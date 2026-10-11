@@ -4053,6 +4053,8 @@ struct Issue965FreshPopulationAcquisitionTests {
             if causeName == "ownershipLost" {
                 #expect(hint.contains("operation ownership or cache/project custody"))
             }
+            if causeName == "pollerStopped" { #expect(hint.contains("population producer is stopped")) }
+            if causeName == "textEditing" { #expect(hint.contains("keyboard-focus/observation guard")) }
             let expectedError = causeName == "cancelled" ? "cancelled"
                 : causeName == "deadline" ? "operation_timeout" : "readback_unavailable"
             #expect(body["error"] as? String == expectedError)

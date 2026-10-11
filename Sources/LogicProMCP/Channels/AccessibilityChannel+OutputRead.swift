@@ -8,7 +8,7 @@ extension AccessibilityChannel {
     /// A passive Arrange name is not an editable field despite its AXTextField
     /// role. This retained witness grants only this reader's semantic popup
     /// press, never a keyboard command, selection change, or parameter write.
-    private struct PassiveRoutingReadFocus {
+    struct PassiveRoutingReadFocus {
         let pid: pid_t
         let app: AXUIElement
         let window: AXUIElement
@@ -96,10 +96,10 @@ extension AccessibilityChannel {
     }
 
     /// Shares the exact owned reader; wire receipt decoding never supplies graph identity.
-    static func getOutputObservation(runtime: AXLogicProElements.Runtime,
+    static func getOutputObservation(runtime: AXLogicProElements.Runtime, sendOrdinal: Int? = nil,
                                      timing: OutputAssignmentTiming = .live,
                                      observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in }) async -> CheckedOutputReading {
-        await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, runtime: runtime, timing: timing,
+        await getCheckedRoutingDestination(params: [:], sendOrdinal: sendOrdinal, runtime: runtime, timing: timing,
             observingPopupFocus: observingPopupFocus)
     }
 
@@ -189,9 +189,8 @@ extension AccessibilityChannel {
                   document.utf8.elementsEqual(physical.document.utf8) else { return false }
             return true
         }
-        func sourceOwned() -> Bool {
+        func sourceFactsCurrent() -> Bool {
             guard !Task.isCancelled, runtime.logicProPID() == pid,
-                  physical.currentIndex(runtime: runtime) != nil,
                   let current = selectedControl(),
                   CFEqual(current, slot),
                   case .success(.some(let label)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
@@ -199,21 +198,24 @@ extension AccessibilityChannel {
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
                   !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else { return false }
-            return ownerBoundaryStillCurrent()
+            return true
+        }
+        func sourceOwned() -> Bool {
+            sourceFactsCurrent() && ownerBoundaryStillCurrent()
         }
         let app = AXLogicProElements.appRoot(runtime: runtime)
         let originalFocus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
-        guard sourceOwned() else { return refuse(.staleTargetReference, "Source custody changed before acquisition; nothing was pressed.") }
+        guard sourceFactsCurrent() else { return refuse(.staleTargetReference, "Source custody changed before acquisition; nothing was pressed.") }
         if sendOrdinal != nil || inputBusOnly {
             guard case .success(let actions) = AXHelpers.getActionNamesResult(slot, runtime: runtime.ax),
-                  actions.contains(kAXPressAction as String), sourceOwned() else {
+                  actions.contains(kAXPressAction as String), sourceFactsCurrent() else {
                 return refuse(.readbackUnavailable, "The held routing control does not advertise a current press capability; nothing was pressed.")
             }
             extras["send_ordinal"] = sendOrdinal
         }
         // The last focus read can itself observe a project transition. Renew
         // original source/document custody afterward, before any menu action.
-        guard focusAllowsAcquisition(), sourceOwned(), focusAllowsAcquisition(), sourceOwned() else {
+        guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
             return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed.")
         }
         extras["navigation_attempted"] = true
@@ -341,7 +343,10 @@ extension AccessibilityChannel {
             return refuse(.readbackUnavailable, "The acquired popup lost original source custody; no unowned cleanup was attempted.")
         }
         func menuOwned() -> Bool {
-            guard sourceOwned(), let current = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax) else { return false }
+            // Renew source facts and root membership before the one deciding
+            // complete physical/window/document boundary. Neither grants action
+            // authority on its own, and no earlier census is reused as permission.
+            guard sourceFactsCurrent(), let current = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax) else { return false }
             return current.count == 1 && CFEqual(current[0], root) && ownerBoundaryStillCurrent()
         }
         // Two agreeing reads bracketed by the same source/menu, not an atomic graph snapshot.
