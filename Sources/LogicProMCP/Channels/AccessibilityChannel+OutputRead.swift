@@ -474,6 +474,25 @@ extension AccessibilityChannel {
             }
             extras["before"] = request.expected.json; extras["destination"] = request.destination.json
             extras["strip_count_before"] = population.count
+            // Observe retained-original identifiers for diagnosis only. Neither
+            // a repeated identifier nor its absence changes CF/action authority.
+            var identifiers: [String: Any] = [:]
+            var identifierStatuses: [String: Int32] = [:]
+            for (key, original) in [("strip", physical.strip), ("send_group", assigned.group),
+                                    ("send_list", assigned.list), ("send_bypass", assigned.bypass)] {
+                let reading: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                    original, kAXIdentifierAttribute as String, runtime: runtime.ax)
+                switch reading {
+                case .success(let value):
+                    identifiers[key] = value as Any? ?? NSNull()
+                    identifierStatuses[key] = 0
+                case .failure(let error):
+                    identifiers[key] = NSNull()
+                    identifierStatuses[key] = error.raw
+                }
+            }
+            extras["pre_press_source_identifiers"] = identifiers
+            extras["pre_press_identifier_read_status"] = identifierStatuses
             let choice = sendMenuChoice(for: request.destination, in: root, runtime: runtime.ax)
             guard case .item(let item, let path) = choice,
                   AXHelpers.getAttribute(item, kAXEnabledAttribute as String, runtime: runtime.ax) as Bool? == true,

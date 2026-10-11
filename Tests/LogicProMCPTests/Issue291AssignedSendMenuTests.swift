@@ -193,13 +193,29 @@ struct Issue291AssignedSendMenuTests {
         }
     }
     @Test("Occupied-send output replacement and explicit inverse retain level, bypass, mode and exact slot",
-        arguments: ["fixed_label", "destination_label"])
+        arguments: ["fixed_label", "destination_label", "missing_identifiers"])
     func occupiedSendOutputRoundtrip(label: String) async throws {
         let p = try prepare(), probe = SendWriterProbe(p)
         probe.fault = label
+        for (element, identifier) in [(p.f.strips[0], "original-source"), (p.group, "occupied-group"),
+                                       (p.f.outputs[0], "occupied-list"), (p.bypass, "occupied-bypass")] {
+            if label != "missing_identifiers" {
+                p.f.b.setAttribute(element, kAXIdentifierAttribute as String, identifier)
+            }
+        }
         let before = AXLogicProElements.sendSlotObservations(in:p.f.strips[0],runtime:probe.runtime.ax)
         let forward = try #require(sharedJSONObject(await probe.write().message))
         #expect(forward["state"] as? String == "A", "\(forward)")
+        if label == "missing_identifiers" {
+            let identifiers = try #require(forward["pre_press_source_identifiers"] as? [String: Any])
+            #expect(identifiers.count == 4 && identifiers.values.allSatisfy { $0 is NSNull })
+        } else {
+            #expect(forward["pre_press_source_identifiers"] as? [String: String] == [
+                "strip": "original-source", "send_group": "occupied-group",
+                "send_list": "occupied-list", "send_bypass": "occupied-bypass"])
+            #expect(forward["pre_press_identifier_read_status"] as? [String: Int] == [
+                "strip": 0, "send_group": 0, "send_list": 0, "send_bypass": 0])
+        }
         let identity = try #require(forward["post_press_control_identity"] as? [String: Bool])
         #expect(identity == ["observed": true, "ordinal": true, "group": true,
             "list": true, "bypass": true, "parent_proxy": true, "source_path": true])
