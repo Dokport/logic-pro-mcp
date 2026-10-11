@@ -403,11 +403,13 @@ actor AccessibilityChannel: Channel {
             return effects
         }
         do {
+            let populationReadStarted = ContinuousClock.now
             var population = try await readExposedSessionPopulation(
                 request: request, fileReader: fileReader,
                 exposure: stackNavigation?.effects.navigationPerformed == true ? stackNavigation?.exposure : nil,
                 stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop
             )
+            let populationReadDuration = populationReadStarted.duration(to: .now)
             if association != nil, originalPresentation == nil {
                 // These fresh independent bookends precede every association
                 // selection. Retain them instead of another full view discovery.
@@ -594,7 +596,9 @@ actor AccessibilityChannel: Channel {
             if let association, stackNavigation?.effects.navigationPerformed != true,
                navigation?.effects.navigationPerformed != true, population.stable {
                 population.selectionAssociations = await association.observe(
-                    referenceIsCurrent: navigationReferenceIsCurrent, stoppingWhen: stop)
+                    referenceIsCurrent: navigationReferenceIsCurrent, stoppingWhen: stop,
+                    allHeldHeaders: request.scope == .wholeProject,
+                    populationReadDuration: populationReadDuration)
                 population.uiEffects = association.effects
                 if association.effects.reason != nil { population.stable = false }
                 // A refused association is already unstable and cannot publish
