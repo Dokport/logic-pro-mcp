@@ -94,6 +94,18 @@ extension AccessibilityChannel {
     struct CheckedOutputReading: Sendable {
         let result: ChannelResult
         let assignment: OutputAssignment?
+        var inputRenewal: OriginalHeaderSourceRenewal? = nil
+        var inputSlot: AXMixerInputSlotBinding? = nil
+    }
+
+    /// Typed input evidence from the same owned reader, never from a wire receipt.
+    static func getInputBusObservation(runtime: AXLogicProElements.Runtime,
+        timing: OutputAssignmentTiming = .live,
+        observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
+        observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in }) async -> CheckedOutputReading {
+        await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
+            runtime: runtime, timing: timing, observingPopupFocus: observingPopupFocus,
+            observingRenewedFocus: observingRenewedFocus)
     }
 
     /// Shares the exact owned reader; wire receipt decoding never supplies graph identity.
@@ -107,7 +119,8 @@ extension AccessibilityChannel {
     private static func getCheckedRoutingDestination(
         params: [String: String], sendOrdinal: Int?, inputBusOnly: Bool = false, runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming,
-        observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in }
+        observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
+        observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in }
     ) async -> CheckedOutputReading {
         let operation = inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified")
         var extras: [String: Any] = ["operation": operation, "write_attempted": false,
@@ -363,14 +376,29 @@ extension AccessibilityChannel {
             if case .success = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax) { cancelSucceeded = true }
         }
         if interrupted() { return await cancelledReading(priorCancelSucceeded: cancelSucceeded) }
-        let closed = sourceOwned() && checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
+        // Absence in the held Mixer's complete non-Help census prevents reading
+        // a retired object's old controls. Presence alone grants no authority:
+        // the ordinary complete source/window/document proof remains decisive.
+        func originalSourcePresent() -> Bool {
+            AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?
+                .strips.filter { CFEqual($0, physical.strip) }.count == 1
+        }
+        let currentFocus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
+        let focusRestored = originalFocus.flatMap { old in currentFocus.map { CFEqual(old, $0) } } == true
+        // Cancel can move focus to the renewed strip before the Mixer census
+        // retires its old entry. Do not touch the old input's guarded Help in
+        // that gap. Focus agreement only permits the ordinary source checks;
+        // a mismatch still requires the full original-header renewal below.
+        let originalInputFocusCurrent = !inputBusOnly || focusRestored
+        let closed = originalSourcePresent() && originalInputFocusCurrent && sourceOwned()
+            && checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
             && runtime.onScreenWindowList().map { LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 } == true
         extras["popup_menu_state"] = closed ? "closed" : "not_restored"
         extras["popup_cancel_succeeded"] = cancelSucceeded
-        let currentFocus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
-        let focusRestored = originalFocus.flatMap { old in currentFocus.map { CFEqual(old, $0) } } == true
         extras["focus_restoration"] = focusRestored ? "restored" : "not_restored"
-        var sourceAfter = sourceOwned()
+        var sourceAfter = originalSourcePresent() && originalInputFocusCurrent && sourceOwned()
+        var inputRenewal: OriginalHeaderSourceRenewal?
+        var inputSlot: AXMixerInputSlotBinding?
         if inputBusOnly, !sourceAfter, dataOwned, first != nil, second == first,
            let originalPair = AXMixerStripBinding.outputAssociation, originalPair.strip.matches(physical) {
             func popupAbsent() -> Bool {
@@ -394,11 +422,14 @@ extension AccessibilityChannel {
                 // Only an actually re-observed original-header pair can renew it;
                 // the helper still inverses the selection it found on entry.
                 let observed = await renewSourceThroughOriginalHeader(originalPair, original: physical,
-                    runtime: runtime, selectedHeaderRequired: false)
+                    runtime: runtime, selectedHeaderRequired: false, observingReadFocus: observingRenewedFocus)
                 extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
                     "attempted": observed.effects.attempted, "changed": observed.effects.changed,
                     "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
-                if let source = observed.source {
+                if let source = observed.source, source.permits(runtime: runtime) {
+                    // Hand off only the newly proved passive focus witness before
+                    // guarded Help reads. This is not assignment/publication authority.
+                    observingRenewedFocus(source.observation)
                     let input = AXLogicProElements.inputSlotRead(in: source.pair.strip.strip, runtime: runtime.ax)
                     func inputControlStillCurrent(_ control: AXUIElement) -> Bool {
                         let current = AXLogicProElements.inputSlotRead(in: source.pair.strip.strip, runtime: runtime.ax)
@@ -416,6 +447,8 @@ extension AccessibilityChannel {
                         extras["source_renewal"] = "held_exclusive_selection_focus"
                         extras["reference_reread_required"] = true
                         extras["source_index_after"] = source.index
+                        inputRenewal = source
+                        inputSlot = .init(owner: source.pair.strip, control: control, source: originalLabel)
                     }
                 }
             }
@@ -437,7 +470,8 @@ extension AccessibilityChannel {
         extras["verify_source"] = inputBusOnly ? "ax_input_menu_checkmark" : (sendOrdinal == nil ? "ax_output_menu_checkmark" : "ax_send_menu_checkmark")
         if inputBusOnly { extras["input_scope"] = "bus_only" }
         extras["snapshot_atomic"] = false
-        return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first)
+        return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
+            inputRenewal: inputRenewal, inputSlot: inputSlot)
     }
 
     static func outputReadContextFailure(_ result: ChannelResult, operation: String) -> ChannelResult {

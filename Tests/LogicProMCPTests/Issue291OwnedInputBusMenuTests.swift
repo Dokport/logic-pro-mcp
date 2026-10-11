@@ -69,6 +69,136 @@ struct Issue291OwnedInputBusMenuTests {
         let write: Bool = try #require(body["write_attempted"] as? Bool)
         #expect(!write)
     }
+
+    @Test("Routing inspection publishes only its owned checked bus input", arguments: [1, 256], [false, true])
+    func inspectionPublishesCheckedInput(number: Int, navigation: Bool) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let p = try prepare(number), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            let fresh = try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
+                    allowUINavigation: navigation), fileReader: .unavailable, stoppingWhen: { false })
+            }
+            #expect(fresh.stable)
+            let cache = StateCache(), registry = TargetRegistry()
+            await cache.updateProject(try #require(fresh.project))
+            await cache.updateDocumentState(true)
+            await cache.updateChannelStrips(try #require(fresh.strips))
+            let base = await SessionPopulationObservation.capture(cache: cache,
+                targetRegistry: registry, fileReader: .unavailable)
+            let receiver = try #require(base.mixerReference(at: 0))
+            let capture = inputCapture(base, fresh: fresh)
+            let graph = SessionPopulationObservation.routingGraph(capture: capture)
+            let inputs = graph.edges.filter { $0.kind == .inputAssignment }
+            if navigation {
+                let input = try #require(inputs.first)
+                #expect(inputs.count == 1)
+                #expect(input.source == "bus_\(number)")
+                #expect(input.destination == receiver.rawValue)
+                #expect(input.provenance == .axInputMenuCheckmark)
+                #expect(graph.nodes.first { $0.id == receiver.rawValue }?.kind == .physicalStrip)
+                #expect(graph.coverage.busToAuxInput.state == .partial)
+                #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+            } else {
+                #expect(inputs.isEmpty)
+                #expect(f.mutations.isEmpty)
+            }
+            #expect(!graph.complete)
+            #expect(!graph.nodes.contains { $0.kind == .aux })
+            #expect(graph.snapshotId == base.captureID)
+        }
+    }
+
+    private func inputCapture(_ base: SessionPopulationObservation.Capture,
+        fresh: SessionPopulationObservation.FreshPopulation) -> SessionPopulationObservation.Capture {
+        SessionPopulationObservation.Capture(before: base.before, after: base.after,
+                projectEpoch: base.projectEpoch, project: base.project, tracks: base.tracks,
+                tracksFetchedAt: base.tracksFetchedAt, channelStrips: base.channelStrips,
+                mixerFetchedAt: base.mixerFetchedAt, fileTrackCount: base.fileTrackCount,
+                projectFileNotBound: base.projectFileNotBound, requestedProjectMatches: base.requestedProjectMatches,
+                referencesEnabled: base.referencesEnabled, targetSnapshot: base.targetSnapshot,
+                issued: base.issued, projectIssuance: base.projectIssuance,
+                beganAt: base.beganAt, endedAt: base.endedAt, captureID: base.captureID,
+                freshPopulation: fresh, mixerReferences: base.mixerReferences)
+    }
+
+    @Test("Input publication keeps exact owner, source census and unique typed evidence",
+        arguments: ["held", "absent", "other_owner", "conflict", "unstable", "invalid_bus", "missing_slot"])
+    func checkedInputPublicationRefusesUnsupportedEvidence(_ fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let p = try prepare(), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            var states = try #require(AccessibilityChannel.defaultGetMixerStates(
+                runtime: f.logic, stoppingWhen: { false }).states)
+            let owner = try #require(states[0].physicalBinding)
+            if fault == "missing_slot" { states[0].inputSlotBinding = nil }
+            let cache = StateCache(), registry = TargetRegistry()
+            await cache.updateProject(.init(name: "Session", filePath: f.bundle.path, source: "fixture"))
+            await cache.updateDocumentState(true)
+            await cache.updateChannelStrips(states)
+            let base = await SessionPopulationObservation.capture(cache: cache,
+                targetRegistry: registry, fileReader: .unavailable)
+            let receiver = try #require(base.mixerReference(at: 0))
+            var fresh = SessionPopulationObservation.FreshPopulation(project: base.project,
+                tracks: base.tracks, strips: states, fileTrackCount: nil,
+                beganAt: base.beganAt, endedAt: base.endedAt, stable: fault != "unstable")
+            if fault != "absent" {
+                fresh.checkedInputs = [.init(receiver: fault == "other_owner"
+                    ? try #require(states[1].physicalBinding) : owner,
+                    busNumber: fault == "invalid_bus" ? 257 : 1)]
+                if fault == "conflict" { fresh.checkedInputs.append(.init(receiver: owner, busNumber: 2)) }
+            }
+            let capture = inputCapture(base, fresh: fresh)
+            let graph = SessionPopulationObservation.routingGraph(capture: capture)
+            let inputs = graph.edges.filter { $0.kind == .inputAssignment }
+            if fault == "held" {
+                let input = try #require(inputs.first)
+                #expect(inputs.count == 1)
+                #expect(input.source == "bus_1")
+                #expect(input.destination == receiver.rawValue)
+            } else { #expect(inputs.isEmpty) }
+            if fault == "held" { #expect(graph.provenance.contains(.axInputMenuCheckmark)) }
+            else { #expect(!graph.provenance.contains(.axInputMenuCheckmark)) }
+            #expect(!graph.complete)
+            #expect(!graph.nodes.contains { $0.kind == .aux })
+            #expect(f.mutations.isEmpty)
+        }
+    }
+
+    @Test("Input acquisition never publishes a conflict or a population moved after cleanup",
+        arguments: ["conflict", "moved", "not_restored"])
+    func inputInspectionKeepsCleanupAndPopulationBookends(_ fault: String) async throws {
+        let p = try prepare(), f = p.f
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        if fault == "conflict" { f.b.setAttribute(p.inputLeaf, "AXMenuItemMarkChar", "✓") }
+        if fault == "not_restored" { f.b.setActionNames(f.root, []) }
+        if fault == "moved" {
+            f.attributeReadResult = { _, _ in
+                if f.mutations.contains(where: { $0.1 == kAXCancelAction as String }) {
+                    f.b.setAttribute(f.volumes[1], kAXValueAttribute as String, 101)
+                }
+                return nil
+            }
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let fresh = try await OperationTraceContext.$current.withValue(context) {
+            try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
+                allowUINavigation: true), fileReader: .unavailable, stoppingWhen: { false })
+        }
+        #expect(fresh.checkedInputs.isEmpty)
+        if fault == "conflict" { #expect(fresh.stable) }
+        else { #expect(!fresh.stable) }
+        if fault == "moved" { #expect(fresh.uiEffects.reason == "routing_population_moved") }
+        if fault == "not_restored" { #expect(fresh.uiEffects.reason == "routing_popup_not_restored") }
+        #expect(f.mutations.allSatisfy { $0.1 == "AXPress" || $0.1 == "AXCancel" })
+    }
     @Test("Cleanup requires original input membership even when its AX role stays readable",
           arguments: ["healthy", "invalid_element", "readable_nonmember"])
     func originalInputMustSurviveCancel(_ mode: String) async throws {

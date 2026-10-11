@@ -29,6 +29,8 @@ enum RoutingProjectBinding: Sendable {
 /// Request-held, checked output/send menus can additionally publish physical-source bus edges;
 /// a send retains its census ordinal but no physical write-slot payload. Neither establishes
 /// receiving-strip identity or complete graph coverage.
+/// Checked input menus bind a bus to its request-held physical receiver only;
+/// they do not establish aux kind, track attribution or receiving completeness.
 ///
 /// This function is pure: it never sees the registry and never reads another resource. Every
 /// domain it cannot answer carries its reasons in `coverage`, and `partialReason` is those reasons
@@ -163,6 +165,17 @@ enum RoutingGraphPublication {
                         observedInputSlot: input
                     )
                     if capture.freshPopulation?.stable == true {
+                        let inputs = capture.freshPopulation?.checkedInputs.filter {
+                            $0.receiver.matches(owner)
+                        } ?? []
+                        if input != nil, inputs.count == 1,
+                           OutputAssignment.busNumbers.contains(inputs[0].busNumber) {
+                            let number = inputs[0].busNumber, busID = "bus_\(number)"
+                            nodesByID[busID] = RoutingNode(id: busID, kind: .bus,
+                                displayName: "Bus \(number)", busNumber: number, targetRef: nil)
+                            edges.append(RoutingEdge(kind: .inputAssignment, source: busID,
+                                destination: reference.rawValue, send: nil, provenance: .axInputMenuCheckmark))
+                        }
                         let checked = capture.freshPopulation?.checkedOutputs.filter {
                             $0.source.matches(owner) && $0.sendOrdinal == nil
                         } ?? []
@@ -268,6 +281,7 @@ enum RoutingGraphPublication {
                 + ["only request-held bus main outputs have checked-menu evidence"])
             : mainOutput.coverage
         let checkedSendObserved = edges.contains { $0.provenance == .axSendMenuCheckmark }
+        let checkedInputObserved = edges.contains { $0.provenance == .axInputMenuCheckmark }
         let sendCoverage = checkedSendObserved
             ? RoutingDomainCoverage(state: .partial, reasons: sends.coverage.reasons.filter { $0 != sendDestinationReason }
                 + ["only request-held bus sends have checked-menu evidence; source census ordinals do not establish physical write slots or receiving-strip identity"])
@@ -277,7 +291,9 @@ enum RoutingGraphPublication {
             stripTrackAssociation: association.coverage,
             mainOutput: mainOutputCoverage,
             physicalOutput: physicalOutput.coverage,
-            busToAuxInput: RoutingDomainCoverage(state: .notObserved, reasons: [busToAuxInputReason]),
+            busToAuxInput: checkedInputObserved
+                ? RoutingDomainCoverage(state: .partial, reasons: ["only request-held bus inputs have checked-menu evidence; physical receivers do not establish aux kind or receiving-population completeness"])
+                : RoutingDomainCoverage(state: .notObserved, reasons: [busToAuxInputReason]),
             sends: sendCoverage
         )
         var partialReasons: [String] = []
@@ -296,6 +312,7 @@ enum RoutingGraphPublication {
             edges: edges,
             provenance: [.axMixerStrip]
                 + (checkedMainOutputObserved ? [.axOutputMenuCheckmark] : [])
+                + (checkedInputObserved ? [.axInputMenuCheckmark] : [])
                 + (checkedSendObserved ? [.axSendMenuCheckmark] : []),
             snapshotId: snapshotId,
             coverage: coverage

@@ -451,7 +451,7 @@ extension AccessibilityChannel {
         return (label, source.index, observed.effects)
     }
 
-    struct OriginalHeaderSourceRenewal {
+    struct OriginalHeaderSourceRenewal: Sendable {
         let pair: HeldSelectionAssociation.Pair
         let index: Int
         let original: AXMixerStripBinding.Binding
@@ -477,7 +477,8 @@ extension AccessibilityChannel {
     /// A successful inverse and original header CF are required; no reference is rebound.
     static func renewSourceThroughOriginalHeader(
         _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
-        runtime: AXLogicProElements.Runtime, selectedHeaderRequired: Bool = true
+        runtime: AXLogicProElements.Runtime, selectedHeaderRequired: Bool = true,
+        observingReadFocus: @Sendable (HeldSelectionAssociation) -> Void = { _ in }
     ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
               let observation = HeldSelectionAssociation(window: original.window, logic: runtime,
@@ -487,6 +488,10 @@ extension AccessibilityChannel {
               observation.headers.filter({ CFEqual($0, originalPair.track.header) }).count == 1,
               !selectedHeaderRequired || CFEqual(observation.headers[observation.originalIndex], originalPair.track.header)
         else { return (nil, .init()) }
+        // The same fully qualified starting witness used by registered association
+        // acquisition permits passive Help during this owned selection excursion.
+        // Assignment authority still requires the actual pair and inverse below.
+        observingReadFocus(observation)
         let pairs = await observation.observe(referenceIsCurrent: {
             originalPair.track.currentIndex() != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil

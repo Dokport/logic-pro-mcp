@@ -414,12 +414,16 @@ actor AccessibilityChannel: Channel {
                 originalPresentation = population
                 reusesAssociationPresentation = true
             }
-            // Start with the already exposed Mixer, without composing popup focus
-            // changes with a held selection, stack or temporary-view inverse.
-            if request.allowUINavigation, request.domains.contains(.routing), population.stable,
-               association == nil, stackNavigation?.effects.navigationPerformed != true,
-               navigation?.effects.navigationPerformed != true {
+            let mixerNavigationPerformed = navigation?.effects.navigationPerformed == true
+            let stackNavigationPerformed = stackNavigation?.effects.navigationPerformed == true
+            func collectRouting(_ original: SessionPopulationObservation.FreshPopulation) async throws -> SessionPopulationObservation.FreshPopulation {
+                var population = original
+                guard request.allowUINavigation, request.domains.contains(.routing), population.stable,
+                      !stackNavigationPerformed, !mixerNavigationPerformed else { return population }
                 var checked: [SessionPopulationObservation.HeldCheckedOutput] = []
+                var checkedInputs: [SessionPopulationObservation.HeldCheckedInput] = []
+                var renewals: [OriginalHeaderSourceRenewal] = []
+                var renewedSlots: [AXMixerInputSlotBinding] = []
                 stripReads: for strip in population.strips ?? [] {
                     guard !stop(), await navigationReferenceIsCurrent() else {
                         try SessionPopulationObservation.requireOwnedAcquisition()
@@ -428,26 +432,48 @@ actor AccessibilityChannel: Channel {
                     // This bounded projection publishes only checked bus edges. A
                     // display classification selects candidates to acquire; it never
                     // supplies the assignment, source identity or receiver identity.
-                    var candidates: [Int?] = []
+                    var candidates: [(input: Bool, ordinal: Int?)] = []
+                    if let slot = strip.inputSlotBinding, let owner = strip.physicalBinding,
+                       slot.owner.matches(owner),
+                       let observed = strip.inputObservation, observed.state == .observedSource,
+                       let label = observed.source, label.utf8.elementsEqual(slot.source.utf8),
+                       RoutingGraphPublication.classifyOutputLabel(label).0 == .bus {
+                        candidates.append((true, nil))
+                    }
                     if let label = strip.output, RoutingGraphPublication.classifyOutputLabel(label).0 == .bus {
-                        candidates.append(nil)
+                        candidates.append((false, nil))
                     }
                     let slots = strip.sendSlots ?? []
                     for slot in slots where slot.state == .occupiedUnknownDestination && slot.ordinal >= 0 {
                         if slots.filter({ $0.ordinal == slot.ordinal }).count == 1 {
-                            candidates.append(slot.ordinal)
+                            candidates.append((false, slot.ordinal))
                         }
                     }
                     guard !candidates.isEmpty else { continue }
                     guard let owner = strip.physicalBinding,
                           population.strips?.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1 else { continue }
-                    for ordinal in candidates {
+                    for candidate in candidates {
                         guard !stop(), await navigationReferenceIsCurrent() else {
                             try SessionPopulationObservation.requireOwnedAcquisition()
                             throw SessionPopulationObservation.AcquisitionError.ownershipLost
                         }
+                        let pairs = population.selectionAssociations.filter { $0.strip.matches(owner) }
+                        let pair = pairs.count == 1 && population.selectionAssociations.filter { candidatePair in
+                            pairs.first.map { candidatePair.track.matches($0.track) } ?? false
+                        }.count == 1 ? pairs.first : nil
+                        // This bounded paired projection cannot restore a retired
+                        // unpaired receiver through an Arrange header. Leave its
+                        // input unqualified instead of risking the verified pairs.
+                        if candidate.input, request.domains.contains(.associations), pair == nil { continue }
                         let read = await AXMixerStripBinding.$current.withValue(owner) {
-                            await Self.getOutputObservation(runtime: runtime.logicRuntime, sendOrdinal: ordinal,
+                            if candidate.input {
+                                return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                                    await Self.getInputBusObservation(runtime: runtime.logicRuntime,
+                                        observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
+                                        observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
+                                }
+                            }
+                            return await Self.getOutputObservation(runtime: runtime.logicRuntime, sendOrdinal: candidate.ordinal,
                                 observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) })
                         }
                         let receipt = read.result.message.data(using: .utf8).flatMap {
@@ -464,8 +490,19 @@ actor AccessibilityChannel: Channel {
                                     population.uiEffects.changed.append("routing_popup")
                                 }
                             }
+                            // A retired focus cannot be CF-equal to its replacement.
+                            // Only the actual original selected header/focused-strip
+                            // pair and its verified selection inverse can qualify it.
+                            let renewedOriginalFocus = read.inputRenewal.map { renewal in
+                                guard let association else { return false }
+                                return CFEqual(association.originalFocus, owner.strip)
+                                    && CFEqual(association.headers[association.originalIndex], renewal.pair.track.header)
+                                    && CFEqual(renewal.observation.originalFocus, renewal.pair.strip.strip)
+                                    && CFEqual(renewal.observation.headers[renewal.observation.originalIndex], renewal.pair.track.header)
+                                    && renewal.permits(runtime: runtime.logicRuntime)
+                            } ?? false
                             let restored = receipt?["popup_menu_state"] as? String == "closed"
-                                && receipt?["focus_restoration"] as? String == "restored"
+                                && (receipt?["focus_restoration"] as? String == "restored" || renewedOriginalFocus)
                             population.uiEffects.restoration = restored ? "restored" : "partially_restored"
                             routingEffects = population.uiEffects
                             if !restored {
@@ -475,28 +512,84 @@ actor AccessibilityChannel: Channel {
                             }
                         }
                         if let assignment = read.assignment {
-                            checked.append(.init(source: owner, assignment: assignment, sendOrdinal: ordinal))
+                            if candidate.input {
+                                if case .bus(let number) = assignment, OutputAssignment.busNumbers.contains(number) {
+                                    if let renewal = read.inputRenewal, let slot = read.inputSlot {
+                                        renewals.append(renewal)
+                                        renewedSlots.append(slot)
+                                        checkedInputs.append(.init(receiver: renewal.pair.strip, busNumber: number))
+                                        population.uiEffects = mergedEffects(population.uiEffects, renewal.observation.effects)
+                                    } else {
+                                        checkedInputs.append(.init(receiver: owner, busNumber: number))
+                                        if let slot = strip.inputSlotBinding { renewedSlots.append(slot) }
+                                    }
+                                }
+                            } else {
+                                checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal))
+                            }
                         }
                     }
                 }
-                if population.stable, !checked.isEmpty {
+                if population.stable, !checked.isEmpty || !checkedInputs.isEmpty {
+                    let boundary = renewals.isEmpty
+                        ? population.associationReadbackBoundary : await associationReadbackBoundary()
                     let current = try await readExposedSessionPopulation(request: request, fileReader: fileReader,
                         stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
                     let valuesAgree = (try? encoder.encode(population.strips)) == (try? encoder.encode(current.strips))
-                    let ownersAgree = zip(population.strips ?? [], current.strips ?? []).allSatisfy { old, new in
-                        guard let owner = old.physicalBinding else { return new.physicalBinding == nil }
-                        return new.physicalBinding?.matches(owner) == true
+                    let ownersAgree: Bool
+                    if renewals.count == 1, let renewal = renewals.first {
+                        // Cancel may retire the entire physical census. These are
+                        // new raw rows, not old identities mapped by label/index.
+                        // Bookend their exact ordered ownership against the full
+                        // census held by the actual renewed selection/inverse.
+                        let rows = current.strips ?? []
+                        ownersAgree = population.strips?.count == current.strips?.count
+                            && rows.count == renewal.observation.strips.count
+                            && zip(rows, renewal.observation.strips).allSatisfy { row, strip in
+                                guard let owner = row.physicalBinding else { return false }
+                                return owner.matches(.init(window: renewal.pair.strip.window,
+                                    mixer: renewal.pair.strip.mixer, strip: strip,
+                                    document: renewal.pair.strip.document))
+                            }
+                    } else {
+                        ownersAgree = population.strips?.count == current.strips?.count
+                            && zip(population.strips ?? [], current.strips ?? []).allSatisfy { old, new in
+                                guard let owner = old.physicalBinding else { return new.physicalBinding == nil }
+                                return new.physicalBinding?.matches(owner) == true
+                            }
                     }
-                    if current.stable, valuesAgree, ownersAgree,
+                    let slotsAgree = renewedSlots.allSatisfy { slot in
+                        current.strips?.filter { $0.inputSlotBinding?.matches(slot) == true }.count == 1
+                    }
+                    if current.stable, valuesAgree, ownersAgree, slotsAgree,
+                       renewals.allSatisfy({ $0.permits(runtime: runtime.logicRuntime) }),
                        current.project?.filePath == population.project?.filePath,
                        await navigationReferenceIsCurrent(), !stop() {
-                        population.checkedOutputs = checked
+                        var restored = current
+                        restored.uiEffects = population.uiEffects
+                        restored.checkedOutputs = checked.filter { reading in
+                            current.strips?.filter { $0.physicalBinding?.matches(reading.source) == true }.count == 1
+                        }
+                        restored.checkedInputs = checkedInputs.filter { reading in
+                            current.strips?.filter { $0.physicalBinding?.matches(reading.receiver) == true }.count == 1
+                        }
+                        restored.selectionAssociations = population.selectionAssociations.compactMap { pair in
+                            let candidate = renewals.first {
+                                $0.original.matches(pair.strip) && $0.originalTrack.matches(pair.track)
+                            }?.pair ?? pair
+                            // Unrelated retired pairs are discarded, never rebound.
+                            return current.strips?.filter { $0.physicalBinding?.matches(candidate.strip) == true }.count == 1
+                                ? candidate : nil
+                        }
+                        restored.associationReadbackBoundary = boundary
+                        population = restored
                     } else {
                         population.stable = false
                         population.uiEffects.reason = "routing_population_moved"
                     }
                 }
+                return population
             }
             if let association, stackNavigation?.effects.navigationPerformed != true,
                navigation?.effects.navigationPerformed != true, population.stable {
@@ -542,6 +635,9 @@ actor AccessibilityChannel: Channel {
                     }
                 }
             }
+            // Compose only after the original selection observation has restored
+            // and reconciled its rows. No pair is inferred for an unobserved strip.
+            population = try await collectRouting(population)
             let disclosureExposures = request.domains.contains(.hierarchy) && population.stable
                 ? stackNavigation?.capturedDisclosureExposures(in: population.tracks) ?? [] : []
             let stackEffects = await stackNavigation?.restore(stoppingWhen: stop) ?? .init()

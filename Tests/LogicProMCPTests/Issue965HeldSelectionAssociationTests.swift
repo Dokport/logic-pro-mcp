@@ -128,6 +128,7 @@ struct Issue965HeldSelectionAssociationTests {
         var zoomRoleReadsAtFirstValue: Int?
         var zoomRoleFaultAtRead: Int?
         var routingReplacement: AXUIElement?
+        var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
         var routingDestinationPresses = 0
         var routingWrongSourcePressed = false
@@ -137,6 +138,9 @@ struct Issue965HeldSelectionAssociationTests {
         var routingLateScopeInjected = false
         var inputMenuPresses = 0
         var inputMenuCancels = 0
+        var inputRetirementCensusLag = false
+        var inputRetiredSourceReadable = false
+        var inputRetirementCensusLagObserved = false
         var inputMenuHadOwnedClaim = false
         var inputPreviousReadWasDescription = false
         var presentationCensusReads = 0
@@ -282,14 +286,18 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     return nil
                 }, attributeValueResultHandler: { [self] element, attribute in
-                    if routingReplacement != nil, CFEqual(element, strips[1]) {
+                    if routingOtherReplacement != nil, CFEqual(element, strips[0]) {
+                        return .failure(.init(raw: AXError.invalidUIElement.rawValue))
+                    }
+                    if routingReplacement != nil, !inputRetiredSourceReadable, CFEqual(element, strips[1]) {
                         return .failure(.init(raw: AXError.invalidUIElement.rawValue))
                     }
                     if let volatileSlider, CFEqual(element, volatileSlider), !selections.isEmpty,
                        attribute == kAXDescriptionAttribute as String {
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
                     }
-                    let isReplacement = routingReplacement.map { CFEqual($0, element) } ?? false
+                    let isReplacement = routingReplacement.map { CFEqual($0, element) } == true
+                        || routingOtherReplacement.map { CFEqual($0, element) } == true
                     if strips.contains(where: { CFEqual($0, element) }) || isReplacement,
                        attribute == kAXValueAttribute as String || attribute == kAXSelectedTextAttribute as String {
                         if fault == "transient_editor", selections.count == 1,
@@ -300,6 +308,12 @@ struct Issue965HeldSelectionAssociationTests {
                         return .failure(.init(raw: AXError.noValue.rawValue))
                     }
                     return nil
+                },
+                childrenResultHandler: { [self] element in
+                    guard inputRetirementCensusLag, CFEqual(element, mixer) else { return nil }
+                    inputRetirementCensusLag = false
+                    inputRetirementCensusLagObserved = true
+                    return .success(strips)
                 },
                 setAttributeHandler: { [self] element, attribute, value in
                     if CFEqual(element, scroll), attribute == kAXValueAttribute as String,
@@ -323,7 +337,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     // The actual physical relationship is deliberately not positional.
                     builder.setAttribute(app, kAXFocusedUIElementAttribute as String,
-                        index == 0 ? routingReplacement ?? strips[1] : strips[0])
+                        index == 0 ? routingReplacement ?? strips[1] : routingOtherReplacement ?? strips[0])
                     if fault == "selection_scroll" || fault?.hasPrefix("scroll_") == true {
                         // Native R11: restoring the selected header/focused strip did
                         // not restore the Tracks scrollbar's original value.
@@ -428,16 +442,20 @@ struct Issue965HeldSelectionAssociationTests {
 
     private func inspect(_ f: Fixture, navigation: Bool = true, cache: StateCache = StateCache(),
                          fileReader: LogicProjectFileReader.Runtime = .unavailable,
-                         registry: TargetRegistry = TargetRegistry(), projectRef: String? = nil) async throws -> [String: Any] {
+                         registry: TargetRegistry = TargetRegistry(), projectRef: String? = nil,
+                         domains: [String] = ["associations"], guardedRenewalFocus: Bool = false) async throws -> [String: Any] {
         let gate = LogicMutationGate()
         let dependencies = HandlerDependencies(router: ChannelRouter(), cache: cache, targetRegistry: registry,
             poller: StatePoller(axChannel: f.channel(), cache: cache,
                 runtime: .init(hasVisibleWindow: { true }, projectFileReader: fileReader,
-                               keyboardFocus: { .notTextEditing })),
+                               keyboardFocus: {
+                                   guardedRenewalFocus && f.routingReplacement != nil
+                                       ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing
+                               })),
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
             liveTrackNames: { [:] }, projectFileReader: fileReader)
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
-        var arguments: [String: Value] = ["domains": .array([.string("associations")]), "allow_ui_navigation": .bool(navigation)]
+        var arguments: [String: Value] = ["domains": .array(domains.map(Value.string)), "allow_ui_navigation": .bool(navigation)]
         if let projectRef { arguments["project_ref"] = .string(projectRef) }
         let params = arguments
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
@@ -635,7 +653,7 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    private func assertInputBusRenewal(number: Int, condition: String) async throws {
+    private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), registry = TargetRegistry()
             let captureNow = ContinuousClock.now
@@ -648,6 +666,10 @@ struct Issue965HeldSelectionAssociationTests {
             let submenu = f.builder.element(1_965_966), leaf = f.builder.element(1_965_967)
             let decoy = f.builder.element(1_965_968)
             let mixerOwner = f.builder.element(1_965_971)
+            let unpairedStrip = f.builder.element(1_965_973), unpairedInput = f.builder.element(1_965_974)
+            let unpairedRows = condition == "unpaired_bus" ? [unpairedStrip] : []
+            let otherReplacement = f.builder.element(1_965_975)
+            let retiresWholeCensus = condition.hasPrefix("whole_census_")
             f.builder.setRole(f.mixer, kAXLayoutAreaRole as String)
             f.builder.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
             f.builder.setRole(mixerOwner, kAXGroupRole as String)
@@ -660,12 +682,30 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setChildren(button, [])
                 f.builder.setActionNames(button, [kAXPressAction as String])
             }
+            if graph { f.builder.setAttribute(decoy, kAXDescriptionAttribute as String, "Input 1") }
+            if !unpairedRows.isEmpty {
+                f.builder.setRole(unpairedStrip, kAXLayoutItemRole as String)
+                f.builder.setButton(unpairedInput, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
+                    x: 0, y: 0, width: 1, height: 1)
+                f.builder.setActionNames(unpairedInput, [kAXPressAction as String])
+                f.builder.setChildren(unpairedInput, [])
+                f.builder.setChildren(unpairedStrip, [unpairedInput])
+                f.builder.setChildren(f.mixer, f.strips + unpairedRows)
+            }
             f.builder.setChildren(f.strips[1], f.builder.makeAXRuntime().children(f.strips[1]) + [input])
             f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [decoy])
+            if retiresWholeCensus {
+                f.builder.setRole(otherReplacement, kAXLayoutItemRole as String)
+                f.builder.setAttribute(otherReplacement, kAXNumberOfCharactersAttribute as String, 0)
+                f.builder.setAttribute(otherReplacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                f.builder.setChildren(otherReplacement, f.builder.makeAXRuntime().children(f.strips[0]))
+            }
             f.builder.setRole(replacement, kAXLayoutItemRole as String)
             f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
             f.builder.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
-            f.builder.setChildren(replacement, [newInput])
+            f.builder.setChildren(replacement, graph
+                ? f.builder.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, input) } + [newInput]
+                : [newInput])
             for menu in [root, submenu] { f.builder.setRole(menu, kAXMenuRole as String) }
             f.builder.setActionNames(root, [kAXCancelAction as String])
             for (item, title) in [(echo, "Bus \(number) ← Audio 2"), (bus, "Bus"), (leaf, "Bus \(number) ← Audio 2")] {
@@ -682,15 +722,24 @@ struct Issue965HeldSelectionAssociationTests {
                     if let context = OperationTraceContext.current {
                         f.inputMenuHadOwnedClaim = context.mutationGateAcquired && context.ownsGate()
                     }
-                    f.builder.setChildren(f.mixer, f.strips + [root])
+                    f.builder.setChildren(f.mixer, f.strips + unpairedRows + [root])
                     return true
                 }
                 if CFEqual(element, root), action == kAXCancelAction as String {
                     f.inputMenuCancels += 1
                     f.routingReplacement = replacement
-                    f.builder.setChildren(f.mixer, [f.strips[0], replacement] + (condition == "popup_still_open" ? [root] : []))
+                    if retiresWholeCensus { f.routingOtherReplacement = otherReplacement }
+                    if condition == "retirement_census_lag" {
+                        f.inputRetirementCensusLag = true
+                        f.inputRetiredSourceReadable = true
+                    }
+                    f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement] + unpairedRows + (condition == "popup_still_open" ? [root] : []))
                     f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
                         condition == "unselected_pair" ? f.strips[0] : replacement)
+                    if graph, condition == "unselected_pair" {
+                        f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
+                        f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
+                    }
                     if condition == "replaced_header" {
                         let foreign = f.builder.element(1_965_969)
                         f.builder.setRole(foreign, kAXLayoutItemRole as String)
@@ -715,18 +764,22 @@ struct Issue965HeldSelectionAssociationTests {
             }
             if condition == "partial_restore" {
                 f.routingSelection = { _ in
-                    if f.selections.count == 3 {
+                    if f.selections.count == (graph ? 5 : 3) {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     }
                 }
             }
             f.routingRead = { element, attribute in
-                let inputDescription = f.selections.count == 4 && CFEqual(element, newInput)
+                let inputDescription = f.selections.count == (graph ? 6 : 4) && CFEqual(element, newInput)
                     && attribute == kAXDescriptionAttribute as String
                 let decidingDescription = inputDescription && f.inputPreviousReadWasDescription
                 f.inputPreviousReadWasDescription = inputDescription
                 if inputDescription {
+                    if decidingDescription, condition == "whole_census_late_reorder" {
+                        f.routingLateScopeInjected = true
+                        f.builder.setChildren(f.mixer, [replacement, otherReplacement])
+                    }
                     if decidingDescription, condition == "deciding_read" || condition == "deciding_control_replaced" {
                         f.routingLateScopeInjected = true
                         if condition == "deciding_control_replaced" {
@@ -755,6 +808,60 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(CFEqual(pair.track.header, f.headers[0]) && CFEqual(pair.strip.strip, f.strips[1]),
                 "Only the actual opposite-ordinal own-gesture pair may tether renewal")
             #expect(f.selections == [1, 0])
+            if graph {
+                let body = try await inspect(f, navigation: condition != "navigation_disabled", cache: cache,
+                    registry: registry, domains: condition == "missing_pair" ? ["routing"] : ["associations", "routing"],
+                    guardedRenewalFocus: true)
+                let retained = if let id = body["snapshot_id"] as? String {
+                    await cache.retainedInspection(id: id)?.capture
+                } else { nil as SessionPopulationObservation.Capture? }
+                let routing = retained.map { SessionPopulationObservation.routingGraph(capture: $0) }
+                let edges = routing?.edges.filter { $0.kind == .inputAssignment } ?? []
+                if condition == "navigation_disabled" {
+                    #expect(edges.isEmpty && f.inputMenuPresses == 0 && f.inputMenuCancels == 0)
+                    #expect(f.selections == [1, 0])
+                    return
+                }
+                #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1,
+                    "Registered acquisition must execute Cancel's real physical retirement")
+                #expect(source.currentIndex(runtime: f.builder.makeLogicRuntime(appElement: f.app)) == nil)
+                if condition != "paired" && condition != "retirement_census_lag" && condition != "unpaired_bus" && condition != "whole_census_retirement" {
+                    #expect(edges.isEmpty, "Lost original authority must not publish a bus input")
+                    #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+                    if ["partial_restore", "deciding_read", "deciding_control_replaced", "whole_census_late_reorder"].contains(condition) {
+                        #expect(f.routingLateScopeInjected, "The refusing late boundary must actually execute")
+                    }
+                    return
+                }
+                let fresh = try #require(retained)
+                if condition == "retirement_census_lag" { #expect(f.inputRetirementCensusLagObserved) }
+                let edge = try #require(edges.first,
+                    "The checked input must survive only through the actual original-header renewal: selections=\(f.selections), report=\(body)")
+                #expect(edges.count == 1 && edge.source == "bus_\(number)")
+                #expect(edge.destination != target.rawValue, "Never rebind the retired reference")
+                #expect(edge.provenance == .axInputMenuCheckmark)
+                let receiverRow = try #require(fresh.channelStrips.indices.first {
+                    fresh.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, replacement) } == true
+                })
+                #expect(edge.destination == fresh.mixerReference(at: receiverRow)?.rawValue)
+                if retiresWholeCensus {
+                    let currentPopulation = try #require(fresh.freshPopulation)
+                    #expect(!currentPopulation.selectionAssociations.contains { CFEqual($0.strip.strip, f.strips[0]) },
+                        "A retired unrelated association must be dropped, never retargeted")
+                    let otherRow = try #require(fresh.channelStrips.indices.first {
+                        fresh.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, otherReplacement) } == true
+                    })
+                    let otherRef = try #require(fresh.mixerReference(at: otherRow))
+                    #expect(await cache.retainedMixerAssociation(reference: otherRef,
+                        source: try #require(fresh.channelStrips[otherRow].physicalBinding),
+                        snapshot: await registry.currentSnapshot) == nil)
+                }
+                #expect(f.selections == [1, 0, 1, 0, 1, 0])
+                #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+                let currentRouting = try #require(routing)
+                #expect(!currentRouting.complete && !currentRouting.nodes.contains { $0.kind == .aux })
+                return
+            }
             if condition == "unselected_pair" {
                 // The retained target is still the exact captured header, but a
                 // different track is selected when its input popup is read.
@@ -819,6 +926,32 @@ struct Issue965HeldSelectionAssociationTests {
     @Test(arguments: [1, 256])
     func inputBusRenewsRetiredSourceThroughOriginalCapturedHeader(number: Int) async throws {
         try await assertInputBusRenewal(number: number, condition: "paired")
+    }
+
+    @Test(arguments: [1, 256])
+    func registeredRoutingCapturePublishesRenewedInputReceiver(number: Int) async throws {
+        try await assertInputBusRenewal(number: number, condition: "paired", graph: true)
+    }
+
+    @Test(arguments: [1, 256])
+    func registeredInputGraphDoesNotReadRetiredControlsAfterFocusMoves(number: Int) async throws {
+        try await assertInputBusRenewal(number: number, condition: "retirement_census_lag", graph: true)
+    }
+
+    @Test func registeredPairedInputGraphDoesNotOpenAnUnpairedAuxPopup() async throws {
+        try await assertInputBusRenewal(number: 256, condition: "unpaired_bus", graph: true)
+    }
+
+    @Test(arguments: [1, 256])
+    func registeredInputGraphUsesActualRenewalCensusWithoutRetargetingOldAssociations(number: Int) async throws {
+        try await assertInputBusRenewal(number: number, condition: "whole_census_retirement", graph: true)
+    }
+
+    @Test(arguments: ["missing_pair", "replaced_header", "foreign_project", "foreign_focus", "partial_restore",
+                      "deciding_read", "deciding_control_replaced", "popup_still_open", "unselected_pair", "navigation_disabled",
+                      "whole_census_late_reorder"])
+    func registeredInputGraphRefusesLostRenewalAuthority(condition: String) async throws {
+        try await assertInputBusRenewal(number: 1, condition: condition, graph: true)
     }
 
     @Test func inputBusRenewsCapturedTargetWhileAnotherTrackIsSelected() async throws {
