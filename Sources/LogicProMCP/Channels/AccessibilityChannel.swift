@@ -481,7 +481,11 @@ actor AccessibilityChannel: Channel {
                     referenceIsCurrent: navigationReferenceIsCurrent, stoppingWhen: stop)
                 population.uiEffects = association.effects
                 if association.effects.reason != nil { population.stable = false }
-                if association.effects.navigationPerformed {
+                // A refused association is already unstable and cannot publish
+                // any rows. Its own cleanup has run; reacquire a population only
+                // to reconcile a successful pair, not to consume the remaining
+                // deadline after a verified refusal.
+                if association.effects.navigationPerformed, population.stable {
                     let boundary = association.effects.restoration == "restored" && association.effects.reason == nil
                         ? await associationReadbackBoundary() : nil
                     let current = try? await readExposedSessionPopulation(request: request, fileReader: fileReader,
