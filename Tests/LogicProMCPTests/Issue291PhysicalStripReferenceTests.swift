@@ -236,8 +236,9 @@ struct Issue291PhysicalStripReferenceTests {
         }
 
         func channel(typedMixer: Bool = true, typedUnread: Bool = false,
+                     logicOverride: AXLogicProElements.Runtime? = nil,
                      onJSONMixerRead: @escaping @Sendable () -> Void = {}) -> AccessibilityChannel {
-            let runtime = logic
+            let runtime = logicOverride ?? logic
             let typed: (@Sendable (@escaping @Sendable () -> Bool) -> (states: [ChannelStripState]?, yielded: Bool))?
             if typedMixer {
                 typed = { stop in typedUnread ? (nil, false) : AccessibilityChannel.defaultGetMixerStates(runtime: runtime, stoppingWhen: stop) }

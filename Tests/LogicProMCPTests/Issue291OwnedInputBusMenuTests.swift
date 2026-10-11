@@ -40,6 +40,44 @@ struct Issue291OwnedInputBusMenuTests {
             await AccessibilityChannel.getInputBusVerified(runtime:f.logic,timing:.immediate)
         }
     }
+    @Test("Input bus destinations follow the owning incoming-arrow menu, never its current echo",
+          arguments: [1, 256])
+    func inputDestinationChoiceUsesIncomingBusIdentity(_ number: Int) throws {
+        let p = try prepare(number)
+        // Exercise the existing structural selector with input semantics. An
+        // incoming arrow is host bus identity, not a receiver-name join.
+        let choice = AccessibilityChannel.outputMenuChoice(for: .bus(number),
+            in: p.f.root, runtime: p.f.logic.ax, receiverArrow: "←")
+        guard case .item(let selected, let path) = choice else {
+            Issue.record("The unique offered input bus must be selectable: \(choice.failureLabel)")
+            return
+        }
+        #expect(CFEqual(selected, p.leaf))
+        #expect(!CFEqual(selected, p.echo))
+        #expect(path == ["Bus", "Bus \(number) ← Audio 2"])
+        #expect(p.f.mutations.isEmpty)
+    }
+    @Test("Input destination selection rejects opposite arrows and duplicate incoming choices",
+          arguments: ["opposite_arrow", "duplicate", "physical_input"])
+    func inputDestinationChoiceRefusesAmbiguousOrForeignChoices(_ fault: String) throws {
+        let p = try prepare(1)
+        if fault == "opposite_arrow" {
+            p.f.b.setAttribute(p.leaf, kAXTitleAttribute as String, "Bus 1 → Audio 2")
+        } else if fault == "duplicate" {
+            let second = p.f.b.element(291_948)
+            p.f.b.setRole(second, kAXMenuItemRole as String)
+            p.f.b.setAttribute(second, kAXTitleAttribute as String, "Bus 1 ← Another receiver")
+            p.f.b.setChildren(second, [])
+            let busMenu = p.f.b.element(291_943)
+            p.f.b.setChildren(busMenu, [p.leaf, second])
+        } else {
+            p.f.b.setAttribute(p.leaf, kAXTitleAttribute as String, "Input 1")
+        }
+        let choice = AccessibilityChannel.outputMenuChoice(for: .bus(1),
+            in: p.f.root, runtime: p.f.logic.ax, receiverArrow: "←")
+        if case .item = choice { Issue.record("Unknown or ambiguous input destinations must refuse") }
+        #expect(p.f.mutations.isEmpty)
+    }
     @Test("Own input list reads checked bus rather than display", arguments:[1,256])
     func checkedInputBus(_ number: Int) async throws {
         let p=try prepare(number), body=try #require(sharedJSONObject(await read(p).message))

@@ -115,6 +115,13 @@ struct HCGlobalInvariantTests {
             RouteCase(tool: "logic_mixer", command: "set_master_volume", params: ["value": .double(0.5)], operation: "mixer.set_master_volume", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "bank", params: ["direction": .string("right")], operation: "mixer.bank", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_output_verified", params: ["track": .int(0), "destination": .object(["kind": .string("bus"), "number": .int(1)])], operation: "mixer.set_output_verified", destinations: [], invariant: .minimumV1),
+            // execute supplies the actual issued physical reference so this
+            // invariant reaches the routed envelope, not an early selector refusal.
+            RouteCase(tool: "logic_mixer", command: "set_input_bus_verified", params: [
+                "target_ref": .string("mix_hc_fixture"),
+                "destination": .object(["kind": .string("bus"), "number": .int(1)]),
+                "expected_current": .object(["kind": .string("bus"), "number": .int(256)]),
+                "replace_existing": .bool(true)], operation: "mixer.set_input_bus_verified", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_plugin_param", params: ["track": .int(0), "insert": .int(0), "param": .int(0), "value": .double(0.5)], operation: "plugin.set_param", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "insert_plugin", params: ["track": .int(0), "slot": .int(0), "plugin_name": .string("Gain"), "confirmed": .bool(true)], operation: "plugin.insert", destinations: [], invariant: .minimumV1),
 
@@ -544,6 +551,31 @@ struct HCGlobalInvariantTests {
                 liveTrackNames: hcLiveTrackHeaders
             )
         case "logic_mixer":
+            if routeCase.command == "set_input_bus_verified" {
+                let fixture = try Issue291InputAssignmentTests.Fixture()
+                let physicalCache = StateCache(), registry = TargetRegistry()
+                let observationRouter = ChannelRouter()
+                let channel = fixture.f.channel(logicOverride: fixture.runtime)
+                await observationRouter.register(channel)
+                let poller = StatePoller(axChannel: channel, cache: physicalCache,
+                    runtime: .init(hasVisibleWindow: { true }, dialogPresent: { false }, blockingDialogInfo: { nil },
+                        projectFileReader: .unavailable, keyboardFocus: { .notTextEditing }))
+                #expect(await poller.refreshNow())
+                let resource = try await ResourceHandlers.read(uri: "logic://mixer", cache: physicalCache,
+                    router: observationRouter, targetRegistry: registry, fileReader: .unavailable)
+                let rows = try #require(sharedJSONObject(sharedResourceText(resource))?["strips"] as? [[String: Any]])
+                var physicalReference: String?
+                for reference in rows.compactMap({ $0["mixer_strip_ref"] as? String }) {
+                    if let held = await registry.resolve(.init(rawValue: reference))?.physicalMixerStrip,
+                       CFEqual(held.strip, fixture.f.strips[0]) { physicalReference = reference }
+                }
+                var params = routeCase.params
+                params["target_ref"] = .string(try #require(physicalReference))
+                return await FeatureFlags.withAdr002TargetRefForTests(true) {
+                    await MixerDispatcher.handle(command: routeCase.command, params: params,
+                        router: router, cache: physicalCache, targetRegistry: registry)
+                }
+            }
             return await MixerDispatcher.handle(command: routeCase.command, params: routeCase.params, router: router, cache: cache)
         case "logic_midi":
             return await MIDIDispatcher.handle(command: routeCase.command, params: routeCase.params, router: router, cache: cache)

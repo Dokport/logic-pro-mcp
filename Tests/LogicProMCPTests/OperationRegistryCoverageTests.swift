@@ -72,6 +72,7 @@ struct OperationRegistryCoverageTests {
             .mixerSetVolume,
             .mixerSetPan,
             .mixerSetOutputVerified,
+            .mixerSetInputBusVerified,
             .pluginsSetParamVerified,
             .pluginsSetEQBandVerified,
             .pluginsInsertVerified,
@@ -87,7 +88,8 @@ struct OperationRegistryCoverageTests {
             .tracksSetInstrument,
         ]
 
-        #expect(mutating.count == 95)   // #971 applies an approved Mixer view;
+        #expect(mutating.count == 96)   // #291 adds the physical-reference-only input bus replacement;
+                                        // #971 applies an approved Mixer view;
                                         // #448: sort_verified is a mutating structural verb;
                                         // #301 added plugins.set_eq_band_verified, which is
                                         // target-bearing, so `targetless` is unchanged;

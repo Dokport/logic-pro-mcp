@@ -459,10 +459,10 @@ extension AccessibilityChannel {
         let observation: HeldSelectionAssociation
 
         /// Renew after the caller's deciding slot read; the pair itself is not permission.
-        func permits(runtime: AXLogicProElements.Runtime) -> Bool {
+        func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil) -> Bool {
             guard pair.strip.currentIndex(runtime: runtime) == index,
                   originalTrack.currentIndex() != nil,
-                  observation.permitsRead(),
+                  ownedPopup.map({ observation.permitsOwnedPopupRead($0) }) ?? observation.permitsRead(),
                   case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
                   CFEqual(window, original.window),
                   case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(original.window, runtime: runtime),
@@ -515,7 +515,8 @@ extension AccessibilityChannel {
     static func outputMenuChoice(
         for destination: OutputAssignment,
         in root: AXUIElement,
-        runtime: AXHelpers.Runtime
+        runtime: AXHelpers.Runtime,
+        receiverArrow: Character = "→"
     ) -> OutputMenuChoice {
         guard let rootItems = titledMenuItems(of: root, runtime: runtime) else { return .menuUnread(path: []) }
         switch destination {
@@ -537,8 +538,12 @@ extension AccessibilityChannel {
             guard let leaves = leafItems(under: submenu, path: [title], depth: 0, runtime: runtime) else {
                 return .menuUnread(path: [title])
             }
-            let matches = leaves.filter { OutputAssignment.busNumber(ofMenuItemTitle: $0.title) == number }
-            let offered = leaves.compactMap { OutputAssignment.busNumber(ofMenuItemTitle: $0.title) }
+            let matches = leaves.filter {
+                OutputAssignment.busNumber(ofMenuItemTitle: $0.title, receiverArrow: receiverArrow) == number
+            }
+            let offered = leaves.compactMap {
+                OutputAssignment.busNumber(ofMenuItemTitle: $0.title, receiverArrow: receiverArrow)
+            }
                 .map { OutputAssignment.bus($0).token }
             return single(matches.map { ($0.element, $0.path) }, offered: offered)
         case .physical(let first, let second):
@@ -928,7 +933,7 @@ extension AccessibilityChannel {
     /// itself, so Logic's popup-level windows are first given `popupCloseTimeoutMs` to go: the
     /// shared cleanup posts Escape when one is still counted, and an Escape with no menu open
     /// reaches the arrange window instead. Either way the shared cleanup has the last word.
-    private static func closeOutputPopup(
+    static func closeOutputPopup(
         runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming,
         waitForSelfClose: Bool,

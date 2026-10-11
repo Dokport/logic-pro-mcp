@@ -226,7 +226,7 @@ extension AccessibilityChannel {
             return document.utf8.elementsEqual(currentDocument.utf8)
         }
 
-        private func owned(checkingAssociation: Bool = true) -> Bool {
+        private func owned(checkingAssociation: Bool = true, ownedPopup: AXUIElement? = nil) -> Bool {
             func railMatches() -> Bool {
                 guard checkingAssociation else { return true }
                 guard let currentRailPath = Self.path(rail, to: window, ax: logic.ax), Self.same(railPath, currentRailPath),
@@ -256,21 +256,35 @@ extension AccessibilityChannel {
                 runtime: logic.ax, permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
             guard case .success(.some(let frontmost)) = application[0], frontmost as? Bool == true,
                   case .success(.some(let windowValues)) = application[1], CFGetTypeID(windowValues) == CFArrayGetTypeID(),
-                  case .success(.some(let mainValue)) = application[2], CFGetTypeID(mainValue) == AXUIElementGetTypeID(),
-                  case .success(.some(let focusedValue)) = application[3], CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+                  case .success(.some(let mainValue)) = application[2], CFGetTypeID(mainValue) == AXUIElementGetTypeID() else {
+                let states = application.map { reading -> String in
+                    switch reading {
+                    case .success(.some(let value)): return "type:\(CFGetTypeID(value))"
+                    case .success(.none): return "absent"
+                    case .failure(let error): return "AX:\(error.raw)"
+                    }
+                }.joined(separator: ",")
+                Log.info("Held association ownership refused: application window attributes [\(states)]", subsystem: "ax")
                 lost = true; return false
             }
             let windows = AXHelpers.decodeChildrenArray(windowValues)
             let main = unsafeBitCast(mainValue, to: AXUIElement.self)
-            let focusedWindow = unsafeBitCast(focusedValue, to: AXUIElement.self)
+            let focusedWindowMatches = AccessibilityChannel.routingFocusedWindowMatches(application[3],
+                window: window, ownedPopup: ownedPopup, mixer: mixer, runtime: logic.ax)
             guard
                   windows.filter({ CFEqual($0, window) }).count == 1,
-                  CFEqual(main, window), CFEqual(focusedWindow, window),
-                  currentWindowScopeMatches(), !AXLogicProElements.dialogPresent(runtime: logic),
-                  railMatches(),
+                  CFEqual(main, window), focusedWindowMatches,
+                  currentWindowScopeMatches(), !AXLogicProElements.dialogPresent(runtime: logic) else {
+                Log.info("Held association ownership refused: window/dialog (main=\(CFEqual(main, window)), focused=\(focusedWindowMatches))", subsystem: "ax")
+                lost = true; return false
+            }
+            guard railMatches(),
                   let currentPath = Self.path(mixer, to: window, ax: logic.ax), Self.same(path, currentPath),
-                  stripCustodyMatches(),
-                  transportPaths.allSatisfy({ held in
+                  stripCustodyMatches() else {
+                Log.info("Held association ownership refused: original rail/Mixer census", subsystem: "ax")
+                lost = true; return false
+            }
+            guard transportPaths.allSatisfy({ held in
                       guard let control = held.first, let current = Self.path(control, to: window, ax: logic.ax),
                             Self.same(held, current) else { return false }
                       let attributes = AXHelpers.getNonHelpAttributes(control, [kAXRoleAttribute, kAXValueAttribute] as [String],
@@ -278,8 +292,11 @@ extension AccessibilityChannel {
                       guard case .success(.some(let role)) = attributes[0], role as? String == kAXCheckBoxRole as String,
                             case .success(.some(let rawValue)) = attributes[1], let value = rawValue as? NSNumber else { return false }
                       return value == 0
-                  }),
-                  case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
+                  }) else {
+                Log.info("Held association ownership refused: original transport path/value", subsystem: "ax")
+                lost = true; return false
+            }
+            guard case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                   document.utf8.elementsEqual(finalDocument.utf8), logic.logicProPID() == pid,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { lost = true; return false }
             return true
@@ -299,6 +316,68 @@ extension AccessibilityChannel {
             guard owned(), Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(final, expectedFocus) else { lost = true; return false }
+            return true
+        }
+
+        func permitsOwnedPopupRead(_ root: AXUIElement) -> Bool {
+            // This is not a general editor exemption or a new association. Keep
+            // the original complete census and exclusive selection; only allow
+            // focus on the search field reciprocally owned by this exact popup.
+            guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+                  let menus = AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax),
+                  menus.count == 1, CFEqual(menus[0], root),
+                  let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax)
+            else {
+                Log.info("Input popup ownership refused: original selection/root/focus", subsystem: "ax")
+                lost = true; return false
+            }
+            guard passiveStripMatches(expectedFocus) else {
+                Log.info("Input popup ownership refused: original passive strip metadata", subsystem: "ax")
+                return false
+            }
+            // Some owned popups keep the original passive strip focused. Its
+            // existing full witness also handles native zero insertion metadata;
+            // do not classify that qualified strip as an arbitrary editor.
+            if CFEqual(focus, expectedFocus) {
+                guard passiveFocusMatches(), owned(ownedPopup: root),
+                      Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+                      let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                      CFEqual(final, expectedFocus) else { lost = true; return false }
+                return true
+            }
+            guard
+                  AXHelpers.getRole(focus, runtime: logic.ax) == kAXTextFieldRole as String,
+                  case .success(let rows) = AXHelpers.childrenResult(root, runtime: logic.ax),
+                  let parent: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
+            else { lost = true; return false }
+            if CFEqual(parent, root) {
+                guard rows.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+            } else {
+                guard rows.filter({ CFEqual($0, parent) }).count == 1,
+                      let role = AXHelpers.getRole(parent, runtime: logic.ax),
+                      role == kAXGroupRole as String || role == "AXMenuItem",
+                      let parentRoot: AXUIElement = AXHelpers.getAttribute(parent, kAXParentAttribute as String, runtime: logic.ax),
+                      CFEqual(parentRoot, root),
+                      case .success(let children) = AXHelpers.childrenResult(parent, runtime: logic.ax),
+                      children.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+            }
+            guard let current = AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax),
+                  current.count == 1, CFEqual(current[0], root),
+                  let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(final, focus) else {
+                Log.info("Input popup ownership refused: reciprocal focus/root", subsystem: "ax")
+                lost = true; return false
+            }
+            guard owned(ownedPopup: root) else {
+                Log.info("Input popup ownership refused: full association custody", subsystem: "ax")
+                return false
+            }
+            guard
+                  Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+                  currentWindowScopeMatches(), logic.logicProPID() == pid,
+                  logic.focusedApplicationPID() == pid,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { lost = true; return false }
             return true
         }
 
@@ -322,7 +401,12 @@ extension AccessibilityChannel {
         private func passiveFocusMatches() -> Bool {
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                  CFEqual(focus, expectedFocus), strips.filter({ CFEqual($0, focus) }).count == 1,
+                  CFEqual(focus, expectedFocus) else { lost = true; return false }
+            return passiveStripMatches(focus)
+        }
+
+        private func passiveStripMatches(_ focus: AXUIElement) -> Bool {
+            guard strips.filter({ CFEqual($0, focus) }).count == 1,
                   AXHelpers.getRole(focus, runtime: logic.ax) == kAXLayoutItemRole as String,
                   AXHelpers.isAttributeSettable(focus, kAXValueAttribute as String, runtime: logic.ax) == false else { lost = true; return false }
             let attributes = [kAXValueAttribute, kAXSelectedTextAttribute,

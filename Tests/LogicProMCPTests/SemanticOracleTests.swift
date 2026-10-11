@@ -641,6 +641,16 @@ struct SemanticOracleCensusTests {
         }
     }
 
+    @Test func boundedInputWriterNativeEvidenceDoesNotImplySemanticOraclePromotion() throws {
+        let reason = try #require(SemanticOracleTable.structurallyUnverifiedMutatingOperationIDs[.mixerSetInputBusVerified])
+        #expect(reason.contains("bounded native round trip"))
+        #expect(reason.contains("independent typed-source"))
+        #expect(reason.contains("not promotion evidence"))
+        #expect(SemanticOracleTable.mutatingSpecIDs.contains(.mixerSetInputBusVerified))
+        #expect(!SemanticOracleTable.coveredMutatingOperationIDs.contains(.mixerSetInputBusVerified))
+        #expect(SemanticOracleTable.byOperationID[.mixerSetInputBusVerified] == nil)
+    }
+
     /// set_cycle_range is excluded a level EARLIER than the structural list: it is
     /// registry `.unsupported`, so `mutatingSpecIDs` (which filters `.unsupported`)
     /// never surfaces it, and it can carry no oracle. Its exclusion is documented
