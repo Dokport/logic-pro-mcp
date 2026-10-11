@@ -207,7 +207,6 @@ extension AccessibilityChannel {
                     defer { if !permitted { lost = true } }
                     guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                           logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
-                          let currentApp = AXLogicProElements.appRoot(runtime: logic), CFEqual(currentApp, app),
                           AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: logic.ax) as Bool? == true,
                           let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
                           let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
@@ -226,7 +225,12 @@ extension AccessibilityChannel {
                           absent(kAXSelectedTextAttribute as String),
                           let owner: AXUIElement = AXHelpers.getAttribute(focus, kAXWindowAttribute as String, runtime: logic.ax),
                           CFEqual(owner, window),
-                          case .read(let rows) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: logic),
+                          // Initial binding discovers the unique original rail across the
+                          // whole window. This read-only focus witness then revalidates
+                          // that held rail, not unrelated plug-in/Inspector subtrees.
+                          // Fresh original window/title/document and physical ancestry
+                          // above and below still prevent chooser or foreign custody.
+                          case .read(let rows) = AXLogicProElements.allTrackHeadersVerifiedRead(in: rail, runtime: logic),
                           rows.filter({ CFEqual($0, header) }).count == 1,
                           case .success(let children) = AXHelpers.childrenResult(header, runtime: logic.ax),
                           children.filter({ CFEqual($0, focus) }).count == 1 else { return false }
