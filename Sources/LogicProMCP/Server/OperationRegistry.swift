@@ -174,7 +174,7 @@ enum TargetPolicy: Sendable, Equatable {
 /// row flip whose census diff is the receipt.
 enum IndexBindingPolicy: Sendable, Equatable, CaseIterable {
     /// A bare index is refused outright — only a stable `target_ref` binds.
-    /// Assigned to ZERO production ops today; see `refRequiredOperationIDs`.
+    /// Assigned to physical-reference-only commands; see `refRequiredOperationIDs`.
     case refRequired
     /// A bare index must be corroborated by an `expected_name` that matches the
     /// LIVE header at that index AND is unique across the live surface.
@@ -478,17 +478,12 @@ enum OperationRegistry {
         .tracksDelete, .tracksDuplicate, .tracksSetInstrument, .pluginsInsertVerified,
     ]
 
-    /// PRD-007: pinned empty this increment. `.refRequired` is implemented and
-    /// unit-tested via a synthetic spec, but assigned to no production op — the
-    /// promotion is a registry row flip in a later batch, so this set going
-    /// non-empty IS the promotion receipt in the census diff.
-    /// Planned first promotion: `tracks.delete` (already `.corroborated`).
-    /// PRD-007 Part 2 flipped `FeatureFlags.adr002TargetRef` to default ON, so
-    /// the reachability precondition is now met — but the promotion is still a
-    /// DELIBERATE separate row flip, not an automatic consequence: it must be
-    /// taken with its own catalog diff and census receipt, and it strands any
-    /// caller running the `=0` kill-switch. Left pinned empty here on purpose.
-    static let refRequiredOperationIDs: Set<OperationID> = []
+    /// The bounded input writer has always required an exact physical Mixer
+    /// reference and exposes no index compatibility path. Advertise that actual
+    /// contract instead of inheriting misleading legacy-index metadata. Existing
+    /// legacy/corroborated commands are unchanged; the target-ref kill switch
+    /// continues to refuse this physical-only command rather than invent a fallback.
+    static let refRequiredOperationIDs: Set<OperationID> = [.mixerSetInputBusVerified]
 
     /// The corroboration parameter. NOT `name`: several target-bearing ops
     /// already spend `name` on an operand (`tracks.rename`'s NEW name,
