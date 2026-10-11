@@ -31,6 +31,7 @@ struct Issue969MixerVisibilitySetterTests {
         var cancelled = false
         var logicPID: pid_t = 4242
         var currentApp: AXUIElement?
+        var appRootResolutions = 0
         var unreadNestedGroup: AXUIElement?
         var failedMetadata: (AXUIElement, String)?
         var failedMetadataError: AXError = .cannotComplete
@@ -104,7 +105,7 @@ struct Issue969MixerVisibilitySetterTests {
 
         func channel() -> AccessibilityChannel {
             let ax = builder.makeAXRuntime(appElement: app,
-                appElementProvider: { [self] _ in currentApp ?? app },
+                appElementProvider: { [self] _ in appRootResolutions += 1; return currentApp ?? app },
                 attributeValueHandler: { [self] element, attribute in
                     attributeReadObserver?(element, attribute)
                     observeDecisiveMixerRead(element, attribute)
