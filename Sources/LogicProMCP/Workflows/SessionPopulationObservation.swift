@@ -32,6 +32,9 @@ enum SessionPopulationObservation {
         var restoredTracks: [TrackState]? = nil
         /// The live held view control, not a claim about saved/live population equivalence.
         var hiddenTracksShown: Bool? = nil
+        /// Strict selected-child membership corroborated against physical headers
+        /// throughout the fresh read. Never an end witness for the whole project.
+        var selectedTrackMembershipObserved = false
         /// Request-local physical witnesses from explicit selection and verified restoration.
         /// Never decoded or reconstructed from a wire reference, name or ordinal.
         var selectionAssociations: [AccessibilityChannel.HeldSelectionAssociation.Pair] = []
@@ -732,6 +735,7 @@ enum SessionPopulationObservation {
         /// Present only beside `expected_count`. A match is evidence, not completeness.
         let expectedCountMatchesRail: Bool?
         let hiddenTracksShown: Bool?
+        var selectionMembershipSource: String? = nil
 
         enum CodingKeys: String, CodingKey {
             case firstRow = "first_row"
@@ -741,6 +745,7 @@ enum SessionPopulationObservation {
             case expectedCountSource = "expected_count_source"
             case expectedCountMatchesRail = "expected_count_matches_rail"
             case hiddenTracksShown = "hidden_tracks_shown"
+            case selectionMembershipSource = "selection_membership_source"
         }
 
         func encode(to encoder: Encoder) throws {
@@ -752,6 +757,7 @@ enum SessionPopulationObservation {
             try container.encodeIfPresent(expectedCountSource, forKey: .expectedCountSource)
             try container.encodeIfPresent(expectedCountMatchesRail, forKey: .expectedCountMatchesRail)
             try container.encodeIfPresent(hiddenTracksShown, forKey: .hiddenTracksShown)
+            try container.encodeIfPresent(selectionMembershipSource, forKey: .selectionMembershipSource)
         }
     }
 
@@ -986,6 +992,9 @@ enum SessionPopulationObservation {
         // Coverage describes the rail that was read; the scope narrows which rows are shown and,
         // for a selection, adds the one reason the rail cannot answer.
         let tracksCoverage: Coverage
+        let selectedMembershipObserved = request.scope == .selection
+            && capture.freshPopulation?.stable == true
+            && capture.freshPopulation?.selectedTrackMembershipObserved == true
         var tracksReasons: [Reason] = []
         if capture.freshPopulation != nil && !request.needsTracks {
             tracksCoverage = .unavailable
@@ -1012,7 +1021,7 @@ enum SessionPopulationObservation {
             if capture.before.axOccluded {
                 tracksReasons.append(.axOccluded)
             }
-            if live.isEmpty {
+            if live.isEmpty && !selectedMembershipObserved {
                 // The cache cannot tell a failed rail read from an empty rail.
                 tracksReasons.append(.unverifiedEmpty)
             }
@@ -1021,16 +1030,19 @@ enum SessionPopulationObservation {
             if capture.endedAt.timeIntervalSince(capture.tracksFetchedAt) > ProjectSessionAudit.staleThresholdSeconds {
                 tracksReasons.append(.trackCacheStale)
             }
-            if !collapsedStackRows.isEmpty {
+            if !collapsedStackRows.isEmpty && !selectedMembershipObserved {
                 tracksReasons.append(.collapsedTrackStack)
             }
-            if capture.freshPopulation?.hiddenTracksShown == false {
+            if capture.freshPopulation?.hiddenTracksShown == false && !selectedMembershipObserved {
                 tracksReasons.append(.hiddenTracksUnobserved)
             }
-            if live.contains(where: { $0.isStackHeader == nil }) {
+            if live.contains(where: { $0.isStackHeader == nil }) && !selectedMembershipObserved {
                 tracksReasons.append(.stackStateUnreadable)
             }
-            if let expected = capture.fileTrackCount {
+            if selectedMembershipObserved {
+                // The independently observed selected set is this request's
+                // population. It says nothing about hidden or virtualized peers.
+            } else if let expected = capture.fileTrackCount {
                 // A matching count says the rail has as many rows as the file has tracks, not
                 // that these rows are those tracks: nothing in the cache witnesses where the rail
                 // ends, so a count alone never makes the population complete (#965).
@@ -1067,7 +1079,8 @@ enum SessionPopulationObservation {
                 expectedCount: capture.fileTrackCount,
                 expectedCountSource: capture.fileTrackCount == nil ? nil : "project_file",
                 expectedCountMatchesRail: capture.fileTrackCount.map { $0 == live.count },
-                hiddenTracksShown: capture.freshPopulation?.stable == true ? capture.freshPopulation?.hiddenTracksShown : nil
+                hiddenTracksShown: capture.freshPopulation?.stable == true ? capture.freshPopulation?.hiddenTracksShown : nil,
+                selectionMembershipSource: selectedMembershipObserved ? "ax_selected_children" : nil
             ),
             rows: rows,
             ambiguousTrackIndices: ambiguousTrackIndices,

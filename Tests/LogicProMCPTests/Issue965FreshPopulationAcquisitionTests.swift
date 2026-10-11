@@ -3124,6 +3124,95 @@ struct Issue965FreshPopulationAcquisitionTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func completeSelectedChildrenWitnessDoesNotRequireWholeProjectEnd(selected: Bool) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(false) {
+            let fixture = Fixture()
+            fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, selected)
+            fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String,
+                                         selected ? [fixture.header] : [AXUIElement]())
+            let result = try await inspect(fixture: fixture, domains: ["tracks"], scope: "selection")
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let tracks = try #require(body["tracks"] as? [String: Any])
+            let rows = try #require(tracks["rows"] as? [[String: Any]])
+            #expect(rows.count == (selected ? 1 : 0))
+            #expect(tracks["coverage"] as? String == "complete")
+            #expect(try #require(tracks["reasons"] as? [String]).isEmpty)
+            let witnesses = try #require(tracks["witnesses"] as? [String: Any])
+            #expect(witnesses["selection_membership_source"] as? String == "ax_selected_children")
+            let overall = try #require(body["overall"] as? [String: Any])
+            let complete = try #require(overall["complete"] as? Bool)
+            #expect(complete)
+            #expect(fixture.reads.helpCount == 0)
+            #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+        }
+    }
+
+    @Test(arguments: ["missing", "duplicate", "foreign", "flag_disagrees", "wrong_type", "unreadable", "malformed_flag"])
+    func selectedChildrenMustBeFullyObservedAndAgreeWithRows(defect: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(false) {
+            let fixture = Fixture()
+            fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, true)
+            fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [fixture.header])
+            switch defect {
+            case "missing": fixture.builder.removeAttribute(fixture.rail, kAXSelectedChildrenAttribute as String)
+            case "duplicate": fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [fixture.header, fixture.header])
+            case "foreign": fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [fixture.builder.element(965_998)])
+            case "flag_disagrees": fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [AXUIElement]())
+            case "wrong_type": fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, "selected")
+            case "malformed_flag": fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, NSNumber(value: 2))
+            default: break
+            }
+            let result = try await inspect(fixture: fixture, domains: ["tracks"], scope: "selection",
+                readingAttribute: { element, attribute in
+                    guard defect == "unreadable", CFEqual(element, fixture.rail),
+                          attribute == kAXSelectedChildrenAttribute as String else { return nil }
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                })
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let tracks = try #require(body["tracks"] as? [String: Any])
+            #expect(tracks["coverage"] as? String != "complete")
+            let witnesses = try #require(tracks["witnesses"] as? [String: Any])
+            #expect(witnesses["selection_membership_source"] == nil)
+            #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+        }
+    }
+
+    @Test func selectedChildrenWitnessCannotReplaceEarlierRowSelection() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(false) {
+            let fixture = Fixture()
+            fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, false)
+            fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [fixture.header])
+            let result = try await inspect(fixture: fixture, domains: ["tracks"], scope: "selection",
+                readingAttribute: { element, attribute in
+                    guard CFEqual(element, fixture.header), attribute == kAXSelectedAttribute as String else { return nil }
+                    let readings = fixture.reads.recorded
+                    let selectedRead = readings.lastIndex(of: kAXSelectedChildrenAttribute as String) ?? -1
+                    let rowRead = readings.lastIndex(of: kAXTitleAttribute as String) ?? -1
+                    return .success(NSNumber(value: selectedRead > rowRead))
+                })
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let tracks = try #require(body["tracks"] as? [String: Any])
+            #expect(tracks["coverage"] as? String != "complete")
+            let witnesses = try #require(tracks["witnesses"] as? [String: Any])
+            #expect(witnesses["selection_membership_source"] == nil)
+        }
+    }
+
+    @Test func selectedChildrenWitnessNeverCertifiesWholeProject() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(false) {
+            let fixture = Fixture()
+            fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, true)
+            fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [fixture.header])
+            let result = try await inspect(fixture: fixture, domains: ["tracks"])
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let tracks = try #require(body["tracks"] as? [String: Any])
+            #expect(tracks["coverage"] as? String == "partial")
+            let witnesses = try #require(tracks["witnesses"] as? [String: Any])
+            #expect(witnesses["selection_membership_source"] == nil)
+        }
+    }
+
     @Test func disappearingSelectionReadIsNotAStablePopulation() async throws {
         let fixture = Fixture()
         let selectionReads = Reads()
