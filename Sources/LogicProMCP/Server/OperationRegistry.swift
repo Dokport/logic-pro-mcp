@@ -22,6 +22,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case mixerGetOutputVerified = "mixer.get_output_verified"
     case mixerGetInputBusVerified = "mixer.get_input_bus_verified"
     case mixerSetInputBusVerified = "mixer.set_input_bus_verified"
+    case mixerSetSendOutputVerified = "mixer.set_send_output_verified"
     case mixerGetSendDestinationVerified = "mixer.get_send_destination_verified"
     case navigateGotoBar = "navigate.goto_bar"
     case navigateGotoMarker = "navigate.goto_marker"
@@ -306,7 +307,7 @@ enum OperationRegistry {
         ToolID.logicMixer.rawValue: [
             "mixer.set_volume", "mixer.set_pan", "mixer.set_master_volume",
             "mixer.set_plugin_param", "mixer.insert_plugin", "mixer.bank",
-            "mixer.set_output_verified", "mixer.get_output_verified", "mixer.get_input_bus_verified", "mixer.set_input_bus_verified", "mixer.get_send_destination_verified",
+            "mixer.set_output_verified", "mixer.get_output_verified", "mixer.get_input_bus_verified", "mixer.set_input_bus_verified", "mixer.get_send_destination_verified", "mixer.set_send_output_verified",
         ],
         ToolID.logicNavigate.rawValue: [
             "navigate.goto_bar", "navigate.goto_marker", "navigate.create_marker",
@@ -368,7 +369,7 @@ enum OperationRegistry {
         ],
         ToolID.logicMixer.rawValue: [
             "set_volume", "set_pan", "set_master_volume", "set_plugin_param", "insert_plugin",
-            "bank", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified",
+            "bank", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified",
         ],
         ToolID.logicNavigate.rawValue: [
             "goto_bar", "goto_marker", "create_marker", "delete_marker", "rename_marker",
@@ -483,7 +484,7 @@ enum OperationRegistry {
     /// contract instead of inheriting misleading legacy-index metadata. Existing
     /// legacy/corroborated commands are unchanged; the target-ref kill switch
     /// continues to refuse this physical-only command rather than invent a fallback.
-    static let refRequiredOperationIDs: Set<OperationID> = [.mixerSetInputBusVerified]
+    static let refRequiredOperationIDs: Set<OperationID> = [.mixerSetInputBusVerified, .mixerSetSendOutputVerified]
 
     /// The corroboration parameter. NOT `name`: several target-bearing ops
     /// already spend `name` on an operand (`tracks.rename`'s NEW name,
@@ -601,6 +602,7 @@ enum OperationRegistry {
         (.mixerGetOutputVerified, "get_output_verified", .none, .acceptsStableTarget, []),
         (.mixerGetInputBusVerified, "get_input_bus_verified", .none, .acceptsStableTarget, []),
         (.mixerSetInputBusVerified, "set_input_bus_verified", .none, .acceptsStableTarget, ["destination", "expected_current", "replace_existing"]),
+        (.mixerSetSendOutputVerified, "set_send_output_verified", .none, .acceptsStableTarget, ["ordinal", "destination", "expected_current", "replace_existing"]),
         (.mixerGetSendDestinationVerified, "get_send_destination_verified", .none, .acceptsStableTarget, ["ordinal"]),
     ] as [(OperationID, String, ConfirmationPolicy, TargetPolicy, Set<String>)]).map { entry in
         OperationSpec(

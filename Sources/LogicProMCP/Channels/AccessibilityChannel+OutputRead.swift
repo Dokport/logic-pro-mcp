@@ -497,9 +497,14 @@ extension AccessibilityChannel {
                 extras["hint"] = hint
                 return .init(result: .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras)), assignment: nil)
             }
-            guard writerContextCurrent(), let current = assignedControl(), assigned.matches(current),
-                  checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true,
-                  runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true else {
+            let contextAfterPress = writerContextCurrent()
+            let controlAfterPress = assignedControl().map { assigned.matches($0) } == true
+            let axPopupAbsent = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
+            let cgPopupAbsent = runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true
+            extras["post_press_custody"] = ["context_current": contextAfterPress,
+                "original_send_control_current": controlAfterPress,
+                "ax_popup_absent": axPopupAbsent, "cg_popup_absent": cgPopupAbsent]
+            guard contextAfterPress, controlAfterPress, axPopupAbsent, cgPopupAbsent else {
                 return uncertain("The press lost original physical/send custody or popup closure; no guessed inverse was attempted.")
             }
             let after = await getOutputObservation(runtime: runtime, sendOrdinal: sendOrdinal, timing: timing)

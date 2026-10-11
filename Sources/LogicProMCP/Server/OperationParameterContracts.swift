@@ -241,6 +241,13 @@ extension OperationRegistry {
                 "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
                 "ordinal": index(1),
             ], required: [["target_ref"],["ordinal"]]),
+            "mixer.set_send_output_verified": .init(params: [
+                "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
+                "ordinal": .enforced(.integer, .int(1)),
+                "destination": .enforced(.object, .object(["kind": "physical", "ports": .array([.int(3), .int(4)])])),
+                "expected_current": .enforced(.object, .object(["kind": "stereo_output"])),
+                "replace_existing": .enforced(.boolean, .bool(true)),
+            ], required: [["target_ref"], ["ordinal"], ["destination"], ["expected_current"], ["replace_existing"]]),
 
             // logic_navigate
             "navigate.goto_bar": .init(params: ["bar": index(9)], required: [["bar"]]),

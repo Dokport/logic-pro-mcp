@@ -1822,7 +1822,8 @@ func testTransportDispatcherStillnessRefusalsBeforeTheKeyAreStateC(
     #expect(!description.replacingOccurrences(of: "set_output_verified", with: "").contains("set_output"))
     #expect(description.contains("set_input_bus_verified"))
     #expect(!description.replacingOccurrences(of: "set_input_bus_verified", with: "").contains("set_input"))
-    #expect(!description.contains("set_send"))
+    #expect(description.contains("set_send_output_verified"))
+    #expect(!description.replacingOccurrences(of: "set_send_output_verified", with: "").contains("set_send"))
 }
 
 // MARK: - TrackDispatcher

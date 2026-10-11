@@ -122,6 +122,11 @@ struct HCGlobalInvariantTests {
                 "destination": .object(["kind": .string("bus"), "number": .int(1)]),
                 "expected_current": .object(["kind": .string("bus"), "number": .int(256)]),
                 "replace_existing": .bool(true)], operation: "mixer.set_input_bus_verified", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_mixer", command: "set_send_output_verified", params: [
+                "target_ref": .string("mix_hc_fixture"), "ordinal": .int(1),
+                "destination": .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
+                "expected_current": .object(["kind": .string("stereo_output")]),
+                "replace_existing": .bool(true)], operation: "mixer.set_send_output_verified", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_plugin_param", params: ["track": .int(0), "insert": .int(0), "param": .int(0), "value": .double(0.5)], operation: "plugin.set_param", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "insert_plugin", params: ["track": .int(0), "slot": .int(0), "plugin_name": .string("Gain"), "confirmed": .bool(true)], operation: "plugin.insert", destinations: [], invariant: .minimumV1),
 
@@ -551,7 +556,7 @@ struct HCGlobalInvariantTests {
                 liveTrackNames: hcLiveTrackHeaders
             )
         case "logic_mixer":
-            if routeCase.command == "set_input_bus_verified" {
+            if routeCase.command == "set_input_bus_verified" || routeCase.command == "set_send_output_verified" {
                 let fixture = try Issue291InputAssignmentTests.Fixture()
                 let physicalCache = StateCache(), registry = TargetRegistry()
                 let observationRouter = ChannelRouter()

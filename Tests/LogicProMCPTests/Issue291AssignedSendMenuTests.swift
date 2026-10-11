@@ -1,5 +1,6 @@
 @preconcurrency import ApplicationServices
 import Foundation
+import MCP
 import Testing
 @testable import LogicProMCP
 
@@ -221,6 +222,71 @@ struct Issue291AssignedSendMenuTests {
         #expect(probe.pressed == (fault == "post_open_foreground" ? ["Output 3-4"] : []))
         #expect(probe.cancels == 0)
         #expect(probe.open)
+    }
+    @Test("Registered occupied-send writer uses only a physical reference and the real mutation gate")
+    func registeredOccupiedSendOutputWriter() async throws {
+        let command = "set_send_output_verified"
+        let spec = try #require(OperationRegistry.spec(tool:"logic_mixer",command:command))
+        #expect(spec.mutability == .mutating)
+        #expect(spec.indexBinding == .refRequired)
+        #expect(spec.allowedParams == Set(["target_ref","project_ref","ordinal","destination","expected_current","replace_existing"]))
+        let handler = try #require(OperationHandlerRegistry.handler(tool:"logic_mixer",command:command))
+        let p = try prepare(), probe = SendWriterProbe(p)
+        let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter()
+        let channel = p.f.channel(logicOverride:probe.runtime)
+        await router.register(channel)
+        let poller = StatePoller(axChannel:channel,cache:cache,
+            runtime:.init(hasVisibleWindow: { true },dialogPresent: { false },blockingDialogInfo: { nil },
+                projectFileReader:.unavailable,keyboardFocus: { .notTextEditing }))
+        #expect(await poller.refreshNow())
+        let resource = try await ResourceHandlers.read(uri:"logic://mixer",cache:cache,router:router,
+            targetRegistry:registry,fileReader:.unavailable)
+        let rows = try #require(sharedJSONObject(sharedResourceText(resource))?["strips"] as? [[String:Any]])
+        var matching: [String] = []
+        for reference in rows.compactMap({ $0["mixer_strip_ref"] as? String }) {
+            if let physical = await registry.resolve(.init(rawValue:reference))?.physicalMixerStrip,
+               CFEqual(physical.strip,p.f.strips[0]) { matching.append(reference) }
+        }
+        #expect(matching.count == 1)
+        let reference = try #require(matching.first)
+        let dependencies = HandlerDependencies(router:router,cache:cache,targetRegistry:registry,poller:poller,
+            dialogPresent: { false },supportBundleExporter:nil,mutationGate:LogicMutationGate(),
+            liveTrackNames: { [0:"A",1:"B"] },projectFileReader:.unavailable)
+        let params: [String:Value] = ["target_ref":.string(reference),"ordinal":.int(1),
+            "destination":.object(["kind":.string("physical"),"ports":.array([.int(3),.int(4)])]),
+            "expected_current":.object(["kind":.string("stereo_output")]),"replace_existing":.bool(true)]
+        func call(_ inputs: [String:Value]) async -> CallTool.Result {
+            await LogicProServer.runWithDeadline(tool:"logic_mixer",command:command,
+                commandParams:inputs,mutationGate:dependencies.mutationGate) {
+                await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies,inputs) }
+            }
+        }
+        for extra in ["track","index","value","bypassed"] {
+            var invalid = params; invalid[extra] = .int(0)
+            let body = try #require(sharedJSONObject(sharedToolText(await call(invalid))))
+            #expect(body["state"] as? String == "C")
+            #expect(probe.pressed.isEmpty)
+        }
+        for invalidReference in ["mix_unissued","trk_unissued"] {
+            var invalid = params; invalid["target_ref"] = .string(invalidReference)
+            let body = try #require(sharedJSONObject(sharedToolText(await call(invalid))))
+            #expect(body["state"] as? String == "C")
+            #expect(probe.pressed.isEmpty)
+        }
+        var wrongProject = params; wrongProject["project_ref"] = .string("prj_unissued")
+        #expect(sharedJSONObject(sharedToolText(await call(wrongProject)))?["state"] as? String == "C")
+        #expect(probe.pressed.isEmpty)
+        let forward = try #require(sharedJSONObject(sharedToolText(await call(params))))
+        #expect(forward["state"] as? String == "A", "\(forward)")
+        #expect(probe.pressed == ["Output 3-4"])
+        var inverse = params
+        inverse["destination"] = params["expected_current"]
+        inverse["expected_current"] = params["destination"]
+        let restored = try #require(sharedJSONObject(sharedToolText(await call(inverse))))
+        #expect(restored["state"] as? String == "A", "\(restored)")
+        #expect(probe.pressed == ["Output 3-4","Stereo Output"])
+        #expect(!probe.open)
+        #expect(dependencies.mutationGate?.currentOperation() == nil)
     }
     @Test("Routing actions reuse the exact occupied census control, never an empty anchor or a lookalike",
           arguments: ["held", "negative", "empty", "missing_list", "duplicate_list", "foreign_parent"])
