@@ -408,7 +408,7 @@ extension OperationRegistry {
             "plugins.get_inventory": .init(params: Dictionary(uniqueKeysWithValues: ["index", "track", "track_index"].map {
                 ($0, ParamRule.unconstrained("omitted when it does not read as an integer; the channel then refuses the request",
                                              sample: .int(0)))
-            }), required: [["index", "track", "track_index"]]),
+            }).merging(["reveal_mixer": .enforced(.boolean, .bool(false))],uniquingKeysWith:{ _,new in new }), required: [["index", "track", "track_index"]]),
             "plugins.get_param_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("ins_lpm_contract_955")), "project_ref": projectRef,
                 "param": .enforced(.string, .string("threshold")),

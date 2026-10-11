@@ -16,7 +16,8 @@ enum AXPluginTrackBinding {
 
     static func resolve(
         track: Int, mixer: AXUIElement, runtime: AXLogicProElements.Runtime,
-        onRefusal: ((String) -> Void)? = nil
+        onRefusal: ((String) -> Void)? = nil,
+        onRefusalHeaderIndex: ((Int) -> Void)? = nil
     ) -> Binding? {
         guard track >= 0 else { onRefusal?("invalid_track_index"); return nil }
         let windowRead = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime)
@@ -36,11 +37,12 @@ enum AXPluginTrackBinding {
         guard track < headers.count else { onRefusal?("track_index_absent"); return nil }
 
         var headerNames: [String] = []
-        for header in headers {
+        for (headerIndex, header) in headers.enumerated() {
             let nameRead = AXValueExtractors.extractTrackNameResult(
                 from: header, runtime: runtime.ax
             )
             guard case .success(.some(let name)) = nameRead else {
+                onRefusalHeaderIndex?(headerIndex)
                 if case .failure(let error) = nameRead {
                     onRefusal?("arrange_name_unavailable/\(error.diagnosticLabel)")
                 } else { onRefusal?("arrange_name_unavailable") }
@@ -50,6 +52,7 @@ enum AXPluginTrackBinding {
         }
         let name = headerNames[track]
         guard headerNames.filter({ $0.utf8.elementsEqual(name.utf8) }).count == 1 else {
+            onRefusalHeaderIndex?(track)
             onRefusal?("arrange_name_ambiguous"); return nil
         }
 
