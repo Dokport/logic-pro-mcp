@@ -54,7 +54,7 @@ extension ProjectSessionAudit {
     }
 
     /// Where a subject's main output is meant to go: an existing bus, or deliberately nowhere. P1
-    /// accepts `bus >= 1` only; the bus namespace (its upper bound, what is allocated) is evidence
+    /// uses #291's supported bus-number range. Allocation/availability remains observed evidence
     /// #291/#967 own, not a guess made here.
     enum IntentMainOutput: Hashable, Sendable {
         case bus(Int)
@@ -177,6 +177,7 @@ extension ProjectSessionAudit {
         case unsupportedOutput(path: String, value: String)
         case conflictingOutputs(subject: String, outputs: [IntentMainOutput])
         case busBelowOne(path: String, value: Int)
+        case busOutOfRange(path: String, value: Int)
         case duplicateReceiver(bus: Int)
         case unsupportedSortCriterion(path: String, value: String)
         case invalidSortOrder(path: String)
@@ -219,6 +220,8 @@ extension ProjectSessionAudit {
                 return "conflicting_outputs \(subject) \(outputs.map(\.token))"
             case .busBelowOne(let path, let value):
                 return "bus_below_one \(path) \(value)"
+            case .busOutOfRange(let path, let value):
+                return "bus_out_of_range \(path) \(value)"
             case .duplicateReceiver(let bus):
                 return "duplicate_receiver bus \(bus)"
             case .unsupportedSortCriterion(let path, let value):
@@ -279,6 +282,7 @@ extension ProjectSessionAudit {
         // The source's own output.
         case trackNotInGraph = "track_not_in_graph"
         case sourceNodeAmbiguous = "source_node_ambiguous"
+        case sourceNodeNotTrack = "source_node_not_track"
         case outputUnclassified = "output_unclassified"
         case outputEdgeAmbiguous = "output_edge_ambiguous"
         case outputDestinationAmbiguous = "output_destination_ambiguous"
@@ -590,7 +594,7 @@ extension ProjectSessionAudit {
         return .init(criterion: forward, expectedOrder: references, inverseCriterion: inverse)
     }
 
-    /// Optional `receivers`: `[{"bus": n >= 1, "aux": "new" | "keep" | "none"}]`, at most one per bus.
+    /// Optional `receivers`: supported bus number and `aux: new|keep|none`, at most one per bus.
     private static func parseReceivers(
         _ object: [String: Value],
         into rejections: inout [IntentPolicyRejection]
@@ -611,10 +615,7 @@ extension ProjectSessionAudit {
             let bus = requiredInt(entry, key: "bus", path: path, into: &rejections)
             let word = requiredString(entry, key: "aux", path: path, into: &rejections)
             guard let bus, let word else { continue }
-            guard bus >= 1 else {
-                rejections.append(.busBelowOne(path: "\(path).bus", value: bus))
-                continue
-            }
+            guard validateIntentBus(bus, path: "\(path).bus", into: &rejections) else { continue }
             guard let receiver = IntentReceiver(rawValue: word) else {
                 rejections.append(.unsupportedOutput(path: "\(path).aux", value: word))
                 continue
@@ -626,6 +627,17 @@ extension ProjectSessionAudit {
             receivers[bus] = receiver
         }
         return receivers
+    }
+
+    private static func validateIntentBus(_ number: Int, path: String,
+                                          into rejections: inout [IntentPolicyRejection]) -> Bool {
+        guard number >= 1 else {
+            rejections.append(.busBelowOne(path: path, value: number)); return false
+        }
+        guard OutputAssignment.busNumbers.contains(number) else {
+            rejections.append(.busOutOfRange(path: path, value: number)); return false
+        }
+        return true
     }
 
     private static func parseTargets(
@@ -774,7 +786,7 @@ extension ProjectSessionAudit {
             var bus: Int?
             if entry["bus"] != nil {
                 guard let number = requiredInt(entry, key: "bus", path: path, into: &rejections) else { continue }
-                guard number >= 1 else { rejections.append(.busBelowOne(path: "\(path).bus", value: number)); continue }
+                guard validateIntentBus(number, path: "\(path).bus", into: &rejections) else { continue }
                 bus = number
             } else {
                 guard let remove = requiredBool(entry, key: "remove", path: path, into: &rejections) else { continue }
@@ -795,7 +807,7 @@ extension ProjectSessionAudit {
         return result.sorted { $0.target == $1.target ? $0.physicalSlot < $1.physicalSlot : $0.target < $1.target }
     }
 
-    /// Exactly one of `bus` (an int >= 1) or `output` (`"no_output"`, the one non-bus main output
+    /// Exactly one of `bus` (a supported number) or `output` (`"no_output"`, the one non-bus main output
     /// P1 accepts: a track deliberately routed nowhere).
     private static func parseDestination(
         _ entry: [String: Value],
@@ -808,10 +820,7 @@ extension ProjectSessionAudit {
         }
         if entry["bus"] != nil {
             guard let bus = requiredInt(entry, key: "bus", path: path, into: &rejections) else { return nil }
-            guard bus >= 1 else {
-                rejections.append(.busBelowOne(path: "\(path).bus", value: bus))
-                return nil
-            }
+            guard validateIntentBus(bus, path: "\(path).bus", into: &rejections) else { return nil }
             return .bus(bus)
         }
         guard let output = optionalString(entry, key: "output", path: path, into: &rejections) else { return nil }
@@ -1450,7 +1459,7 @@ extension ProjectSessionAudit {
                 return finding(.compliant, observation, trackIndex: trackIndex, reasons: [])
             }
             var reasons: [IntentReason] = []
-            if !graph.nodes.contains(where: { $0.busNumber == bus }) {
+            if !graph.nodes.contains(where: { $0.kind == .bus && $0.busNumber == bus }) {
                 reasons.append(.expectedBusNotObserved)
             }
             return finding(.violation, observation, trackIndex: trackIndex, reasons: reasons)
@@ -1473,6 +1482,7 @@ extension ProjectSessionAudit {
         let sources = graph.nodes.filter { $0.targetRef == trackRef }
         guard let source = sources.first else { return .unobserved(.trackNotInGraph, edgeObserved: false) }
         guard sources.count == 1 else { return .unobserved(.sourceNodeAmbiguous, edgeObserved: false) }
+        guard source.kind == .track else { return .unobserved(.sourceNodeNotTrack, edgeObserved: false) }
 
         switch source.outputClassification {
         case nil, .unclassified?:
@@ -1502,7 +1512,7 @@ extension ProjectSessionAudit {
             guard destinations.count <= 1 else {
                 return .unobserved(.outputDestinationAmbiguous, edgeObserved: true)
             }
-            guard let busNode = destinations.first, let busNumber = busNode.busNumber else {
+            guard let busNode = destinations.first, busNode.kind == .bus, let busNumber = busNode.busNumber else {
                 return .unobserved(.outputEdgeAmbiguous, edgeObserved: true)
             }
             // The verdict compares this number, so it has to name one node.
@@ -1526,7 +1536,7 @@ extension ProjectSessionAudit {
     ) -> IntentCoverage {
         var expectedBusObserved: Bool?
         if case .bus(let bus) = expected {
-            expectedBusObserved = graph.nodes.contains { $0.busNumber == bus }
+            expectedBusObserved = graph.nodes.contains { $0.kind == .bus && $0.busNumber == bus }
         }
         return IntentCoverage(
             outputEdgeObserved: edgeObserved,
