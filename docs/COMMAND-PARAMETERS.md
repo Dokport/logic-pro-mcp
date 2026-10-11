@@ -59,6 +59,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | Command | Parameters | Required | Unknown parameters | Mutability | Confirmation | Target | Verification | Retry | Availability |
 |---|---|---|---|---|---|---|---|---|---|
 | `bank` | `count`: integer, `direction`: scalar (left, right) | `direction` | closed | mutating | none | none | readback_required | never_automatic | default_install |
+| `get_input_bus_verified` | `project_ref`, `target_ref`: string | `target_ref` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `get_output_verified` | `project_ref`, `target_ref`: string | `target_ref` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `get_send_destination_verified` | `ordinal`: integer, `project_ref`, `target_ref`: string | `target_ref`; `ordinal` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `insert_plugin` | `channel_configuration`, `configuration`, `confirmed`: boolean, `index`: integer, `insert`: integer, `name`, `plugin`, `plugin_name`, `slot`: integer, `track`: integer, `track_index`: integer | `track` or `track_index` or `index`; `slot` or `insert`; `plugin_name` or `plugin` or `name` | closed | mutating | l2 | none | readback_required | never_automatic | default_install |
