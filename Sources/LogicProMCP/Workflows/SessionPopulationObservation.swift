@@ -47,6 +47,12 @@ enum SessionPopulationObservation {
         var disclosureExposures: [HeldDisclosureExposure] = []
         /// Request-held menu observations, never reconstructed from cached labels or JSON.
         var checkedOutputs: [HeldCheckedOutput] = []
+        var checkedInputs: [HeldCheckedInput] = []
+    }
+
+    struct HeldCheckedInput: Sendable {
+        let receiver: AXMixerStripBinding.Binding
+        let busNumber: Int
     }
 
     struct HeldCheckedOutput: Sendable {

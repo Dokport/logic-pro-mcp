@@ -117,6 +117,7 @@ enum RoutingProvenance: String, Codable, Sendable {
     case axMixerStrip
     case axOutputMenuCheckmark
     case axSendMenuCheckmark
+    case axInputMenuCheckmark
     case mcuEcho
     case other
 }
