@@ -165,7 +165,7 @@ struct OperationCatalogTests {
         .systemSagaCancel: ["idempotency_key"],
         .systemSetupArmKey: ["consent"],
         .systemSetupControlSurface: ["consent"],
-        .pluginsGetInventory: ["track_index"],
+        .pluginsGetInventory: ["track_index", "reveal_mixer"],
         .pluginsGetParamVerified: ["insert", "param", "plugin", "plugin_id", "plugin_name", "unit"],
         .pluginsGetChannelEQStateVerified: ["insert", "plugin", "plugin_id", "plugin_name", "project_expected_path"],
         .pluginsSetParamVerified: [

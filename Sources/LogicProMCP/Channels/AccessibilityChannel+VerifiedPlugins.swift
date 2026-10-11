@@ -37,6 +37,12 @@ extension AccessibilityChannel {
         /// stops there: the Mixer may already be showing, and View > Show Mixer or key 7 could
         /// hide it again.
         var mixerChildrenUnread = false
+        var windowUnavailable = false
+
+        static func notRevealed(windowUnavailable: Bool = false) -> Self {
+            .init(attempted:false, alreadyVisible:false, strategies:[], menuItemFound:false,
+                menuClicked:false, keySent:false, mixerVisible:false, windowUnavailable:windowUnavailable)
+        }
 
         static let alreadyVisible = MixerRevealResult(
             attempted: false,
@@ -183,11 +189,27 @@ extension AccessibilityChannel {
         }
 
         let fetchedAt = ISO8601DateFormatter.cacheFormatter.string(from: Date())
+        let revealRequested: Bool
+        switch params["reveal_mixer"] {
+        case nil, "false": revealRequested = false
+        case "true": revealRequested = true
+        default:
+            return .error(HonestContract.encodeV2StateC(error:.invalidParams,
+                extras:["operation":operation,"what_was_observed":"reveal_mixer must be a Boolean",
+                    "safe_to_retry":false]))
+        }
 
         // The AX insert subtree is unreadable when the mixer or the requested
         // strip cannot be located — there is nothing to enumerate, so this is
         // State B `readback_unavailable` rather than a fabricated empty chain.
-        let ensuredMixer = await revealMixer(runtime)
+        let ensuredMixer: (mixer: AXUIElement?, result: MixerRevealResult)
+        if let observed = mixerWithoutReveal(runtime:runtime) {
+            ensuredMixer = observed
+        } else if revealRequested, inventoryRevealWindow(runtime:runtime) != nil {
+            ensuredMixer = await revealMixer(runtime)
+        } else {
+            ensuredMixer = (nil,.notRevealed(windowUnavailable:inventoryRevealWindow(runtime:runtime) == nil))
+        }
         let reveal = ensuredMixer.result
         // #982: children that did not read are unknown. Before, they read as no Mixer at all, as a
         // Mixer with no strips ("track index is not present") or as a strip with no inserts.
@@ -219,7 +241,7 @@ extension AccessibilityChannel {
                     "track": track,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
-                    "plugins_unknown_reason": "mixer_not_visible",
+                    "plugins_unknown_reason": reveal.windowUnavailable ? "logic_window_unavailable" : "mixer_not_visible",
                     "mixer_reveal_attempted": reveal.attempted,
                     "mixer_reveal_strategies": reveal.strategies,
                     "mixer_reveal_menu_item_found": reveal.menuItemFound,
@@ -228,7 +250,9 @@ extension AccessibilityChannel {
                     "what_was_attempted": reveal.attempted
                         ? "reveal the mixer, then read insert chain inventory for track \(track)"
                         : "read insert chain inventory for track \(track)",
-                    "what_was_observed": reveal.attempted
+                    "what_was_observed": reveal.windowUnavailable
+                        ? "Logic's window or modal state could not be observed safely; no Mixer reveal was attempted"
+                        : reveal.attempted
                         ? "the mixer remained hidden after the reveal attempt, so the insert subtree could not be read"
                         : "mixer area was not locatable in the AX tree",
                     "recovery_hint": "Open View > Show Mixer in Logic Pro and retry the inventory read.",
@@ -239,7 +263,10 @@ extension AccessibilityChannel {
         guard AXLogicProElements.mixerChannelStrips(in: mixer, runtime: runtime.ax) != nil else {
             return mixerChildrenUnread()
         }
-        guard let target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime) else {
+        var bindingRefusal: String?
+        var failingHeader: Int?
+        guard let target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime,
+            onRefusal:{ bindingRefusal = $0 }, onRefusalHeaderIndex:{ failingHeader = $0 }) else {
             return .success(HonestContract.encodeV2StateB(
                 reason: .readbackUnavailable,
                 extras: [
@@ -248,6 +275,8 @@ extension AccessibilityChannel {
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "ax_subtree_unreadable",
+                    "binding_refusal_reason": bindingRefusal ?? "binding_unavailable",
+                    "binding_refusal_header_index": failingHeader.map { $0 as Any } ?? NSNull(),
                     "what_was_attempted": "read insert chain inventory for track \(track)",
                     "what_was_observed": pluginTrackBindingFailureDetail(mixer: mixer, runtime: runtime),
                     "safe_to_retry": true,
@@ -357,6 +386,20 @@ extension AccessibilityChannel {
         return nil
     }
 
+    /// A missing Mixer is hidden only when its owning Logic window is positively observable.
+    /// Unknown/locked-window and modal observations never authorize a reveal or fallback key.
+    static func inventoryRevealWindow(runtime: AXLogicProElements.Runtime) -> AXUIElement? {
+        guard let app = AXLogicProElements.appRoot(runtime:runtime),
+              case .success(.elements(let windows)) = AXHelpers.getAXUIElementArrayRead(app,kAXWindowsAttribute as String,runtime:runtime.ax),
+              !windows.isEmpty,
+              case .found(let window) = AXLogicProElements.arrangeWindowVerifiedRead(runtime:runtime),
+              windows.contains(where:{ CFEqual($0,window) }),
+              AXHelpers.getRole(window,runtime:runtime.ax) == kAXWindowRole as String,
+              case .success = AXHelpers.childrenResult(window,runtime:runtime.ax),
+              !AXLogicProElements.dialogPresenceReason(runtime:runtime).isBlocked else { return nil }
+        return window
+    }
+
     /// The actions the menu-click reveal takes outside its AX runtime. Production by default. A
     /// test injects all four, so the reveal's branches after an actuation (#982) run without
     /// activating, keying or raising the running Logic.
@@ -387,6 +430,12 @@ extension AccessibilityChannel {
         if let found = mixerWithoutReveal(runtime: runtime) {
             return found
         }
+        guard let window = inventoryRevealWindow(runtime:runtime) else {
+            return (nil,.notRevealed(windowUnavailable:true))
+        }
+        func windowCurrent() -> Bool {
+            inventoryRevealWindow(runtime:runtime).map { CFEqual($0,window) } == true
+        }
 
         // #142 — reveal-reliability hardening. The deterministic AX menu-click
         // path (View > Show Mixer) is PREFERRED and retried (it targets the
@@ -411,7 +460,9 @@ extension AccessibilityChannel {
                 mixerChildrenUnread: true
             ))
         }
-        _ = actuators.activateLogic()
+        guard windowCurrent(), actuators.activateLogic(), windowCurrent() else {
+            return (nil,.notRevealed(windowUnavailable:true))
+        }
 
         // Strategy 1 (preferred): AX menu-click, with retry.
         let menuAttempt = await clickTopLevelMenuItemViaAXMenuClick(
@@ -419,13 +470,19 @@ extension AccessibilityChannel {
             runtime: runtime,
             maxEnabledRetries: 2,
             focusBetweenAttempts: false,
-            actuators: actuators
+            actuators: actuators,
+            permittingActuation: windowCurrent
         )
         var itemFound = menuAttempt.itemFound
         var menuClicked = menuAttempt.clicked
         if menuAttempt.clicked {
             strategies.append("ax_menu_view_show_mixer")
-            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs)
+            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs,
+                in:window, permittingObservation:windowCurrent)
+            guard windowCurrent() else {
+                return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                    menuItemFound:itemFound,menuClicked:true,keySent:false,mixerVisible:false,windowUnavailable:true))
+            }
             if polled.childrenUnread {
                 return unreadAfterReveal(itemFound: itemFound, menuClicked: true, keySent: false)
             }
@@ -447,11 +504,16 @@ extension AccessibilityChannel {
 
         // Strategy 2 (fallback): cgevent key-7 (View > Show Mixer default key).
         var keySent = false
-        if let pid = runtime.logicProPID(),
+        if windowCurrent(), let pid = runtime.logicProPID(),
            actuators.postKeyEvent(7, [], pid) {
             keySent = true
             strategies.append("cgevent_x")
-            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs)
+            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs,
+                in:window, permittingObservation:windowCurrent)
+            guard windowCurrent() else {
+                return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                    menuItemFound:itemFound,menuClicked:menuClicked,keySent:true,mixerVisible:false,windowUnavailable:true))
+            }
             if polled.childrenUnread {
                 return unreadAfterReveal(itemFound: itemFound, menuClicked: menuClicked, keySent: true)
             }
@@ -474,12 +536,17 @@ extension AccessibilityChannel {
         // Strategy 3 (final AX menu retry): the deterministic path again, in
         // case key-7 restored focus the menu needs to resolve. Only attempted
         // when an earlier AX click did not already land the mixer.
+        guard windowCurrent() else {
+            return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                menuItemFound:itemFound,menuClicked:menuClicked,keySent:keySent,mixerVisible:false,windowUnavailable:true))
+        }
         let menuRetry = await clickTopLevelMenuItemViaAXMenuClick(
             candidates: [AXLocalePolicy.showMixerMenuPath],
             runtime: runtime,
             maxEnabledRetries: 1,
             focusBetweenAttempts: true,
-            actuators: actuators
+            actuators: actuators,
+            permittingActuation: windowCurrent
         )
         itemFound = itemFound || menuRetry.itemFound
         if menuRetry.clicked {
@@ -487,7 +554,12 @@ extension AccessibilityChannel {
             if !strategies.contains("ax_menu_view_show_mixer_retry") {
                 strategies.append("ax_menu_view_show_mixer_retry")
             }
-            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs)
+            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs,
+                in:window, permittingObservation:windowCurrent)
+            guard windowCurrent() else {
+                return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                    menuItemFound:itemFound,menuClicked:true,keySent:keySent,mixerVisible:false,windowUnavailable:true))
+            }
             if polled.childrenUnread {
                 return unreadAfterReveal(itemFound: itemFound, menuClicked: true, keySent: keySent)
             }
@@ -525,11 +597,16 @@ extension AccessibilityChannel {
     /// at once (#982): it is present, so waiting for it to appear cannot help.
     static func pollMixerAreaVisible(
         runtime: AXLogicProElements.Runtime,
-        timeoutMs: Int
+        timeoutMs: Int,
+        in window: AXUIElement? = nil,
+        permittingObservation: () -> Bool = { true }
     ) async -> AXLogicProElements.MixerAreaLookup {
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
         repeat {
-            let lookup = AXLogicProElements.mixerAreaLookup(runtime: runtime)
+            guard permittingObservation() else { return .notFound }
+            let lookup = window.map { AXLogicProElements.mixerAreaLookup(in:$0,runtime:runtime) }
+                ?? AXLogicProElements.mixerAreaLookup(runtime:runtime)
+            guard permittingObservation() else { return .notFound }
             if lookup.mixer != nil || lookup.childrenUnread {
                 return lookup
             }
@@ -5251,20 +5328,25 @@ extension AccessibilityChannel {
         runtime: AXLogicProElements.Runtime,
         maxEnabledRetries: Int,
         focusBetweenAttempts: Bool,
-        actuators: MenuClickActuators = .production
+        actuators: MenuClickActuators = .production,
+        permittingActuation: () -> Bool = { true }
     ) async -> (itemFound: Bool, clicked: Bool, enabledRetries: Int) {
         var itemFound = false
         for attempt in 0..<maxEnabledRetries {
+            guard permittingActuation() else { return (itemFound,false,attempt) }
             _ = actuators.activateLogic()
+            guard permittingActuation() else { return (itemFound,false,attempt) }
             for candidate in candidates {
                 guard let barItem = menuBarItem(matching: candidate.bar, runtime: runtime) else {
                     continue
                 }
 
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 if !openMenuBarItem(barItem, runtime: runtime.ax) {
                     continue
                 }
                 try? await Task.sleep(for: .milliseconds(120))
+                guard permittingActuation() else { return (itemFound,false,attempt) }
 
                 guard let item = menuItem(
                     matching: candidate.item,
@@ -5272,6 +5354,7 @@ extension AccessibilityChannel {
                     under: barItem,
                     runtime: runtime.ax
                 ) else {
+                    guard permittingActuation() else { return (itemFound,false,attempt) }
                     actuators.pressEscape()
                     continue
                 }
@@ -5279,6 +5362,7 @@ extension AccessibilityChannel {
 
                 if let enabled: Bool = AXHelpers.getAttribute(item, kAXEnabledAttribute, runtime: runtime.ax),
                    enabled == false {
+                    guard permittingActuation() else { return (itemFound,false,attempt) }
                     actuators.pressEscape()
                     continue
                 }
@@ -5290,13 +5374,16 @@ extension AccessibilityChannel {
                 // runs, the mixer-reveal consumer falls back to the non-coordinate
                 // cgevent key-7 channel, and the hide-plugin-windows consumer is
                 // explicitly best-effort — so no feature is degraded.
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 if AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax) {
                     return (true, true, attempt)
                 }
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 actuators.pressEscape()
             }
 
             if focusBetweenAttempts {
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 _ = actuators.raiseMixerWindow()
             }
             try? await Task.sleep(for: .milliseconds(250))
