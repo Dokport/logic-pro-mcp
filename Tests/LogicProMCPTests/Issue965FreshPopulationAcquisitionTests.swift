@@ -1416,6 +1416,10 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await observeStack(navigation: true, initiallyExpanded: false, selectedEnumerationLoss: true)
     }
 
+    @Test func observedStackExpansionSurvivesLaterForeignFocusRefusalInUIReceipt() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, postAckForeignFocus: true)
+    }
+
     @Test func registeredNestedStackSampledReplacementCannotRestoreItsOldDisclosureInverse() async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: true, knownInnerReplacement: true)
     }
@@ -1643,7 +1647,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                               hiddenFocusFault: String? = nil, lateScopeFault: String? = nil,
                               verifyHierarchy: Bool = false, verifyDirectChildren: Bool = false,
                               revealedStack: String? = nil, selectedCensusLoss: Bool = false,
-                              selectedEnumerationLoss: Bool = false) async throws {
+                              selectedEnumerationLoss: Bool = false, postAckForeignFocus: Bool = false) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -2003,6 +2007,18 @@ struct Issue965FreshPopulationAcquisitionTests {
                     }
                     return true
                 }, observingAttribute: { element, attribute in
+                    if postAckForeignFocus, fixture.events.count == 2, CFEqual(element, disclosure),
+                       attribute == kAXValueAttribute as String,
+                       Thread.callStackSymbols.contains(where: { $0.contains("observeCompletedClick") }) {
+                        fixture.reads.record("held_expansion_ack_read")
+                    }
+                    if postAckForeignFocus, fixture.reads.recorded.contains("held_expansion_ack_read"),
+                       !fixture.reads.recorded.contains("foreign_focus_after_held_ack"),
+                       CFEqual(element, fixture.window), attribute == kAXRoleAttribute as String,
+                       Thread.callStackSymbols.contains(where: { $0.contains("allTrackHeadersVerifiedRead") }) {
+                        fixture.reads.record("foreign_focus_after_held_ack")
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, otherLabel)
+                    }
                     if selectedEnumerationLoss, fixture.events.count == 2,
                        CFEqual(element, headers[headers.count - 1]), attribute == kAXSelectedAttribute as String {
                         fixture.reads.record("selected_enumeration_rows_captured")
@@ -2582,6 +2598,22 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty && gate.currentOperation() == nil)
             #expect((fixture.builder.attributeValue(play, kAXValueAttribute as String) as? NSNumber)?.intValue == 0)
             #expect((fixture.builder.attributeValue(record, kAXValueAttribute as String) as? NSNumber)?.intValue == 0)
+            return
+        }
+        if postAckForeignFocus {
+            #expect(fixture.reads.recorded.contains("held_expansion_ack_read"))
+            #expect(fixture.reads.recorded.contains("foreign_focus_after_held_ack"))
+            #expect(fixture.events.recorded == ["disclosure_down", "disclosure_up"])
+            #expect((fixture.builder.attributeValue(disclosure, kAXValueAttribute as String) as? NSNumber)?.intValue == 1)
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let effects = try #require(body["ui_effects"] as? [String: Any])
+            #expect(effects["changed"] as? [String] == ["stack_disclosure"],
+                    "later custody refusal must retain the already observed UI change")
+            #expect(effects["restoration"] as? String == "not_restored")
+            #expect(effects["reason"] as? String == "stack_navigation_ownership_lost")
+            #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
+            #expect(await cache.getTracks().isEmpty)
+            #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty && gate.currentOperation() == nil)
             return
         }
         if let focusRestoration {

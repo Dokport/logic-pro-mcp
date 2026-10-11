@@ -935,8 +935,14 @@ extension AccessibilityChannel {
                     effects.reason = releaseUnverified ? "stack_mouse_release_unverified" : "stack_expansion_unverified"
                     return
                 }
-                guard await observeCompletedClick(target: target, expectedValue: 1, stoppingWhen: stop),
-                      case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: logic,
+                guard await observeCompletedClick(target: target, expectedValue: 1, stoppingWhen: stop) else {
+                    effects.reason = "stack_expansion_unverified"; return
+                }
+                // Preserve the held-control observation even if a later scope
+                // check refuses capture or inverse authority.
+                let effect = hiddenControl.map({ CFEqual($0, target.disclosure) }) == true ? "hidden_track_view" : "stack_disclosure"
+                if !effects.changed.contains(effect) { effects.changed.append(effect) }
+                guard case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: logic,
                         observingExposure: forwardExposure),
                       same(headers.filter { row in beforeHeaders.contains { CFEqual($0, row) } }, beforeHeaders) else {
                     effects.reason = "stack_expansion_unverified"; return
@@ -953,8 +959,6 @@ extension AccessibilityChannel {
                 acquired.append(.init(target: target, beforeHeaders: beforeHeaders, afterHeaders: headers))
                 pending.removeFirst()
                 expandedHeaders = headers
-                let effect = hiddenControl.map({ CFEqual($0, target.disclosure) }) == true ? "hidden_track_view" : "stack_disclosure"
-                if !effects.changed.contains(effect) { effects.changed.append(effect) }
                 let newlyExposed = headers.filter { row in !beforeHeaders.contains { CFEqual($0, row) } }
                 guard let disclosureRead = Self.disclosureStates(in: newlyExposed, runtime: logic) else {
                     effects.reason = "stack_disclosure_unreadable"; return
