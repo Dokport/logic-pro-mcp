@@ -1215,6 +1215,22 @@ struct Issue966ApprovedRoutingDiffTests {
         #expect(body["unchanged_tasks"]?.arrayValue == [.string("main_output.target.approved")])
     }
 
+    @Test(arguments: ["stale", "unrequested"])
+    func matchingOutputCannotBecomeUnchangedOverAStaleOrUnrequestedRead(_ fault: String) throws {
+        let body = try plan(graph(edges: edges(correct: true)), snapshotCurrent: fault != "stale",
+            request: Observation.Request(domains: fault == "unrequested" ? [.tracks] : [.tracks, .strips, .routing]))
+        #expect(body["unchanged_tasks"]?.arrayValue == [])
+        let step = try #require(body["steps"]?.arrayValue?.first?.objectValue)
+        #expect(step["target_ref"]?.stringValue == source.rawValue)
+        let delta = try #require(step["proposed_routing_diff"]?.objectValue)
+        #expect(delta["status"]?.stringValue == "unverified")
+        let blocked = try #require(step["blocked_reasons"]?.arrayValue)
+        #expect(blocked.contains(.string(fault == "stale" ? "snapshot_changed" : "routing_not_requested")))
+        let executable = try #require(body["executable"]?.boolValue as Bool?)
+        #expect(!executable)
+        #expect(body["steps"] == body["preview"])
+    }
+
     @Test func duplicateLookingNamesDoNotChooseTheSourceOrTheDestination() throws {
         let forward = try plan(graph())
         let reverse = try plan(graph(nodes: nodes().reversed(), edges: edges().reversed()))

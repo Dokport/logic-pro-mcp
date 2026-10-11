@@ -304,7 +304,7 @@ extension ProjectSessionAudit {
             if let id = aux.objectValue?["id"]?.stringValue { recordRoutingPrefix(id, after: nil) }
         }
         for finding in assessment.findings {
-            if finding.status == .compliant {
+            if finding.status == .compliant, proposalReadReasons.isEmpty {
                 unchanged.append(.string(finding.id))
                 continue
             }
