@@ -1145,11 +1145,16 @@ struct Issue966ApprovedRoutingDiffTests {
     @Test(arguments: [false, true])
     func contradictoryPhysicalClassificationCannotSupplyABusBeforeEdge(noOutput: Bool) throws {
         let body = try plan(graph(nodes: nodes(output: .physicalOutput)), noOutput: noOutput)
+        let findings = try #require(body["findings"]?.arrayValue)
+        let finding = try #require(findings.first?.objectValue)
+        #expect(finding["status"]?.stringValue == "unverified")
+        #expect(finding["observed"] == nil || finding["observed"] == .null)
         let delta = try proposal(body)
         #expect(delta["status"]?.stringValue == "unverified")
         #expect(delta["output_changes"] == nil)
         let reasons = try #require(delta["reasons"]?.arrayValue)
-        #expect(reasons.contains(.string("proposed_before_output_not_bus")))
+        #expect(reasons.contains(.string("output_edge_ambiguous")))
+        #expect(reasons.contains(.string("main_output_proposal_unverified")))
         let executable = try #require(body["executable"]?.boolValue as Bool?)
         #expect(!executable)
     }

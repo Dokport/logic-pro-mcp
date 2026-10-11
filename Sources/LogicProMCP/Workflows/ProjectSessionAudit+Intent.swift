@@ -1501,6 +1501,11 @@ extension ProjectSessionAudit {
             guard graph.nodes.filter({ $0.id == source.id }).count == 1 else {
                 return .unobserved(.sourceNodeAmbiguous, edgeObserved: false)
             }
+            // Physical classifications publish no main-output edge. A contradictory edge
+            // is evidence of an uncertain observation, not authority to prescribe a repair.
+            guard !graph.edges.contains(where: { $0.kind == .mainOutput && $0.source == source.id }) else {
+                return .unobserved(.outputEdgeAmbiguous, edgeObserved: true)
+            }
             return classified(.physicalOutput)
         case .bus?:
             // Edges name their source by id: another node carrying that id could own the edge.
@@ -1515,7 +1520,8 @@ extension ProjectSessionAudit {
             guard destinations.count <= 1 else {
                 return .unobserved(.outputDestinationAmbiguous, edgeObserved: true)
             }
-            guard let busNode = destinations.first, busNode.kind == .bus, let busNumber = busNode.busNumber else {
+            guard let busNode = destinations.first, busNode.kind == .bus, let busNumber = busNode.busNumber,
+                  OutputAssignment.busNumbers.contains(busNumber) else {
                 return .unobserved(.outputEdgeAmbiguous, edgeObserved: true)
             }
             // The verdict compares this number, so it has to name one node.
