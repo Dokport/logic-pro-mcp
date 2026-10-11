@@ -1412,6 +1412,10 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await observeStack(navigation: true, initiallyExpanded: false, selectedCensusLoss: true)
     }
 
+    @Test func selectedRailEnumerationMissingOwnedHeaderCannotRenewItsOldInverse() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, selectedEnumerationLoss: true)
+    }
+
     @Test func registeredNestedStackSampledReplacementCannotRestoreItsOldDisclosureInverse() async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: true, knownInnerReplacement: true)
     }
@@ -1638,7 +1642,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                               hiddenViewLoss: Bool = false, hiddenView: Bool = false,
                               hiddenFocusFault: String? = nil, lateScopeFault: String? = nil,
                               verifyHierarchy: Bool = false, verifyDirectChildren: Bool = false,
-                              revealedStack: String? = nil, selectedCensusLoss: Bool = false) async throws {
+                              revealedStack: String? = nil, selectedCensusLoss: Bool = false,
+                              selectedEnumerationLoss: Bool = false) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -1658,7 +1663,7 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.setChildren(header, index == 0 ? [disclosure] : [])
         }
         let collapsed = [headers[0]] + Array(headers[24...])
-        if selectedCensusLoss {
+        if selectedCensusLoss || selectedEnumerationLoss {
             fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [headers[0]])
         }
         let passiveLabel = fixture.builder.element(965_240)
@@ -1998,6 +2003,17 @@ struct Issue965FreshPopulationAcquisitionTests {
                     }
                     return true
                 }, observingAttribute: { element, attribute in
+                    if selectedEnumerationLoss, fixture.events.count == 2,
+                       CFEqual(element, headers[headers.count - 1]), attribute == kAXSelectedAttribute as String {
+                        fixture.reads.record("selected_enumeration_rows_captured")
+                    }
+                    if selectedEnumerationLoss, CFEqual(element, fixture.rail),
+                       attribute == kAXSelectedChildrenAttribute as String,
+                       fixture.reads.recorded.contains("selected_enumeration_missing_header_sample"),
+                       !fixture.reads.recorded.contains("selected_enumeration_header_recovered") {
+                        fixture.reads.record("selected_enumeration_header_recovered")
+                        fixture.builder.setChildren(fixture.rail, headers)
+                    }
                     if selectedCensusLoss, fixture.events.count == 2,
                        CFEqual(element, fixture.rail), attribute == kAXSelectedChildrenAttribute as String {
                         fixture.reads.record("selected_census_armed")
@@ -2187,6 +2203,15 @@ struct Issue965FreshPopulationAcquisitionTests {
                     fixture.reads.record("focus_read_missing_after_true_down")
                     return .success(nil)
                 }, observingChildren: { element in
+                    if selectedEnumerationLoss, fixture.events.count == 2,
+                       CFEqual(element, fixture.rail),
+                       Thread.callStackSymbols.contains(where: { $0.contains("enumerateTrackHeaderRows") }),
+                       Thread.callStackSymbols.contains(where: { $0.contains("uniqueTrackHeaderRail") }),
+                       fixture.reads.recorded.contains("selected_enumeration_rows_captured"),
+                       !fixture.reads.recorded.contains("selected_enumeration_missing_header_sample") {
+                        fixture.reads.record("selected_enumeration_missing_header_sample")
+                        fixture.builder.setChildren(fixture.rail, Array(headers.dropFirst()))
+                    }
                     if selectedCensusLoss, CFEqual(element, fixture.rail),
                        fixture.reads.recorded.contains("selected_census_armed"),
                        !fixture.reads.recorded.contains("selected_census_missing_header_sample") {
@@ -2261,7 +2286,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
         let params: [String: Value] = ["domains": .array(verifyHierarchy
             ? [.string("tracks"), .string("hierarchy")] : [.string("tracks")]), "allow_ui_navigation": .bool(navigation),
-            "scope": .string(selectedCensusLoss ? "selection" : "whole_project")]
+            "scope": .string(selectedCensusLoss || selectedEnumerationLoss ? "selection" : "whole_project")]
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: params, mutationGate: gate) {
                 if let nestedFault,
@@ -2284,9 +2309,11 @@ struct Issue965FreshPopulationAcquisitionTests {
                 }
                 return await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
             }
-        if selectedCensusLoss {
-            #expect(fixture.reads.recorded.filter { $0 == "selected_census_missing_header_sample" }.count == 1)
-            #expect(fixture.reads.recorded.filter { $0 == "selected_census_header_recovered" }.count == 1)
+        if selectedCensusLoss || selectedEnumerationLoss {
+            let missing = selectedEnumerationLoss ? "selected_enumeration_missing_header_sample" : "selected_census_missing_header_sample"
+            let recovered = selectedEnumerationLoss ? "selected_enumeration_header_recovered" : "selected_census_header_recovered"
+            #expect(fixture.reads.recorded.filter { $0 == missing }.count == 1)
+            #expect(fixture.reads.recorded.filter { $0 == recovered }.count == 1)
             #expect(fixture.events.recorded == ["disclosure_down", "disclosure_up"],
                     "a sampled missing owned header irreversibly ends the old inverse")
             let body = try #require(sharedJSONObject(sharedToolText(result)))

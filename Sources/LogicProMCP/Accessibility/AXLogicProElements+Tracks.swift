@@ -357,7 +357,8 @@ extension AXLogicProElements {
         let rails = !candidates.lists.isEmpty ? candidates.lists
             : !candidates.scrollAreas.isEmpty ? candidates.scrollAreas : candidates.groups
         guard rails.count == 1,
-              case .read = enumerateTrackHeaderRows(in: rails[0], runtime: runtime.ax) else { return nil }
+              case .read(let rows) = enumerateTrackHeaderRows(in: rails[0], runtime: runtime.ax) else { return nil }
+        observingExposure?.observeHeaders(rows)
         return rails[0]
     }
 
