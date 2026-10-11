@@ -444,12 +444,49 @@ extension AccessibilityChannel {
         _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
         runtime: AXLogicProElements.Runtime
     ) async -> (label: String?, index: Int?, effects: SessionPopulationObservation.UIEffects) {
+        let observed = await renewSourceThroughOriginalHeader(originalPair, original: original, runtime: runtime)
+        guard let source = observed.source,
+              let label = AXLogicProElements.outputSlotDestination(in: source.pair.strip.strip, runtime: runtime.ax),
+              source.permits(runtime: runtime) else { return (nil, nil, observed.effects) }
+        return (label, source.index, observed.effects)
+    }
+
+    struct OriginalHeaderSourceRenewal {
+        let pair: HeldSelectionAssociation.Pair
+        let index: Int
+        let original: AXMixerStripBinding.Binding
+        let originalTrack: AXTrackBinding.Binding
+        let observation: HeldSelectionAssociation
+
+        /// Renew after the caller's deciding slot read; the pair itself is not permission.
+        func permits(runtime: AXLogicProElements.Runtime) -> Bool {
+            guard pair.strip.currentIndex(runtime: runtime) == index,
+                  originalTrack.currentIndex() != nil,
+                  observation.permitsRead(),
+                  case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+                  CFEqual(window, original.window),
+                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(original.window, runtime: runtime),
+                  document.utf8.elementsEqual(original.document.utf8),
+                  runtime.logicProPID() == observation.pid, runtime.focusedApplicationPID() == observation.pid,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            return true
+        }
+    }
+
+    /// Shared physical renewal only: callers retain their own slot/readback contract.
+    /// A successful inverse and original header CF are required; no reference is rebound.
+    static func renewSourceThroughOriginalHeader(
+        _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
+        runtime: AXLogicProElements.Runtime, selectedHeaderRequired: Bool = true
+    ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
               let observation = HeldSelectionAssociation(window: original.window, logic: runtime,
                   expectedProject: nil, requiresProjectReference: false),
               CFEqual(observation.mixer, original.mixer),
               observation.document.utf8.elementsEqual(original.document.utf8),
-              CFEqual(observation.headers[observation.originalIndex], originalPair.track.header) else { return (nil, nil, .init()) }
+              observation.headers.filter({ CFEqual($0, originalPair.track.header) }).count == 1,
+              !selectedHeaderRequired || CFEqual(observation.headers[observation.originalIndex], originalPair.track.header)
+        else { return (nil, .init()) }
         let pairs = await observation.observe(referenceIsCurrent: {
             originalPair.track.currentIndex() != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
@@ -459,18 +496,9 @@ extension AccessibilityChannel {
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,
               observation.effects.restoration == "restored",
               !pair.strip.matches(original), originalPair.track.currentIndex() != nil,
-              let index = pair.strip.currentIndex(runtime: runtime),
-              let label = AXLogicProElements.outputSlotDestination(in: pair.strip.strip, runtime: runtime.ax),
-              pair.strip.currentIndex(runtime: runtime) == index,
-              originalPair.track.currentIndex() != nil,
-              observation.permitsRead(),
-              case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
-              CFEqual(window, original.window),
-              case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(original.window, runtime: runtime),
-              document.utf8.elementsEqual(original.document.utf8),
-              runtime.logicProPID() == observation.pid, runtime.focusedApplicationPID() == observation.pid,
-              (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return (nil, nil, observation.effects) }
-        return (label, index, observation.effects)
+              let index = pair.strip.currentIndex(runtime: runtime) else { return (nil, observation.effects) }
+        return (.init(pair: pair, index: index, original: original, originalTrack: originalPair.track,
+            observation: observation), observation.effects)
     }
 
     /// Picks the popup entry for `destination` by structure: the parent submenu that owns it, then
