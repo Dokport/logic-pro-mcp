@@ -1334,7 +1334,9 @@ struct Issue966ApprovedRoutingDiffTests {
         #expect(delta["status"]?.stringValue == "unverified")
         #expect(delta["output_changes"] == nil)
         let reasons = try #require(delta["reasons"]?.arrayValue)
-        #expect(reasons.contains(.string("proposed_source_not_track")))
+        // The assessor now rejects the wrong-kind source before proposal synthesis.
+        #expect(reasons.contains(.string("source_node_not_track")))
+        #expect(body["findings"]?.arrayValue?.first?.objectValue?["status"]?.stringValue == "unverified")
         let executable = try #require(body["executable"]?.boolValue as Bool?)
         #expect(!executable)
     }

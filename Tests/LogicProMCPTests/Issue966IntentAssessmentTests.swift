@@ -418,12 +418,62 @@ struct Issue966IntentAssessmentTests {
         ))))
         #expect(negative == [.busBelowOne(path: "policy.outputs[0].bus", value: -7)])
 
-        // Positive control: bus 1 is the lowest bus and is accepted; no upper bound is guessed here.
+        // Positive control: bus 1 is the lowest supported bus and is accepted.
         let one = try #require(accepted(Audit.parseIntentPolicy(policyObject(
             targets: [targetEntry("kick", "trk_0")],
             outputs: [targetOutput("kick", bus: 1)]
         ))))
         #expect(one.outputs == [Audit.IntentOutput(subject: .target("kick"), destination: .bus(1))])
+    }
+
+    @Test(arguments: ["outputs", "sends", "receivers"], [257, Int.max])
+    func policyRejectsBusOutsideSharedRoutingRange(_ domain: String, _ bus: Int) throws {
+        var raw = policyObject(targets: [targetEntry("kick", "trk_0")])
+        var entry: [String: Value] = ["bus": .int(bus)]
+        if domain == "receivers" { entry["aux"] = .string("keep") }
+        else { entry["target"] = .string("kick") }
+        if domain == "sends" { entry["physical_slot"] = .int(1) }
+        raw[domain] = .array([.object(entry)])
+        let rejected = try #require(rejections(Audit.parseIntentPolicy(raw)))
+        #expect(rejected.map(\.sortKey) == ["bus_out_of_range policy.\(domain)[0].bus \(bus)"])
+
+        // A supported number permits planning, not allocation or native execution.
+        entry["bus"] = .int(256)
+        raw[domain] = .array([.object(entry)])
+        #expect(accepted(Audit.parseIntentPolicy(raw)) != nil)
+    }
+
+    @Test(arguments: [RoutingNodeKind.aux, .output, .physicalStrip], [false, true])
+    func mainOutputRequiresTypedTrackAndBusEndpoints(_ wrongKind: RoutingNodeKind, _ sourceWrong: Bool) throws {
+        let source = RoutingNode(id: "trk_0", kind: sourceWrong ? wrongKind : .track,
+            displayName: "Same", busNumber: nil, targetRef: trackRef(0), outputClassification: .bus)
+        let destination = RoutingNode(id: "destination", kind: sourceWrong ? .bus : wrongKind,
+            displayName: "Same", busNumber: 3, targetRef: nil)
+        let candidate = graph(nodes: [source, destination], edges: [mainOutput(from: 0, to: destination.id)])
+        #expect(candidate.isConsistent)
+        let result = Audit.assessIntent(policy: try kickPolicy(), capture: threeTrackCapture, graph: candidate)
+        let finding = try #require(result.findings.first)
+        #expect(finding.status == .unverified)
+        #expect(finding.reasons.map(\.rawValue) == [sourceWrong ? "source_node_not_track" : "output_edge_ambiguous"])
+
+        let valid = graph(nodes: [trackNode(0), busNode(3, id: "destination")],
+            edges: [mainOutput(from: 0, to: "destination")])
+        let control = Audit.assessIntent(policy: try kickPolicy(), capture: threeTrackCapture, graph: valid)
+        #expect(control.findings.first?.status == .compliant)
+    }
+
+    @Test(arguments: [RoutingNodeKind.aux, .output, .physicalStrip])
+    func expectedBusObservationCannotComeFromANonBus(_ wrongKind: RoutingNodeKind) throws {
+        let impostor = RoutingNode(id: "impostor", kind: wrongKind, displayName: "Bus 9",
+            busNumber: 9, targetRef: nil)
+        let candidate = graph(nodes: wrongGraph.nodes + [impostor], edges: wrongGraph.edges)
+        #expect(candidate.isConsistent)
+        let result = Audit.assessIntent(policy: try kickPolicy(bus: 9), capture: threeTrackCapture, graph: candidate)
+        let finding = try onlyFinding(result)
+        #expect(finding.status == .violation)
+        #expect(finding.reasons == [.expectedBusNotObserved])
+        let observed: Bool = try #require(finding.coverage.expectedBusObserved as Bool?)
+        #expect(!observed)
     }
 
     // Mutation: drop the both-or-neither check in `parseOutputs`.
