@@ -90,6 +90,7 @@ enum SessionPopulationObservation {
         let title: String
         let document: String
         let mixer: AXUIElement?
+        let mixerOwners: [AXUIElement]
         let transport: AXLogicProElements.ObservedTransportActivity?
         let runtime: AXLogicProElements.Runtime
         let pid: pid_t?
@@ -99,15 +100,22 @@ enum SessionPopulationObservation {
         let uiLocale: String?
         init(window: AXUIElement, title: String, document: String, mixer: AXUIElement?,
              transport: AXLogicProElements.ObservedTransportActivity?, runtime: AXLogicProElements.Runtime,
-             uiLocale: String? = nil) {
+             uiLocale: String? = nil, mixerOwners: [AXUIElement] = []) {
             self.window = window; self.title = title; self.document = document
             self.mixer = mixer; self.transport = transport; self.runtime = runtime
+            self.mixerOwners = mixerOwners
             self.uiLocale = uiLocale
             pid = runtime.logicProPID()
             app = AXLogicProElements.appRoot(runtime: runtime)
             focus = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
             navigationBaseline = .init(window: window, runtime: runtime, expectedProject: nil,
                 requiresProjectReference: false, referenceIsCurrent: { true })
+        }
+
+        /// Captured qualified owners only; no live read or arbitrary ancestor inference.
+        var mixerFocusWouldBeRetired: Bool {
+            guard let focus, let mixer else { return false }
+            return CFEqual(focus, mixer) || mixerOwners.contains(where: { CFEqual(focus, $0) })
         }
 
         func matches(_ other: PresentationBinding) -> Bool {
@@ -120,7 +128,9 @@ enum SessionPopulationObservation {
             }
             guard CFEqual(window, other.window), title.utf8.elementsEqual(other.title.utf8),
                   document.utf8.elementsEqual(other.document.utf8), pid == other.pid,
-                  same(app, other.app), same(focus, other.focus), same(mixer, other.mixer) else { return false }
+                  same(app, other.app), same(focus, other.focus), same(mixer, other.mixer),
+                  mixerOwners.count == other.mixerOwners.count,
+                  zip(mixerOwners, other.mixerOwners).allSatisfy({ CFEqual($0, $1) }) else { return false }
             switch (transport, other.transport) {
             case (nil, nil): return true
             case (.some(let a), .some(let b)):

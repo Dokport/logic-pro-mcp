@@ -492,6 +492,10 @@ extension ProjectSessionAudit {
                 blocked.insert("project_view_binding_unavailable")
             }
             if observation?.mixerVisible == nil { blocked.insert("mixer_visibility_unobserved") }
+            if observation?.mixerVisible == true, !desired,
+               capture.freshPopulation?.presentationBinding?.mixerFocusWouldBeRetired == true {
+                blocked.insert("mixer_focus_would_be_retired")
+            }
             if observation?.isPlaying == nil || observation?.isRecording == nil {
                 blocked.insert("transport_state_unobserved")
             } else if observation?.isPlaying != false || observation?.isRecording != false {
