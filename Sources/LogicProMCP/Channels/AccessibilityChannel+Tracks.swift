@@ -207,7 +207,6 @@ extension AccessibilityChannel {
                     defer { if !permitted { lost = true } }
                     guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                           logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
-                          let currentApp = AXLogicProElements.appRoot(runtime: logic), CFEqual(currentApp, app),
                           AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: logic.ax) as Bool? == true,
                           let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
                           let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),

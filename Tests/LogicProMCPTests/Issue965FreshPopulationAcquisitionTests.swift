@@ -2942,6 +2942,51 @@ struct Issue965FreshPopulationAcquisitionTests {
         return (fixture, label)
     }
 
+    @Test("passive track-read focus samples the retained app without rebuilding it on each guard")
+    func passiveHeaderReadFocusReusesBoundAppButReadsFreshFocus() async throws {
+        let (fixture, label) = passiveHeaderFocusFixture()
+        let roots = Reads()
+        let focusReads = Reads()
+        let ax = fixture.builder.makeAXRuntime(appElementProvider: { _ in
+            roots.record("app_root")
+            return fixture.app
+        }, attributeValueHandler: { element, attribute in
+            if CFEqual(element, fixture.app), attribute == kAXFocusedUIElementAttribute as String {
+                focusReads.record(attribute)
+            }
+            return nil
+        }, attributeValueResultHandler: { element, attribute in
+            guard CFEqual(element, label), attribute == kAXValueAttribute as String else { return nil }
+            return .success(fixture.builder.attributeValue(label, attribute) as AnyObject?)
+        }, setAttributeHandler: nil, performActionHandler: nil)
+        let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax,
+            executeAppleScript: { _ in Issue.record("read focus cannot execute scripts"); return .error("forbidden") },
+            onScreenWindowList: { [] }, postPopupMenuEscape: { Issue.record("read focus cannot post Escape") },
+            focusedApplicationPID: { 4242 })
+        let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
+            commandParams: ["domains": .array([.string("tracks")]), "allow_ui_navigation": .bool(false)],
+            mutationGate: LogicMutationGate()) {
+            guard let held = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope
+                .PassiveHeaderReadFocus(window: fixture.window, logic: logic) else {
+                Issue.record("positive fixture must bind its original passive label")
+                return CallTool.Result(content: [], isError: true)
+            }
+            let boundRoots = roots.count
+            let boundFocusReads = focusReads.count
+            for _ in 0..<8 { #expect(held.permits()) }
+            #expect(roots.count == boundRoots, "fresh focus guards must not rebuild the same PID-bound app")
+            #expect(focusReads.count >= boundFocusReads + 8, "each guard still samples current focus")
+            fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header)
+            #expect(!held.permits())
+            fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, label)
+            #expect(!held.permits(), "restored focus cannot revive lost custody")
+            #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+            return CallTool.Result(content: [])
+        }
+        let failed = result.isError ?? false
+        #expect(!failed)
+    }
+
     @Test("a held immutable numeric track-name label permits only the navigation-disabled track read")
     func registeredPassiveHeaderLabelAllowsOnlyTrackRead() async throws {
         let (fixture, label) = passiveHeaderFocusFixture()
