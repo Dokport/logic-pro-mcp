@@ -60,6 +60,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
         var routingSelection: (@Sendable (Int) -> Void)?
         var routingLateScopeInjected = false
+        var presentationCensusReads = 0
 
         init(withViewport: Bool = false) throws {
             bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-selection-\(UUID().uuidString).logicx")
@@ -126,6 +127,7 @@ struct Issue965HeldSelectionAssociationTests {
         func channel() -> AccessibilityChannel {
             let base = builder.makeLogicRuntime(appElement: app,
                 attributeValueHandler: { [self] element, attribute in
+                    if CFEqual(element, window), attribute == kAXHelpAttribute as String { presentationCensusReads += 1 }
                     routingRead?(element, attribute)
                     if CFEqual(element, scroll), selections.count == 1 {
                         if attribute == kAXRoleAttribute as String {
@@ -593,6 +595,27 @@ struct Issue965HeldSelectionAssociationTests {
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
     }
 
+    @Test func aQualifiedAssociationReusesItsFreshPopulationPresentationBookends() async throws {
+        let f = try Fixture()
+        let body = try await inspect(f)
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 2 && f.selections == [1, 0])
+        #expect(f.presentationCensusReads == 4, "Initial and restored populations already independently read the Mixer twice each; no separate view baseline is needed")
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test func reusedPresentationCannotIgnoreTransportChangingAfterSelectionRestoration() async throws {
+        let f = try Fixture()
+        f.routingRead = { element, attribute in
+            if f.selections == [1, 0], CFEqual(element, f.window), attribute == kAXHelpAttribute as String {
+                f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+            }
+        }
+        let body = try await inspect(f)
+        #expect(f.selections == [1, 0])
+        #expect(body["state"] as? String == "C" && body["associations"] == nil)
+    }
+
     @Test(arguments: [false, true])
     func selectionInducedViewportDriftRestoresOnlyItsOriginalControl(bulk: Bool) async throws {
         let f = try Fixture(withViewport: true)
@@ -782,7 +805,7 @@ struct Issue965HeldSelectionAssociationTests {
         f.fault = fault
         let body = try await inspect(f)
         #expect(f.selections == [1, 0], "the physical challenge and restoration must actually run")
-        #expect(f.postRestoreSelectionFaults == 4, "all four post-restoration title-associated selection samples must consume the fault")
+        #expect(f.postRestoreSelectionFaults == 3, "Both restored-population bookends and final held ownership still consume the fault; the redundant view baseline is gone")
         #expect(body["associations"] == nil, "do not retain pairs after initial-vs-restored selection provenance changes")
         #expect(body["state"] as? String == "C")
         #expect(body["error"] as? String == "stale_snapshot")
