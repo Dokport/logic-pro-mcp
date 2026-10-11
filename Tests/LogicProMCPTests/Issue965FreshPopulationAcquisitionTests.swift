@@ -2987,6 +2987,62 @@ struct Issue965FreshPopulationAcquisitionTests {
         #expect(!failed)
     }
 
+    @Test("passive focus revalidates its held rail without rediscovering unrelated window subtrees",
+          arguments: ["identifier", "role", "rows", "path", "document", "title"])
+    func passiveHeaderReadFocusRechecksHeldRail(fault: String) async throws {
+        let (fixture, label) = passiveHeaderFocusFixture()
+        let unrelated = fixture.builder.element(965_987)
+        fixture.builder.setRole(unrelated, kAXGroupRole as String)
+        fixture.builder.setChildren(unrelated, [])
+        fixture.builder.setChildren(fixture.window, [fixture.rail, unrelated])
+        let unrelatedReads = Reads()
+        let ax = fixture.builder.makeAXRuntime(appElement: fixture.app,
+            attributeValueHandler: { element, attribute in
+                if CFEqual(element, unrelated) { unrelatedReads.record(attribute) }
+                return nil
+            }, attributeValueResultHandler: { element, attribute in
+                guard CFEqual(element, label), attribute == kAXValueAttribute as String else { return nil }
+                return .success(fixture.builder.attributeValue(label, attribute) as AnyObject?)
+            }, setAttributeHandler: nil, performActionHandler: nil)
+        let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax,
+            executeAppleScript: { _ in Issue.record("read focus cannot execute scripts"); return .error("forbidden") },
+            onScreenWindowList: { [] }, postPopupMenuEscape: { Issue.record("read focus cannot post Escape") },
+            focusedApplicationPID: { 4242 })
+        let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
+            commandParams: ["domains": .array([.string("tracks")]), "allow_ui_navigation": .bool(false)],
+            mutationGate: LogicMutationGate()) {
+            guard let held = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope
+                .PassiveHeaderReadFocus(window: fixture.window, logic: logic) else {
+                Issue.record("positive fixture must bind its original passive label")
+                return CallTool.Result(content: [], isError: true)
+            }
+            let initialReads = unrelatedReads.count
+            #expect(initialReads > 0, "initial binding still verifies the whole window")
+            for _ in 0..<8 { #expect(held.permits()) }
+            #expect(unrelatedReads.count == initialReads, "held focus checks must not rediscover unrelated subtrees")
+            switch fault {
+            case "identifier": fixture.builder.setAttribute(fixture.rail, kAXIdentifierAttribute as String, "Other")
+            case "role": fixture.builder.setRole(fixture.rail, kAXButtonRole as String)
+            case "rows": fixture.builder.setChildren(fixture.rail, [])
+            case "path": fixture.builder.setChildren(fixture.window, [unrelated])
+            case "document": fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/other.logicx/")
+            default: fixture.builder.setAttribute(fixture.window, kAXTitleAttribute as String, "Choose a Project")
+            }
+            #expect(!held.permits(), "fresh rail and original window custody remain required")
+            fixture.builder.setRole(fixture.rail, kAXListRole as String)
+            fixture.builder.setAttribute(fixture.rail, kAXIdentifierAttribute as String, "Track Headers")
+            fixture.builder.setChildren(fixture.rail, [fixture.header])
+            fixture.builder.setChildren(fixture.window, [fixture.rail, unrelated])
+            fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/965-passive-header.logicx/")
+            fixture.builder.setAttribute(fixture.window, kAXTitleAttribute as String, "Session - Tracks")
+            #expect(!held.permits(), "restoring the fixture cannot revive lost custody")
+            #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+            return CallTool.Result(content: [])
+        }
+        let failed = result.isError ?? false
+        #expect(!failed)
+    }
+
     @Test("a held immutable numeric track-name label permits only the navigation-disabled track read")
     func registeredPassiveHeaderLabelAllowsOnlyTrackRead() async throws {
         let (fixture, label) = passiveHeaderFocusFixture()
