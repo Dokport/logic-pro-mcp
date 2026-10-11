@@ -48,7 +48,8 @@ extension AccessibilityChannel {
     /// The full and request-owned readers share extraction from an already-bound population.
     static func readChannelStrips(
         from strips: [AXUIElement], runtime: AXLogicProElements.Runtime,
-        window: AXUIElement? = nil, mixer: AXUIElement? = nil, stoppingWhen stop: () -> Bool
+        window: AXUIElement? = nil, mixer: AXUIElement? = nil,
+        readingPlugins: Bool = true, stoppingWhen stop: () -> Bool
     ) -> [ChannelStripState]? {
         var channelStrips: [ChannelStripState] = []
         let document: String?
@@ -79,7 +80,7 @@ extension AccessibilityChannel {
                     state.physicalBinding = .init(window: window, mixer: mixer, strip: strip, document: document)
                 }
                 readStripName(of: strip, into: &state, runtime: runtime)
-                readPluginChain(of: strip, into: &state, runtime: runtime)
+                if readingPlugins { readPluginChain(of: strip, into: &state, runtime: runtime) }
                 // #291: `output` has been on this model since it was written and nothing ever set it, so
                 // `logic://mixer` published a field that was always null. It is read now; `nil` still
                 // means "not identified", never "routed nowhere".

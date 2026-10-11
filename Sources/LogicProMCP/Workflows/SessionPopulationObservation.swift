@@ -52,6 +52,8 @@ enum SessionPopulationObservation {
     struct HeldCheckedOutput: Sendable {
         let source: AXMixerStripBinding.Binding
         let assignment: OutputAssignment
+        /// The reader's retained send census ordinal, never a physical write-slot number.
+        var sendOrdinal: Int? = nil
     }
 
     struct HeldDisclosureExposure: Sendable {
@@ -798,7 +800,7 @@ enum SessionPopulationObservation {
         let input: String?
         let inputObservation: InputSlotObservation?
         var inputStatus: String { inputObservation?.state.rawValue ?? "not_read" }
-        let pluginCount: Int
+        let pluginCount: Int?
         let pluginsSource: String?
         var mixerStripRef: String? = nil
         var sendSlots: [SendSlotObservation]? = nil
@@ -833,7 +835,7 @@ enum SessionPopulationObservation {
             try container.encodeIfPresent(input, forKey: .input)
             try container.encodeIfPresent(inputObservation, forKey: .inputObservation)
             try container.encode(inputStatus, forKey: .inputStatus)
-            try container.encode(pluginCount, forKey: .pluginCount)
+            try container.encodeIfPresent(pluginCount, forKey: .pluginCount)
             try container.encodeIfPresent(pluginsSource, forKey: .pluginsSource)
             try container.encodeIfPresent(mixerStripRef, forKey: .mixerStripRef)
             try container.encodeIfPresent(sendSlots, forKey: .sendSlots)
@@ -1144,7 +1146,8 @@ enum SessionPopulationObservation {
                     output: strip.output,
                     input: strip.input,
                     inputObservation: strip.inputObservation,
-                    pluginCount: strip.plugins.count,
+                    pluginCount: request.domains == [.routing] && strip.pluginsSource == nil
+                        && strip.pluginsReadError == nil ? nil : strip.plugins.count,
                     pluginsSource: strip.pluginsSource,
                     mixerStripRef: capture.mixerReference(at: row)?.rawValue,
                     sendSlots: strip.sendSlots

@@ -23,12 +23,12 @@ enum RoutingProjectBinding: Sendable {
 /// is never an output destination in Logic, so a track named like a bus is not one (#291). A
 /// label that classifies as a bus becomes a `bus_<n>` node whose only identity is the number parsed
 /// from the source's own slot description, and `main_output` coverage says so. A physical output
-/// or no output is recorded on the source node and publishes no node and no edge. No send edge is
-/// published: occupancy is read at the source strip, and the destination an assigned send's group
-/// names is not read. Physical-strip nodes retain classification as display evidence only; no
+/// or no output is recorded on the source node and publishes no node and no edge. Send display
+/// names and occupancy alone publish no edge. Physical-strip nodes retain classification as display evidence only; no
 /// track association, bus/port identity or edge is derived from their ordinal or labels.
-/// Request-held, checked output menus can additionally publish a physical source's bus edge;
-/// this does not identify the receiving strip or establish complete graph coverage.
+/// Request-held, checked output/send menus can additionally publish physical-source bus edges;
+/// a send retains its census ordinal but no physical write-slot payload. Neither establishes
+/// receiving-strip identity or complete graph coverage.
 ///
 /// This function is pure: it never sees the registry and never reads another resource. Every
 /// domain it cannot answer carries its reasons in `coverage`, and `partialReason` is those reasons
@@ -164,7 +164,7 @@ enum RoutingGraphPublication {
                     )
                     if capture.freshPopulation?.stable == true {
                         let checked = capture.freshPopulation?.checkedOutputs.filter {
-                            $0.source.matches(owner)
+                            $0.source.matches(owner) && $0.sendOrdinal == nil
                         } ?? []
                         if checked.count == 1, case .bus(let number) = checked[0].assignment,
                            OutputAssignment.busNumbers.contains(number) {
@@ -173,6 +173,20 @@ enum RoutingGraphPublication {
                                 displayName: "Bus \(number)", busNumber: number, targetRef: nil)
                             edges.append(RoutingEdge(kind: .mainOutput, source: reference.rawValue,
                                 destination: busID, send: nil, provenance: .axOutputMenuCheckmark))
+                        }
+                        for slot in strip.sendSlots ?? [] where slot.state == .occupiedUnknownDestination && slot.ordinal >= 0 {
+                            guard strip.sendSlots?.filter({ $0.ordinal == slot.ordinal }).count == 1 else { continue }
+                            let sends = capture.freshPopulation?.checkedOutputs.filter {
+                                $0.source.matches(owner) && $0.sendOrdinal == slot.ordinal
+                            } ?? []
+                            guard sends.count == 1, case .bus(let number) = sends[0].assignment,
+                                  OutputAssignment.busNumbers.contains(number) else { continue }
+                            let busID = "bus_\(number)"
+                            nodesByID[busID] = RoutingNode(id: busID, kind: .bus,
+                                displayName: "Bus \(number)", busNumber: number, targetRef: nil)
+                            edges.append(RoutingEdge(kind: .send, source: reference.rawValue,
+                                destination: busID, send: nil, provenance: .axSendMenuCheckmark,
+                                observedSendOrdinal: slot.ordinal))
                         }
                     }
                 } else {
@@ -253,13 +267,18 @@ enum RoutingGraphPublication {
             ? RoutingDomainCoverage(state: .partial, reasons: mainOutput.coverage.reasons
                 + ["only request-held bus main outputs have checked-menu evidence"])
             : mainOutput.coverage
+        let checkedSendObserved = edges.contains { $0.provenance == .axSendMenuCheckmark }
+        let sendCoverage = checkedSendObserved
+            ? RoutingDomainCoverage(state: .partial, reasons: sends.coverage.reasons.filter { $0 != sendDestinationReason }
+                + ["only request-held bus sends have checked-menu evidence; source census ordinals do not establish physical write slots or receiving-strip identity"])
+            : sends.coverage
         let coverage = RoutingCoverage(
             population: population.coverage,
             stripTrackAssociation: association.coverage,
             mainOutput: mainOutputCoverage,
             physicalOutput: physicalOutput.coverage,
             busToAuxInput: RoutingDomainCoverage(state: .notObserved, reasons: [busToAuxInputReason]),
-            sends: sends.coverage
+            sends: sendCoverage
         )
         var partialReasons: [String] = []
         for domain in coverage.domains where domain.state != .complete {
@@ -275,8 +294,9 @@ enum RoutingGraphPublication {
             partialReason: partialReasons.isEmpty ? nil : partialReasons.joined(separator: "; "),
             nodes: nodesByID.values.sorted { $0.id < $1.id },
             edges: edges,
-            provenance: checkedMainOutputObserved
-                ? [.axMixerStrip, .axOutputMenuCheckmark] : [.axMixerStrip],
+            provenance: [.axMixerStrip]
+                + (checkedMainOutputObserved ? [.axOutputMenuCheckmark] : [])
+                + (checkedSendObserved ? [.axSendMenuCheckmark] : []),
             snapshotId: snapshotId,
             coverage: coverage
         )

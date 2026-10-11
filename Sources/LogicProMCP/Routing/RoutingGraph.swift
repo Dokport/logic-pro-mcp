@@ -116,6 +116,7 @@ struct SendEdge: Codable, Equatable, Sendable {
 enum RoutingProvenance: String, Codable, Sendable {
     case axMixerStrip
     case axOutputMenuCheckmark
+    case axSendMenuCheckmark
     case mcuEcho
     case other
 }
@@ -126,6 +127,8 @@ struct RoutingEdge: Codable, Equatable, Sendable {
     let destination: String
     let send: SendEdge?
     let provenance: RoutingProvenance
+    /// Read-only source census identity. This does not establish SendEdge.physicalSlot.
+    var observedSendOrdinal: Int? = nil
 }
 
 enum RoutingCoverageState: String, Codable, Sendable {
@@ -230,7 +233,7 @@ struct RoutingGraph: Codable, Equatable, Sendable {
         if !complete {
             return partialReason?.isEmpty == false
         }
-        guard partialReason == nil else { return false }
+        guard partialReason == nil, edges.allSatisfy({ $0.observedSendOrdinal == nil }) else { return false }
         // A complete logical bus must name a destination the routing API can address.
         // Partial captures may retain an unresolved bus as display evidence only.
         guard nodes.allSatisfy({ node in

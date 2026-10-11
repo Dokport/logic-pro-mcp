@@ -508,6 +508,12 @@ struct ProjectDispatcher: OperationTraceDispatching {
                 case SessionPopulationObservation.AcquisitionError.ownershipLost:
                     failure = .readbackUnavailable
                     hint = "Fresh population could not retain operation ownership or cache/project custody; no replacement report was published."
+                case SessionPopulationObservation.AcquisitionError.pollerStopped:
+                    failure = .readbackUnavailable
+                    hint = "The registered population producer is stopped; no replacement report was published."
+                case SessionPopulationObservation.AcquisitionError.textEditing:
+                    failure = .readbackUnavailable
+                    hint = "Fresh population acquisition was stopped by its keyboard-focus/observation guard; no replacement report was published."
                 default:
                     failure = .readbackUnavailable
                     hint = "Fresh population acquisition could not verify its owned observation; no replacement report was published."

@@ -67,6 +67,198 @@ struct Issue291AssignedSendMenuTests {
             await AccessibilityChannel.getAssignedSendVerified(ordinal:ordinal,runtime:f.logic,timing:.immediate)
         }
     }
+    @Test("Routing-only population does not claim or classify unrequested inserts", arguments: [false, true])
+    func routingPopulationSkipsUnrequestedInserts(includeStrips: Bool) async throws {
+        let p = try prepare(), f = p.f
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let insert = Issue982UnreadChildrenTests.occupiedSlot(f.b, 291_950, name: "Compressor")
+        f.b.setChildren(f.strips[1], [f.outputs[1], insert])
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let population = try await OperationTraceContext.$current.withValue(context) {
+            try await f.channel().readFreshSessionPopulation(request: .init(
+                domains: includeStrips ? [.routing, .strips] : [.routing]),
+                fileReader: .unavailable, stoppingWhen: { false })
+        }
+        #expect(population.stable)
+        let states = try #require(population.strips)
+        #expect(!states.isEmpty)
+        if includeStrips {
+            #expect(states.contains { $0.pluginsSource != nil || $0.pluginsReadError != nil })
+            #expect(states[1].plugins.count == 1)
+        } else {
+            #expect(states.allSatisfy { $0.pluginsSource == nil && $0.pluginsReadError == nil })
+        }
+        let cache = StateCache()
+        await cache.updateProject(try #require(population.project))
+        await cache.updateChannelStrips(states)
+        let capture = await SessionPopulationObservation.capture(cache: cache,
+            targetRegistry: nil, fileReader: .unavailable)
+        let report = SessionPopulationObservation.build(request: .init(
+            domains: includeStrips ? [.routing, .strips] : [.routing]), capture: capture)
+        let wire = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any])
+        let rows = try #require((wire["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+        if includeStrips {
+            #expect(rows[1]["plugin_count"] as? Int == 1)
+        } else {
+            #expect(rows[1]["plugin_count"] == nil || rows[1]["plugin_count"] is NSNull)
+        }
+        let hasSend = try #require(states.first?.sendSlots?.contains { $0.ordinal == 1 })
+        #expect(hasSend)
+        #expect(f.mutations.isEmpty)
+    }
+    @Test("Explicit fresh routing capture retains the occupied send's checked destination")
+    func freshRoutingCaptureReadsAssignedSend() async throws {
+        let p = try prepare(), f = p.f
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let population = try await OperationTraceContext.$current.withValue(context) {
+            try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
+                allowUINavigation: true), fileReader: .unavailable, stoppingWhen: { false })
+        }
+        #expect(population.stable)
+        #expect(population.checkedOutputs.count == 1)
+        #expect(population.checkedOutputs.first?.assignment == .bus(1))
+        #expect(population.checkedOutputs.first?.sendOrdinal == 1)
+        #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+        #expect(population.uiEffects.restoration == "restored")
+    }
+    @Test("Registered routing capture permits only its original nonediting physical or header focus under its Help guard",
+          arguments: ["healthy", "editor", "settable", "characters", "line", "detached", "duplicate", "parent", "window", "background",
+                      "header_healthy", "header_popup", "header_settable", "header_value", "header_line", "header_detached", "header_window", "header_background"])
+    func guardedRoutingCaptureRetainsPassivePhysicalFocus(fault input: String) async throws {
+        let p = try prepare(), f = p.f
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let isHeader = input.hasPrefix("header_")
+        let fault = input == "header_popup" ? "healthy" : (isHeader ? String(input.dropFirst(7)) : input)
+        let focus = isHeader ? passiveHeaderFocus(f) : try passivePhysicalFocus(f)
+        if input == "header_popup" {
+            let search = f.b.element(291_960)
+            f.b.setRole(search, kAXTextFieldRole as String)
+            f.b.setChildren(search, [])
+            f.b.setChildren(f.root, try AXHelpers.childrenResult(f.root, runtime: f.logic.ax).get() + [search])
+            f.onAttributeRead = { element, attribute in
+                guard CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String else { return }
+                // Focus changes with the owned action, not midway through the
+                // popup witness's deciding read of its retained search identity.
+                if f.mutations.last?.1 == kAXPressAction as String {
+                    f.b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, search)
+                } else if f.mutations.last?.1 == kAXCancelAction as String {
+                    f.b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, focus)
+                }
+            }
+        }
+        switch fault {
+        case "editor": f.b.setRole(focus, kAXTextFieldRole as String)
+        case "settable": f.b.setAttributeSettable(focus, kAXValueAttribute as String, true)
+        case "value": f.b.setAttribute(focus, kAXValueAttribute as String, NSNumber(value: 1))
+        case "characters": f.b.setAttribute(focus, kAXNumberOfCharactersAttribute as String, 1)
+        case "line": f.b.setAttribute(focus, kAXInsertionPointLineNumberAttribute as String, 1)
+        case "detached":
+            if isHeader { f.b.setChildren(f.headers[0], [f.headerVolumes[0], f.headerPans[0]]) }
+            else { f.b.setChildren(f.mixer, [f.strips[0]]) }
+        case "duplicate": f.b.setChildren(f.mixer, [f.strips[0], focus, focus])
+        case "parent": f.b.setAttribute(focus, kAXParentAttribute as String, f.window)
+        case "window": f.b.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.app)
+        case "background": f.b.setAttribute(f.app, kAXFrontmostAttribute as String, false)
+        default: break
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let scope = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+        let guardian = AXHelpers.HelpReadGuard(allowHelpReads: true, stop: {
+            AccessibilityChannel.readLogicKeyboardFocus(runtime: f.logic) != .notTextEditing && !scope.permits()
+        })
+        do {
+            let population = try await OperationTraceContext.$current.withValue(context) {
+                try await AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+                    try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
+                        allowUINavigation: true), fileReader: .unavailable, readFocusScope: scope,
+                        stoppingBeforeAXRead: { guardian.stopped }, stoppingWhen: { guardian.stopped })
+                }
+            }
+            #expect(fault == "healthy")
+            #expect(population.stable)
+            #expect(population.checkedOutputs.first?.sendOrdinal == 1)
+            #expect(population.checkedOutputs.first?.assignment == .bus(1))
+            #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+            let currentFocus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+                kAXFocusedUIElementAttribute as String, runtime: f.logic.ax))
+            #expect(CFEqual(currentFocus, focus))
+        } catch {
+            #expect(fault != "healthy")
+            #expect(f.mutations.isEmpty)
+        }
+        #expect(!scope.permits())
+    }
+    @Test("A checked send graph edge is tied to its source census, not a physical write slot",
+          arguments: ["held", "absent", "other_owner", "conflict", "unstable", "empty", "duplicate_ordinal", "stereo", "no_output", "negative_ordinal", "moved"])
+    func checkedSendGraphUsesOnlyHeldCensus(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let p = try prepare(), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            var states = try #require(AccessibilityChannel.defaultGetMixerStates(
+                runtime: f.logic, stoppingWhen: { false }).states)
+            if fault == "empty" { states[0].sendSlots?[1].state = .observedEmpty }
+            if fault == "duplicate_ordinal", let slot = states[0].sendSlots?[1] { states[0].sendSlots?.append(slot) }
+            let cache = StateCache(), registry = TargetRegistry()
+            await cache.updateProject(.init(name: "Session", filePath: f.bundle.path, source: "fixture"))
+            await cache.updateDocumentState(true)
+            await cache.updateChannelStrips(states)
+            let base = await SessionPopulationObservation.capture(cache: cache,
+                targetRegistry: registry, fileReader: .unavailable)
+            let owner = try #require(states[0].physicalBinding)
+            let source = try #require(base.mixerReference(at: 0))
+            var fresh = SessionPopulationObservation.FreshPopulation(project: base.project,
+                tracks: base.tracks, strips: states, fileTrackCount: nil,
+                beganAt: base.beganAt, endedAt: base.endedAt, stable: fault != "unstable")
+            if fault != "absent" {
+                fresh.checkedOutputs = [.init(source: fault == "other_owner"
+                    ? try #require(states[1].physicalBinding) : owner,
+                    assignment: fault == "stereo" ? .stereoOutput : (fault == "no_output" ? .noOutput : .bus(1)),
+                    sendOrdinal: fault == "negative_ordinal" ? -1 : 1)]
+                if fault == "conflict" {
+                    fresh.checkedOutputs.append(.init(source: owner, assignment: .bus(2), sendOrdinal: 1))
+                }
+            }
+            let capture = SessionPopulationObservation.Capture(before: base.before, after: base.after,
+                projectEpoch: base.projectEpoch, project: base.project, tracks: base.tracks,
+                tracksFetchedAt: base.tracksFetchedAt, channelStrips: base.channelStrips,
+                mixerFetchedAt: base.mixerFetchedAt, fileTrackCount: base.fileTrackCount,
+                projectFileNotBound: base.projectFileNotBound,
+                requestedProjectMatches: base.requestedProjectMatches,
+                referencesEnabled: base.referencesEnabled, targetSnapshot: base.targetSnapshot,
+                issued: base.issued, projectIssuance: base.projectIssuance,
+                beganAt: base.beganAt, endedAt: base.endedAt, captureID: base.captureID,
+                freshPopulation: fresh, mixerReferences: base.mixerReferences)
+            let graph = fault == "moved" ? RoutingGraphPublication.publish(capture: capture, project: .moved)
+                : SessionPopulationObservation.routingGraph(capture: capture)
+            let edges = graph.edges.filter { $0.source == source.rawValue && $0.kind == .send }
+            if fault == "held" {
+                #expect(edges.count == 1)
+                let edge = try #require(edges.first)
+                #expect(edge.destination == "bus_1")
+                #expect(edge.send == nil)
+                #expect(edge.observedSendOrdinal == 1)
+                #expect(edge.provenance.rawValue == "axSendMenuCheckmark")
+                #expect(graph.nodes.first { $0.id == "bus_1" }?.targetRef == nil)
+                #expect(graph.coverage.sends.state == .partial)
+            } else { #expect(edges.isEmpty) }
+            #expect(!graph.complete)
+            let decision = evaluate(.init(sourceTrackRef: source, physicalSlot: 1,
+                destinationBusNumber: 1, destinationRef: nil, expectedProjectEpoch: graph.projectEpoch), against: graph)
+            #expect(!decision.allowed)
+            #expect(!decision.writeAttempted)
+            #expect(f.mutations.isEmpty)
+        }
+    }
     private func passiveHeaderFocus(_ f: Issue291PhysicalStripReferenceTests.Fixture) -> AXUIElement {
         let label = f.b.element(291_940)
         f.b.setRole(label, kAXTextFieldRole as String)

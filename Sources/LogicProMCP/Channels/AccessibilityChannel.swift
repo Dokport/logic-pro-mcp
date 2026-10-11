@@ -340,6 +340,14 @@ actor AccessibilityChannel: Channel {
         var reusesAssociationPresentation = false
         var association: HeldSelectionAssociation?
         var routingEffects = SessionPopulationObservation.UIEffects()
+        if request.allowUINavigation, request.domains.contains(.routing),
+           !request.domains.contains(.associations),
+           case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
+            // Reuse this routing reader's exact existing focus witnesses, not
+            // a different track-acquisition contract. No selection/write authority.
+            readFocusScope?.retainPassiveRouting(in: window, logic: runtime.logicRuntime,
+                includingHeader: request.domains == [.routing])
+        }
         if request.allowUINavigation, request.domains.contains(.associations),
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime),
            let candidate = HeldSelectionAssociation(window: window, logic: runtime.logicRuntime,
@@ -412,7 +420,7 @@ actor AccessibilityChannel: Channel {
                association == nil, stackNavigation?.effects.navigationPerformed != true,
                navigation?.effects.navigationPerformed != true {
                 var checked: [SessionPopulationObservation.HeldCheckedOutput] = []
-                for strip in population.strips ?? [] {
+                stripReads: for strip in population.strips ?? [] {
                     guard !stop(), await navigationReferenceIsCurrent() else {
                         try SessionPopulationObservation.requireOwnedAcquisition()
                         throw SessionPopulationObservation.AcquisitionError.ownershipLost
@@ -420,40 +428,55 @@ actor AccessibilityChannel: Channel {
                     // This bounded projection publishes only checked bus edges. A
                     // display classification selects candidates to acquire; it never
                     // supplies the assignment, source identity or receiver identity.
-                    guard let label = strip.output,
-                          RoutingGraphPublication.classifyOutputLabel(label).0 == .bus else { continue }
+                    var candidates: [Int?] = []
+                    if let label = strip.output, RoutingGraphPublication.classifyOutputLabel(label).0 == .bus {
+                        candidates.append(nil)
+                    }
+                    let slots = strip.sendSlots ?? []
+                    for slot in slots where slot.state == .occupiedUnknownDestination && slot.ordinal >= 0 {
+                        if slots.filter({ $0.ordinal == slot.ordinal }).count == 1 {
+                            candidates.append(slot.ordinal)
+                        }
+                    }
+                    guard !candidates.isEmpty else { continue }
                     guard let owner = strip.physicalBinding,
                           population.strips?.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1 else { continue }
-                    let read = await AXMixerStripBinding.$current.withValue(owner) {
-                        await Self.getOutputObservation(runtime: runtime.logicRuntime,
-                            observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) })
-                    }
-                    let receipt = read.result.message.data(using: .utf8).flatMap {
-                        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-                    }
-                    if receipt?["navigation_attempted"] as? Bool == true {
-                        population.uiEffects.navigationPerformed = true
-                        if !population.uiEffects.attempted.contains("routing_popup") {
-                            population.uiEffects.attempted.append("routing_popup")
+                    for ordinal in candidates {
+                        guard !stop(), await navigationReferenceIsCurrent() else {
+                            try SessionPopulationObservation.requireOwnedAcquisition()
+                            throw SessionPopulationObservation.AcquisitionError.ownershipLost
                         }
-                        if receipt?["popup_menu_state"] as? String == "closed"
-                            || receipt?["menu_custody_at_read"] as? Bool == true {
-                            if !population.uiEffects.changed.contains("routing_popup") {
-                                population.uiEffects.changed.append("routing_popup")
+                        let read = await AXMixerStripBinding.$current.withValue(owner) {
+                            await Self.getOutputObservation(runtime: runtime.logicRuntime, sendOrdinal: ordinal,
+                                observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) })
+                        }
+                        let receipt = read.result.message.data(using: .utf8).flatMap {
+                            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+                        }
+                        if receipt?["navigation_attempted"] as? Bool == true {
+                            population.uiEffects.navigationPerformed = true
+                            if !population.uiEffects.attempted.contains("routing_popup") {
+                                population.uiEffects.attempted.append("routing_popup")
+                            }
+                            if receipt?["popup_menu_state"] as? String == "closed"
+                                || receipt?["menu_custody_at_read"] as? Bool == true {
+                                if !population.uiEffects.changed.contains("routing_popup") {
+                                    population.uiEffects.changed.append("routing_popup")
+                                }
+                            }
+                            let restored = receipt?["popup_menu_state"] as? String == "closed"
+                                && receipt?["focus_restoration"] as? String == "restored"
+                            population.uiEffects.restoration = restored ? "restored" : "partially_restored"
+                            routingEffects = population.uiEffects
+                            if !restored {
+                                population.stable = false
+                                population.uiEffects.reason = "routing_popup_not_restored"
+                                break stripReads
                             }
                         }
-                        let restored = receipt?["popup_menu_state"] as? String == "closed"
-                            && receipt?["focus_restoration"] as? String == "restored"
-                        population.uiEffects.restoration = restored ? "restored" : "partially_restored"
-                        routingEffects = population.uiEffects
-                        if !restored {
-                            population.stable = false
-                            population.uiEffects.reason = "routing_popup_not_restored"
-                            break
+                        if let assignment = read.assignment {
+                            checked.append(.init(source: owner, assignment: assignment, sendOrdinal: ordinal))
                         }
-                    }
-                    if let assignment = read.assignment {
-                        checked.append(.init(source: owner, assignment: assignment))
                     }
                 }
                 if population.stable, !checked.isEmpty {
@@ -780,7 +803,10 @@ actor AccessibilityChannel: Channel {
                     if let enumeration = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: logic.ax) {
                         stripElements = enumeration.strips
                         strips = Self.readChannelStrips(from: enumeration.strips, runtime: logic,
-                            window: window, mixer: binding.mixer, stoppingWhen: stop)
+                            window: window, mixer: binding.mixer,
+                            // Routing-only bookends do not classify unrequested inserts.
+                            // Other populations and standalone callers retain the full chain read.
+                            readingPlugins: request.domains != [.routing], stoppingWhen: stop)
                     }
                 }
             }

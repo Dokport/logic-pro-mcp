@@ -130,10 +130,11 @@ extension AccessibilityChannel {
             private var navigation: OwnedTrackStackObservationNavigation?
             private var passiveMixer: PassiveMixerReadFocus?
             private var passiveHeader: PassiveHeaderReadFocus?
+            private var passiveRoutingHeader: (PassiveRoutingReadFocus, AXLogicProElements.Runtime)?
             private var association: HeldSelectionAssociation?
             private var routingPopupFocus: (@Sendable () -> Bool)?
             func retain(_ navigation: OwnedTrackStackObservationNavigation?) {
-                lock.withLock { self.navigation = navigation; passiveMixer = nil; passiveHeader = nil; association = nil; routingPopupFocus = nil }
+                lock.withLock { self.navigation = navigation; passiveMixer = nil; passiveHeader = nil; passiveRoutingHeader = nil; association = nil; routingPopupFocus = nil }
             }
             func retainRoutingPopupFocus(_ proof: (@Sendable () -> Bool)?) {
                 lock.withLock { routingPopupFocus = proof }
@@ -141,15 +142,26 @@ extension AccessibilityChannel {
             func retainAssociation(_ observation: HeldSelectionAssociation) {
                 lock.withLock { association = observation }
             }
-            func retainPassiveMixer(in window: AXUIElement, logic: AXLogicProElements.Runtime) {
+            func retainPassiveMixer(in window: AXUIElement, logic: AXLogicProElements.Runtime, includingHeader: Bool = true) {
                 let candidate = PassiveMixerReadFocus(window: window, logic: logic)
-                let header = PassiveHeaderReadFocus(window: window, logic: logic)
-                lock.withLock { passiveMixer = candidate; passiveHeader = header }
+                let header = includingHeader ? PassiveHeaderReadFocus(window: window, logic: logic) : nil
+                lock.withLock { passiveMixer = candidate; passiveHeader = header; passiveRoutingHeader = nil }
+            }
+            func retainPassiveRouting(in window: AXUIElement, logic: AXLogicProElements.Runtime, includingHeader: Bool) {
+                let candidate = PassiveMixerReadFocus(window: window, logic: logic)
+                let header: PassiveRoutingReadFocus?
+                if includingHeader, case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic) {
+                    header = PassiveRoutingReadFocus(window: window, document: document, runtime: logic)
+                } else { header = nil }
+                lock.withLock { passiveMixer = candidate; passiveHeader = nil; passiveRoutingHeader = header.map { ($0, logic) } }
             }
             func permits() -> Bool {
-                let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus) }
-                return held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
-                    || held.2?.permitsPassiveFocusRead() == true || held.3?.permits() == true || held.4?() == true
+                let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader) }
+                // A currently owned popup deliberately holds search focus. Do not
+                // revoke the original header witness during that proven excursion.
+                return held.4?() == true || held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
+                    || held.2?.permitsPassiveFocusRead() == true || held.3?.permits() == true
+                    || held.5.map { $0.0.permits(runtime: $0.1) } == true
             }
 
             /// An original immutable numeric name label is not a rename editor.
@@ -254,8 +266,9 @@ extension AccessibilityChannel {
 
             /// A passive strip exposes a zero insertion sentinel on Logic 12.3.
             /// This witness grants only its caller's bounded semantic read:
-            /// no-navigation track acquisition or an owned routing-popup read.
-            /// It never grants Help, keyboard commands or musical write permission.
+            /// no-navigation track acquisition or explicitly permitted routing acquisition.
+            /// The caller's Help guard remains decisive; this proof grants neither
+            /// keyboard/selection actions nor musical write permission.
             struct PassiveMixerReadFocus {
                 private let acquisitionPermitted: @Sendable () -> Bool
                 let logic: AXLogicProElements.Runtime
