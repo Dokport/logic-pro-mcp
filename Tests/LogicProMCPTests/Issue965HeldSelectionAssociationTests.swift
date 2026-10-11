@@ -6,6 +6,62 @@ import Testing
 
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
+    @Test("A held input popup may move focus without losing its original complete association",
+          arguments: ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window", "popup_unreadable_window", "popup_foreign_window", "foreign_document", "foreign_focus", "detached_search", "retired_strip", "changed_selection", "playing"])
+    func ownedPopupFocusPreservesOnlyActualHeldCustody(_ fault: String) async throws {
+        let f = try Fixture(), gate = LogicMutationGate()
+        _ = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
+            commandParams: ["domains": .array([.string("associations")])], mutationGate: gate) {
+            let base = f.builder.makeLogicRuntime(appElement: f.app, attributeValueResultHandler: { element, attribute in
+                if f.ownedPopupObservationStarted, CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
+                    if ["popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window"].contains(fault) {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    if fault == "popup_unreadable_window" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                }
+                if f.strips.contains(where: { CFEqual($0, element) }),
+                   attribute == kAXValueAttribute as String || attribute == kAXSelectedTextAttribute as String {
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
+                return nil
+            }, setAttributeHandler: nil, performActionHandler: nil)
+            let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: base.ax,
+                executeAppleScript: { _ in Issue.record("No scripts"); return .error("forbidden") },
+                onScreenWindowList: { [] }, focusedApplicationPID: { 4242 })
+            guard let association = AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: logic, expectedProject: nil, requiresProjectReference: false) else {
+                Issue.record("Fixture must hold a real association before its popup"); return .init(content: [])
+            }
+            let root = f.builder.element(1_965_980), search = f.builder.element(1_965_981)
+            f.builder.setRole(root, kAXMenuRole as String)
+            f.builder.setRole(search, kAXTextFieldRole as String)
+            f.builder.setChildren(search, []); f.builder.setChildren(root, [search])
+            f.builder.setChildren(f.mixer, f.strips + [root])
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, search)
+            f.ownedPopupObservationStarted = true
+            switch fault {
+            case "unchanged_focus", "popup_unchanged_no_focused_window", "ordinary_no_focused_window":
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, association.originalFocus)
+                f.builder.setAttribute(association.originalFocus, kAXInsertionPointLineNumberAttribute as String, 0)
+                #expect(AccessibilityChannel.readLogicKeyboardFocus(runtime: logic) != .notTextEditing,
+                    "The existing full passive-strip witness, not a global focus exemption, must qualify this native-shaped control")
+            case "foreign_document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+            case "popup_foreign_window": f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.builder.element(1_965_982))
+            case "foreign_focus": f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.headers[0])
+            case "detached_search": f.builder.setChildren(root, [])
+            case "retired_strip": f.builder.setChildren(f.mixer, [f.strips[1], root])
+            case "changed_selection":
+                f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
+                f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
+            case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+            default: break
+            }
+            let permitted = fault == "ordinary_no_focused_window" ? association.permitsRead() : association.permitsOwnedPopupRead(root)
+            if ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window"].contains(fault) { #expect(permitted) } else { #expect(!permitted) }
+            #expect(f.builder.actionCalls.isEmpty)
+            return .init(content: [])
+        }
+    }
     @Test func publicDescriptionDistinguishesPhysicalPairsFromWholePopulation() {
         let description = ProjectDispatcher.tool.description ?? ""
         #expect(description.contains("held exclusive selection"), "Describe the implemented physical observation, not name/index joins")
@@ -99,6 +155,7 @@ struct Issue965HeldSelectionAssociationTests {
         let scroll: AXUIElement
         let bundle: URL
         var selections: [Int] = []
+        var ownedPopupObservationStarted = false
         var scrollWrites: [Double] = []
         var viewportReadsAfterSelection = 0
         var inverseValueReadCount = 0

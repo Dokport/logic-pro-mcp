@@ -1473,6 +1473,8 @@ actor AccessibilityChannel: Channel {
             return await AccessibilityChannel.setOutputVerified(params: params, runtime: runtime.logicRuntime)
         case "mixer.get_output_verified":
             return await AccessibilityChannel.getOutputVerified(params: params, runtime: runtime.logicRuntime)
+        case "mixer.set_input_bus_verified":
+            return await AccessibilityChannel.setInputBusVerified(params: params, runtime: runtime.logicRuntime)
         case "mixer.get_input_bus_verified":
             guard params.isEmpty else {
                 return .error(HonestContract.encodeStateC(error: .invalidParams,
