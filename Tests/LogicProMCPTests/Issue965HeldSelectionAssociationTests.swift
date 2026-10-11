@@ -648,6 +648,23 @@ struct Issue965HeldSelectionAssociationTests {
         #expect((rows?.count ?? 0) == 0)
     }
 
+    @Test(arguments: [false, true])
+    func unchangedHeldMixerFocusRefusesAssociationButRestoresOwnedSelection(bulk: Bool) async throws {
+        let f = try Fixture()
+        f.useBulkReads = bulk
+        f.fault = "unchanged_focus"
+        let body = try await inspect(f)
+        #expect(f.selections == [1, 0], "Actual Logic can change the held rail selection without changing its original passive Mixer focus")
+        let selected = try #require(f.builder.attributeValue(f.headers[0], kAXSelectedAttribute as String) as? Bool)
+        #expect(selected)
+        let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]]
+        #expect((rows?.count ?? 0) == 0, "An unchanged physical focus proves no track-to-strip pair")
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String,
+            runtime: f.builder.makeAXRuntime()))
+        #expect(CFEqual(focus, f.strips[1]))
+    }
+
     @Test func explicitNavigationPublishesPhysicalPairsWithoutNameOrOrdinalJoin() async throws {
         let f = try Fixture()
         let body = try await inspect(f)
@@ -954,7 +971,7 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(rows == nil, "non-Boolean numeric selection is not physical association evidence")
     }
 
-    @Test(arguments: ["foreign_focus", "transient_foreign_focus", "unchanged_focus", "document", "header_replacement", "strip_replacement", "playback", "transient_editor"], [false, true])
+    @Test(arguments: ["foreign_focus", "transient_foreign_focus", "document", "header_replacement", "strip_replacement", "playback", "transient_editor"], [false, true])
     func observedCustodyLossCannotAuthorizeAnotherSelection(fault: String, bulk: Bool) async throws {
         let f = try Fixture()
         f.useBulkReads = bulk
@@ -964,7 +981,7 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(body["associations"] == nil)
         #expect(body["state"] as? String == "C")
         if fault == "transient_foreign_focus" { #expect(f.transientForeignRead, "the actual optional focus-read seam must be exercised") }
-        if fault == "foreign_focus" || fault == "unchanged_focus" {
+        if fault == "foreign_focus" {
             #expect((body["ui_effects"] as? [String: Any])?["changed"] as? [String] == ["track_selection"],
                     "a deciding read observed actual selection even though its focus could not qualify a pair")
         }

@@ -352,7 +352,6 @@ extension AccessibilityChannel {
             // R965-ASSOC-C001: the deciding focus/selection reads in permitsRead
             // can themselves coincide with a document/window switch. Revalidate
             // scoped ownership AFTER them, with no further AX read before write.
-            let previousFocus = expectedFocus
             effects.navigationPerformed = true; effects.restoration = "not_restored"
             if !effects.attempted.contains("track_selection") { effects.attempted.append("track_selection") }
             let accepted = AXHelpers.setAttribute(rail, kAXSelectedChildrenAttribute as String, [headers[index]] as CFArray, runtime: logic.ax)
@@ -366,8 +365,12 @@ extension AccessibilityChannel {
                       strips.filter({ CFEqual($0, focus) }).count == 1 else {
                     lost = true; return false
                 }
-                if selectionChanged, !CFEqual(focus, previousFocus) {
+                if selectionChanged {
                     guard let afterViewport = currentViewport(), owned() else { return false }
+                    // Logic can select our exact held header while retaining its
+                    // original passive Mixer focus. Retain that owned transition
+                    // for inverse cleanup; observe() still requires a different
+                    // challenge focus before publishing any association pair.
                     expectedIndex = index; expectedFocus = focus
                     expectedViewport = afterViewport
                     return permitsRead() && !stop() && accepted
