@@ -2,6 +2,42 @@
 import Testing
 @testable import LogicProMCP
 
+@Test(arguments: [false, true])
+func testAXHelpersDescendantReadsOnlyMetadataNeededAfterEarlierFilters(_ titleMismatch: Bool) throws {
+    let builder = FakeAXRuntimeBuilder()
+    let root = builder.element(965_400)
+    let excluded = builder.element(965_401)
+    let target = builder.element(965_402)
+    builder.setChildren(root, [excluded])
+    builder.setChildren(excluded, [target])
+    builder.setChildren(target, [])
+    builder.setRole(excluded, titleMismatch ? kAXButtonRole as String : kAXTextFieldRole as String)
+    builder.setAttribute(excluded, kAXTitleAttribute as String, titleMismatch ? "Other" : "Stop")
+    builder.setAttribute(excluded, kAXIdentifierAttribute as String, "stop")
+    builder.setRole(target, kAXButtonRole as String)
+    builder.setAttribute(target, kAXTitleAttribute as String, "Stop")
+    builder.setAttribute(target, kAXIdentifierAttribute as String, "stop")
+    let ax = builder.makeAXRuntime(attributeValueHandler: { element, attribute in
+        if CFEqual(element, excluded), attribute == kAXIdentifierAttribute as String
+            || (!titleMismatch && attribute == kAXTitleAttribute as String) {
+            Issue.record("an earlier mismatched filter must not read irrelevant title/identifier metadata")
+        }
+        return nil
+    }, setAttributeHandler: nil, performActionHandler: nil)
+    var observedRoles: [AXUIElement] = []
+    var observedParents: [AXUIElement] = []
+    let found = try #require(AXHelpers.findDescendant(
+        of: root, role: kAXButtonRole, title: "Stop", identifier: "stop", maxDepth: 2, runtime: ax,
+        observingRole: { element, _ in observedRoles.append(element) },
+        observingChildren: { element, _ in observedParents.append(element) }))
+    #expect(CFEqual(found, target), "rejecting a parent must not prune a matching nested target")
+    #expect(observedRoles.contains { CFEqual($0, excluded) })
+    #expect(observedRoles.contains { CFEqual($0, target) })
+    #expect(observedParents.contains { CFEqual($0, excluded) })
+    #expect(builder.setCalls.isEmpty)
+    #expect(builder.actionCalls.isEmpty)
+}
+
 @Test func testAXHelpersReadAndWriteThroughInjectedRuntime() {
     let builder = FakeAXRuntimeBuilder()
     let root = builder.element(1)

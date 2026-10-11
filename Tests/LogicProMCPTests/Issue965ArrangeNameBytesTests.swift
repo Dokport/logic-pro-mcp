@@ -6,6 +6,13 @@ import Testing
 
 @Suite("#965 Arrange name observations preserve bytes")
 struct Issue965ArrangeNameBytesTests {
+    private final class FieldReads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var attributes: [String] = []
+        func record(_ attribute: String) { lock.withLock { attributes.append(attribute) } }
+        var values: [String] { lock.withLock { attributes } }
+    }
+
     enum Source: CaseIterable {
         case fieldDescription, fieldTitle, fieldValue, staticText, quotedDescription, headerTitle
     }
@@ -39,6 +46,67 @@ struct Issue965ArrangeNameBytesTests {
             builder.setAttribute(header, kAXTitleAttribute as String, name)
         }
         return header
+    }
+
+    @Test(arguments: [Source.fieldDescription, .fieldTitle], [true, false])
+    func usableFieldMetadataDoesNotReadLowerPriorityFallbacks(_ source: Source, verifiedReader: Bool) throws {
+        let builder = FakeAXRuntimeBuilder()
+        let name = " q\u{0323}\u{0301} \n"
+        let header = header(builder, source: source, name: name)
+        let field = builder.element(965_301)
+        let reads = FieldReads()
+        let attributes = [kAXDescriptionAttribute as String, kAXTitleAttribute as String, kAXValueAttribute as String]
+        let ax = builder.makeAXRuntime(attributeValueHandler: { element, attribute in
+            if CFEqual(element, field), attributes.contains(attribute) { reads.record(attribute) }
+            return nil
+        }, setAttributeHandler: nil, performActionHandler: nil)
+        let observed: String
+        if verifiedReader {
+            guard case .success(let candidate) = AXValueExtractors.extractTrackNameResult(from: header, runtime: ax) else {
+                Issue.record("usable metadata must remain readable")
+                return
+            }
+            observed = try #require(candidate)
+        } else {
+            let state = try #require(AXValueExtractors.extractTrackState(
+                from: header, index: 0, runtime: ax, readingTypeHelp: false, stoppingBeforeHelp: { false }))
+            #expect(state.liveIdentityBacked)
+            observed = state.name
+        }
+        #expect(observed.utf8.elementsEqual(name.utf8))
+        let expected = source == .fieldDescription ? Array(attributes.prefix(1)) : Array(attributes.prefix(2))
+        if verifiedReader {
+            #expect(reads.values == expected, "a resolved name must not query unused fallback metadata")
+        } else {
+            // Full state extraction also reads titles for other metadata. Its name
+            // is already resolved, so the field's value fallback remains unnecessary.
+            #expect(reads.values.filter { $0 == kAXValueAttribute as String }.count == 0)
+        }
+        #expect(builder.setCalls.isEmpty)
+        #expect(builder.actionCalls.isEmpty)
+    }
+
+    @Test(arguments: [Source.fieldDescription, .fieldTitle, .fieldValue])
+    func failedRequiredFieldMetadataRemainsAFailure(_ source: Source) {
+        let builder = FakeAXRuntimeBuilder()
+        let header = header(builder, source: source, name: "Bass")
+        let field = builder.element(965_301)
+        let attribute = source == .fieldDescription ? kAXDescriptionAttribute as String
+            : source == .fieldTitle ? kAXTitleAttribute as String : kAXValueAttribute as String
+        let reads = FieldReads()
+        let ax = builder.makeAXRuntime(attributeValueResultHandler: { element, key in
+            guard CFEqual(element, field), key == attribute else { return nil }
+            reads.record(key)
+            return .failure(AXHelpers.AXStatusError(raw: -25200))
+        }, setAttributeHandler: nil, performActionHandler: nil)
+        guard case .failure(let error) = AXValueExtractors.extractTrackNameResult(from: header, runtime: ax) else {
+            Issue.record("a required name reading's AX failure must not become a name or absence")
+            return
+        }
+        #expect(error.raw == -25200)
+        #expect(reads.values == [attribute])
+        #expect(builder.setCalls.isEmpty)
+        #expect(builder.actionCalls.isEmpty)
     }
 
     @Test(arguments: Source.allCases, [" Bass \n", " Ba\u{0301}ss ", "q\u{0323}\u{0301}"])

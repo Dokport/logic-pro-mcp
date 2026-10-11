@@ -33,7 +33,9 @@ private func makeHeaderTextFieldReadFixture(
     b.setAttribute(rail, kAXIdentifierAttribute as String, "Track Headers")
     b.setAttribute(row, kAXRoleAttribute as String, kAXLayoutItemRole as String)
     b.setAttribute(name, kAXRoleAttribute as String, kAXTextFieldRole as String)
-    b.setAttribute(name, kAXDescriptionAttribute as String, "Bass")
+    // The name-failure control must need the faulted value fallback, rather
+    // than already having a usable higher-priority description.
+    b.setAttribute(name, kAXDescriptionAttribute as String, fault == .headerName ? "" : "Bass")
     b.setChildren(row, [name])
     b.setChildren(rail, [row])
     if let siblingRole { b.setAttribute(sibling, kAXRoleAttribute as String, siblingRole) }

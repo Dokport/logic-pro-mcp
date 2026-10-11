@@ -618,9 +618,9 @@ enum AXHelpers {
                 observingRole(child, observedRole)
                 roleMatch = observedRole == role
             } else { roleMatch = true }
-            let titleMatch = title == nil || getTitle(child, runtime: runtime) == title
-            let idMatch = identifier == nil || getIdentifier(child, runtime: runtime) == identifier
-            if roleMatch && titleMatch && idMatch {
+            if roleMatch,
+               title == nil || getTitle(child, runtime: runtime) == title,
+               identifier == nil || getIdentifier(child, runtime: runtime) == identifier {
                 return child
             }
             if let found = findDescendant(
