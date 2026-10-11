@@ -226,12 +226,12 @@ extension AccessibilityChannel {
                   document.utf8.elementsEqual(physical.document.utf8) else { return false }
             return true
         }
-        @Sendable func sourceFactsCurrent() -> Bool {
+        @Sendable func sourceFactsCurrent(preservingOriginalLabel: Bool = true) -> Bool {
             guard !Task.isCancelled, runtime.logicProPID() == pid,
                   let current = selectedControl(),
                   CFEqual(current, slot),
                   case .success(.some(let label)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
-                  label.utf8.elementsEqual(originalLabel.utf8),
+                  (!preservingOriginalLabel || label.utf8.elementsEqual(originalLabel.utf8)),
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
                   !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else { return false }
@@ -379,11 +379,12 @@ extension AccessibilityChannel {
             extras["popup_menu_state"] = "not_restored"
             return refuse(.readbackUnavailable, "The acquired popup lost original source custody; no unowned cleanup was attempted.")
         }
-        @Sendable func menuOwned() -> Bool {
+        @Sendable func menuOwned(preservingOriginalLabel: Bool = true) -> Bool {
             // Renew source facts and root membership before the one deciding
             // complete physical/window/document boundary. Neither grants action
             // authority on its own, and no earlier census is reused as permission.
-            guard sourceFactsCurrent(), let current = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax) else { return false }
+            guard sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel),
+                  let current = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax) else { return false }
             return current.count == 1 && CFEqual(current[0], root) && ownerBoundaryStillCurrent()
         }
         // Two agreeing reads bracketed by the same source/menu, not an atomic graph snapshot.
@@ -405,8 +406,9 @@ extension AccessibilityChannel {
             }
             let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips
             let protectedSends = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax)
-            @Sendable func writerContextCurrent(ownedPopup: AXUIElement? = nil) -> Bool {
-                guard sourceFactsCurrent(), ownerBoundaryStillCurrent(),
+            @Sendable func writerContextCurrent(ownedPopup: AXUIElement? = nil,
+                preservingOriginalLabel: Bool = true) -> Bool {
+                guard sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel), ownerBoundaryStillCurrent(),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                       runtime.focusedApplicationPID() == pid, let app,
                       AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
@@ -435,14 +437,16 @@ extension AccessibilityChannel {
                 } else { focusAllowed = false }
                 guard focusAllowed,
                       let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
-                      CFEqual(focus, finalFocus), sourceFactsCurrent(), ownerBoundaryStillCurrent(),
+                      CFEqual(focus, finalFocus), sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel), ownerBoundaryStillCurrent(),
                       runtime.focusedApplicationPID() == pid,
                       AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true else { return false }
                 return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
             }
-            @Sendable func writerMenuOwned() -> Bool {
-                menuOwned() && writerContextCurrent(ownedPopup: root) && menuOwned()
-                    && writerContextCurrent(ownedPopup: root)
+            @Sendable func writerMenuOwned(preservingOriginalLabel: Bool = true) -> Bool {
+                menuOwned(preservingOriginalLabel: preservingOriginalLabel)
+                    && writerContextCurrent(ownedPopup: root, preservingOriginalLabel: preservingOriginalLabel)
+                    && menuOwned(preservingOriginalLabel: preservingOriginalLabel)
+                    && writerContextCurrent(ownedPopup: root, preservingOriginalLabel: preservingOriginalLabel)
             }
             func writeBoundary() -> Bool {
                 guard writerMenuOwned(), let population, let protectedSends,
@@ -483,22 +487,40 @@ extension AccessibilityChannel {
             }
             extras["write_attempted"] = true; extras["menu_path"] = path
             _ = AXHelpers.performActionResult(item, kAXPressAction as String, runtime: runtime.ax)
+            // Only the attempted destination press may change this display label.
+            // Original CF control/path custody, readable label, transport and owner
+            // guards still apply; a fresh checked destination decides the effect.
             let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: true,
                 cleaner: { runtime in
-                    guard writerMenuOwned(), runtime.ax.actionNames(root).contains(kAXCancelAction as String), writerMenuOwned() else {
+                    guard writerMenuOwned(preservingOriginalLabel: false),
+                          runtime.ax.actionNames(root).contains(kAXCancelAction as String),
+                          writerMenuOwned(preservingOriginalLabel: false) else {
                         return .couldNotDismiss(initialPopupCount: 1, remainingPopupCount: 1)
                     }
                     _ = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax)
                     return checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true ? .dismissed
                         : .couldNotDismiss(initialPopupCount: 1, remainingPopupCount: 1)
-                }, permittingCleanup: writerMenuOwned)
+                }, permittingCleanup: { writerMenuOwned(preservingOriginalLabel: false) })
             extras.merge(cleanup) { _, new in new }
             func uncertain(_ hint: String) -> CheckedOutputReading {
                 extras["hint"] = hint
                 return .init(result: .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras)), assignment: nil)
             }
-            let contextAfterPress = writerContextCurrent()
-            let controlAfterPress = assignedControl().map { assigned.matches($0) } == true
+            let contextAfterPress = writerContextCurrent(preservingOriginalLabel: false)
+            let observedControl = assignedControl()
+            let controlAfterPress = observedControl.map { assigned.matches($0) } == true
+            if let current = observedControl {
+                extras["post_press_control_identity"] = ["observed": true,
+                    "ordinal": assigned.ordinal == current.ordinal,
+                    "group": CFEqual(assigned.group, current.group),
+                    "list": CFEqual(assigned.list, current.list),
+                    "bypass": CFEqual(assigned.bypass, current.bypass),
+                    "parent_proxy": CFEqual(assigned.parentProxy, current.parentProxy),
+                    "source_path": assigned.sourcePath.count == current.sourcePath.count
+                        && zip(assigned.sourcePath, current.sourcePath).allSatisfy { CFEqual($0, $1) }]
+            } else {
+                extras["post_press_control_identity"] = ["observed": false]
+            }
             let axPopupAbsent = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
             let cgPopupAbsent = runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true
             extras["post_press_custody"] = ["context_current": contextAfterPress,
@@ -516,7 +538,8 @@ extension AccessibilityChannel {
                   normalized(slotsAfter) == normalized(protectedSends),
                   let populationAfter = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips,
                   populationAfter.count == population.count, zip(populationAfter, population).allSatisfy({ CFEqual($0, $1) }),
-                  let finalControl = assignedControl(), assigned.matches(finalControl), writerContextCurrent() else {
+                  let finalControl = assignedControl(), assigned.matches(finalControl),
+                  writerContextCurrent(preservingOriginalLabel: false) else {
                 return uncertain("Checked destination, protected send state or original population did not survive the press and fresh read; no automatic inverse was attempted.")
             }
             extras["after"] = request.destination.json; extras["strip_count_after"] = population.count

@@ -120,6 +120,13 @@ struct Issue291AssignedSendMenuTests {
                 let next = CFEqual(node,pair) ? "Output 3-4" : "Stereo Output"
                 pressed.append(next)
                 if fault != "no_effect" { current = next }
+                if fault == "destination_label" {
+                    f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, next)
+                }
+                if fault == "unreadable_label" {
+                    f.b.removeAttribute(f.outputs[0], kAXDescriptionAttribute as String)
+                }
+                if fault == "control_retired" { f.b.setChildren(f.strips[0], [p.anchor, p.knob]) }
                 if fault == "level" { f.b.setAttribute(p.knob,kAXValueAttribute as String,1) }
                 if fault == "mode" { f.b.setAttribute(mode,kAXTitleAttribute as String,"Pre Fader") }
                 if fault == "post_open_foreground" {
@@ -138,6 +145,7 @@ struct Issue291AssignedSendMenuTests {
                     guard CFEqual(node,pair) else { return nil }
                     switch fault {
                     case "late_wrong_project": f.b.setAttribute(f.window,kAXDocumentAttribute as String,"file:///wrong.logicx")
+                    case "late_label": f.b.setAttribute(f.outputs[0],kAXDescriptionAttribute as String,"changed before press")
                     case "late_foreground": foregroundLost = true
                     case "late_background": f.b.setAttribute(f.app,kAXFrontmostAttribute as String,false)
                     case "late_foreign_editor":
@@ -176,12 +184,17 @@ struct Issue291AssignedSendMenuTests {
             }
         }
     }
-    @Test("Occupied-send output replacement and explicit inverse retain level, bypass, mode and exact slot")
-    func occupiedSendOutputRoundtrip() async throws {
+    @Test("Occupied-send output replacement and explicit inverse retain level, bypass, mode and exact slot",
+        arguments: ["fixed_label", "destination_label"])
+    func occupiedSendOutputRoundtrip(label: String) async throws {
         let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = label
         let before = AXLogicProElements.sendSlotObservations(in:p.f.strips[0],runtime:probe.runtime.ax)
         let forward = try #require(sharedJSONObject(await probe.write().message))
         #expect(forward["state"] as? String == "A", "\(forward)")
+        let identity = try #require(forward["post_press_control_identity"] as? [String: Bool])
+        #expect(identity == ["observed": true, "ordinal": true, "group": true,
+            "list": true, "bypass": true, "parent_proxy": true, "source_path": true])
         #expect(probe.pressed == ["Output 3-4"])
         #expect(probe.current == "Output 3-4")
         let inverse = try #require(sharedJSONObject(await probe.write(destination:"stereo_output",expected:"physical:3-4").message))
@@ -191,7 +204,7 @@ struct Issue291AssignedSendMenuTests {
         #expect(!probe.open)
     }
     @Test("Occupied-send refusals never press a destination",
-        arguments:["stale", "empty", "replacement", "bus", "late_wrong_project"])
+        arguments:["stale", "empty", "replacement", "bus", "late_wrong_project", "late_label"])
     func occupiedSendOutputRefusals(fault: String) async throws {
         let p = try prepare(), probe = SendWriterProbe(p)
         probe.fault = fault
@@ -200,9 +213,10 @@ struct Issue291AssignedSendMenuTests {
             replacement:fault != "replacement",ordinal:fault == "empty" ? 0 : 1).message))
         #expect(body["state"] as? String == "C", "\(body)")
         #expect(probe.pressed.isEmpty)
+        if fault == "late_label" { #expect(probe.cancels == 0) }
     }
     @Test("Post-press effect, protected-state and original-source loss remain uncertain; no guessed inverse",
-        arguments:["no_effect", "level", "mode", "source_retired"])
+        arguments:["no_effect", "level", "mode", "source_retired", "control_retired", "unreadable_label"])
     func occupiedSendOutputPostPressUncertainty(fault: String) async throws {
         let p = try prepare(), probe = SendWriterProbe(p)
         probe.fault = fault
@@ -211,6 +225,10 @@ struct Issue291AssignedSendMenuTests {
         let writeAttempted = try #require(body["write_attempted"] as? Bool)
         #expect(writeAttempted)
         #expect(probe.pressed == ["Output 3-4"])
+        if fault == "control_retired" {
+            let identity = try #require(body["post_press_control_identity"] as? [String: Bool])
+            #expect(identity == ["observed": false])
+        }
     }
     @Test("Revoked writer focus/foreground permits neither destination nor popup inverse",
         arguments:["late_foreground", "late_background", "late_foreign_editor", "post_open_foreground"])
