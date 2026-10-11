@@ -969,9 +969,11 @@ extension AccessibilityChannel {
                 return true
             }
             guard await owned() else { return result(verified: false, reason: "navigation_ownership_lost") }
-            let initial = AXLogicProElements.mixerAreaLookup(in: window, runtime: runtime, requiresCompleteAbsence: true)
+            let initial = try? AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: runtime,
+                requiresCompleteAbsence: true)
             guard await owned() else { return result(verified: false, reason: "navigation_ownership_lost") }
-            switch initial {
+            guard let initial else { return result(verified: false, reason: "mixer_children_unread") }
+            switch initial.lookup {
             case .found(let mixer): before = true; revealedMixer = mixer
             case .notFound: before = false
             case .childrenUnread: return result(verified: false, reason: "mixer_children_unread")
@@ -982,6 +984,13 @@ extension AccessibilityChannel {
                       await permittingVisibilityChange?() ?? true else {
                     return result(verified: false, reason: "approved_view_before_changed")
                 }
+            }
+            // Hide retires the physical Mixer and its qualified containers. An
+            // exact focus on either cannot survive our existing readback/inverse
+            // contract. Refuse before opening View, not after destroying custody.
+            if before == true, !desired, let binding = initial.binding,
+               CFEqual(focus, binding.mixer) || binding.owners.contains(where: { CFEqual(focus, $0) }) {
+                return result(verified: false, reason: "mixer_focus_would_be_retired")
             }
             var acknowledged = true
             if before != desired {

@@ -1160,6 +1160,39 @@ struct Issue971ApprovedMixerSagaTests {
         }
     }
 
+    @Test("Hide refuses retiring captured Mixer focus while an already-visible goal remains a verified no-op", arguments: [false, true], [false, true])
+    func mixerFocusedHideRefusesBeforeAnyViewAction(container: Bool, desired: Bool) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = try Fixture(showing: true)
+                let focus: AXUIElement
+                if container {
+                    let wrapper = f.view.builder.element(971_301)
+                    f.view.builder.setRole(wrapper, kAXGroupRole as String)
+                    f.view.builder.setAttribute(wrapper, kAXDescriptionAttribute as String, "Mixer")
+                    f.view.builder.setChildren(wrapper, [f.view.mixer])
+                    f.view.mixerContainer = wrapper
+                    f.view.updateVisibility()
+                    focus = wrapper
+                } else { focus = f.view.mixer }
+                f.view.builder.setAttribute(f.view.app, kAXFocusedUIElementAttribute as String, focus)
+                f.view.afterVisibilityChange = {
+                    f.view.builder.setAttribute(f.view.app, kAXFocusedUIElementAttribute as String, f.view.rail)
+                }
+                await f.router.register(f.view.channel())
+                let plan = try await f.plan(desired: desired)
+                #expect(try #require(plan["executable"] as? Bool))
+                let outcome = try await f.call("apply_session_repair", params: f.applyParameters(plan, key: "retired-mixer-focus"))
+                let completed = outcome["saga_state"] as? String == "completed"
+                if desired { #expect(completed) } else { #expect(!completed) }
+                #expect(f.view.events.isEmpty)
+                #expect(f.view.showing)
+                let current = try #require(f.view.builder.attributeValue(f.view.app, kAXFocusedUIElementAttribute as String))
+                #expect(CFEqual(current as AnyObject, focus))
+            }
+        }
+    }
+
     @Test(arguments: [false, true], [false, true])
     func composedMatchingNamesKeepBothViewDirectionsAndNoOpReceipts(initial: Bool, desired: Bool) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
