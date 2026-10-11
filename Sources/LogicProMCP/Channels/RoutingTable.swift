@@ -120,6 +120,7 @@ extension ChannelRouter {
         "mixer.set_output_verified":  [.accessibility],
         "mixer.get_output_verified":  [.accessibility],
         "mixer.get_input_bus_verified": [.accessibility],
+        "mixer.set_input_bus_verified": [.accessibility],
         "mixer.get_send_destination_verified": [.accessibility],
         // #575: `mixer.set_output_volume`, `mixer.get_bus_routing` and `automation.get_parameter`
         // were removed from this table. Each had no caller AND no implementation — the channel they

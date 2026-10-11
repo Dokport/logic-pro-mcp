@@ -33,6 +33,7 @@ struct OperationRegistryTests {
         (.mixerSetOutputVerified, "set_output_verified"),
         (.mixerGetOutputVerified, "get_output_verified"),
         (.mixerGetInputBusVerified, "get_input_bus_verified"),
+        (.mixerSetInputBusVerified, "set_input_bus_verified"),
         (.mixerGetSendDestinationVerified, "get_send_destination_verified"),
     ]
 
@@ -169,7 +170,7 @@ struct OperationRegistryTests {
     @Test("all mixer metadata matches current runtime truth")
     func mixerMetadata() throws {
         let mixerSpecs = OperationRegistry.specs.filter { $0.tool == .logicMixer }
-        let targetBearingCommands: Set<String> = ["set_volume", "set_pan", "set_output_verified", "get_output_verified", "get_input_bus_verified", "get_send_destination_verified"]
+        let targetBearingCommands: Set<String> = ["set_volume", "set_pan", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified"]
         #expect(Set(Self.mixerCommands.map(\.1)) == Set(mixerSpecs.map(\.command)))
 
         for (id, command) in Self.mixerCommands {

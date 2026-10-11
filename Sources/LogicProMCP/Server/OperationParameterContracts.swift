@@ -231,6 +231,12 @@ extension OperationRegistry {
             "mixer.get_input_bus_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
             ], required: [["target_ref"]]),
+            "mixer.set_input_bus_verified": .init(params: [
+                "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
+                "destination": .enforced(.object, .object(["kind": "bus", "number": .int(1)])),
+                "expected_current": .enforced(.object, .object(["kind": "bus", "number": .int(256)])),
+                "replace_existing": .enforced(.boolean, .bool(true)),
+            ], required: [["target_ref"], ["destination"], ["expected_current"], ["replace_existing"]]),
             "mixer.get_send_destination_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
                 "ordinal": index(1),

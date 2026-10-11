@@ -466,6 +466,15 @@ extension AccessibilityChannel {
         guard sendOrdinal == nil || first != .noOutput else {
             return refuse(.readbackUnavailable, "An output-only No Output marker is not an assigned-send destination.")
         }
+        if inputBusOnly, inputSlot == nil {
+            let current = AXLogicProElements.inputSlotRead(in: physical.strip, runtime: runtime.ax)
+            guard case .source(let label) = current.reading, let control = current.control,
+                  CFEqual(control, slot), label.utf8.elementsEqual(originalLabel.utf8),
+                  sourceOwned(), closed else {
+                return refuse(.readbackUnavailable, "The checked input's original control did not survive cleanup.")
+            }
+            inputSlot = .init(owner: physical, control: control, source: label)
+        }
         extras[inputBusOnly ? "current_input" : (sendOrdinal == nil ? "current_output" : "current_destination")] = first.json
         extras["verify_source"] = inputBusOnly ? "ax_input_menu_checkmark" : (sendOrdinal == nil ? "ax_output_menu_checkmark" : "ax_send_menu_checkmark")
         if inputBusOnly { extras["input_scope"] = "bus_only" }
@@ -488,7 +497,26 @@ extension AccessibilityChannel {
             hint: "The original target/project context ended; the output is withheld and known UI effects are preserved.", extras: extras))
     }
 
-    private static func checkedOutputPopupMenus(in mixer: AXUIElement, runtime: AXHelpers.Runtime) -> [AXUIElement]? {
+    /// Logic reports AXNoValue for FocusedWindow while its routing menu owns
+    /// keyboard focus. Only that exact response and a reciprocal original
+    /// Mixer/menu path qualify; absent/unreadable/foreign windows still refuse.
+    static func routingFocusedWindowMatches(
+        _ reading: Result<AnyObject?, AXHelpers.AXStatusError>, window: AXUIElement,
+        ownedPopup: AXUIElement?, mixer: AXUIElement, runtime: AXHelpers.Runtime
+    ) -> Bool {
+        if case .success(.some(let value)) = reading, CFGetTypeID(value) == AXUIElementGetTypeID() {
+            return CFEqual(unsafeBitCast(value, to: AXUIElement.self), window)
+        }
+        guard case .failure(let error) = reading, error.raw == AXError.noValue.rawValue,
+              let root = ownedPopup,
+              let menus = checkedOutputPopupMenus(in: mixer, runtime: runtime),
+              menus.count == 1, CFEqual(menus[0], root),
+              let parent: AXUIElement = AXHelpers.getAttribute(root, kAXParentAttribute as String, runtime: runtime),
+              CFEqual(parent, mixer) else { return false }
+        return true
+    }
+
+    static func checkedOutputPopupMenus(in mixer: AXUIElement, runtime: AXHelpers.Runtime) -> [AXUIElement]? {
         guard case .success(let children) = AXHelpers.childrenResult(mixer, runtime: runtime) else { return nil }
         var menus: [AXUIElement] = []
         for child in children {
