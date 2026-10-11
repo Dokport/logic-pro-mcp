@@ -149,7 +149,7 @@ extension AccessibilityChannel {
             func permits() -> Bool {
                 let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus) }
                 return held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
-                    || held.2?.permitsRead() == true || held.3?.permits() == true || held.4?() == true
+                    || held.2?.permitsPassiveFocusRead() == true || held.3?.permits() == true || held.4?() == true
             }
 
             /// An original immutable numeric name label is not a rename editor.

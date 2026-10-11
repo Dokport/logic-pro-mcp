@@ -159,7 +159,7 @@ struct Issue965MixerPresentationWitnessTests {
         #expect(CFEqual(binding.mixer, fixture.layout))
         #expect(batches.count > 0)
         #expect(singles.count == 0, "the four deciding non-Help attributes use one fresh native call per node")
-        #expect(help.count == batches.count, "each visited node still reads Help separately")
+        #expect(help.count == 6 && help.count < batches.count, "Only nonleaf containers need separately guarded Inspector Help in this fixture")
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 
@@ -173,6 +173,60 @@ struct Issue965MixerPresentationWitnessTests {
         if case .childrenUnread = result.lookup {} else { Issue.record("a failed/malformed batch became observed absence") }
         #expect(result.binding == nil)
         #expect(batches.count == 1 && singles.count == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func aCompletelyReadNoncandidateLeafNeedsNoInspectorHelp(bulk: Bool) throws {
+        let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter(), leafHelp = Counter()
+        let leaf = fixture.builder.element(966_130)
+        fixture.builder.setRole(leaf, kAXButtonRole as String)
+        fixture.builder.setChildren(leaf, [])
+        fixture.builder.setChildren(fixture.window, [fixture.owner, leaf])
+        let base = bulk ? batchedCensusRuntime(fixture, batches: batches, singles: singles, help: help)
+            : fixture.builder.makeLogicRuntime(appElement: fixture.app)
+        let ax = base.ax
+        let observedAX = AXHelpers.Runtime(axApp: ax.axApp, attributeValue: ax.attributeValue,
+            attributeIsSettable: ax.attributeIsSettable, setAttributeValue: ax.setAttributeValue,
+            children: ax.children, performAction: ax.performAction, childCount: ax.childCount,
+            actionNames: ax.actionNames, actionNamesResult: ax.actionNamesResult, childrenResult: ax.childrenResult,
+            attributeValueResult: { element, attribute in
+                if CFEqual(element, leaf), attribute == kAXHelpAttribute as String { _ = leafHelp.next() }
+                return ax.attributeValueResult!(element, attribute)
+            }, attributeValuesResult: ax.attributeValuesResult)
+        let runtime = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: observedAX,
+            executeAppleScript: { _ in .error("fixture forbids scripts") })
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window, runtime: runtime,
+            requiresCompleteAbsence: true)
+        #expect(CFEqual(try #require(result.binding).mixer, fixture.layout))
+        #expect(leafHelp.count == 0, "An observed childless noncandidate cannot contain a Mixer or Inspector subtree")
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test func anEmptyLegacyCandidateStillReadsInspectorHelp() throws {
+        let fixture = Fixture()
+        let legacy = fixture.builder.element(966_131)
+        fixture.builder.setRole(legacy, kAXGroupRole as String)
+        fixture.builder.setAttribute(legacy, kAXIdentifierAttribute as String, "Mixer")
+        fixture.builder.setAttribute(legacy, kAXHelpAttribute as String, "Inspector")
+        fixture.builder.setChildren(legacy, [])
+        fixture.builder.setChildren(fixture.window, [legacy, fixture.owner])
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
+            runtime: fixture.builder.makeLogicRuntime(appElement: fixture.app), requiresCompleteAbsence: true)
+        #expect(CFEqual(try #require(result.binding).mixer, fixture.layout), "Skipping a leaf must not admit an empty Inspector legacy candidate")
+    }
+
+    @Test func remainingInspectorHelpCannotPublishEarlierCandidateChildren() throws {
+        let fixture = Fixture()
+        let runtime = fixture.builder.makeLogicRuntime(appElement: fixture.app,
+            attributeValueResultHandler: { element, attribute in
+                if CFEqual(element, fixture.layout), attribute == kAXHelpAttribute as String {
+                    fixture.builder.setChildren(fixture.layout, [])
+                }
+                return nil
+            }, setAttributeHandler: nil, performActionHandler: nil)
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
+            runtime: runtime, requiresCompleteAbsence: true)
+        #expect(result.binding == nil, "A candidate's deciding child census must still follow its performed Help read")
     }
 
     @Test func censusBatchCutoffStopsNullFallbackAndHelpBeforeAnotherAXRead() throws {
@@ -620,7 +674,7 @@ struct Issue965MixerPresentationWitnessTests {
             }
             let addedFocusReads = readings[1].focus - readings[0].focus
             let addedHelpReads = readings[1].help - readings[0].help
-            #expect(addedHelpReads > 0, "the real producer must traverse the added no-ID nodes")
+            #expect(addedHelpReads == 0, "Completely read noncandidate leaves add no side-effecting Help")
             #expect(addedFocusReads == addedHelpReads,
                     "additional metadata must retain one focus check per AXHelp, without another focus acquisition before each non-Help read")
         }

@@ -337,6 +337,7 @@ actor AccessibilityChannel: Channel {
         var navigation: OwnedMixerObservationNavigation?
         var stackNavigation: OwnedTrackStackObservationNavigation?
         var originalPresentation: SessionPopulationObservation.FreshPopulation?
+        var reusesAssociationPresentation = false
         var association: HeldSelectionAssociation?
         var routingEffects = SessionPopulationObservation.UIEffects()
         if request.allowUINavigation, request.domains.contains(.associations),
@@ -352,7 +353,9 @@ actor AccessibilityChannel: Channel {
         }
         if request.allowUINavigation, request.needsStrips,
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
-            originalPresentation = try readPresentationBaseline(stoppingWhen: stopBeforeAXRead ?? stop)
+            if association == nil {
+                originalPresentation = try readPresentationBaseline(stoppingWhen: stopBeforeAXRead ?? stop)
+            }
             navigation = OwnedMixerObservationNavigation(
                 window: window, runtime: runtime.logicRuntime,
                 expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
@@ -371,6 +374,11 @@ actor AccessibilityChannel: Channel {
                navigation.map({ CFEqual(candidate.window, $0.window)
                    && candidate.title.utf8.elementsEqual($0.title.utf8)
                    && candidate.document.utf8.elementsEqual($0.document.utf8) }) ?? true {
+                // A possible stack exposure still needs its original pre-action
+                // view baseline. Only the held-association-only path reuses rows.
+                if association != nil, originalPresentation == nil {
+                    originalPresentation = try readPresentationBaseline(stoppingWhen: stopBeforeAXRead ?? stop)
+                }
                 stackNavigation = candidate
                 readFocusScope?.retain(candidate)
                 await candidate.expand(stoppingWhen: stop)
@@ -392,6 +400,12 @@ actor AccessibilityChannel: Channel {
                 exposure: stackNavigation?.effects.navigationPerformed == true ? stackNavigation?.exposure : nil,
                 stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop
             )
+            if association != nil, originalPresentation == nil {
+                // These fresh independent bookends precede every association
+                // selection. Retain them instead of another full view discovery.
+                originalPresentation = population
+                reusesAssociationPresentation = true
+            }
             // Start with the already exposed Mixer, without composing popup focus
             // changes with a held selection, stack or temporary-view inverse.
             if request.allowUINavigation, request.domains.contains(.routing), population.stable,
@@ -511,7 +525,8 @@ actor AccessibilityChannel: Channel {
                 }
                 // A temporary reveal is not the state the user approves. Bookend the
                 // original observation after restoration, without restoring an approved write.
-                let restored = try? readPresentationBaseline(stoppingWhen: stopBeforeAXRead ?? stop)
+                let restored = reusesAssociationPresentation
+                    ? population : try? readPresentationBaseline(stoppingWhen: stopBeforeAXRead ?? stop)
                 if let originalPresentation, let restored,
                    let observed = originalPresentation.presentationObservation,
                    let restoredObservation = restored.presentationObservation,

@@ -460,12 +460,24 @@ extension AXLogicProElements {
         let identifier = try metadata(kAXIdentifierAttribute)
         let description = try metadata(kAXDescriptionAttribute, deferCandidateTextFailure: role != nil)
         let title = try metadata(kAXTitleAttribute, deferCandidateTextFailure: role != nil)
+        // Read the existing child census before deciding whether Inspector Help
+        // can affect this node or a subtree. A failed read still hides possible
+        // strips; it is never an observed leaf.
+        try check()
+        let observedChildren = childrenIfRead(element, runtime: runtime)
+        if let observedChildren { observingExposure?.observeChildren(element: element, children: observedChildren) }
+        let canBeEmptyLegacyMixer = identifier == "Mixer"
+            && (role == (kAXGroupRole as String) || role == (kAXScrollAreaRole as String))
         // Help only excludes Inspector context; it cannot identify a Mixer. If it
         // is unavailable, conservatively census every descendant instead: that
         // enlarges the search rather than hiding a possible Mixer. Role, possible
         // candidate identity, children and traversal bounds remain strict.
-        let help = try metadata(kAXHelpAttribute,
-            allowUnreadContext: role != nil)
+        // A completely read childless nonlegacy node cannot be a candidate or
+        // contain one. Omit its side-effecting Help, not any deciding metadata,
+        // child/status read, traversal or remaining per-Help guard.
+        let needsInspectorHelp = observedChildren?.isEmpty != true || canBeEmptyLegacyMixer
+        let help = needsInspectorHelp
+            ? try metadata(kAXHelpAttribute, allowUnreadContext: role != nil) : nil
         let text = [identifier, description, title, help].compactMap { $0 }.joined(separator: " ").lowercased()
         let isInspector = ancestorIsInspector
             || AXLocalePolicy.mixerInspectorContext.containsAny(in: text)
@@ -474,20 +486,17 @@ extension AXLogicProElements {
             && isMixerContainerRole(role)
         let legacyRole = !isInspector && identifier == "Mixer"
             && (role == (kAXGroupRole as String) || role == (kAXScrollAreaRole as String)) ? role : nil
-        // Read once, with its status (#982). `getChildren` answers a failed read with [], which
-        // made a Mixer whose children did not read look like a container with no strips. A failed
-        // read inside a Mixer-named container outside the Inspector (12.3 puts an unnamed group
-        // between its outer group and the layout area) hides strips that may be there.
+        // Performed Help retains its original post-Help deciding census. A
+        // failed earlier read is not renewed by a later successful one.
         try check()
-        guard let children = childrenIfRead(element, runtime: runtime) else {
+        let decidingChildren = needsInspectorHelp && observedChildren != nil
+            ? childrenIfRead(element, runtime: runtime) : observedChildren
+        guard let children = decidingChildren else {
             sawIncompleteAbsence = true
-            if !isInspector, ancestorIsMixer || isMixerContainer {
-                sawUnreadMixerContainer = true
-            }
+            if !isInspector, ancestorIsMixer || isMixerContainer { sawUnreadMixerContainer = true }
             return false
         }
         observingExposure?.observeChildren(element: element, children: children)
-
         // Unread description/title cannot identify a candidate on other roles. An
         // eligible container can match only with a legacy Mixer ID or direct strip
         // children. Use the existing child census's deciding roles, not an earlier

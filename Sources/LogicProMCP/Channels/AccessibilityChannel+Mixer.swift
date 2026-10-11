@@ -60,31 +60,37 @@ extension AccessibilityChannel {
 
         for (index, strip) in strips.enumerated() {
             if stop() { return nil }
-            let volume = AXLogicProElements.findVolumeFader(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
-                .flatMap { AXValueExtractors.extractLogicMixerFaderValue($0, runtime: runtime.ax) }
-                ?? 0.0
-            let pan = AXLogicProElements.findPanControl(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
-                .flatMap { AXValueExtractors.extractCenteredSliderValue($0, runtime: runtime.ax) }
-                ?? 0.0
+            let samples = (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+                ? AXHelpers.StripHelpSamples() : nil
+            let state = AXHelpers.StripHelpSamples.$current.withValue(samples) {
+                let volume = AXLogicProElements.findVolumeFader(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
+                    .flatMap { AXValueExtractors.extractLogicMixerFaderValue($0, runtime: runtime.ax) }
+                    ?? 0.0
+                let pan = AXLogicProElements.findPanControl(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
+                    .flatMap { AXValueExtractors.extractCenteredSliderValue($0, runtime: runtime.ax) }
+                    ?? 0.0
 
-            var state = ChannelStripState(
-                trackIndex: index,
-                volume: volume,
-                pan: pan
-            )
-            if let window, let mixer, let document {
-                state.physicalBinding = .init(window: window, mixer: mixer, strip: strip, document: document)
+                var state = ChannelStripState(
+                    trackIndex: index,
+                    volume: volume,
+                    pan: pan
+                )
+                if let window, let mixer, let document {
+                    state.physicalBinding = .init(window: window, mixer: mixer, strip: strip, document: document)
+                }
+                readStripName(of: strip, into: &state, runtime: runtime)
+                readPluginChain(of: strip, into: &state, runtime: runtime)
+                // #291: `output` has been on this model since it was written and nothing ever set it, so
+                // `logic://mixer` published a field that was always null. It is read now; `nil` still
+                // means "not identified", never "routed nowhere".
+                state.output = AXLogicProElements.outputSlotDestination(in: strip, runtime: runtime.ax)
+                readInputSource(of: strip, into: &state, runtime: runtime)
+                // #291: occupancy per send slot, from the send-level knob beside an assigned send's
+                // group. `nil` stays nil — an absent key is "nobody could look", never "no sends".
+                state.sendSlots = AXLogicProElements.sendSlotObservations(in: strip, runtime: runtime.ax)
+                return state
             }
-            readStripName(of: strip, into: &state, runtime: runtime)
-            readPluginChain(of: strip, into: &state, runtime: runtime)
-            // #291: `output` has been on this model since it was written and nothing ever set it, so
-            // `logic://mixer` published a field that was always null. It is read now; `nil` still
-            // means "not identified", never "routed nowhere".
-            state.output = AXLogicProElements.outputSlotDestination(in: strip, runtime: runtime.ax)
-            readInputSource(of: strip, into: &state, runtime: runtime)
-            // #291: occupancy per send slot, from the send-level knob beside an assigned send's
-            // group. `nil` stays nil — an absent key is "nobody could look", never "no sends".
-            state.sendSlots = AXLogicProElements.sendSlotObservations(in: strip, runtime: runtime.ax)
+            if samples != nil, stop() { return nil }
             channelStrips.append(state)
         }
         return channelStrips

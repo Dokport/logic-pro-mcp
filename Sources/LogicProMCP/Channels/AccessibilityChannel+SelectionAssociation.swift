@@ -226,7 +226,26 @@ extension AccessibilityChannel {
             return document.utf8.elementsEqual(currentDocument.utf8)
         }
 
-        private func owned() -> Bool {
+        private func owned(checkingAssociation: Bool = true) -> Bool {
+            func railMatches() -> Bool {
+                guard checkingAssociation else { return true }
+                guard let currentRailPath = Self.path(rail, to: window, ax: logic.ax), Self.same(railPath, currentRailPath),
+                      case .success(let currentHeaders) = AXHelpers.childrenResult(rail, runtime: logic.ax) else { return false }
+                return Self.same(headers, currentHeaders)
+            }
+            func stripCustodyMatches() -> Bool {
+                if checkingAssociation {
+                    guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax) else { return false }
+                    return Self.same(strips, current.strips)
+                }
+                // A focus-moving read is not a rail-selection capability.
+                // Renew this exact focus's reciprocal Mixer membership only;
+                // never adopt another strip by name or position.
+                guard case .success(let children) = AXHelpers.childrenResult(mixer, runtime: logic.ax),
+                      children.filter({ CFEqual($0, expectedFocus) }).count == 1,
+                      let parent: AXUIElement = AXHelpers.getAttribute(expectedFocus, kAXParentAttribute as String, runtime: logic.ax) else { return false }
+                return CFEqual(parent, mixer)
+            }
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
                   let currentApp = AXLogicProElements.appRoot(runtime: logic), CFEqual(app, currentApp) else {
@@ -248,12 +267,9 @@ extension AccessibilityChannel {
                   windows.filter({ CFEqual($0, window) }).count == 1,
                   CFEqual(main, window), CFEqual(focusedWindow, window),
                   currentWindowScopeMatches(), !AXLogicProElements.dialogPresent(runtime: logic),
-                  let currentRailPath = Self.path(rail, to: window, ax: logic.ax), Self.same(railPath, currentRailPath),
-                  case .success(let currentHeaders) = AXHelpers.childrenResult(rail, runtime: logic.ax),
-                  Self.same(headers, currentHeaders),
+                  railMatches(),
                   let currentPath = Self.path(mixer, to: window, ax: logic.ax), Self.same(path, currentPath),
-                  let currentStrips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),
-                  Self.same(strips, currentStrips.strips),
+                  stripCustodyMatches(),
                   transportPaths.allSatisfy({ held in
                       guard let control = held.first, let current = Self.path(control, to: window, ax: logic.ax),
                             Self.same(held, current) else { return false }
@@ -279,6 +295,32 @@ extension AccessibilityChannel {
             // require the final scoped action boundary in select().
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+                  passiveFocusMatches() else { lost = true; return false }
+            guard owned(), Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+                  let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(final, expectedFocus) else { lost = true; return false }
+            return true
+        }
+
+        /// Only ReadFocusScope uses this witness. Full exclusive-selection and
+        /// population custody still authorize every association action, inverse
+        /// and publication. Passive Help never acquires that authority.
+        func permitsPassiveFocusRead() -> Bool {
+            guard passiveFocusMatches(), owned(checkingAssociation: false),
+                  let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(final, expectedFocus),
+                  let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
+                  CFEqual(main, window),
+                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
+                  CFEqual(focusedWindow, window),
+                  case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
+                  document.utf8.elementsEqual(finalDocument.utf8), logic.logicProPID() == pid,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { lost = true; return false }
+            return true
+        }
+
+        private func passiveFocusMatches() -> Bool {
+            guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(focus, expectedFocus), strips.filter({ CFEqual($0, focus) }).count == 1,
                   AXHelpers.getRole(focus, runtime: logic.ax) == kAXLayoutItemRole as String,
@@ -297,9 +339,6 @@ extension AccessibilityChannel {
                 default: lost = true; return false
                 }
             }
-            guard owned(), Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
-                  let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                  CFEqual(final, expectedFocus) else { lost = true; return false }
             return true
         }
 
@@ -313,7 +352,6 @@ extension AccessibilityChannel {
             // R965-ASSOC-C001: the deciding focus/selection reads in permitsRead
             // can themselves coincide with a document/window switch. Revalidate
             // scoped ownership AFTER them, with no further AX read before write.
-            let previousFocus = expectedFocus
             effects.navigationPerformed = true; effects.restoration = "not_restored"
             if !effects.attempted.contains("track_selection") { effects.attempted.append("track_selection") }
             let accepted = AXHelpers.setAttribute(rail, kAXSelectedChildrenAttribute as String, [headers[index]] as CFArray, runtime: logic.ax)
@@ -327,8 +365,12 @@ extension AccessibilityChannel {
                       strips.filter({ CFEqual($0, focus) }).count == 1 else {
                     lost = true; return false
                 }
-                if selectionChanged, !CFEqual(focus, previousFocus) {
+                if selectionChanged {
                     guard let afterViewport = currentViewport(), owned() else { return false }
+                    // Logic can select our exact held header while retaining its
+                    // original passive Mixer focus. Retain that owned transition
+                    // for inverse cleanup; observe() still requires a different
+                    // challenge focus before publishing any association pair.
                     expectedIndex = index; expectedFocus = focus
                     expectedViewport = afterViewport
                     return permitsRead() && !stop() && accepted

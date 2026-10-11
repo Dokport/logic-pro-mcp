@@ -926,7 +926,12 @@ struct Issue969MixerVisibilitySetterTests {
             }
             fixture.builder.setChildren(group, children)
         case "visible": fixture.unreadNestedGroup = group
-        case "malformed_help": fixture.builder.setAttribute(group, kAXHelpAttribute as String, 42)
+        case "malformed_help":
+            let child = fixture.builder.element(969_052)
+            fixture.builder.setRole(child, kAXButtonRole as String)
+            fixture.builder.setChildren(child, [])
+            fixture.builder.setChildren(group, [child])
+            fixture.builder.setAttribute(group, kAXHelpAttribute as String, 42)
         default:
             if shape == "description" || shape == "title" {
                 let strip = fixture.builder.element(969_051)
