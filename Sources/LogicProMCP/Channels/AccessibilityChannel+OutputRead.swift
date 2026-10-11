@@ -67,7 +67,8 @@ extension AccessibilityChannel {
             return true
         }
     }
-    /// Internal bus-only input acquisition; no public operation or graph-edge qualification.
+    /// Bus-only input acquisition behind the physical-reference public reader;
+    /// this does not qualify a routing graph edge or independent native readback.
     static func getInputBusVerified(
         runtime: AXLogicProElements.Runtime = .production,
         timing: OutputAssignmentTiming = .live
@@ -369,7 +370,56 @@ extension AccessibilityChannel {
         let currentFocus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
         let focusRestored = originalFocus.flatMap { old in currentFocus.map { CFEqual(old, $0) } } == true
         extras["focus_restoration"] = focusRestored ? "restored" : "not_restored"
-        let sourceAfter = sourceOwned()
+        var sourceAfter = sourceOwned()
+        if inputBusOnly, !sourceAfter, dataOwned, first != nil, second == first,
+           let originalPair = AXMixerStripBinding.outputAssociation, originalPair.strip.matches(physical) {
+            func popupAbsent() -> Bool {
+                !interrupted()
+                    && checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
+                    && runtime.onScreenWindowList().map { LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 } == true
+            }
+            // Cancel may retire the physical source. Only the previously captured
+            // original-header pair can renew it, after observed popup absence;
+            // display text is a stability fact, never the checked bus authority.
+            if popupAbsent(),
+               let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax),
+               !census.strips.contains(where: { CFEqual($0, physical.strip) }),
+               runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
+               case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+               CFEqual(window, physical.window),
+               case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(physical.window, runtime: runtime),
+               document.utf8.elementsEqual(physical.document.utf8),
+               (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil {
+                // This reader need not select its target before opening the popup.
+                // Only an actually re-observed exact-header pair can renew it;
+                // the helper still inverses the selection it found on entry.
+                let observed = await renewSourceThroughOriginalHeader(originalPair, original: physical,
+                    runtime: runtime, selectedHeaderRequired: false)
+                extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
+                    "attempted": observed.effects.attempted, "changed": observed.effects.changed,
+                    "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
+                if let source = observed.source {
+                    let input = AXLogicProElements.inputSlotRead(in: source.pair.strip.strip, runtime: runtime.ax)
+                    func inputControlStillCurrent(_ control: AXUIElement) -> Bool {
+                        let current = AXLogicProElements.inputSlotRead(in: source.pair.strip.strip, runtime: runtime.ax)
+                        guard case .source(let label) = current.reading, let currentControl = current.control,
+                              CFEqual(currentControl, control) else { return false }
+                        return label.utf8.elementsEqual(originalLabel.utf8)
+                    }
+                    if case .source = input.reading, let control = input.control,
+                       case .success(.some(let label)) = AXHelpers.getAttributeResult(control,
+                        kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
+                       label.utf8.elementsEqual(originalLabel.utf8),
+                       inputControlStillCurrent(control), popupAbsent(), source.permits(runtime: runtime) {
+                        sourceAfter = true
+                        extras["popup_menu_state"] = "closed"
+                        extras["source_renewal"] = "held_exclusive_selection_focus"
+                        extras["reference_reread_required"] = true
+                        extras["source_index_after"] = source.index
+                    }
+                }
+            }
+        }
         extras["source_custody_after_cleanup"] = sourceAfter
         extras["menu_custody_at_read"] = dataOwned
         extras["output_checkmark_reads_observed"] = (first == nil ? 0 : 1) + (second == nil ? 0 : 1)
@@ -394,7 +444,8 @@ extension AccessibilityChannel {
         var extras: [String: Any] = ["operation": operation, "write_attempted": false]
         let receiptKeys: Set<String> = ["navigation_attempted", "popup_menu_state", "popup_cancel_succeeded",
             "focus_restoration", "popup_press_succeeded", "source_custody_after_cleanup",
-            "menu_custody_at_read", "output_checkmark_reads_observed", "output_checkmark_reads_agree", "send_ordinal"]
+            "menu_custody_at_read", "output_checkmark_reads_observed", "output_checkmark_reads_agree", "send_ordinal",
+            "ui_effects", "source_renewal", "reference_reread_required", "source_index_after"]
         if let data = result.message.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             for (key, value) in object where receiptKeys.contains(key) { extras[key] = value }

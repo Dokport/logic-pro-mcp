@@ -1,5 +1,6 @@
 @preconcurrency import ApplicationServices
 import Foundation
+import MCP
 import Testing
 @testable import LogicProMCP
 
@@ -167,5 +168,163 @@ struct Issue291OwnedInputBusMenuTests {
         let body=try #require(sharedJSONObject(await read(p).message))
         #expect(body["state"] as? String == "C")
         #expect(f.mutations.isEmpty)
+    }
+
+    private func publishPublicInput(_ p: Prepared) async throws -> (dependencies: HandlerDependencies, source: String, track: String, project: String) {
+        let f = p.f
+        let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter()
+        let channel = f.channel()
+        await router.register(channel)
+        let poller = StatePoller(axChannel: channel, cache: cache,
+            runtime: .init(hasVisibleWindow: { true }, dialogPresent: { false }, blockingDialogInfo: { nil },
+                projectFileReader: .unavailable, keyboardFocus: { .notTextEditing }))
+        #expect(await poller.refreshNow())
+        let mixer = try await ResourceHandlers.read(uri: "logic://mixer", cache: cache, router: router,
+            targetRegistry: registry, fileReader: .unavailable)
+        let strips = try #require(sharedJSONObject(sharedResourceText(mixer))?["strips"] as? [[String: Any]])
+        var source: String?
+        for reference in strips.compactMap({ $0["mixer_strip_ref"] as? String }) {
+            if let physical = await registry.resolve(TargetReference(rawValue: reference))?.physicalMixerStrip,
+               CFEqual(physical.strip, f.strips[0]) { source = reference }
+        }
+        let tracks = try await ResourceHandlers.read(uri: "logic://tracks", cache: cache, router: router,
+            targetRegistry: registry, fileReader: .unavailable)
+        let trackRows = try #require(sharedJSONObject(sharedResourceText(tracks))?["data"] as? [[String: Any]])
+        let track = try #require(trackRows.first?["track_ref"] as? String)
+        let project = try await ResourceHandlers.read(uri: "logic://project/info", cache: cache, router: router,
+            targetRegistry: registry, fileReader: .unavailable)
+        let projectRef = try #require((sharedJSONObject(sharedResourceText(project))?["data"] as? [String: Any])?["project_ref"] as? String)
+        #expect(f.mutations.isEmpty, "Issuing physical references must not navigate or write")
+        let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry, poller: poller,
+            dialogPresent: { false }, supportBundleExporter: nil, mutationGate: LogicMutationGate(),
+            liveTrackNames: { [0: "A", 1: "B"] }, projectFileReader: .unavailable)
+        return (dependencies, try #require(source), track, projectRef)
+    }
+
+    private func publicInput(_ dependencies: HandlerDependencies, params: [String: Value], referencesEnabled: Bool = true) async throws -> [String: Any] {
+        let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "get_input_bus_verified"))
+        let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "get_input_bus_verified",
+            commandParams: params, mutationGate: dependencies.mutationGate) {
+                if let context = OperationTraceContext.current {
+                    #expect(context.mutationGateAcquired,
+                        "Popup acquisition and retained-source renewal require the real exclusive observation claim")
+                    #expect(context.ownsGate())
+                } else {
+                    Issue.record("Popup acquisition must have an operation context")
+                }
+                // The deadline wrapper detaches its work. Set the test-only flag
+                // inside that task rather than relying on inherited TaskLocals.
+                return await FeatureFlags.withAdr002TargetRefForTests(referencesEnabled) {
+                    await handler(dependencies, params)
+                }
+            }
+        let completedGate = try #require(dependencies.mutationGate)
+        #expect(completedGate.currentOperation() == nil,
+            "Completed input observations must release their exclusive claim")
+        return try #require(sharedJSONObject(sharedToolText(result)))
+    }
+
+    @Test func publicInputBusCannotEnterDuringAnotherOperation() async throws {
+        let gate = LogicMutationGate()
+        let predecessor = try #require(gate.tryAcquire(operation: "logic_tracks.rename"))
+        defer { gate.release(predecessor) }
+        let result = await LogicProServer.runWithDeadline(
+            tool: "logic_mixer", command: "get_input_bus_verified", mutationGate: gate
+        ) {
+            Issue.record("Input popup acquisition entered while another operation owned Logic")
+            return toolTextResult("unexpected acquisition")
+        }
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(body["error"] as? String == "mutating_operation_in_progress")
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(gate.stillOwns(predecessor))
+        #expect(gate.currentOperation() == "logic_tracks.rename")
+    }
+
+    @Test func publicInputBusContract() throws {
+        let spec = try #require(OperationRegistry.spec(tool: "logic_mixer", command: "get_input_bus_verified"))
+        #expect(spec.mutability == .readOnly)
+        #expect(spec.allowedParams == Set(["target_ref", "project_ref"]))
+        #expect(spec.deadline == .short)
+        #expect(ChannelRouter.v2RoutingTable["mixer.get_input_bus_verified"] == [.accessibility])
+        #expect(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "get_input_bus_verified") != nil)
+    }
+
+    @Test(arguments: [1, 256])
+    func publicInputBusReadsPhysicalReference(number: Int) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let p = try prepare(number), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let published = try await publishPublicInput(p)
+            var params: [String: Value] = ["target_ref": .string(published.source)]
+            if number == 256 { params["project_ref"] = .string(published.project) }
+            let body = try await publicInput(published.dependencies, params: params)
+            #expect(body["state"] as? String == "A")
+            #expect(body["operation"] as? String == "mixer.get_input_bus_verified")
+            #expect(body["target_ref"] as? String == published.source)
+            let input = try #require(body["current_input"] as? [String: Any])
+            #expect(input["kind"] as? String == "bus")
+            #expect(input["number"] as? Int == number, "The checked bus, not the misleading Bus 256 display, is authoritative")
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!attempted)
+            #expect(body["popup_menu_state"] as? String == "closed")
+            #expect(f.mutations.count == 2)
+            if f.mutations.count == 2 {
+                #expect(CFEqual(f.mutations[0].0, f.outputs[0]) && f.mutations[0].1 == kAXPressAction as String)
+                #expect(CFEqual(f.mutations[1].0, f.root) && f.mutations[1].1 == kAXCancelAction as String)
+            }
+            #expect(!f.mutations.contains { CFEqual($0.0, p.leaf) || CFEqual($0.0, p.inputLeaf) })
+        }
+    }
+
+    @Test(arguments: ["track", "unknown", "removed"])
+    func publicInputBusRejectsNonPhysicalOrStaleReference(target: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let p = try prepare(), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let published = try await publishPublicInput(p)
+            if target == "removed" { f.reorder([1]) }
+            let reference = target == "track" ? published.track
+                : (target == "unknown" ? "mix_missing_input_source" : published.source)
+            let body = try await publicInput(published.dependencies, params: ["target_ref": .string(reference)])
+            #expect(f.mutations.isEmpty)
+            #expect(body["state"] as? String == "C")
+            #expect(body["error"] as? String == "stale_target_reference")
+            #expect(body["current_input"] == nil)
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!attempted)
+        }
+    }
+
+    @Test(arguments: ["track", "index", "value", "destination", "ordinal"])
+    func publicInputBusRejectsWriteAndIndexInputs(extra: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let p = try prepare(), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let published = try await publishPublicInput(p)
+            let value: Value = extra == "destination" ? .object(["kind": .string("bus"), "number": .int(1)]) : .int(0)
+            let body = try await publicInput(published.dependencies,
+                params: ["target_ref": .string(published.source), extra: value])
+            #expect(f.mutations.isEmpty)
+            #expect(body["error"] as? String == "invalid_params")
+            #expect(body["current_input"] == nil)
+        }
+    }
+
+    @Test func publicInputBusRefusesDisabledReferences() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let p = try prepare(), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let published = try await publishPublicInput(p)
+            let body = try await publicInput(published.dependencies,
+                params: ["target_ref": .string(published.source)], referencesEnabled: false)
+            #expect(f.mutations.isEmpty)
+            #expect(body["state"] as? String == "C")
+            #expect(body["error"] as? String == "target_ref_unavailable")
+            #expect(body["current_input"] == nil)
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!attempted)
+        }
     }
 }
