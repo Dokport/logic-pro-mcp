@@ -266,6 +266,8 @@ struct Issue291OwnedInputBusMenuTests {
         #expect(readsAgree)
         let cancelled: Bool = try #require(body["popup_cancel_succeeded"] as? Bool)
         #expect(cancelled)
+        #expect(body["popup_menu_state"] as? String == "closed",
+            "Observed popup absence is distinct from the retired source's refused assignment authority")
         let writeAttempted: Bool = try #require(body["write_attempted"] as? Bool)
         #expect(!writeAttempted)
         if retires {
@@ -311,6 +313,46 @@ struct Issue291OwnedInputBusMenuTests {
         let body=try #require(sharedJSONObject(await read(p,document:"file:///wrong.logicx").message))
         #expect(body["state"] as? String == "C")
         #expect(p.f.mutations.isEmpty)
+    }
+    @Test("A refused source cannot report popup closure across a changed or unreadable owner",
+          arguments: ["foreign_document", "foreign_window", "unreadable_mixer"])
+    func popupClosureRequiresOriginalOwnerAfterSourceRetirement(_ fault: String) async throws {
+        let p = try prepare(), f = p.f
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let foreign = f.b.element(291_949)
+        f.b.setRole(foreign, kAXWindowRole as String)
+        f.b.setChildren(foreign, [])
+        f.attributeReadResult = { _, _ in
+            guard f.mutations.contains(where: {
+                CFEqual($0.0, f.root) && $0.1 == kAXCancelAction as String
+            }) else { return nil }
+            f.reorder([1])
+            if fault == "foreign_document" {
+                f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///foreign.logicx")
+            } else if fault == "foreign_window" {
+                f.b.setAttribute(f.app, kAXMainWindowAttribute as String, foreign)
+                f.b.setAttribute(f.app, kAXWindowsAttribute as String, [foreign])
+            }
+            return nil
+        }
+        f.childrenReadResult = { element in
+            guard fault == "unreadable_mixer", CFEqual(element, f.mixer),
+                  f.mutations.contains(where: {
+                      CFEqual($0.0, f.root) && $0.1 == kAXCancelAction as String
+                  }) else { return nil }
+            return .failure(.init(raw: AXError.cannotComplete.rawValue))
+        }
+        let body = try #require(sharedJSONObject(await read(p).message))
+        #expect(body["state"] as? String == "C")
+        #expect(body["current_input"] == nil)
+        #expect(body["popup_menu_state"] as? String == "not_restored")
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(f.mutations.count == 2)
+        if f.mutations.count == 2 {
+            #expect(CFEqual(f.mutations[0].0, f.outputs[0]) && f.mutations[0].1 == kAXPressAction as String)
+            #expect(CFEqual(f.mutations[1].0, f.root) && f.mutations[1].1 == kAXCancelAction as String)
+        }
     }
     @Test("Missing input or unadvertised press cannot navigate", arguments:[false,true])
     func inputControlMustBeQualified(_ missing: Bool) async throws {
