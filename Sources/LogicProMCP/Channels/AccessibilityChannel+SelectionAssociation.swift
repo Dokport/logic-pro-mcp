@@ -366,6 +366,15 @@ extension AccessibilityChannel {
                     lost = true; return false
                 }
                 if selectionChanged {
+                    // Selection and passive Mixer focus can settle on different
+                    // host turns. Do not freeze the old focus as the new pair.
+                    // Only original held strips are admitted by the guard above.
+                    let awaitingOwnFocus = index == originalIndex
+                        ? !CFEqual(focus, originalFocus) : CFEqual(focus, originalFocus)
+                    if awaitingOwnFocus && attempt < 3 {
+                        do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
+                        continue
+                    }
                     guard let afterViewport = currentViewport(), owned() else { return false }
                     // Logic can select our exact held header while retaining its
                     // original passive Mixer focus. Retain that owned transition
