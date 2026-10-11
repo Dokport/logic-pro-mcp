@@ -96,6 +96,33 @@ extension AccessibilityChannel {
         let assignment: OutputAssignment?
         var inputRenewal: OriginalHeaderSourceRenewal? = nil
         var inputSlot: AXMixerInputSlotBinding? = nil
+        /// Raw checked non-routing root entries: preservation witness only,
+        /// never a typed mode, destination or endpoint identity.
+        var sendNonRoutingChecks: [String]? = nil
+    }
+
+    static func setAssignedSendOutputVerified(params: [String: String],
+        runtime: AXLogicProElements.Runtime = .production,
+        timing: OutputAssignmentTiming = .live) async -> ChannelResult {
+        func isSink(_ assignment: OutputAssignment) -> Bool {
+            switch assignment { case .stereoOutput, .physical: true; default: false }
+        }
+        guard params.keys.allSatisfy({ ["destination", "expected_current", "replace_existing", "send_ordinal"].contains($0) }),
+              params["replace_existing"] == "true", let ordinal = params["send_ordinal"].flatMap(Int.init), ordinal >= 0,
+              let destination = params["destination"].flatMap(OutputAssignment.init(token:)), isSink(destination),
+              let expected = params["expected_current"].flatMap(OutputAssignment.init(token:)), isSink(expected),
+              (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+            return .error(HonestContract.encodeStateC(error: .invalidParams,
+                hint: "An occupied physical send, explicit replacement, checked physical/stereo before and destination, and owned acquisition are required.",
+                extras: ["operation": "mixer.set_send_output_verified", "write_attempted": false]))
+        }
+        return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal,
+            runtime: runtime, timing: timing, sendReplacement: .init(expected: expected, destination: destination)).result
+    }
+
+    private struct SendReplacement: Sendable {
+        let expected: OutputAssignment
+        let destination: OutputAssignment
     }
 
     /// Typed input evidence from the same owned reader, never from a wire receipt.
@@ -120,9 +147,11 @@ extension AccessibilityChannel {
         params: [String: String], sendOrdinal: Int?, inputBusOnly: Bool = false, runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
-        observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in }
+        observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
+        sendReplacement: SendReplacement? = nil
     ) async -> CheckedOutputReading {
-        let operation = inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified")
+        let operation = sendReplacement != nil ? "mixer.set_send_output_verified" :
+            (inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified"))
         var extras: [String: Any] = ["operation": operation, "write_attempted": false,
                                    "navigation_attempted": false, "popup_menu_state": "not_opened"]
         func refuse(_ error: HonestContract.FailureError, _ hint: String) -> CheckedOutputReading {
@@ -139,7 +168,7 @@ extension AccessibilityChannel {
         let passiveMixerFocus = readLogicKeyboardFocus(runtime: runtime) == .notTextEditing ? nil
             : OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(
                 window: physical.window, logic: runtime, acquisitionPermitted: { !Task.isCancelled })
-        func focusAllowsAcquisition() -> Bool {
+        @Sendable func focusAllowsAcquisition() -> Bool {
             if let passiveFocus { return passiveFocus.permits(runtime: runtime) }
             if let passiveMixerFocus { return passiveMixerFocus.permits() }
             return readLogicKeyboardFocus(runtime: runtime) == .notTextEditing
@@ -153,22 +182,16 @@ extension AccessibilityChannel {
             return refuse(.transportStateUnknown, "Play and Record must read before menu acquisition.")
         }
         guard !playing, !recording else { return refuse(.unsupportedState, "Output-menu acquisition requires stopped transport.") }
-        func assignedControl() -> AXLogicProElements.AssignedSendMenuControl? {
+        @Sendable func assignedControl() -> AXLogicProElements.AssignedSendMenuControl? {
             guard let sendOrdinal else { return nil }
-            var controls: [AXLogicProElements.AssignedSendMenuControl] = []
-            guard let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax,
-                observingAssignedGroup: { controls.append($0) }), slots.indices.contains(sendOrdinal),
-                  slots[sendOrdinal].state == .occupiedUnknownDestination else { return nil }
-            let matches = controls.filter { $0.ordinal == sendOrdinal }
-            guard matches.count == 1, let selected = matches.first,
-                  controls.filter({ CFEqual($0.list, selected.list) }).count == 1 else { return nil }
-            return selected
+            return AXLogicProElements.assignedSendMenuControl(in: physical.strip,
+                ordinal: sendOrdinal, runtime: runtime.ax)
         }
         let assigned = assignedControl()
         guard sendOrdinal == nil || assigned != nil else {
             return refuse(.readbackUnavailable, "The requested ordinal has no uniquely qualified assigned-send list control; nothing was pressed.")
         }
-        func selectedControl() -> AXUIElement? {
+        @Sendable func selectedControl() -> AXUIElement? {
             if inputBusOnly {
                 let read = AXLogicProElements.inputSlotRead(in: physical.strip, runtime: runtime.ax)
                 guard case .source = read.reading else { return nil }
@@ -203,7 +226,7 @@ extension AccessibilityChannel {
                   document.utf8.elementsEqual(physical.document.utf8) else { return false }
             return true
         }
-        func sourceFactsCurrent() -> Bool {
+        @Sendable func sourceFactsCurrent() -> Bool {
             guard !Task.isCancelled, runtime.logicProPID() == pid,
                   let current = selectedControl(),
                   CFEqual(current, slot),
@@ -356,7 +379,7 @@ extension AccessibilityChannel {
             extras["popup_menu_state"] = "not_restored"
             return refuse(.readbackUnavailable, "The acquired popup lost original source custody; no unowned cleanup was attempted.")
         }
-        func menuOwned() -> Bool {
+        @Sendable func menuOwned() -> Bool {
             // Renew source facts and root membership before the one deciding
             // complete physical/window/document boundary. Neither grants action
             // authority on its own, and no earlier census is reused as permission.
@@ -370,7 +393,133 @@ extension AccessibilityChannel {
         }
         let first = checkedChoice()
         let second = menuOwned() ? checkedChoice() : nil
+        let sendChecks = sendOrdinal == nil ? nil : sendMenuNonRoutingChecks(in: root, runtime: runtime.ax)
         let dataOwned = menuOwned()
+        if let request = sendReplacement, let sendOrdinal, let assigned {
+            func normalized(_ slots: [SendSlotObservation]) -> [SendSlotObservation] {
+                slots.map { slot in
+                    var result = slot
+                    if result.ordinal == sendOrdinal { result.destinationDisplay = nil }
+                    return result
+                }
+            }
+            let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips
+            let protectedSends = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax)
+            @Sendable func writerContextCurrent(ownedPopup: AXUIElement? = nil) -> Bool {
+                guard sourceFactsCurrent(), ownerBoundaryStillCurrent(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                      runtime.focusedApplicationPID() == pid, let app,
+                      AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
+                      let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: runtime.ax),
+                      CFEqual(main, physical.window),
+                      routingFocusedWindowMatches(AXHelpers.getAttributeResult(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax),
+                          window: physical.window, ownedPopup: ownedPopup, mixer: physical.mixer, runtime: runtime.ax),
+                      let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else { return false }
+                let focusAllowed: Bool
+                if originalFocus.map({ CFEqual($0, focus) }) == true { focusAllowed = focusAllowsAcquisition() }
+                else if let ownedPopup,
+                        AXHelpers.getRole(focus, runtime: runtime.ax) == kAXTextFieldRole as String,
+                        case .success(let rows) = AXHelpers.childrenResult(ownedPopup, runtime: runtime.ax),
+                        let parent: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: runtime.ax) {
+                    if CFEqual(parent, ownedPopup) {
+                        focusAllowed = rows.filter { CFEqual($0, focus) }.count == 1
+                    } else {
+                        let role = AXHelpers.getRole(parent, runtime: runtime.ax)
+                        let parentRoot: AXUIElement? = AXHelpers.getAttribute(parent, kAXParentAttribute as String, runtime: runtime.ax)
+                        let children = try? AXHelpers.childrenResult(parent, runtime: runtime.ax).get()
+                        focusAllowed = rows.filter { CFEqual($0, parent) }.count == 1
+                            && (role == kAXGroupRole as String || role == kAXMenuItemRole as String)
+                            && parentRoot.map { CFEqual($0, ownedPopup) } == true
+                            && children?.filter { CFEqual($0, focus) }.count == 1
+                    }
+                } else { focusAllowed = false }
+                guard focusAllowed,
+                      let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+                      CFEqual(focus, finalFocus), sourceFactsCurrent(), ownerBoundaryStillCurrent(),
+                      runtime.focusedApplicationPID() == pid,
+                      AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true else { return false }
+                return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+            }
+            @Sendable func writerMenuOwned() -> Bool {
+                menuOwned() && writerContextCurrent(ownedPopup: root) && menuOwned()
+                    && writerContextCurrent(ownedPopup: root)
+            }
+            func writeBoundary() -> Bool {
+                guard writerMenuOwned(), let population, let protectedSends,
+                      let fresh = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips,
+                      fresh.count == population.count, zip(fresh, population).allSatisfy({ CFEqual($0, $1) }),
+                      AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax) == protectedSends,
+                      let current = assignedControl(), assigned.matches(current) else { return false }
+                return writerMenuOwned()
+            }
+            func closeBeforeRefusal(_ error: HonestContract.FailureError, _ hint: String) -> CheckedOutputReading {
+                if writerMenuOwned(), runtime.ax.actionNames(root).contains(kAXCancelAction as String), writerMenuOwned() {
+                    _ = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax)
+                }
+                extras["popup_menu_state"] = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
+                    && runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true ? "closed" : "not_restored"
+                return refuse(error, hint)
+            }
+            guard dataOwned, first == request.expected, second == first else {
+                return closeBeforeRefusal(.staleSnapshot, "Checked current send did not agree with expected_current; no destination was pressed.")
+            }
+            guard let population, let protectedSends, let slotState = protectedSends.first(where: { $0.ordinal == sendOrdinal }),
+                  slotState.bypassed != nil, slotState.levelRaw?.isFinite == true,
+                  let sendChecks, !sendChecks.isEmpty, writeBoundary() else {
+                return closeBeforeRefusal(.readbackUnavailable, "The exact occupied send, protected level/bypass/checkmarks or write boundary did not remain observed; nothing was selected.")
+            }
+            extras["before"] = request.expected.json; extras["destination"] = request.destination.json
+            extras["strip_count_before"] = population.count
+            let choice = sendMenuChoice(for: request.destination, in: root, runtime: runtime.ax)
+            guard case .item(let item, let path) = choice,
+                  AXHelpers.getAttribute(item, kAXEnabledAttribute as String, runtime: runtime.ax) as Bool? == true,
+                  case .success(let actions) = AXHelpers.getActionNamesResult(item, runtime: runtime.ax),
+                  actions.contains(kAXPressAction as String), writeBoundary(),
+                  checkedChoice() == request.expected, sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == sendChecks,
+                  case .item(let finalItem, let finalPath) = sendMenuChoice(for: request.destination, in: root, runtime: runtime.ax),
+                  CFEqual(item, finalItem), path == finalPath, writeBoundary() else {
+                extras["destination_choice_failure"] = choice.failureLabel
+                return closeBeforeRefusal(.staleTargetReference, "No unique offered send destination survived the final source/menu/action checks; nothing was selected.")
+            }
+            extras["write_attempted"] = true; extras["menu_path"] = path
+            _ = AXHelpers.performActionResult(item, kAXPressAction as String, runtime: runtime.ax)
+            let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: true,
+                cleaner: { runtime in
+                    guard writerMenuOwned(), runtime.ax.actionNames(root).contains(kAXCancelAction as String), writerMenuOwned() else {
+                        return .couldNotDismiss(initialPopupCount: 1, remainingPopupCount: 1)
+                    }
+                    _ = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax)
+                    return checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true ? .dismissed
+                        : .couldNotDismiss(initialPopupCount: 1, remainingPopupCount: 1)
+                }, permittingCleanup: writerMenuOwned)
+            extras.merge(cleanup) { _, new in new }
+            func uncertain(_ hint: String) -> CheckedOutputReading {
+                extras["hint"] = hint
+                return .init(result: .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras)), assignment: nil)
+            }
+            guard writerContextCurrent(), let current = assignedControl(), assigned.matches(current),
+                  checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true,
+                  runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true else {
+                return uncertain("The press lost original physical/send custody or popup closure; no guessed inverse was attempted.")
+            }
+            let after = await getOutputObservation(runtime: runtime, sendOrdinal: sendOrdinal, timing: timing)
+            if let data = after.result.message.data(using: .utf8), let receipt = try? JSONSerialization.jsonObject(with: data) {
+                extras["after_acquisition"] = receipt
+            }
+            guard after.assignment == request.destination, after.sendNonRoutingChecks == sendChecks,
+                  let slotsAfter = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
+                  normalized(slotsAfter) == normalized(protectedSends),
+                  let populationAfter = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips,
+                  populationAfter.count == population.count, zip(populationAfter, population).allSatisfy({ CFEqual($0, $1) }),
+                  let finalControl = assignedControl(), assigned.matches(finalControl), writerContextCurrent() else {
+                return uncertain("Checked destination, protected send state or original population did not survive the press and fresh read; no automatic inverse was attempted.")
+            }
+            extras["after"] = request.destination.json; extras["strip_count_after"] = population.count
+            extras["changed"] = request.expected != request.destination
+            extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
+            return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: request.destination,
+                sendNonRoutingChecks: after.sendNonRoutingChecks)
+        }
         var cancelSucceeded = false
         if dataOwned, runtime.ax.actionNames(root).contains(kAXCancelAction as String), menuOwned(), !interrupted() {
             if case .success = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax) { cancelSucceeded = true }
@@ -480,7 +629,7 @@ extension AccessibilityChannel {
         if inputBusOnly { extras["input_scope"] = "bus_only" }
         extras["snapshot_atomic"] = false
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
-            inputRenewal: inputRenewal, inputSlot: inputSlot)
+            inputRenewal: inputRenewal, inputSlot: inputSlot, sendNonRoutingChecks: sendChecks)
     }
 
     static func outputReadContextFailure(_ result: ChannelResult, operation: String) -> ChannelResult {

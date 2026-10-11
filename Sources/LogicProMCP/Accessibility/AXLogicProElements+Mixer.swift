@@ -84,6 +84,22 @@ extension AXLogicProElements {
                 && zip(sourcePath, other.sourcePath).allSatisfy { CFEqual($0, $1) }
         }
     }
+
+    /// Shares the existing census-owned assigned control with routing actions.
+    /// The ordinal is a census identity, never a physical screen slot or label.
+    static func assignedSendMenuControl(in strip: AXUIElement, ordinal: Int,
+        runtime: AXHelpers.Runtime = .production) -> AssignedSendMenuControl? {
+        guard ordinal >= 0 else { return nil }
+        var controls: [AssignedSendMenuControl] = []
+        guard let slots = sendSlotObservations(in: strip, runtime: runtime,
+            observingAssignedGroup: { controls.append($0) }), slots.indices.contains(ordinal),
+            slots[ordinal].ordinal == ordinal,
+            slots[ordinal].state == .occupiedUnknownDestination else { return nil }
+        let matches = controls.filter { $0.ordinal == ordinal }
+        guard matches.count == 1, let selected = matches.first,
+              controls.filter({ CFEqual($0.list, selected.list) }).count == 1 else { return nil }
+        return selected
+    }
     // MARK: - Mixer
 
     /// What looking for the Mixer found (#982). A children read that failed at or inside a
