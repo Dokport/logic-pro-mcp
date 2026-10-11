@@ -391,7 +391,7 @@ extension AccessibilityChannel {
                document.utf8.elementsEqual(physical.document.utf8),
                (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil {
                 // This reader need not select its target before opening the popup.
-                // Only an actually re-observed exact-header pair can renew it;
+                // Only an actually re-observed original-header pair can renew it;
                 // the helper still inverses the selection it found on entry.
                 let observed = await renewSourceThroughOriginalHeader(originalPair, original: physical,
                     runtime: runtime, selectedHeaderRequired: false)
