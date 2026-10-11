@@ -150,6 +150,40 @@ struct Issue966RetainedPlanTests {
     }
 
     @Test(arguments: [false, true])
+    func matchingCapturedNameIsNotUnchangedAfterBaselineMoves(baselineChanged: Bool) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let (cache, registry, snapshot, reference) = try await fixture()
+            if baselineChanged {
+                await cache.updateTracks([TrackState(id: 0, name: "Changed by user", type: .audio)])
+            }
+            let result = await plan([
+                "snapshot_id": .string(snapshot), "policy": policy(reference: reference),
+                "names": .array([.object(["target": .string("track"), "name": .string("Original")])])
+            ], cache: cache, registry: registry)
+            let isError = try #require(result.isError)
+            #expect(!isError)
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let unchanged = try #require(body["unchanged_tasks"] as? [String])
+            let steps = try #require(body["steps"] as? [[String: Any]])
+            if baselineChanged {
+                #expect(!unchanged.contains("name_track"))
+                let step = try #require(steps.first { $0["id"] as? String == "name_track" })
+                let blocked = try #require(step["blocked_reasons"] as? [String])
+                #expect(blocked.contains("snapshot_changed"))
+                let before = try #require(step["before"] as? [String: Any])
+                let after = try #require(step["after"] as? [String: Any])
+                #expect(before["name"] as? String == "Original")
+                #expect(after["name"] as? String == "Original")
+                let executable = try #require(body["executable"] as? Bool)
+                #expect(!executable)
+            } else {
+                #expect(unchanged.contains("name_track"))
+                #expect(steps.isEmpty)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
     func matchingCachedNamesDoNotInventNativeGoalVerification(includeProjectReference: Bool) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
