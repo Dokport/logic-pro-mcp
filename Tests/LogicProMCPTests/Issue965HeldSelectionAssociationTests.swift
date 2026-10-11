@@ -660,6 +660,7 @@ struct Issue965HeldSelectionAssociationTests {
         let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]]
         #expect((rows?.count ?? 0) == 0, "An unchanged physical focus proves no track-to-strip pair")
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        #expect(f.presentationCensusReads == 2, "A refused association publishes no population; do not repeat a whole native acquisition after its verified cleanup")
         let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String,
             runtime: f.builder.makeAXRuntime()))
         #expect(CFEqual(focus, f.strips[1]))
