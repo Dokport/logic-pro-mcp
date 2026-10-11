@@ -114,6 +114,7 @@ struct Issue965HeldSelectionAssociationTests {
         var fault: String?
         var transientEditorRead = false
         var transientForeignRead = false
+        var delayedOwnFocusRead = false
         var metadataReads = 0
         var focusReadsBeforeWrite = [0, 0]
         var scopeLossPhase: Int?
@@ -264,6 +265,11 @@ struct Issue965HeldSelectionAssociationTests {
                             // Still return the expected held focus. Its deciding
                             // read changed scope after the prior scope validation.
                         }
+                    }
+                    if fault == "delayed_own_focus", selections.count == 1,
+                       CFEqual(element, app), attribute == kAXFocusedUIElementAttribute as String, !delayedOwnFocusRead {
+                        delayedOwnFocusRead = true
+                        return .some(strips[1])
                     }
                     if fault == "transient_foreign_focus", selections.count == 1,
                        CFEqual(element, app), attribute == kAXFocusedUIElementAttribute as String, !transientForeignRead {
@@ -661,6 +667,29 @@ struct Issue965HeldSelectionAssociationTests {
         #expect((rows?.count ?? 0) == 0, "An unchanged physical focus proves no track-to-strip pair")
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
         #expect(f.presentationCensusReads == 2, "A refused association publishes no population; do not repeat a whole native acquisition after its verified cleanup")
+        let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String,
+            runtime: f.builder.makeAXRuntime()))
+        #expect(CFEqual(focus, f.strips[1]))
+    }
+
+    @Test func delayedOwnMixerFocusPublishesPairsAndRestoresOriginalSelection() async throws {
+        let f = try Fixture()
+        f.fault = "delayed_own_focus"
+        let body = try await inspect(f)
+        #expect(f.delayedOwnFocusRead, "The first post-selection read must actually return the original held focus")
+        #expect(f.selections == [1, 0])
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        let tracks = try #require((body["tracks"] as? [String: Any])?["rows"] as? [[String: Any]])
+        let strips = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 2)
+        for row in rows {
+            let index = try #require(row["track_index"] as? Int)
+            #expect(row["track_ref"] as? String == tracks[index]["track_ref"] as? String)
+            #expect(row["mixer_strip_ref"] as? String == strips[1 - index]["mixer_strip_ref"] as? String)
+        }
+        let selected = try #require(f.builder.attributeValue(f.headers[0], kAXSelectedAttribute as String) as? Bool)
+        #expect(selected)
         let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String,
             runtime: f.builder.makeAXRuntime()))
         #expect(CFEqual(focus, f.strips[1]))
