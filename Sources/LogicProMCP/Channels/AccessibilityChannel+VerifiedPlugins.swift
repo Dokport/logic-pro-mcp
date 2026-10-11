@@ -295,6 +295,29 @@ extension AccessibilityChannel {
                 ]
             ))
         }
+        // #1228: occupied offscreen rows may expose only "audio plug-in".
+        // Neither that placeholder nor its checkbox proves a name/bypass value.
+        if slots.contains(where: { slot in
+            guard slot.occupied,
+                  let description = AXHelpers.getDescription(slot.element, runtime: runtime.ax) else { return false }
+            return AXLogicProElements.isPluginSlotPlaceholderName(description)
+        }) {
+            return .success(HonestContract.encodeV2StateB(
+                reason: .readbackUnavailable,
+                extras: [
+                    "operation": operation,
+                    "track": track,
+                    "plugins_source": "ax",
+                    "plugins_fetched_at": fetchedAt,
+                    "plugins_unknown_reason": "occupied_insert_name_unreadable",
+                    "mixer_reveal_attempted": reveal.attempted,
+                    "mixer_reveal_strategies": reveal.strategies,
+                    "what_was_observed": "an occupied insert exposed a generic slot label instead of its plugin name",
+                    "recovery_hint": "Scroll the target channel strip into the Mixer view and retry.",
+                    "safe_to_retry": true,
+                ]
+            ))
+        }
         let built = pluginInventoryItems(for: slots)
 
         return .success(HonestContract.encodeV2StateA(extras: [

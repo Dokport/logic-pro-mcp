@@ -251,6 +251,54 @@ private func makeMixerFixture(
     #expect(plugins[0]["plugin_id"] as? String == "logic.stock.effect.noise_gate")
 }
 
+// #1228: an occupied offscreen row can expose its control label instead of its
+// plugin name. Its checkbox value does not establish the actual bypass state.
+@Test(arguments: ["audio plug-in", " Audio Plug-in\n", "오디오 플러그인", "Audio-Plug-in", "オーディオプラグイン"])
+func testIssue1228OccupiedPlaceholderIsUnreadable(name: String) {
+    let b = FakeAXRuntimeBuilder()
+    let occupied = addOccupiedSlot(b, 722, name: name)
+    let slots = AXLogicProElements.audioPluginInsertSlots(children: [occupied], runtime: b.makeAXRuntime())
+    #expect(slots.count == 1)
+    #expect(slots[0].occupied)
+    #expect(!slots[0].isEmpty)
+    #expect(slots[0].readStatus == .occupiedUnreadable)
+    #expect(slots[0].name == nil)
+    let (items, complete) = AccessibilityChannel.pluginInventoryItems(for: slots)
+    #expect(!complete)
+    #expect(items[0]["name"] is NSNull)
+    #expect(items[0]["plugin_id"] is NSNull)
+    #expect(items[0]["bypassed"] is NSNull)
+}
+
+@Test func testIssue1228PlaceholderInventoryIsNotVerified() async throws {
+    let b = FakeAXRuntimeBuilder()
+    let runtime = makeMixerFixture(b) { b in
+        [addOccupiedSlot(b, 723, name: "audio plug-in")]
+    }
+    let result = await AccessibilityChannel.defaultGetPluginInventory(params: ["track": "0"], runtime: runtime)
+    let obj = decodeObject(result.message)
+    #expect(result.isSuccess)
+    #expect(obj["state"] as? String == "B")
+    let verified = try #require(obj["verified"] as? Bool)
+    #expect(!verified)
+    #expect(obj["plugins_unknown_reason"] as? String == "occupied_insert_name_unreadable")
+    #expect(obj["plugins"] == nil)
+}
+
+@Test func testIssue1228PlaceholderFragmentDoesNotHideRealPluginName() async throws {
+    let b = FakeAXRuntimeBuilder()
+    let runtime = makeMixerFixture(b) { b in
+        [addOccupiedSlot(b, 724, name: "My Audio Plug-in")]
+    }
+    let result = await AccessibilityChannel.defaultGetPluginInventory(params: ["track": "0"], runtime: runtime)
+    let obj = decodeObject(result.message)
+    #expect(obj["state"] as? String == "A")
+    let complete = try #require(obj["complete"] as? Bool)
+    #expect(complete)
+    let items = obj["plugins"] as! [[String: Any]]
+    #expect(items[0]["name"] as? String == "My Audio Plug-in")
+}
+
 @Test func testGetInventoryStateBWhenSubtreeUnreadable() async {
     // Track index out of range → the AX subtree cannot be read → State B
     // readback_unavailable + plugins_unknown_reason (AC2). Not a fabricated

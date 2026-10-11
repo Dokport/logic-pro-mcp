@@ -300,11 +300,20 @@ extension AXLogicProElements {
             return nil
         }
         let lower = description.lowercased()
-        guard !AXLocalePolicy.pluginAutomationLabelExact.matches(lower, mode: .exactStrict),
+        guard !isPluginSlotPlaceholderName(description),
+              !AXLocalePolicy.pluginAutomationLabelExact.matches(lower, mode: .exactStrict),
               !AXLocalePolicy.pluginAutomationLabelSubstring.containsAny(in: lower) else {
             return nil
         }
         return description
+    }
+
+    /// Offscreen occupied rows can expose the slot control label, not a plugin
+    /// name. Match the whole label only; a real plugin may contain these words.
+    static func isPluginSlotPlaceholderName(_ name: String) -> Bool {
+        AXLocalePolicy.audioPluginSlotLabel.matches(
+            name.trimmingCharacters(in: .whitespacesAndNewlines), mode: .exactStrict
+        )
     }
 
     /// Name of an occupied plugin slot, or nil if the element is not an
