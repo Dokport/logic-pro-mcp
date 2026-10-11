@@ -1726,6 +1726,7 @@ actor ProductionMCUTransport: MCUTransportProtocol {
         // so it must dereference whichever sinks are current at delivery time.
         let sink = feedbackSink
         do {
+            guard ChannelRouter.mcuUsePermitted else { throw CancellationError() }
             port = try await portManager.createBidirectionalPort(name: "LogicProMCP-MCU-Internal") { eventList, _ in
                 // Parse UMP event list → MIDI 1.0 bytes → MIDIFeedback.Event
                 // Use original eventList pointer (not a stack copy) for safe traversal

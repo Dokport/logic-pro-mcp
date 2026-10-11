@@ -69,6 +69,11 @@ actor ChannelRouter {
 
     private var channels: [ChannelID: any Channel] = [:]
     private var channelStartOrder: [ChannelID] = []
+    private var mcuDeferred = false
+    private var mcuStarted = false
+    private var mcuStartTask: (id: UUID, task: Task<String?, Never>)?
+    private var stopping = false
+    private static let passiveMCUOperations: Set<String> = ["mixer.get_state", "mixer.get_channel_strip"]
 
     // Operations for which an Accessibility `element_not_found` is provably a
     // PRE-WRITE miss, so a later channel may still run. Three conditions must all
@@ -136,15 +141,27 @@ actor ChannelRouter {
         }
     }
 
-    func startAll() async -> StartReport {
+    func startAll(deferMCU: Bool = true) async -> StartReport {
+        stopping = false
         var started: [ChannelID] = []
         var failures: [ChannelID: String] = [:]
         var degraded: [ChannelID: String] = [:]
 
         for id in channelStartOrder {
             guard let channel = channels[id] else { continue }
+            // Publishing the MCU pair makes Logic display control-surface bars, moving its
+            // viewport even without a tool call. Passive server startup must not publish it.
             do {
-                try await channel.start()
+                if id == .mcu {
+                    if !mcuStarted { mcuDeferred = true }
+                    if mcuDeferred && deferMCU { continue }
+                    if let failure = await startMCUForUse() {
+                        degraded[id] = failure
+                        continue
+                    }
+                } else {
+                    try await channel.start()
+                }
                 Log.info("Channel \(id.rawValue) started", subsystem: "router")
                 started.append(id)
             } catch {
@@ -165,9 +182,64 @@ actor ChannelRouter {
     }
 
     func stopAll(excluding excluded: Set<ChannelID> = []) async {
+        stopping = true
+        // A start suspended inside CoreMIDI must finish before the owned client is disposed.
+        // Keep its single-flight task through the drain; late routes cannot republish endpoints.
+        if let mcuStartTask { _ = await mcuStartTask.task.value }
         for (id, channel) in channels where !excluded.contains(id) {
             await channel.stop()
         }
+        if !excluded.contains(.mcu) {
+            mcuStartTask = nil
+            mcuStarted = false
+            mcuDeferred = channels[.mcu] != nil
+        }
+    }
+
+    static var mcuUsePermitted: Bool {
+        guard !Task.isCancelled else { return false }
+        guard let context = OperationTraceContext.current else { return true }
+        return context.mutationGateAcquired && context.ownsGate()
+            && !context.cancellationRequested()
+            && (context.deadline.map { ContinuousClock.now < $0 } ?? true)
+    }
+
+    /// Endpoint publication is an explicit setup side effect, or a reached MCU write rung.
+    /// It is not feedback proof: callers still perform the ordinary channel readiness check.
+    func startMCUForUse() async -> String? {
+        guard !stopping, Self.mcuUsePermitted else { return "MCU startup cancelled or ownership expired" }
+        guard mcuDeferred else { return nil }
+        guard let channel = channels[.mcu] else { return "MCU channel is not registered" }
+        let start: (id: UUID, task: Task<String?, Never>)
+        if let existing = mcuStartTask {
+            start = existing
+        } else {
+            let task = Task<String?, Never> {
+                guard Self.mcuUsePermitted else { return "MCU startup cancelled or ownership expired" }
+                do {
+                    try await channel.start()
+                    return nil
+                } catch { return String(describing: error) }
+            }
+            start = (UUID(), task)
+            mcuStartTask = start
+        }
+        let failure = await withTaskCancellationHandler {
+            await start.task.value
+        } onCancel: {
+            start.task.cancel()
+        }
+        guard !stopping, mcuStartTask?.id == start.id else { return "MCU startup interrupted by shutdown" }
+        if failure == nil {
+            mcuStarted = true
+            mcuDeferred = false
+        } else {
+            // A cancelled/failed attempt did not establish a running channel. A later owner
+            // may retry; only this flight may clear itself, never a successor's task.
+            mcuStartTask = nil
+        }
+        guard !stopping, Self.mcuUsePermitted else { return "MCU startup cancelled or ownership expired" }
+        return failure
     }
 
     // MARK: - Routing
@@ -328,7 +400,22 @@ actor ChannelRouter {
                 continue
             }
 
-            let health = await channel.healthCheck()
+            if channelID == .mcu && mcuDeferred,
+               !Self.passiveMCUOperations.contains(operation) {
+                if let failure = await startMCUForUse() {
+                    if stopping || !Self.mcuUsePermitted {
+                        return .error(HonestContract.encodeStateC(
+                            error: .cancelled, hint: failure, extras: ["operation": operation]
+                        ))
+                    }
+                    lastError = "Channel MCU: \(failure)"
+                    continue
+                }
+            }
+
+            let health = channelID == .mcu && mcuDeferred
+                ? ChannelHealth.unavailable("MCU is deferred until an MCU write or consented setup")
+                : await channel.healthCheck()
             guard health.available else {
                 // PRD Issue #1 §4.1 step 7: a bypass op (KeyCmd MIDI send)
                 // whose channel reports `available:false` means the virtual
@@ -360,6 +447,13 @@ actor ChannelRouter {
                 continue
             }
 
+            if channelID == .mcu && !Self.passiveMCUOperations.contains(operation),
+               stopping || !Self.mcuUsePermitted {
+                return .error(HonestContract.encodeStateC(
+                    error: .cancelled, hint: "MCU execution cancelled or ownership expired",
+                    extras: ["operation": operation, "write_attempted": false]
+                ))
+            }
             await OperationTraceContext.record(.channelStarted, attributes: [
                 "channel": channelID.rawValue,
             ])
@@ -367,6 +461,13 @@ actor ChannelRouter {
             // that actually executes — and never on a route that resolved no
             // channel. Reads route without an arm, so this is a no-op for them.
             await OperationTraceWriteBoundaryArm.commitIfArmed()
+            if channelID == .mcu && !Self.passiveMCUOperations.contains(operation),
+               stopping || !Self.mcuUsePermitted {
+                return .error(HonestContract.encodeStateC(
+                    error: .cancelled, hint: "MCU execution cancelled or ownership expired",
+                    extras: ["operation": operation, "write_attempted": false]
+                ))
+            }
             let result = await channel.execute(operation: operation, params: params)
             var completedAttributes = [
                 "channel": channelID.rawValue,
@@ -501,7 +602,9 @@ actor ChannelRouter {
     func healthReport() async -> [ChannelID: ChannelHealth] {
         var report: [ChannelID: ChannelHealth] = [:]
         for (id, channel) in channels {
-            report[id] = await channel.healthCheck()
+            report[id] = id == .mcu && mcuDeferred
+                ? .unavailable("MCU is deferred until an MCU write or consented setup")
+                : await channel.healthCheck()
         }
         return report
     }

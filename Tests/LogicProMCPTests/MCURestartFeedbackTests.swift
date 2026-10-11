@@ -82,6 +82,30 @@ private actor ReusingPortManager: VirtualPortManaging {
     }
 }
 
+@Test(arguments: ["claim", "deadline", "caller_cancel"])
+func issue1174TransportRefusesExpiredStartupBeforePublishingPorts(reason: String) async {
+    let portManager = ReusingPortManager()
+    let transport = ProductionMCUTransport(portManager: portManager)
+    let context = OperationTraceContext(
+        mutationGateAcquired: true,
+        ownsGate: { reason != "claim" },
+        deadline: reason == "deadline" ? ContinuousClock.now - .seconds(1) : nil,
+        cancellationRequested: { reason == "caller_cancel" }
+    )
+    await OperationTraceContext.$current.withValue(context) {
+        do {
+            try await transport.start { _ in }
+            Issue.record("Expired startup published the MCU endpoints")
+        } catch is CancellationError {
+            // Refusal must precede the actual port manager call, not merely drop later sends.
+        } catch {
+            Issue.record("Expected cancellation refusal, got \(error)")
+        }
+    }
+    #expect(await portManager.bidirectionalCallCount == 0)
+    await transport.stop()
+}
+
 /// Thread-safe recorder for the pitch-bend values a sink observed — the sink is
 /// invoked synchronously on the (fake) real-time callback thread.
 private final class SinkRecorder: @unchecked Sendable {

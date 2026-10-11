@@ -706,7 +706,7 @@ private func verifiedReadbackMismatchEnvelope() -> String {
     for id in registeredOrder {
         await router.register(OrderedStartChannel(id: id, recorder: recorder))
     }
-    _ = await router.startAll()
+    _ = await router.startAll(deferMCU: false)
 
     let observedOrder = await recorder.snapshot()
     let preservesRegistrationOrder = observedOrder == registeredOrder
