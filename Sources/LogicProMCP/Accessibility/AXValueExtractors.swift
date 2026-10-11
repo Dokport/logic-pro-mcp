@@ -858,15 +858,14 @@ enum AXValueExtractors {
     private static func trackNameFieldReading(
         _ field: AXUIElement, runtime: AXHelpers.Runtime
     ) -> String? {
-        let candidates = [
-            AXHelpers.getDescription(field, runtime: runtime),
-            AXHelpers.getTitle(field, runtime: runtime),
-            extractTextValue(field, runtime: runtime)
-        ]
-        return candidates.compactMap { $0 }.first {
-            let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !trimmed.isEmpty && trimmed != "0"
+        func usable(_ candidate: String?) -> String? {
+            guard let candidate else { return nil }
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmed.isEmpty && trimmed != "0" ? candidate : nil
         }
+        if let name = usable(AXHelpers.getDescription(field, runtime: runtime)) { return name }
+        if let name = usable(AXHelpers.getTitle(field, runtime: runtime)) { return name }
+        return usable(extractTextValue(field, runtime: runtime))
     }
 
     private static func extractTrackName(
