@@ -650,7 +650,8 @@ actor AccessibilityChannel: Channel {
         // Unknown, foreign or duplicated selected children cannot certify it.
         func readSelectedTracks(_ headers: [AXUIElement]?, states: [TrackState]?, in window: AXUIElement) throws -> SelectedTrackRead? {
             guard request.scope == .selection, let headers, let states, states.count == headers.count,
-                  let rail = AXLogicProElements.uniqueTrackHeaderRail(in: window, runtime: logic) else { return nil }
+                  let rail = AXLogicProElements.uniqueTrackHeaderRail(in: window, runtime: logic,
+                    observingExposure: exposure) else { return nil }
             try check()
             func selectedChildren() -> [AXUIElement]? {
                 guard case .success(.some(let children)) = AXHelpers.getAttributeResult(rail,
@@ -659,6 +660,7 @@ actor AccessibilityChannel: Channel {
             }
             guard let selected = selectedChildren(),
                   case .success(let children) = AXHelpers.childrenResult(rail, runtime: logic.ax) else { return nil }
+            exposure?.observeHeaders(children)
             var observed: [AXUIElement] = []
             var seen: [AXUIElement] = []
             for (header, state) in zip(headers, states) {

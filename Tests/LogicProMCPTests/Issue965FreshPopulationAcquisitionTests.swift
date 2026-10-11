@@ -1408,6 +1408,10 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: true, knownInnerReopen: true)
     }
 
+    @Test func selectedCensusMissingOwnedHeaderCannotRenewItsOldInverse() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, selectedCensusLoss: true)
+    }
+
     @Test func registeredNestedStackSampledReplacementCannotRestoreItsOldDisclosureInverse() async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: true, knownInnerReplacement: true)
     }
@@ -1634,7 +1638,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                               hiddenViewLoss: Bool = false, hiddenView: Bool = false,
                               hiddenFocusFault: String? = nil, lateScopeFault: String? = nil,
                               verifyHierarchy: Bool = false, verifyDirectChildren: Bool = false,
-                              revealedStack: String? = nil) async throws {
+                              revealedStack: String? = nil, selectedCensusLoss: Bool = false) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -1654,6 +1658,9 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.setChildren(header, index == 0 ? [disclosure] : [])
         }
         let collapsed = [headers[0]] + Array(headers[24...])
+        if selectedCensusLoss {
+            fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [headers[0]])
+        }
         let passiveLabel = fixture.builder.element(965_240)
         let passiveRoleReads = Reads()
         let otherLabel = fixture.builder.element(965_241)
@@ -1991,6 +1998,16 @@ struct Issue965FreshPopulationAcquisitionTests {
                     }
                     return true
                 }, observingAttribute: { element, attribute in
+                    if selectedCensusLoss, fixture.events.count == 2,
+                       CFEqual(element, fixture.rail), attribute == kAXSelectedChildrenAttribute as String {
+                        fixture.reads.record("selected_census_armed")
+                    }
+                    if selectedCensusLoss, CFEqual(element, fixture.window), attribute == kAXTitleAttribute as String,
+                       fixture.reads.recorded.contains("selected_census_missing_header_sample"),
+                       !fixture.reads.recorded.contains("selected_census_header_recovered") {
+                        fixture.reads.record("selected_census_header_recovered")
+                        fixture.builder.setChildren(fixture.rail, headers)
+                    }
                     if revealedStack == "late_open", fixture.events.count == 2,
                        CFEqual(element, headers[1]), attribute == kAXTitleAttribute as String,
                        fixture.reads.recorded.contains("revealed_disclosure_scan_completed"),
@@ -2170,6 +2187,12 @@ struct Issue965FreshPopulationAcquisitionTests {
                     fixture.reads.record("focus_read_missing_after_true_down")
                     return .success(nil)
                 }, observingChildren: { element in
+                    if selectedCensusLoss, CFEqual(element, fixture.rail),
+                       fixture.reads.recorded.contains("selected_census_armed"),
+                       !fixture.reads.recorded.contains("selected_census_missing_header_sample") {
+                        fixture.reads.record("selected_census_missing_header_sample")
+                        fixture.builder.setChildren(fixture.rail, Array(headers.dropFirst()))
+                    }
                     if revealedStack == "late_open", fixture.events.count == 2,
                        CFEqual(element, headers[23]),
                        Thread.callStackSymbols.contains(where: { $0.contains("disclosureStates") }) {
@@ -2237,7 +2260,8 @@ struct Issue965FreshPopulationAcquisitionTests {
             liveTrackNames: { [:] }, projectFileReader: fileReader)
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
         let params: [String: Value] = ["domains": .array(verifyHierarchy
-            ? [.string("tracks"), .string("hierarchy")] : [.string("tracks")]), "allow_ui_navigation": .bool(navigation)]
+            ? [.string("tracks"), .string("hierarchy")] : [.string("tracks")]), "allow_ui_navigation": .bool(navigation),
+            "scope": .string(selectedCensusLoss ? "selection" : "whole_project")]
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: params, mutationGate: gate) {
                 if let nestedFault,
@@ -2260,6 +2284,18 @@ struct Issue965FreshPopulationAcquisitionTests {
                 }
                 return await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
             }
+        if selectedCensusLoss {
+            #expect(fixture.reads.recorded.filter { $0 == "selected_census_missing_header_sample" }.count == 1)
+            #expect(fixture.reads.recorded.filter { $0 == "selected_census_header_recovered" }.count == 1)
+            #expect(fixture.events.recorded == ["disclosure_down", "disclosure_up"],
+                    "a sampled missing owned header irreversibly ends the old inverse")
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let effects = try #require(body["ui_effects"] as? [String: Any])
+            #expect(effects["restoration"] as? String == "not_restored")
+            #expect(body["snapshot_id"] == nil)
+            #expect(await cache.getTracks().isEmpty)
+            return
+        }
         if verifyHierarchy, nestedFault != nil {
             let body = try #require(sharedJSONObject(sharedToolText(result)))
             #expect((body["hierarchy"] as? [String: Any])?["disclosure_exposures"] == nil,
