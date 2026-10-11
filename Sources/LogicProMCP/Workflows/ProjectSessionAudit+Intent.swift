@@ -1498,6 +1498,9 @@ extension ProjectSessionAudit {
             }
             return classified(.noOutput)
         case .physicalOutput?:
+            guard graph.nodes.filter({ $0.id == source.id }).count == 1 else {
+                return .unobserved(.sourceNodeAmbiguous, edgeObserved: false)
+            }
             return classified(.physicalOutput)
         case .bus?:
             // Edges name their source by id: another node carrying that id could own the edge.

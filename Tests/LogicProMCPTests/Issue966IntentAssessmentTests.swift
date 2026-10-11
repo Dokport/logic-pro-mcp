@@ -813,6 +813,25 @@ struct Issue966IntentAssessmentTests {
         #expect(finding.observed == Audit.IntentEndpoint(nodeId: nil, displayName: nil, busNumber: nil, output: .physicalOutput))
     }
 
+    @Test func duplicatePhysicalOutputSourceIdentityCannotAuthorizeARouteFinding() throws {
+        let source = trackNode(0, output: .physicalOutput)
+        let duplicate = auxNode(source.id)
+        for nodes in [[source, duplicate, drumBus], [duplicate, source, drumBus]] {
+            let routing = graph(coverage: sendsPartialCoverage, nodes: nodes, edges: [])
+            #expect(routing.isConsistent)
+            let assessment = Audit.assessIntent(policy: try kickPolicy(bus: 3), capture: threeTrackCapture, graph: routing)
+            let finding = try onlyFinding(assessment)
+            #expect(finding.status == .unverified)
+            #expect(finding.reasons == [.sourceNodeAmbiguous])
+            #expect(finding.observed == nil)
+            #expect(!assessment.changeRequired)
+        }
+        let unique = graph(coverage: sendsPartialCoverage, nodes: [source, drumBus], edges: [])
+        let finding = try onlyFinding(Audit.assessIntent(policy: try kickPolicy(bus: 3), capture: threeTrackCapture, graph: unique))
+        #expect(finding.status == .violation)
+        #expect(finding.observed?.output == .physicalOutput)
+    }
+
     // A track named "Bus 3" that outputs to bus 4, beside a real bus 3 and another track named "Bus 3"
     // on it: identity is the reference, never the name. Mutation: key the source by displayName.
     @Test func identicalNamesAreDecidedByReference() throws {
