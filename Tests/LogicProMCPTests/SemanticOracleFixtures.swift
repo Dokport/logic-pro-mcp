@@ -555,6 +555,16 @@ enum SemanticOracleFixtures {
                 """,
             readback: "{}"
         ),
+        .mixerGetInputBusVerified: SemanticOracleFixture(
+            response: """
+                {"state":"A","success":true,"verified":true,"operation":"mixer.get_input_bus_verified",\
+                "write_attempted":false,"snapshot_atomic":false,"verify_source":"ax_input_menu_checkmark",\
+                "menu_custody_at_read":true,"source_custody_after_cleanup":true,\
+                "output_checkmark_reads_observed":2,"output_checkmark_reads_agree":true,\
+                "input_scope":"bus_only","current_input":{"kind":"bus","number":256}}
+                """,
+            readback: "{}"
+        ),
         .mixerGetSendDestinationVerified: SemanticOracleFixture(
             response: """
                 {"state":"A","success":true,"verified":true,"operation":"mixer.get_send_destination_verified",\

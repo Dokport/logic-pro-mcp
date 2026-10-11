@@ -1377,6 +1377,13 @@ actor AccessibilityChannel: Channel {
             return await AccessibilityChannel.setOutputVerified(params: params, runtime: runtime.logicRuntime)
         case "mixer.get_output_verified":
             return await AccessibilityChannel.getOutputVerified(params: params, runtime: runtime.logicRuntime)
+        case "mixer.get_input_bus_verified":
+            guard params.isEmpty else {
+                return .error(HonestContract.encodeStateC(error: .invalidParams,
+                    hint: "The physical input-bus reader accepts no indices or write inputs.",
+                    extras: ["operation": operation, "write_attempted": false]))
+            }
+            return await AccessibilityChannel.getInputBusVerified(runtime: runtime.logicRuntime)
         case "mixer.get_send_destination_verified":
             guard params.count == 1, let raw = params["ordinal"], let ordinal = Int(raw), ordinal >= 0 else {
                 return .error(HonestContract.encodeStateC(error:.invalidParams,

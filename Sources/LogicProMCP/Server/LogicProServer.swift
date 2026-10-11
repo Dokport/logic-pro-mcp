@@ -869,11 +869,13 @@ actor LogicProServer {
         // Retained snapshot lookup never reads Logic or generates a replacement.
         let freshPopulationRead = tool == "logic_project" && command == "inspect_session"
             && commandParams["snapshot_id"] == nil
-        if freshPopulationRead && Task.isCancelled {
+        let ownedObservationRead = freshPopulationRead
+            || (tool == "logic_mixer" && command == "get_input_bus_verified")
+        if ownedObservationRead && Task.isCancelled {
             return toolStateCResult(.cancelled,
                 extras: ["write_attempted": false, "navigation_performed": false])
         }
-        if (isMutatingCommand(tool: tool, command: command) || freshPopulationRead), let mutationGate {
+        if (isMutatingCommand(tool: tool, command: command) || ownedObservationRead), let mutationGate {
             guard let claim = mutationGate.tryAcquire(operation: operation) else {
                 return mutationInProgressResult(
                     tool: tool,
@@ -908,10 +910,10 @@ actor LogicProServer {
                         return heldMutationGate.stillOwns(heldClaim)
                     },
                     deadline: operationDeadline,
-                    cancellationRequested: { freshPopulationRead && callerCancellation.isCancelled }
+                    cancellationRequested: { ownedObservationRead && callerCancellation.isCancelled }
                 )
                 let workTask = Task.detached(priority: .userInitiated) {
-                    if freshPopulationRead && callerCancellation.isCancelled {
+                    if ownedObservationRead && callerCancellation.isCancelled {
                         withUnsafeCurrentTask { $0?.cancel() }
                     }
                     let result = await OperationTraceContext.$current.withValue(traceContext) {
@@ -924,7 +926,7 @@ actor LogicProServer {
                         timeoutHandle.cancel()
                     }
                 }
-                if freshPopulationRead { callerCancellation.set(workTask) }
+                if ownedObservationRead { callerCancellation.set(workTask) }
                 let timeoutTask = DispatchWorkItem {
                     let didWin = race.resume(
                         continuation,
@@ -960,7 +962,7 @@ actor LogicProServer {
             }
         } onCancel: {
             // Other commands retain their existing mutation/deadline semantics.
-            if freshPopulationRead { callerCancellation.cancel() }
+            if ownedObservationRead { callerCancellation.cancel() }
         }
     }
 
