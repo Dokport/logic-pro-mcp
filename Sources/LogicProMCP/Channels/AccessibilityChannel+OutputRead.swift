@@ -527,6 +527,23 @@ extension AccessibilityChannel {
                 "original_send_control_current": controlAfterPress,
                 "ax_popup_absent": axPopupAbsent, "cg_popup_absent": cgPopupAbsent]
             guard contextAfterPress, controlAfterPress, axPopupAbsent, cgPopupAbsent else {
+                // Diagnostic reads of the retained originals only; a readable
+                // replacement or a zero AX status never restores action authority.
+                func roleStatus(_ original: AXUIElement) -> Int32 {
+                    let read: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                        original, kAXRoleAttribute as String, runtime: runtime.ax)
+                    switch read { case .success: return 0; case .failure(let error): return error.raw }
+                }
+                func childrenStatus(_ original: AXUIElement) -> Int32 {
+                    switch AXHelpers.childrenResult(original, runtime: runtime.ax) {
+                    case .success: return 0
+                    case .failure(let error): return error.raw
+                    }
+                }
+                extras["post_press_source_read_status"] = ["strip_role": roleStatus(physical.strip),
+                    "strip_children": childrenStatus(physical.strip), "send_group_role": roleStatus(assigned.group),
+                    "send_group_children": childrenStatus(assigned.group), "send_list_role": roleStatus(assigned.list),
+                    "send_bypass_role": roleStatus(assigned.bypass)]
                 return uncertain("The press lost original physical/send custody or popup closure; no guessed inverse was attempted.")
             }
             let after = await getOutputObservation(runtime: runtime, sendOrdinal: sendOrdinal, timing: timing)

@@ -141,6 +141,14 @@ struct Issue291AssignedSendMenuTests {
         var runtime: AXLogicProElements.Runtime {
             let f = p.f, base = f.logic
             let ax = f.b.makeAXRuntime(appElement:f.app,
+                attributeValueResultHandler: { [self] node, _ in
+                    guard fault == "strip_invalid", !pressed.isEmpty, CFEqual(node, f.strips[0]) else { return nil }
+                    return .failure(.init(raw: -25202))
+                },
+                childrenResultHandler: { [self] node in
+                    guard fault == "strip_invalid", !pressed.isEmpty, CFEqual(node, f.strips[0]) else { return nil }
+                    return .failure(.init(raw: -25202))
+                },
                 actionNamesHandler: { [self] node in
                     guard CFEqual(node,pair) else { return nil }
                     switch fault {
@@ -216,7 +224,7 @@ struct Issue291AssignedSendMenuTests {
         if fault == "late_label" { #expect(probe.cancels == 0) }
     }
     @Test("Post-press effect, protected-state and original-source loss remain uncertain; no guessed inverse",
-        arguments:["no_effect", "level", "mode", "source_retired", "control_retired", "unreadable_label"])
+        arguments:["no_effect", "level", "mode", "source_retired", "control_retired", "strip_invalid", "unreadable_label"])
     func occupiedSendOutputPostPressUncertainty(fault: String) async throws {
         let p = try prepare(), probe = SendWriterProbe(p)
         probe.fault = fault
@@ -228,6 +236,11 @@ struct Issue291AssignedSendMenuTests {
         if fault == "control_retired" {
             let identity = try #require(body["post_press_control_identity"] as? [String: Bool])
             #expect(identity == ["observed": false])
+        }
+        if fault == "strip_invalid" {
+            let statuses = try #require(body["post_press_source_read_status"] as? [String: Int])
+            #expect(statuses["strip_role"] == -25202)
+            #expect(statuses["strip_children"] == -25202)
         }
     }
     @Test("Revoked writer focus/foreground permits neither destination nor popup inverse",
