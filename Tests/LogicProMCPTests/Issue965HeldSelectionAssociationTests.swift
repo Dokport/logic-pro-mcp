@@ -14,6 +14,80 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(description.contains("complete population remain unqualified"), "Do not turn a capability-description correction into a native/global acceptance claim")
     }
 
+    @Test(arguments: ["unchanged", "editor", "foreign_document", "foreign_window", "retired_focus", "playing", "changed_selection", "deciding_focus_window", "deciding_focus_document", "transport_on_strip_census"])
+    func passiveHelpPermissionDoesNotReacquireAssociationAuthority(condition: String) async throws {
+        let f = try Fixture()
+        let gate = LogicMutationGate()
+        _ = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
+            commandParams: ["domains": .array([.string("associations")])], mutationGate: gate) {
+            let base = f.builder.makeLogicRuntime(appElement: f.app, attributeValueHandler: { element, attribute in
+                if f.headers.contains(where: { CFEqual($0, element) }), attribute == kAXSelectedAttribute as String {
+                    f.passivePermissionSelectionReads += 1
+                }
+                if f.passivePermissionArmed, CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                    f.passivePermissionFocusReads += 1
+                    if f.passivePermissionFocusReads == 2 {
+                        if condition == "deciding_focus_window" {
+                            let foreign = f.builder.element(1_965_799)
+                            f.builder.setAttribute(f.app, kAXMainWindowAttribute as String, foreign)
+                            f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, foreign)
+                        } else if condition == "deciding_focus_document" {
+                            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                    }
+                }
+                if f.passivePermissionArmed, condition == "transport_on_strip_census",
+                   CFEqual(element, f.strips[0]), attribute == kAXRoleAttribute as String {
+                    f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+                }
+                return nil
+            }, attributeValueResultHandler: { element, attribute in
+                if f.strips.contains(where: { CFEqual($0, element) }),
+                   attribute == kAXValueAttribute as String || attribute == kAXSelectedTextAttribute as String {
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
+                return nil
+            }, setAttributeHandler: nil, performActionHandler: nil)
+            let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: base.ax,
+                executeAppleScript: { _ in Issue.record("No scripts"); return .error("forbidden") },
+                onScreenWindowList: { [] }, focusedApplicationPID: { 4242 })
+            guard let association = AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: logic, expectedProject: nil, requiresProjectReference: false) else {
+                Issue.record("Expected a qualified original association")
+                return .init(content: [])
+            }
+            let scope = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+            scope.retainAssociation(association)
+            f.passivePermissionSelectionReads = 0
+            f.passivePermissionArmed = true
+            switch condition {
+            case "editor": f.builder.setAttribute(f.strips[1], kAXNumberOfCharactersAttribute as String, 1)
+            case "foreign_document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+            case "foreign_window": f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.builder.element(1_965_799))
+            case "retired_focus": f.builder.setChildren(f.mixer, [f.strips[0]])
+            case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+            case "changed_selection":
+                f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
+                f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
+            default: break
+            }
+            let permitted = scope.permits()
+            if condition == "unchanged" || condition == "changed_selection" || condition == "transport_on_strip_census" {
+                #expect(permitted)
+            } else {
+                #expect(!permitted)
+            }
+            #expect(f.passivePermissionSelectionReads == 0, "Passive Help permission must not scan selection twice; action and publication boundaries retain the full association proof")
+            #expect(f.selections.isEmpty && f.scrollWrites.isEmpty)
+            if condition == "changed_selection" {
+                #expect(!association.permitsRead(), "The read-only focus witness cannot authorize association actions")
+            } else if condition == "transport_on_strip_census" {
+                #expect(!association.permitsRead(), "Full association census must precede its deciding stopped-transport checks")
+            }
+            return .init(content: [])
+        }
+    }
+
     private final class Fixture: @unchecked Sendable {
         let builder = FakeAXRuntimeBuilder()
         let app: AXUIElement
@@ -61,6 +135,9 @@ struct Issue965HeldSelectionAssociationTests {
         var routingSelection: (@Sendable (Int) -> Void)?
         var routingLateScopeInjected = false
         var presentationCensusReads = 0
+        var passivePermissionSelectionReads = 0
+        var passivePermissionFocusReads = 0
+        var passivePermissionArmed = false
 
         init(withViewport: Bool = false) throws {
             bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-selection-\(UUID().uuidString).logicx")
