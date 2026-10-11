@@ -653,6 +653,12 @@ struct SystemDispatcher: OperationTraceDispatching {
             // `system health` still reports the MCU channel ready.
             if let refusal = Self.setupControlSurfaceConsentRequiredResult(params) { return refusal }
             let csTraceID = await startTraceIfEnabled(command: command)
+            if let failure = await router.startMCUForUse() {
+                return await finalizeTrace(toolTextResult(HonestContract.encodeStateC(
+                    error: .portUnavailable, hint: failure,
+                    extras: ["stage": "mcu_start", "write_attempted": false]
+                ), isError: true), traceID: csTraceID)
+            }
             let csResult: CallTool.Result
             // The feedback instant BEFORE the drive. `isConnected` alone would be satisfied by a
             // message Logic sent minutes ago through a binding this operation is about to change,
@@ -661,8 +667,11 @@ struct SystemDispatcher: OperationTraceDispatching {
             let csFeedbackBefore = await cache.getMCUConnection().lastFeedbackAt
             // The drive is synchronous AX work: off the cooperative pool, so a long GUI wait cannot
             // starve the executor this dispatcher runs on.
+            let csContext = OperationTraceContext.current
             let csDrive = await Task.detached(priority: .userInitiated) {
-                controlSurfaceSetup(true)
+                OperationTraceContext.$current.withValue(csContext) {
+                    controlSurfaceSetup(true)
+                }
             }.value
             // The functional proof, taken AFTER the drive and from the application rather than from
             // the two popup labels this operation just wrote: Logic emits MCU feedback only once a
