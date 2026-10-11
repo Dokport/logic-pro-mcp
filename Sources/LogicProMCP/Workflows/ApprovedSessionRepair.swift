@@ -300,8 +300,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     private func stop(runtime: AXLogicProElements.Runtime) -> Bool {
-        (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil
-            || StatePoller.backgroundTickYields(to: AccessibilityChannel.readLogicKeyboardFocus(runtime: runtime))
+        guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+              let app = mixerTask?.binding.app,
+              let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
+                  runtime: runtime.ax) else { return true }
+        // Each census check still reads and classifies fresh focus. The outer
+        // navigation boundaries independently revalidate the retained app/PID.
+        return StatePoller.backgroundTickYields(to: AccessibilityChannel.readLogicKeyboardFocus(of: focus, runtime: runtime))
     }
 
     private func reading() async -> (Bool, AXUIElement?)? {

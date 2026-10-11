@@ -246,6 +246,49 @@ struct Issue971ApprovedMixerSagaTests {
         }
     }
 
+    @Test func retainedViewFocusChecksDoNotRediscoverApplicationForEveryCensusNode() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                var resolutions: [Int] = []
+                var freshFocusReads: [Int] = []
+                for leafCount in [0, 64] {
+                    let f = try Fixture(showing: true)
+                    for index in 0..<leafCount {
+                        let leaf = f.view.builder.element(971_800 + index)
+                        f.view.builder.setRole(leaf, kAXButtonRole as String)
+                        f.view.builder.setChildren(leaf, [])
+                        f.view.extraWindowChildren.append(leaf)
+                    }
+                    f.view.updateVisibility()
+                    await f.router.register(f.view.channel())
+                    let plan = try await f.plan(desired: true)
+                    f.view.appRootResolutions = 0
+                    let focusReads = DecidingMixerReplacement()
+                    f.view.attributeReadObserver = { element, attribute in
+                        if CFEqual(element, f.view.app), attribute == kAXFocusedUIElementAttribute as String {
+                            focusReads.originalDecidingReads += 1
+                        }
+                    }
+                    let result = try await f.call("apply_session_repair",
+                        params: f.applyParameters(plan, key: "bound-focus-\(leafCount)"))
+                    #expect(result["saga_state"] as? String == "completed")
+                    let verified: Bool = try #require(result["verified"] as? Bool)
+                    #expect(verified)
+                    #expect(f.view.events.isEmpty)
+                    resolutions.append(f.view.appRootResolutions)
+                    freshFocusReads.append(focusReads.originalDecidingReads)
+                }
+                let growth = resolutions[1] - resolutions[0]
+                print("bound-focus application resolutions small=\(resolutions[0]) large=\(resolutions[1])")
+                // Per-node focus remains fresh; application discovery belongs
+                // to the unchanged outer custody boundaries, not each census read.
+                #expect(growth == 0)
+                #expect(resolutions[0] > 0)
+                #expect(freshFocusReads[1] > freshFocusReads[0] + 64)
+            }
+        }
+    }
+
     @Test
     func approvedMatchingNamesAreIndependentlyVerifiedWithoutWriting() async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
