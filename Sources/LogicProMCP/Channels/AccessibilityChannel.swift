@@ -642,6 +642,54 @@ actor AccessibilityChannel: Channel {
             exposure?.observeHiddenView(control: reading?.control, shown: reading?.shown)
             return reading
         }
+        struct SelectedTrackRead {
+            let rail: AXUIElement
+            let headers: [AXUIElement]
+        }
+        // This witnesses only the selected set, not the end of the whole rail.
+        // Unknown, foreign or duplicated selected children cannot certify it.
+        func readSelectedTracks(_ headers: [AXUIElement]?, states: [TrackState]?, in window: AXUIElement) throws -> SelectedTrackRead? {
+            guard request.scope == .selection, let headers, let states, states.count == headers.count,
+                  let rail = AXLogicProElements.uniqueTrackHeaderRail(in: window, runtime: logic,
+                    observingExposure: exposure) else { return nil }
+            try check()
+            func selectedChildren() -> [AXUIElement]? {
+                guard case .success(.some(let children)) = AXHelpers.getAttributeResult(rail,
+                    kAXSelectedChildrenAttribute as String, runtime: logic.ax) as Result<[AXUIElement]?, AXHelpers.AXStatusError> else { return nil }
+                return children
+            }
+            guard let selected = selectedChildren(),
+                  case .success(let children) = AXHelpers.childrenResult(rail, runtime: logic.ax) else { return nil }
+            exposure?.observeHeaders(children)
+            var observed: [AXUIElement] = []
+            var seen: [AXUIElement] = []
+            for (header, state) in zip(headers, states) {
+                try check()
+                guard !seen.contains(where: { CFEqual($0, header) }),
+                      children.filter({ CFEqual($0, header) }).count == 1,
+                      let parent: AXUIElement = AXHelpers.getAttribute(header, kAXParentAttribute as String, runtime: logic.ax),
+                      CFEqual(parent, rail),
+                      case .success(.some(let isSelected)) = AXHelpers.getAttributeResult(header,
+                        kAXSelectedAttribute as String, runtime: logic.ax) as Result<Bool?, AXHelpers.AXStatusError>,
+                      state.selectionReadback == isSelected,
+                      selected.filter({ CFEqual($0, header) }).count == (isSelected ? 1 : 0) else { return nil }
+                seen.append(header)
+                if isSelected { observed.append(header) }
+            }
+            guard observed.count == selected.count, let final = selectedChildren(),
+                  final.count == selected.count,
+                  zip(final, selected).allSatisfy({ CFEqual($0, $1) }) else { return nil }
+            try check()
+            return .init(rail: rail, headers: observed)
+        }
+        func sameSelectedTracks(_ lhs: SelectedTrackRead?, _ rhs: SelectedTrackRead?) -> Bool {
+            switch (lhs, rhs) {
+            case (nil, nil): return true
+            case (.some(let a), .some(let b)):
+                return CFEqual(a.rail, b.rail) && sameElements(a.headers, b.headers)
+            default: return false
+            }
+        }
         struct Read {
             let title: String?
             let document: String?
@@ -656,6 +704,7 @@ actor AccessibilityChannel: Channel {
             let transport: AXLogicProElements.ObservedTransportActivity?
             let uiLocale: String?
             let hiddenView: HiddenView?
+            let selectedTracks: SelectedTrackRead?
         }
         func check() throws {
             try SessionPopulationObservation.requireOwnedAcquisition()
@@ -718,11 +767,12 @@ actor AccessibilityChannel: Channel {
                 observingExposure: exposure, checking: checkAXRead)
             let locale = try readObservedUILocale(in: window, checking: checkAXRead)
             let hiddenView = wantsTracks ? readHiddenView(headers, in: window) : nil
+            let selectedTracks = wantsTracks ? try readSelectedTracks(headers, states: tracks, in: window) : nil
             try check()
             return Read(title: title, document: document, documentReadable: documentReadable,
                         headers: headers, mixer: mixer, stripElements: stripElements, tracks: tracks, strips: strips,
                         presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: locale,
-                        hiddenView: hiddenView)
+                        hiddenView: hiddenView, selectedTracks: selectedTracks)
         }
         func sameElements(_ lhs: [AXUIElement]?, _ rhs: [AXUIElement]?) -> Bool {
             switch (lhs, rhs) {
@@ -854,6 +904,7 @@ actor AccessibilityChannel: Channel {
             try check()
             let finalTitle = AXHelpers.getTitle(window, runtime: logic.ax)
             let finalHiddenView = wantsTracks ? readHiddenView(currentHeaders, in: window) : nil
+            let finalSelectedTracks = wantsTracks ? try readSelectedTracks(currentHeaders, states: after.tracks, in: window) : nil
             let finalDocument: String?
             let finalDocumentReadable: Bool
             switch AXLogicProElements.projectPickerDocumentRead(window, runtime: logic) {
@@ -869,6 +920,8 @@ actor AccessibilityChannel: Channel {
                 && sameBytes(after.title, finalTitle) && sameBytes(after.document, finalDocument)
                 && sameElements(before.headers, after.headers)
                 && sameHiddenView(before.hiddenView, after.hiddenView) && sameHiddenView(after.hiddenView, finalHiddenView)
+                && sameSelectedTracks(before.selectedTracks, after.selectedTracks)
+                && sameSelectedTracks(after.selectedTracks, finalSelectedTracks)
                 && (!wantsTracks || after.tracks == nil || (sameElements(after.headers, currentHeaders) && sameStackExposure))
                 && (!wantsStrips || sameElements(before.mixer.map { [$0] }, after.mixer.map { [$0] }))
                 && sameElements(before.stripElements, after.stripElements)
@@ -906,7 +959,8 @@ actor AccessibilityChannel: Channel {
                     ? .init(window: window, title: before.title!, document: before.document!,
                         mixer: before.mixer, transport: before.transport, runtime: logic,
                         uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil) : nil,
-                hiddenTracksShown: stable ? before.hiddenView?.shown : nil
+                hiddenTracksShown: stable ? before.hiddenView?.shown : nil,
+                selectedTrackMembershipObserved: stable && before.selectedTracks != nil
             )
             if stable { return candidate }
             last = candidate
