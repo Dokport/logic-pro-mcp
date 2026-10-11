@@ -395,6 +395,7 @@ extension ProjectSessionAudit {
                 throw CocoaError(.coderInvalidValue)
             }
             var blocked = Set<String>()
+            if !snapshotCurrent { blocked.insert("snapshot_changed") }
             if !request.domains.contains(.tracks) { blocked.insert("tracks_not_requested") }
             blocked.formUnion(SessionPopulationObservation.trackRowReadbackReasons(capture: capture).map(\.rawValue))
             var before: [String: Value] = [:]

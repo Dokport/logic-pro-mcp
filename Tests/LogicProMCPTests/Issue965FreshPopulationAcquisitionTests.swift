@@ -2161,7 +2161,12 @@ struct Issue965FreshPopulationAcquisitionTests {
                         case "cancel_read_project": fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
                         case "cancel_read_viewport": fixture.builder.setAttribute(scrollbar, kAXValueAttribute as String, 0.75)
                         case "cancel_read_control": fixture.builder.setRole(inner, kAXButtonRole as String)
-                        case "cancel_read_deadline": Thread.sleep(forTimeInterval: 0.6)
+                        case "cancel_read_deadline":
+                            if let deadline = OperationTraceContext.current?.deadline {
+                                // Expire only after the deciding cancellation marker.
+                                // The outer timer retains its independent cleanup margin.
+                                Thread.sleep(forTimeInterval: LogicProServer.secondsFromNow(until: deadline))
+                            } else { Issue.record("Expected the actual inner deadline") }
                         default: break
                         }
                         if nestedFault == "cancel_task_read" { withUnsafeCurrentTask { $0?.cancel() } }
@@ -2313,7 +2318,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                         ownsGate: { inherited.ownsGate() && !(nestedFault == "cancel_read_gate"
                             && fixture.reads.recorded.contains("last_grandchild_fault")) },
                         deadline: nestedFault == "deadline" ? ContinuousClock.now.advanced(by: .milliseconds(100))
-                            : nestedFault == "cancel_read_deadline" ? ContinuousClock.now.advanced(by: .milliseconds(500)) : inherited.deadline,
+                            : nestedFault == "cancel_read_deadline" ? inherited.deadline?.advanced(by: .seconds(-5)) : inherited.deadline,
                         cancellationRequested: {
                             inherited.cancellationRequested() || (nestedFault == "cancel"
                                 && fixture.reads.recorded.contains("child_custody_fault"))

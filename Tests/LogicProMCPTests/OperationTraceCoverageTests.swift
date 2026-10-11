@@ -347,7 +347,7 @@ extension OperationTraceTests {
         let mutatingSpecs = OperationRegistry.specs.filter {
             $0.mutability == Mutability.`mutating`
         }
-        #expect(mutatingSpecs.count == 95)
+        #expect(mutatingSpecs.count == 96)
 
         // A mutating op that refuses BEFORE dispatch starts its trace starts no trace with the
         // coverage params (which carry no consent), so it is asserted to claim NO trace coverage
@@ -851,6 +851,39 @@ private func dispatchOperationTraceCoverageSpec(
             sleep: { _ in }
         )
     case .logicMixer:
+        if spec.id == .mixerSetInputBusVerified {
+            // Issue an actual physical reference from the injected host census,
+            // not a track/index stand-in. Keep this snapshot separate from the
+            // generic track fixture and route through the census's refusing channel.
+            do {
+                let fixture = try Issue291InputAssignmentTests.Fixture()
+                let physicalCache = StateCache(), physicalRegistry = TargetRegistry()
+                let observationRouter = ChannelRouter()
+                let channel = fixture.f.channel(logicOverride: fixture.runtime)
+                await observationRouter.register(channel)
+                let poller = StatePoller(axChannel: channel, cache: physicalCache,
+                    runtime: .init(hasVisibleWindow: { true }, dialogPresent: { false }, blockingDialogInfo: { nil },
+                        projectFileReader: .unavailable, keyboardFocus: { .notTextEditing }))
+                #expect(await poller.refreshNow())
+                let resource = try await ResourceHandlers.read(uri: "logic://mixer", cache: physicalCache,
+                    router: observationRouter, targetRegistry: physicalRegistry, fileReader: .unavailable)
+                let rows = try #require(sharedJSONObject(sharedResourceText(resource))?["strips"] as? [[String: Any]])
+                var physicalReference: String?
+                for reference in rows.compactMap({ $0["mixer_strip_ref"] as? String }) {
+                    if let held = await physicalRegistry.resolve(.init(rawValue: reference))?.physicalMixerStrip,
+                       CFEqual(held.strip, fixture.f.strips[0]) { physicalReference = reference }
+                }
+                var physicalParams = params
+                physicalParams["target_ref"] = .string(try #require(physicalReference))
+                return await FeatureFlags.withAdr002TargetRefForTests(true) {
+                    await MixerDispatcher.handle(command: spec.command, params: physicalParams,
+                        router: router, cache: physicalCache, targetRegistry: physicalRegistry)
+                }
+            } catch {
+                Issue.record("Physical input trace fixture failed: \(error)")
+                return toolInvalidParamsResult("Physical input trace fixture unavailable")
+            }
+        }
         return await MixerDispatcher.handle(
             command: spec.command,
             params: params,
@@ -956,6 +989,10 @@ private func operationTraceCoverageParams(
         return ["direction": .string("right")]
     case .mixerSetOutputVerified:
         return ["track": .int(0), "destination": .object(["kind": .string("bus"), "number": .int(1)])]
+    case .mixerSetInputBusVerified:
+        return ["destination": .object(["kind": .string("bus"), "number": .int(1)]),
+            "expected_current": .object(["kind": .string("bus"), "number": .int(256)]),
+            "replace_existing": .bool(true)]
     case .mixerSetPluginParam:
         return ["track": .int(0), "insert": .int(0), "param": .int(0), "value": .double(0.5)]
     case .mixerInsertPlugin:

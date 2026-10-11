@@ -64,23 +64,20 @@ struct IndexBindingCensusTests {
         )
     }
 
-    // MARK: - (b) refRequired is empty today
+    // MARK: - (b) actual physical-reference-only production commands
 
-    @Test("census (b): refRequired is assigned to zero production ops")
-    func refRequiredIsEmpty() {
-        // PINNED EMPTY. `.refRequired` is implemented and unit-tested via a
-        // synthetic spec, but no production op carries it yet.
-        //
-        // PLANNED PROMOTION: `tracks.delete` (today `.corroborated`) moves here.
-        // PRD-007 Part 2 flipped `FeatureFlags.adr002TargetRef` to default ON,
-        // so the "every caller can obtain a target_ref" precondition is met —
-        // this set stays empty by DELIBERATE choice, not by blocker. Promoting
-        // is its own row flip + catalog diff, and it would still strand callers
-        // running the `=0` kill-switch with no usable alternative.
-        //
-        // This set going non-empty IS the promotion receipt.
-        #expect(OperationRegistry.refRequiredOperationIDs.isEmpty)
-        #expect(Self.ids { $0.indexBinding == .refRequired }.isEmpty)
+    @Test("census (b): refRequired exactly advertises the physical-reference-only input writer")
+    func refRequiredIsPinned() throws {
+        // This new bounded writer never supported an ordinal path. Catalog
+        // metadata must describe its existing physical-only dispatcher contract;
+        // no legacy operation is promoted or loses an index compatibility path.
+        let expected: Set<OperationID> = [.mixerSetInputBusVerified]
+        #expect(OperationRegistry.refRequiredOperationIDs == expected)
+        #expect(Self.ids { $0.indexBinding == .refRequired } == expected)
+        let spec = try #require(OperationRegistry.specs.first { $0.id == .mixerSetInputBusVerified })
+        #expect(spec.allowedParams.contains("target_ref"))
+        #expect(!spec.allowedParams.contains("track"))
+        #expect(!spec.allowedParams.contains("index"))
     }
 
     // MARK: - (c) the legacy deprecation census
@@ -142,7 +139,7 @@ struct IndexBindingCensusTests {
         // any NEW op added to this class fails this census and forces an explicit
         // decision (give it target_ref, then a tier) instead of silently
         // inheriting an unratcheted index path. Same no-open-ended-runway rule as
-        // the refRequired==[] census.
+        // the explicitly pinned refRequired census.
         //
         // Discriminator = carries a track-strip selector (`track`/`track_index`).
         // `index`-only ops (navigate marker ops) are deliberately EXCLUDED: their
@@ -256,8 +253,9 @@ struct IndexBindingCensusTests {
         #expect(published["tracks.delete"] == "corroborated")
         #expect(published["tracks.rename"] == "legacy_index_allowed")
         #expect(published["plugins.insert_verified"] == "corroborated")
+        #expect(published["mixer.set_input_bus_verified"] == "ref_required")
         #expect(published["plugins.get_inventory"] == nil, "read-only op has no index binding")
-        #expect(Set(published.values) == ["corroborated", "legacy_index_allowed"])
+        #expect(Set(published.values) == ["corroborated", "legacy_index_allowed", "ref_required"])
     }
 
     private static func expectedWire(_ policy: IndexBindingPolicy) -> String {
@@ -271,11 +269,8 @@ struct IndexBindingCensusTests {
 
 // MARK: - .refRequired via a synthetic spec
 
-// `.refRequired` carries zero production ops this increment, but shipping an
-// unexercised enum case is how a tier rots before it is ever used. The guard is
-// a pure function over an injected policy, so the tier is provable today
-// against a synthetic spec — and the promotion (a registry row flip) then only
-// has to change the row, not discover that the mechanism never worked.
+// The policy's pure guard remains independently exercised through a synthetic
+// spec, in addition to the real physical-only writer's catalog and route tests.
 @Suite("PRD-007 refRequired tier (synthetic)")
 struct IndexBindingRefRequiredTests {
     private static let syntheticHeaders: @Sendable () -> [Int: String]? = { [3: "Drums"] }
