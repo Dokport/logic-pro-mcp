@@ -207,9 +207,44 @@ enum AXHelpers {
         }
     }
 
+    /// Immutable semantic samples for one owned population strip extraction.
+    /// Each miss performs an ordinary guarded native Help read. Hits are data,
+    /// not another focus-moving read or permission for an action. Independent
+    /// strips/bookends get separate samples; standalone consumers never use it.
+    final class StripHelpSamples: @unchecked Sendable {
+        @TaskLocal static var current: StripHelpSamples?
+        private let lock = NSLock()
+        private var values: [(AXUIElement, Result<AnyObject?, AXStatusError>)] = []
+
+        func read(_ element: AXUIElement, runtime: Runtime) -> Result<AnyObject?, AXStatusError> {
+            guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  HelpReadGuard.current?.stopped != true else {
+                return .failure(.init(raw: AXError.cannotComplete.rawValue))
+            }
+            return lock.withLock {
+                if let sample = values.first(where: { CFEqual($0.0, element) }) { return sample.1 }
+                let reading: Result<AnyObject?, AXStatusError> = Self.$current.withValue(nil) {
+                    AXHelpers.getAttributeResult(element, kAXHelpAttribute as String, runtime: runtime)
+                }
+                let frozen = reading.map { value -> AnyObject? in
+                    // Preserve malformed values and native status; do not bridge
+                    // absence to NSNull or retry a failure in another classifier.
+                    if let text = value as? String { return text as NSString }
+                    return value
+                }
+                values.append((element, frozen))
+                return frozen
+            }
+        }
+    }
+
     /// Get a typed attribute value from an AX element.
     /// Returns nil on any error (element gone, attribute missing, type mismatch).
     static func getAttribute<T>(_ element: AXUIElement, _ attribute: String, runtime: Runtime = .production) -> T? {
+        if attribute == kAXHelpAttribute as String, let samples = StripHelpSamples.current {
+            guard case .success(let value) = samples.read(element, runtime: runtime) else { return nil }
+            return value as? T
+        }
         if attribute == kAXHelpAttribute as String, let guardian = HelpReadGuard.current, !guardian.permits() {
             return nil
         }
@@ -226,6 +261,12 @@ enum AXHelpers {
         _ attribute: String,
         runtime: Runtime = .production
     ) -> Result<T?, AXStatusError> {
+        if attribute == kAXHelpAttribute as String, let samples = StripHelpSamples.current {
+            return samples.read(element, runtime: runtime).map { value in
+                guard let value else { return nil }
+                return value as? T
+            }
+        }
         if attribute == kAXHelpAttribute as String, let guardian = HelpReadGuard.current, !guardian.permits() {
             // Not read, which is not the same as read and absent.
             return .failure(AXStatusError(raw: Int32(AXError.cannotComplete.rawValue)))
