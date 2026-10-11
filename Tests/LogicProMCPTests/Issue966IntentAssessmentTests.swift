@@ -813,6 +813,40 @@ struct Issue966IntentAssessmentTests {
         #expect(finding.observed == Audit.IntentEndpoint(nodeId: nil, displayName: nil, busNumber: nil, output: .physicalOutput))
     }
 
+    @Test(arguments: [false, true])
+    func physicalClassificationCannotOverrideItsOwnBusOutputEdge(partial: Bool) throws {
+        let routing = graph(
+            coverage: partial ? sendsPartialCoverage : completeCoverage,
+            nodes: [trackNode(0, output: .physicalOutput), drumBus],
+            edges: [mainOutput(from: 0, to: drumBus.id)]
+        )
+        #expect(routing.isConsistent)
+        let assessment = Audit.assessIntent(policy: try kickPolicy(bus: 3), capture: threeTrackCapture, graph: routing)
+        let finding = try onlyFinding(assessment)
+        #expect(finding.status == .unverified)
+        #expect(finding.reasons == [.outputEdgeAmbiguous])
+        #expect(finding.observed == nil)
+        #expect(finding.coverage.outputEdgeObserved)
+        #expect(!assessment.changeRequired)
+    }
+
+    @Test func aPhysicalOutputWithAParallelSendAndAnotherTracksOutputRemainsObserved() throws {
+        let routing = graph(
+            nodes: [trackNode(0, output: .physicalOutput), trackNode(1), drumBus],
+            edges: [
+                sendEdge(from: 0, slot: 0, to: drumBus, level: -6, enabled: true),
+                mainOutput(from: 1, to: drumBus.id),
+            ]
+        )
+        #expect(routing.isConsistent)
+        let assessment = Audit.assessIntent(policy: try kickPolicy(bus: 3), capture: threeTrackCapture, graph: routing)
+        let finding = try onlyFinding(assessment)
+        #expect(finding.status == .violation)
+        #expect(finding.observed?.output == .physicalOutput)
+        #expect(finding.reasons.isEmpty)
+        #expect(assessment.changeRequired)
+    }
+
     @Test func duplicatePhysicalOutputSourceIdentityCannotAuthorizeARouteFinding() throws {
         let source = trackNode(0, output: .physicalOutput)
         let duplicate = auxNode(source.id)
@@ -925,6 +959,36 @@ struct Issue966IntentAssessmentTests {
         #expect(finding.reasons.map(\.rawValue) == ["output_destination_ambiguous"])
         #expect(finding.observed == nil)
         #expect(finding.coverage.outputEdgeObserved)
+    }
+
+    @Test(arguments: [0, 257])
+    func anUnsupportedObservedBusCannotAuthorizeARepairEvenWhenSendsArePartial(_ number: Int) throws {
+        let destination = busNode(number, id: "unaddressable_bus")
+        let routing = graph(
+            coverage: sendsPartialCoverage,
+            nodes: [trackNode(0), destination, drumBus],
+            edges: [mainOutput(from: 0, to: destination.id)]
+        )
+        #expect(routing.isConsistent)
+        let assessment = Audit.assessIntent(policy: try kickPolicy(bus: 3), capture: threeTrackCapture, graph: routing)
+        let finding = try onlyFinding(assessment)
+        #expect(finding.status == .unverified)
+        #expect(finding.reasons == [.outputEdgeAmbiguous])
+        #expect(finding.observed == nil)
+        #expect(finding.coverage.outputEdgeObserved)
+        #expect(!finding.coverage.destinationBusObserved)
+        #expect(!assessment.changeRequired)
+
+        for supportedNumber in [OutputAssignment.busNumbers.lowerBound, OutputAssignment.busNumbers.upperBound] {
+            let validBus = busNode(supportedNumber, id: "supported_bus")
+            let supported = graph(
+                coverage: sendsPartialCoverage,
+                nodes: [trackNode(0), validBus],
+                edges: [mainOutput(from: 0, to: validBus.id)]
+            )
+            #expect(try onlyFinding(Audit.assessIntent(policy: try kickPolicy(bus: supportedNumber),
+                                                    capture: threeTrackCapture, graph: supported)).status == .compliant)
+        }
     }
 
     // A reference the capture carries for two rows cannot say which row is the target. Mutation: take
