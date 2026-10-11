@@ -612,7 +612,8 @@ actor AccessibilityChannel: Channel {
             presentationObservation: .init(mixerVisible: visible, isPlaying: transport?.isPlaying, isRecording: transport?.isRecording,
                 uiLocale: locale),
             presentationBinding: .init(window: window, title: title, document: document,
-                mixer: lookup.binding?.mixer, transport: transport, runtime: logic, uiLocale: locale))
+                mixer: lookup.binding?.mixer, transport: transport, runtime: logic, uiLocale: locale,
+                mixerOwners: lookup.binding?.owners ?? []))
     }
 
     private func readExposedSessionPopulation(
@@ -696,6 +697,7 @@ actor AccessibilityChannel: Channel {
             let documentReadable: Bool
             let headers: [AXUIElement]?
             let mixer: AXUIElement?
+            let mixerOwners: [AXUIElement]
             let stripElements: [AXUIElement]?
             let tracks: [TrackState]?
             let strips: [ChannelStripState]?
@@ -770,7 +772,8 @@ actor AccessibilityChannel: Channel {
             let selectedTracks = wantsTracks ? try readSelectedTracks(headers, states: tracks, in: window) : nil
             try check()
             return Read(title: title, document: document, documentReadable: documentReadable,
-                        headers: headers, mixer: mixer, stripElements: stripElements, tracks: tracks, strips: strips,
+                        headers: headers, mixer: mixer, mixerOwners: lookup.binding?.owners ?? [],
+                        stripElements: stripElements, tracks: tracks, strips: strips,
                         presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: locale,
                         hiddenView: hiddenView, selectedTracks: selectedTracks)
         }
@@ -943,6 +946,7 @@ actor AccessibilityChannel: Channel {
             }
             let mixerStable = before.mixerVisible == after.mixerVisible
                 && sameElements(before.mixer.map { [$0] }, after.mixer.map { [$0] })
+                && sameElements(before.mixerOwners, after.mixerOwners)
             let transportStable = sameElements(before.transport.map { [$0.controlBar, $0.play, $0.record] },
                 after.transport.map { [$0.controlBar, $0.play, $0.record] })
                 && before.transport?.isPlaying == after.transport?.isPlaying
@@ -958,7 +962,8 @@ actor AccessibilityChannel: Channel {
                 presentationBinding: stable && mixerStable && transportStable && path != nil && before.title != nil && before.document != nil
                     ? .init(window: window, title: before.title!, document: before.document!,
                         mixer: before.mixer, transport: before.transport, runtime: logic,
-                        uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil) : nil,
+                        uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil,
+                        mixerOwners: before.mixerOwners) : nil,
                 hiddenTracksShown: stable ? before.hiddenView?.shown : nil,
                 selectedTrackMembershipObserved: stable && before.selectedTracks != nil
             )

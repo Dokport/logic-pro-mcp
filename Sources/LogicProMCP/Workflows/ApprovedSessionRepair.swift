@@ -117,6 +117,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               binding.pid != nil, binding.app != nil, binding.focus != nil,
               goals.allSatisfy({ CFEqual($0.binding.window, binding.window)
                   && $0.binding.document.utf8.elementsEqual(binding.document.utf8) }) else { return nil }
+        if before, !desired, binding.mixerFocusWouldBeRetired { return nil }
         return .init(projectRef: issued, document: binding.document,
             mixer: .init(before: before, desired: desired, binding: binding), names: goals, renameCapture: nil)
     }

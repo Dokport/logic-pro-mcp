@@ -1160,7 +1160,7 @@ struct Issue971ApprovedMixerSagaTests {
         }
     }
 
-    @Test("Hide refuses retiring captured Mixer focus while an already-visible goal remains a verified no-op", arguments: [false, true], [false, true])
+    @Test("The canonical plan blocks retiring captured Mixer focus but retains the already-visible no-op", arguments: [false, true], [false, true])
     func mixerFocusedHideRefusesBeforeAnyViewAction(container: Bool, desired: Bool) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -1181,7 +1181,16 @@ struct Issue971ApprovedMixerSagaTests {
                 }
                 await f.router.register(f.view.channel())
                 let plan = try await f.plan(desired: desired)
-                #expect(try #require(plan["executable"] as? Bool))
+                let executable = try #require(plan["executable"] as? Bool)
+                if desired { #expect(executable) } else {
+                    #expect(!executable)
+                    let reasons = try #require(plan["reasons"] as? [String])
+                    #expect(reasons.contains("mixer_focus_would_be_retired"))
+                    let steps = try #require(plan["steps"] as? [[String: Any]])
+                    #expect(steps.count == 1)
+                    let blockedReasons = try #require(steps[0]["blocked_reasons"] as? [String])
+                    #expect(blockedReasons.contains("mixer_focus_would_be_retired"))
+                }
                 let outcome = try await f.call("apply_session_repair", params: f.applyParameters(plan, key: "retired-mixer-focus"))
                 let completed = outcome["saga_state"] as? String == "completed"
                 if desired { #expect(completed) } else { #expect(!completed) }
