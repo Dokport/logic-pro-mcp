@@ -2826,6 +2826,18 @@ class BootstrapFreshSessionActionTests(unittest.TestCase):
         self.assertLess(confirm_index, create_indices[1])
 
     def test_force_new_retries_after_uncertain_second_create_when_no_track_materializes(self):
+        # All operations are fakes; host scheduling must not consume the
+        # blank-shell grace period before the retry assertions are reached.
+        class FakeClock:
+            def __init__(self):
+                self.now = 0.0
+
+            def time(self):
+                return self.now
+
+            def sleep(self, duration):
+                self.now += duration
+
         state = {
             "created": False,
             "track_created": False,
@@ -2934,7 +2946,12 @@ class BootstrapFreshSessionActionTests(unittest.TestCase):
             state["project_picker_visible"] = False
             return True
 
-        with mock.patch("logic_session_bootstrap._send_return_key", side_effect=send_return_key):
+        fake_clock = FakeClock()
+        with (
+            mock.patch("logic_session_bootstrap._send_return_key", side_effect=send_return_key),
+            mock.patch("logic_session_bootstrap.time.sleep", side_effect=fake_clock.sleep),
+            mock.patch("logic_session_bootstrap.time.time", side_effect=fake_clock.time),
+        ):
             result = run_force_new_bootstrap(
                 call_tool=call_tool,
                 document_probe=lambda timeout_sec: (False, None) if state["created"] else (True, None),
