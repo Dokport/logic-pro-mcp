@@ -67,8 +67,9 @@ struct Issue291AssignedSendMenuTests {
             await AccessibilityChannel.getAssignedSendVerified(ordinal:ordinal,runtime:f.logic,timing:.immediate)
         }
     }
-    @Test("Routing-only population does not claim or classify unrequested inserts", arguments: [false, true])
-    func routingPopulationSkipsUnrequestedInserts(includeStrips: Bool) async throws {
+    @Test("Routing/association population reads inserts only when the strip footprint is requested",
+          arguments: [SessionPopulationObservation.Domain.routing, .associations], [false, true])
+    func routingPopulationSkipsUnrequestedInserts(domain: SessionPopulationObservation.Domain, includeStrips: Bool) async throws {
         let p = try prepare(), f = p.f
         defer { try? FileManager.default.removeItem(at: f.bundle) }
         let insert = Issue982UnreadChildrenTests.occupiedSlot(f.b, 291_950, name: "Compressor")
@@ -79,7 +80,7 @@ struct Issue291AssignedSendMenuTests {
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
         let population = try await OperationTraceContext.$current.withValue(context) {
             try await f.channel().readFreshSessionPopulation(request: .init(
-                domains: includeStrips ? [.routing, .strips] : [.routing]),
+                domains: includeStrips ? [domain, .strips] : [domain]),
                 fileReader: .unavailable, stoppingWhen: { false })
         }
         #expect(population.stable)
@@ -97,7 +98,7 @@ struct Issue291AssignedSendMenuTests {
         let capture = await SessionPopulationObservation.capture(cache: cache,
             targetRegistry: nil, fileReader: .unavailable)
         let report = SessionPopulationObservation.build(request: .init(
-            domains: includeStrips ? [.routing, .strips] : [.routing]), capture: capture)
+            domains: includeStrips ? [domain, .strips] : [domain]), capture: capture)
         let wire = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any])
         let rows = try #require((wire["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
         if includeStrips {

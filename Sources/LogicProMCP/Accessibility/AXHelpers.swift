@@ -528,6 +528,13 @@ enum AXHelpers {
         guard CFGetTypeID(value) == CFArrayGetTypeID() else {
             return .failure(.malformedChildren)
         }
+        let children = unsafeDowncast(value, to: CFArray.self)
+        for index in 0..<CFArrayGetCount(children) {
+            let item = unsafeBitCast(CFArrayGetValueAtIndex(children, index), to: CFTypeRef.self)
+            guard CFGetTypeID(item) == AXUIElementGetTypeID() else {
+                return .failure(.malformedChildren)
+            }
+        }
         return .success(decodeChildrenArray(value))
     }
 

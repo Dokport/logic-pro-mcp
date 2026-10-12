@@ -904,9 +904,10 @@ actor AccessibilityChannel: Channel {
                         stripElements = enumeration.strips
                         strips = Self.readChannelStrips(from: enumeration.strips, runtime: logic,
                             window: window, mixer: binding.mixer,
-                            // Routing-only bookends do not classify unrequested inserts.
-                            // Other populations and standalone callers retain the full chain read.
-                            readingPlugins: request.domains != [.routing], stoppingWhen: stop)
+                            // Routing/association bookends still need physical strips,
+                            // but classify inserts only for a requested strip footprint.
+                            // Default and explicit strip requests retain the full chain.
+                            readingPlugins: request.domains.contains(.strips), stoppingWhen: stop)
                     }
                 }
             }

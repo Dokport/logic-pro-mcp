@@ -411,7 +411,7 @@ extension AXLogicProElements {
         // authority token. Help still runs separately under its per-read guard.
         // Older/injected runtimes retain the original individual status reads.
         let nonHelpAttributes = [kAXRoleAttribute, kAXIdentifierAttribute,
-                                 kAXDescriptionAttribute, kAXTitleAttribute] as [String]
+                                 kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as [String]
         var batchCutoff: Error?
         let metadataBatch = requiresCompleteAbsence && runtime.attributeValuesResult != nil
             ? AXHelpers.getNonHelpAttributes(element, nonHelpAttributes, runtime: runtime,
@@ -464,7 +464,16 @@ extension AXLogicProElements {
         // can affect this node or a subtree. A failed read still hides possible
         // strips; it is never an observed leaf.
         try check()
-        let observedChildren = childrenIfRead(element, runtime: runtime)
+        let observedChildren: [AXUIElement]?
+        if let metadataBatch {
+            switch metadataBatch[4] {
+            case .success(let value):
+                if case .success(let children) = AXHelpers.projectChildrenStatus(.success, value) {
+                    observedChildren = children
+                } else { observedChildren = nil }
+            case .failure(let error): observedChildren = error.isDefinitiveAbsence ? [] : nil
+            }
+        } else { observedChildren = childrenIfRead(element, runtime: runtime) }
         if let observedChildren { observingExposure?.observeChildren(element: element, children: observedChildren) }
         let canBeEmptyLegacyMixer = identifier == "Mixer"
             && (role == (kAXGroupRole as String) || role == (kAXScrollAreaRole as String))

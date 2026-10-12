@@ -1152,7 +1152,7 @@ enum SessionPopulationObservation {
                     output: strip.output,
                     input: strip.input,
                     inputObservation: strip.inputObservation,
-                    pluginCount: request.domains == [.routing] && strip.pluginsSource == nil
+                    pluginCount: !request.domains.contains(.strips) && strip.pluginsSource == nil
                         && strip.pluginsReadError == nil ? nil : strip.plugins.count,
                     pluginsSource: strip.pluginsSource,
                     mixerStripRef: capture.mixerReference(at: row)?.rawValue,
