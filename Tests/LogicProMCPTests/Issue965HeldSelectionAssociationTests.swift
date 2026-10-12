@@ -197,6 +197,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
+        var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingSelection: (@Sendable (Int) -> Void)?
         var sharedThirdStrip = false
         var thirdSharesOriginalStrip = false
@@ -358,6 +359,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     return nil
                 }, attributeValueResultHandler: { [self] element, attribute in
+                    if let result = routingReadResult?(element, attribute) { return result }
                     if fault == "selected_child_unreadable", CFEqual(element, mixer),
                        attribute == kAXSelectedChildrenAttribute as String {
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
@@ -1485,6 +1487,137 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.selections == (shared ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
         #expect(section["coverage"] as? String == "partial", "This does not certify global population")
+    }
+
+    @Test("Whole-held selected-child observation can enter from its exact nonediting rail without changing scalar entry",
+          arguments: [false, true])
+    func mixerSelectedChildrenCanEnterFromTheOriginalPassiveRail(whole: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let mapping = [0, 3, 1, 2]
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        f.routingRead = { element, attribute in
+            if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, attribute, f.rail)
+            }
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+            }
+        }
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let body = try await inspect(f, scope: whole ? "whole_project" : "selected_only")
+        let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+        #expect(rows.count == (whole ? 4 : 0))
+        if whole {
+            let stripRows = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+            for index in mapping.indices {
+                let row = try #require(rows.first { $0["track_index"] as? Int == index })
+                #expect(row["mixer_strip_ref"] as? String == stripRows[mapping[index]]["mixer_strip_ref"] as? String)
+                #expect(row["source"] as? String == "held_exclusive_selection_selected_child")
+            }
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        }
+        #expect(f.selections == (whole ? [1, 2, 3, 0] : []))
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("Passive rail entry refuses editing, unknown metadata and lost exact custody before navigation",
+          arguments: ["text_role", "settable", "zero_insertion", "unreadable", "nil_metadata", "foreign_focus", "detached_rail", "retired_strip", "foreign_document", "missing_relationship"])
+    func passiveRailSelectedChildEntryMustRetainExactNoneditingCustody(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let mapping = [0, 3, 1, 2]
+        let foreign = f.builder.element(1_965_998)
+        f.builder.setRole(foreign, kAXGroupRole as String)
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        if fault == "text_role" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
+        if fault == "settable" { f.builder.setAttributeSettable(f.rail, kAXValueAttribute as String, true) }
+        f.routingRead = { element, attribute in
+            if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, attribute, fault == "foreign_focus" ? foreign : f.rail)
+            }
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                f.selectedChildrenReads += 1
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                if fault == "detached_rail" { f.builder.setChildren(f.window, [f.mixer]) }
+                if fault == "retired_strip" { f.builder.setChildren(f.mixer, Array(f.strips.dropFirst())) }
+            }
+        }
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String,
+               fault == "missing_relationship" { return .failure(.init(raw: AXError.noValue.rawValue)) }
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                if fault == "foreign_document" {
+                    // Switch after the association has captured its original
+                    // document, at the new rail-focus qualification itself.
+                    f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                }
+                if fault == "zero_insertion", attribute == kAXInsertionPointLineNumberAttribute as String {
+                    return .success(NSNumber(value: 0))
+                }
+                if fault == "unreadable" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                if fault == "nil_metadata" { return .success(nil) }
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let body = try await inspect(f)
+        let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+        #expect(rows.isEmpty)
+        #expect(f.selections.isEmpty, "An unknown/editor/foreign rail must not authorize a selection")
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("The final passive rail metadata read cannot authorize a retired selected strip")
+    func passiveRailFinalMetadataMustRenewSelectedStripCustody() async throws {
+        func fixture(injectAt: Int?) throws -> Fixture {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            let mapping = [0, 3, 1, 2]
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                    f.builder.setAttribute(f.app, attribute, f.rail)
+                }
+                if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                }
+            }
+            f.routingReadResult = { element, attribute in
+                if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                    kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                    if attribute == kAXInsertionPointLineNumberAttribute as String {
+                        f.cleanupTransportReads += 1
+                        if f.selections.isEmpty, f.cleanupTransportReads == injectAt {
+                            f.cleanupScopeInjected = true
+                            // A retired AX child can retain its old parent and
+                            // the Mixer's old selected-child attribute.
+                            f.builder.setChildren(f.mixer, Array(f.strips.dropFirst()))
+                        }
+                    }
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
+                return nil
+            }
+            f.routingSelection = { index in
+                if index == 1, f.selections == [1] { f.cleanupTransportReadsAtWrite = f.cleanupTransportReads }
+            }
+            return f
+        }
+        let calibration = try fixture(injectAt: nil)
+        let positive = try await inspect(calibration)
+        #expect(((positive["associations"] as? [String: Any])?["rows"] as? [[String: Any]])?.count == 4)
+        #expect(calibration.cleanupTransportReadsAtWrite > 0)
+        let f = try fixture(injectAt: calibration.cleanupTransportReadsAtWrite)
+        let body = try await inspect(f)
+        #expect(f.cleanupScopeInjected, "Reach the actual final metadata read before the first action")
+        #expect(f.selections.isEmpty, "A deciding rail metadata read must not authorize a retired selected strip")
+        #expect(((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []).isEmpty)
+        #expect(f.focusRestorationWrites.isEmpty)
     }
 
     @Test("The deciding selected-child read cannot outlive reference, editor, document or strip custody",

@@ -34,11 +34,13 @@ extension AccessibilityChannel {
         private var expectedFocus: AXUIElement
         private var originalSelectedChild: AXUIElement?
         private var expectedSelectedChild: AXUIElement?
+        private let originalRailFocus: AXUIElement?
         private var lost = false
         private(set) var effects = SessionPopulationObservation.UIEffects()
 
         init?(window: AXUIElement, logic: AXLogicProElements.Runtime,
-              expectedProject: TargetDescriptor?, requiresProjectReference: Bool) {
+              expectedProject: TargetDescriptor?, requiresProjectReference: Bool,
+              allowsSelectedChildRailEntry: Bool = false) {
             // The existing foreground AX probe requires this CLI process's
             // window-server connection; a missing/foreign PID still refuses.
             _ = logic.onScreenWindowList()
@@ -57,9 +59,11 @@ extension AccessibilityChannel {
                   headers.count > 1,
                   let selected = Self.exclusiveIndex(headers, ax: logic.ax),
                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                  let mixer: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax),
+                  let mixer = Self.entryMixer(focus: focus, window: window, railPath: railPath,
+                    logic: logic, allowsSelectedChildRailEntry: allowsSelectedChildRailEntry),
                   let enumeration = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),
-                  enumeration.strips.filter({ CFEqual($0, focus) }).count == 1,
+                  enumeration.strips.filter({ CFEqual($0, focus) }).count == 1
+                    || (allowsSelectedChildRailEntry && railPath.contains { CFEqual($0, focus) }),
                   let path = Self.path(mixer, to: window, ax: logic.ax),
                   let viewport = Self.viewport(window, ax: logic.ax),
                   let viewportPaths = Self.viewportPaths(viewport, window: window, ax: logic.ax),
@@ -74,11 +78,32 @@ extension AccessibilityChannel {
             self.title = title; self.document = document; self.rail = rail; self.railPath = railPath; self.headers = headers
             self.mixer = mixer; strips = enumeration.strips; self.path = path
             originalIndex = selected; originalFocus = focus; expectedIndex = selected; expectedFocus = focus
+            originalRailFocus = enumeration.strips.contains { CFEqual($0, focus) } ? nil : focus
             transport = activity; self.viewport = viewport
             self.viewportPaths = viewportPaths; expectedViewport = viewport
             transportPaths = [playPath, recordPath]
+            if originalRailFocus != nil {
+                // A passive rail focus is never a fallback focus/strip pair.
+                // This entry needs this exact Mixer's actual held relationship.
+                guard case .observed(let child) = selectedChildRead() else { return nil }
+                originalSelectedChild = child; expectedSelectedChild = child
+            }
             guard permitsRead(), AXHelpers.isAttributeSettable(rail, kAXSelectedChildrenAttribute as String,
                 runtime: logic.ax) == true else { return nil }
+        }
+
+        private static func entryMixer(focus: AXUIElement, window: AXUIElement,
+                                       railPath: [AXUIElement], logic: AXLogicProElements.Runtime,
+                                       allowsSelectedChildRailEntry: Bool) -> AXUIElement? {
+            guard allowsSelectedChildRailEntry, railPath.contains(where: { CFEqual($0, focus) }) else {
+                // Preserve scalar/default acquisition exactly: the focus's
+                // original physical parent supplies its Mixer candidate.
+                return AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
+            }
+            guard case .found(let mixer) = (try? AXLogicProElements.mixerPopulationAreaLookup(
+                in: window, runtime: logic, requiresCompleteAbsence: true,
+                checking: { try SessionPopulationObservation.requireOwnedAcquisition() }))?.lookup else { return nil }
+            return mixer
         }
 
         private static func exclusiveIndex(_ headers: [AXUIElement], ax: AXHelpers.Runtime) -> Int? {
@@ -237,7 +262,7 @@ extension AccessibilityChannel {
                 return Self.same(headers, currentHeaders)
             }
             func stripCustodyMatches() -> Bool {
-                if checkingAssociation {
+                if checkingAssociation || originalRailFocus != nil {
                     guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax) else { return false }
                     return Self.same(strips, current.strips)
                 }
@@ -405,7 +430,28 @@ extension AccessibilityChannel {
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(focus, expectedFocus) else { lost = true; return false }
-            return passiveStripMatches(focus)
+            return passiveAssociationFocusMatches(focus)
+        }
+
+        private func passiveAssociationFocusMatches(_ focus: AXUIElement) -> Bool {
+            if strips.contains(where: { CFEqual($0, focus) }) { return passiveStripMatches(focus) }
+            guard let originalRailFocus, CFEqual(focus, originalRailFocus), expectedSelectedChild != nil,
+                  let role = AXHelpers.getRole(focus, runtime: logic.ax),
+                  [kAXGroupRole as String, kAXListRole as String, kAXLayoutAreaRole as String].contains(role),
+                  AXHelpers.isAttributeSettable(focus, kAXValueAttribute as String, runtime: logic.ax) == false,
+                  let currentPath = Self.path(rail, to: window, ax: logic.ax), Self.same(railPath, currentPath),
+                  currentPath.contains(where: { CFEqual($0, focus) }) else { lost = true; return false }
+            let attributes = [kAXValueAttribute, kAXSelectedTextAttribute,
+                              kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute] as [String]
+            let readings = AXHelpers.getNonHelpAttributes(focus, attributes, runtime: logic.ax,
+                permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+            // Unlike the already-qualified passive strip, a rail container gets
+            // no zero-insertion/editor exception and no settable focus cleanup.
+            guard readings.allSatisfy({ reading in
+                if case .failure(let error) = reading { return error.isDefinitiveAbsence }
+                return false
+            }) else { lost = true; return false }
+            return true
         }
 
         private func passiveStripMatches(_ focus: AXUIElement) -> Bool {
@@ -465,12 +511,21 @@ extension AccessibilityChannel {
 
         private var associationStrip: AXUIElement { expectedSelectedChild ?? expectedFocus }
 
+        private func railMetadataRetainsStripCustody() -> Bool {
+            guard originalRailFocus != nil else { return true }
+            // R965-RAIL-C001: the new rail metadata reads can retire an old
+            // selected child while leaving its old parent/relationship readable.
+            guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax) else { return false }
+            return Self.same(strips, current.strips)
+        }
+
         private func selectedChildCustodyMatches() -> Bool {
             guard let expectedSelectedChild else { return true }
             guard case .observed(let child) = selectedChildRead(), CFEqual(child, expectedSelectedChild),
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
-                    runtime: logic.ax), CFEqual(focus, expectedFocus), passiveStripMatches(focus),
+                    runtime: logic.ax), CFEqual(focus, expectedFocus), passiveAssociationFocusMatches(focus),
+                  railMetadataRetainsStripCustody(),
                   let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
                   let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
                   CFEqual(main, window), CFEqual(focusedWindow, window), currentWindowScopeMatches(),
@@ -512,7 +567,8 @@ extension AccessibilityChannel {
                     effects.changed.append("track_selection")
                 }
                 guard let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                      strips.filter({ CFEqual($0, focus) }).count == 1 else {
+                      strips.filter({ CFEqual($0, focus) }).count == 1
+                        || originalRailFocus.map({ CFEqual($0, focus) }) == true else {
                     lost = true; return false
                 }
                 if selectionChanged {
@@ -642,7 +698,8 @@ extension AccessibilityChannel {
                      allHeldHeaders: Bool = false,
                      populationReadDuration: Duration = .zero,
                      collectionNow: @Sendable () -> ContinuousClock.Instant = { .now }) async -> [Pair] {
-            guard let firstChallenge = headers.indices.first(where: { $0 != originalIndex }),
+            guard allHeldHeaders || originalRailFocus == nil,
+                  let firstChallenge = headers.indices.first(where: { $0 != originalIndex }),
                   await referenceIsCurrent(), permitsRead(), !stop() else { return [] }
             if allHeldHeaders {
                 switch selectedChildRead() {
