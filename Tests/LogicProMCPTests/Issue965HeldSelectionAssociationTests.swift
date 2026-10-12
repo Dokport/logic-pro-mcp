@@ -155,6 +155,12 @@ struct Issue965HeldSelectionAssociationTests {
         let scroll: AXUIElement
         let bundle: URL
         var selections: [Int] = []
+        var focusRestorationWrites: [AXUIElement] = []
+        var cleanupTransportReads = 0
+        var cleanupTransportReadsAtWrite = 0
+        var cleanupScopeInjected = false
+        var focusRestorationAckOnly = false
+        var wholeHeaderSelectionReads = 0
         var ownedPopupObservationStarted = false
         var scrollWrites: [Double] = []
         var viewportReadsAfterSelection = 0
@@ -192,6 +198,9 @@ struct Issue965HeldSelectionAssociationTests {
         var expireRetainedCapture = false
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
         var routingSelection: (@Sendable (Int) -> Void)?
+        var sharedThirdStrip = false
+        var thirdSharesOriginalStrip = false
+        var thirdRetainsPreviousFocus = false
         var routingLateScopeInjected = false
         var inputMenuPresses = 0
         var inputMenuCancels = 0
@@ -205,7 +214,7 @@ struct Issue965HeldSelectionAssociationTests {
         var passivePermissionFocusReads = 0
         var passivePermissionArmed = false
 
-        init(withViewport: Bool = false) throws {
+        init(withViewport: Bool = false, fourTracks: Bool = false) throws {
             bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-selection-\(UUID().uuidString).logicx")
             try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
             app = builder.element(1_965_700)
@@ -213,7 +222,9 @@ struct Issue965HeldSelectionAssociationTests {
             rail = builder.element(1_965_702)
             mixer = builder.element(1_965_703)
             headers = [builder.element(1_965_704), builder.element(1_965_705)]
+                + (fourTracks ? [builder.element(1_965_760), builder.element(1_965_761)] : [])
             strips = [builder.element(1_965_706), builder.element(1_965_707)]
+                + (fourTracks ? [builder.element(1_965_770), builder.element(1_965_771)] : [])
             scroll = builder.element(1_965_708)
             builder.setRole(window, kAXWindowRole as String)
             builder.setAttribute(window, kAXTitleAttribute as String, "Selection fixture - Tracks")
@@ -267,7 +278,7 @@ struct Issue965HeldSelectionAssociationTests {
 
         deinit { try? FileManager.default.removeItem(at: bundle) }
 
-        func channel() -> AccessibilityChannel {
+        func logic() -> AXLogicProElements.Runtime {
             let base = builder.makeLogicRuntime(appElement: app,
                 attributeValueHandler: { [self] element, attribute in
                     if CFEqual(element, window), attribute == kAXHelpAttribute as String { presentationCensusReads += 1 }
@@ -373,6 +384,13 @@ struct Issue965HeldSelectionAssociationTests {
                     return .success(strips)
                 },
                 setAttributeHandler: { [self] element, attribute, value in
+                    if strips.contains(where: { CFEqual($0, element) }), attribute == kAXFocusedAttribute as String {
+                        cleanupTransportReadsAtWrite = cleanupTransportReads
+                        focusRestorationWrites.append(element)
+                        if focusRestorationAckOnly { return true }
+                        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, element)
+                        return true
+                    }
                     if CFEqual(element, scroll), attribute == kAXValueAttribute as String,
                        let number = value as? NSNumber {
                         scrollWrites.append(number.doubleValue)
@@ -387,6 +405,7 @@ struct Issue965HeldSelectionAssociationTests {
                         Issue.record("only exact held rail selection is authorized"); return false
                     }
                     selections.append(index)
+                    let previousFocus = builder.attributeValue(app, kAXFocusedUIElementAttribute as String)
                     routingSelection?(index)
                     if fault == "no_op" { return true }
                     for (row, header) in headers.enumerated() {
@@ -394,7 +413,15 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     // The actual physical relationship is deliberately not positional.
                     builder.setAttribute(app, kAXFocusedUIElementAttribute as String,
-                        index == 0 ? routingReplacement ?? strips[1] : routingOtherReplacement ?? strips[0])
+                        index == 0 ? routingReplacement ?? strips[1]
+                            : index == 1 ? routingOtherReplacement ?? strips[0]
+                                : strips[index == 2 ? (thirdSharesOriginalStrip ? 1 : sharedThirdStrip ? 0 : 3) : 2])
+                    if index == 2, thirdRetainsPreviousFocus, let previousFocus {
+                        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, previousFocus)
+                    }
+                    if index == 0, fault == "restore_retains_held_focus", let previousFocus {
+                        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, previousFocus)
+                    }
                     if fault == "selection_scroll" || fault?.hasPrefix("scroll_") == true {
                         // Native R11: restoring the selected header/focused strip did
                         // not restore the Tracks scrollbar's original value.
@@ -492,27 +519,34 @@ struct Issue965HeldSelectionAssociationTests {
                 executeAppleScript: { _ in Issue.record("no scripts"); return .error("forbidden") },
                 onScreenWindowList: { [] }, postPopupMenuEscape: { Issue.record("no Escape") },
                 focusedApplicationPID: { 4242 })
-            return AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
-                isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic))
+            return logic
+        }
+
+        func channel() -> AccessibilityChannel {
+            AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
+                isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic()))
         }
     }
 
     private func inspect(_ f: Fixture, navigation: Bool = true, cache: StateCache = StateCache(),
                          fileReader: LogicProjectFileReader.Runtime = .unavailable,
                          registry: TargetRegistry = TargetRegistry(), projectRef: String? = nil,
-                         domains: [String] = ["associations"], guardedRenewalFocus: Bool = false) async throws -> [String: Any] {
+                         domains: [String] = ["associations"], guardedRenewalFocus: Bool = false,
+                         guardedPassiveFocus: Bool = false,
+                         scope: String = "whole_project") async throws -> [String: Any] {
         let gate = LogicMutationGate()
         let dependencies = HandlerDependencies(router: ChannelRouter(), cache: cache, targetRegistry: registry,
             poller: StatePoller(axChannel: f.channel(), cache: cache,
                 runtime: .init(hasVisibleWindow: { true }, projectFileReader: fileReader,
                                keyboardFocus: {
-                                   guardedRenewalFocus && f.routingReplacement != nil
+                                   guardedPassiveFocus || (guardedRenewalFocus && f.routingReplacement != nil)
                                        ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing
                                })),
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
             liveTrackNames: { [:] }, projectFileReader: fileReader)
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
-        var arguments: [String: Value] = ["domains": .array(domains.map(Value.string)), "allow_ui_navigation": .bool(navigation)]
+        var arguments: [String: Value] = ["domains": .array(domains.map(Value.string)), "allow_ui_navigation": .bool(navigation),
+                                        "scope": .string(scope)]
         if let projectRef { arguments["project_ref"] = .string(projectRef) }
         let params = arguments
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
@@ -1105,6 +1139,306 @@ struct Issue965HeldSelectionAssociationTests {
         let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String,
             runtime: f.builder.makeAXRuntime()))
         #expect(CFEqual(focus, f.strips[1]))
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("Whole-project inspection observes all held headers, without a duplicate-name or ordinal join",
+          arguments: [false, true])
+    func wholeInspectionObservesEveryHeldHeader(shared: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.sharedThirdStrip = shared
+        f.fault = "selection_scroll"
+        let cache = StateCache(), registry = TargetRegistry()
+        let body = try await inspect(f, cache: cache, registry: registry)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        let strips = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 4)
+        for (trackIndex, stripIndex) in [(0, 1), (1, 0), (2, shared ? 0 : 3), (3, 2)] {
+            let row = try #require(rows.first { $0["track_index"] as? Int == trackIndex })
+            #expect(row["mixer_strip_ref"] as? String == strips[stripIndex]["mixer_strip_ref"] as? String)
+        }
+        #expect(f.selections == (shared ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
+        #expect(f.scrollWrites == [0.8])
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        #expect(section["coverage"] as? String == "partial", "Held exposed headers still do not prove global population")
+        if shared {
+            let id = try #require(body["snapshot_id"] as? String)
+            let retained = try #require(await cache.retainedInspection(id: id))
+            let source = try #require(retained.capture.channelStrips[0].physicalBinding)
+            let ref = try #require(retained.capture.mixerReference(at: 0))
+            #expect(await cache.retainedMixerAssociation(reference: ref, source: source,
+                snapshot: await registry.currentSnapshot) == nil,
+                "Publishing observed aliases must not grant a scalar writer unique source-header custody")
+        }
+    }
+
+    @Test("An original held focus may be restored without manufacturing an original-header association")
+    func wholeInspectionRestoresRetainedFocusWithoutUsingInverseAsPairEvidence() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = section["rows"] as? [[String: Any]] ?? []
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == Set([1, 2, 3]),
+            "Explicit focus restoration is cleanup, never evidence that the original header maps to that strip")
+        #expect(f.selections == [1, 2, 3, 0])
+        #expect(f.focusRestorationWrites.count == 1)
+        let restoredFocus = try #require(f.focusRestorationWrites.first)
+        #expect(CFEqual(restoredFocus, f.strips[1]))
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+            kAXFocusedUIElementAttribute as String, runtime: f.builder.makeAXRuntime()))
+        #expect(CFEqual(focus, f.strips[1]))
+    }
+
+    @Test("Native-shaped passive focus guarding permits only the observed original-focus inverse",
+          arguments: [false, true])
+    func originalFocusInverseRenewsBeforeThePassiveEditingGuard(ackOnly: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.focusRestorationAckOnly = ackOnly
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        for strip in f.strips {
+            f.builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+        }
+        let body = try await inspect(f, guardedPassiveFocus: true)
+        #expect(f.focusRestorationWrites.count == 1)
+        if ackOnly {
+            #expect(body["associations"] == nil)
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "not_restored")
+        } else {
+            let section = try #require(body["associations"] as? [String: Any])
+            let rows = section["rows"] as? [[String: Any]] ?? []
+            #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == Set([1, 2, 3]))
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        }
+    }
+
+    @Test("An ambiguous held focus does not erase independently observed pairs when baseline selection retains focus")
+    func retainedBaselineFocusLeavesOnlyTheAmbiguousHeaderUnknown() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.thirdRetainsPreviousFocus = true
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        let body = try await inspect(f, guardedPassiveFocus: true)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = section["rows"] as? [[String: Any]] ?? []
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == Set([1, 3]))
+        #expect(section["coverage"] as? String == "partial")
+        #expect(f.selections == [1, 2, 0, 3, 0])
+        #expect(f.focusRestorationWrites.count == 1)
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("Optional whole-held challenges leave deadline time for the original inverse and final population",
+          arguments: [6, 11])
+    func wholeHeldCollectionLeavesOwnedDeadlineTimeForRestoration(elapsedSeconds: Int) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+                                            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, collectionNow: {
+                    start.advanced(by: f.selections.isEmpty ? .zero : .seconds(elapsedSeconds))
+                })
+            #expect(f.selections == [1, 0], "Stop optional challenges, not the still-owned inverse")
+            #expect(pairs.count == 2, "Retain only the independently verified subset")
+            #expect(association.effects.restoration == "restored")
+        }
+    }
+
+    @Test("Insufficient measured recheck time refuses optional navigation without inventing instability")
+    func measuredRecheckReservePreservesUnchangedInitialPopulation() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+                                            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, populationReadDuration: .seconds(11), collectionNow: { start })
+            #expect(pairs.isEmpty)
+            #expect(f.selections.isEmpty)
+            #expect(f.focusRestorationWrites.isEmpty)
+            #expect(f.scrollWrites.isEmpty)
+            #expect(!association.effects.navigationPerformed)
+            #expect(association.effects.attempted.isEmpty)
+            #expect(association.effects.restoration == "not_applicable")
+            #expect(association.effects.reason == nil)
+        }
+    }
+
+    @Test("Final focus-restoration reads cannot overwrite foreign focus or a retired reference",
+          arguments: ["reference", "foreign_focus"])
+    func finalFocusInverseCustodyReadCannotAuthorizeItsWrite(fault: String) async throws {
+        func observe(_ f: Fixture) async throws -> SessionPopulationObservation.FreshPopulation {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            return try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(
+                    request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                    fileReader: .unavailable,
+                    navigationReferenceIsCurrent: { f.referenceCurrent }, stoppingWhen: { false })
+            }
+        }
+        let calibration = try Fixture(withViewport: true, fourTracks: true)
+        calibration.fault = "restore_retains_held_focus"
+        calibration.builder.setAttributeSettable(calibration.strips[1], kAXFocusedAttribute as String, true)
+        calibration.routingRead = { element, attribute in
+            if calibration.selections == [1, 2, 3, 0], CFEqual(element, calibration.builder.element(1_965_721)),
+               attribute == kAXValueAttribute as String { calibration.cleanupTransportReads += 1 }
+        }
+        let positive = try await observe(calibration)
+        #expect(positive.selectionAssociations.count == 3)
+        #expect(calibration.focusRestorationWrites.count == 1)
+        #expect(calibration.cleanupTransportReadsAtWrite > 0)
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        f.routingRead = { element, attribute in
+            if f.selections == [1, 2, 3, 0], CFEqual(element, f.builder.element(1_965_721)),
+               attribute == kAXValueAttribute as String {
+                f.cleanupTransportReads += 1
+                if f.cleanupTransportReads == calibration.cleanupTransportReadsAtWrite {
+                    f.cleanupScopeInjected = true
+                    if fault == "reference" { f.referenceCurrent = false }
+                    else {
+                        let editor = f.builder.element(1_965_989)
+                        f.builder.setRole(editor, kAXTextFieldRole as String)
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                    }
+                }
+            }
+        }
+        let refused = try await observe(f)
+        #expect(f.cleanupScopeInjected, "Inject at the actual final custody read before the explicit inverse")
+        #expect(f.focusRestorationWrites.isEmpty)
+        #expect(refused.selectionAssociations.isEmpty)
+        #expect(refused.uiEffects.restoration == "not_restored")
+    }
+
+    @Test("Focus cleanup refuses lost custody and never treats a setter acknowledgement as restoration",
+          arguments: ["unsettable", "document", "foreign_focus", "retired_original", "playing", "newer_viewport", "ack_only"])
+    func focusCleanupRequiresOriginalCustodyAndObservedEffect(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.focusRestorationAckOnly = fault == "ack_only"
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, fault != "unsettable")
+        if fault != "unsettable", fault != "ack_only" {
+            f.routingRead = { element, attribute in
+                guard !f.cleanupScopeInjected, f.selections == [1, 2, 3, 0],
+                      CFEqual(element, f.strips[1]), attribute == kAXNumberOfCharactersAttribute as String else { return }
+                f.cleanupScopeInjected = true
+                switch fault {
+                case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                case "foreign_focus": f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.headers[0])
+                case "retired_original": f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[1]) })
+                case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+                case "newer_viewport": f.builder.setAttribute(f.scroll, kAXValueAttribute as String, NSNumber(value: 0.6))
+                default: Issue.record("Unknown cleanup counterexample")
+                }
+            }
+        }
+        let body = try await inspect(f)
+        #expect(f.selections == [1, 2, 3, 0])
+        if fault != "unsettable", fault != "ack_only" { #expect(f.cleanupScopeInjected) }
+        #expect(f.focusRestorationWrites.count == (fault == "ack_only" ? 1 : 0))
+        #expect(f.scrollWrites.isEmpty)
+        #expect(body["associations"] == nil)
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "not_restored")
+    }
+
+    @Test("Selection scope retains its bounded challenge and excludes unselected pairs")
+    func selectionInspectionDoesNotScanAllHeldHeaders() async throws {
+        let f = try Fixture(fourTracks: true)
+        let body = try await inspect(f, scope: "selection")
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 1 && rows.first?["track_index"] as? Int == 0)
+        #expect(f.selections == [1, 0])
+    }
+
+    @Test("Whole-header selection does not repeat full selection bookends before the same action")
+    func wholeHeaderSelectionsAvoidRedundantBookends() async throws {
+        let f = try Fixture(fourTracks: true)
+        f.routingRead = { element, attribute in
+            if attribute == kAXSelectedAttribute as String,
+               f.headers.contains(where: { CFEqual($0, element) }) { f.wholeHeaderSelectionReads += 1 }
+        }
+        let body = try await inspect(f)
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 4 && f.selections == [1, 2, 3, 0])
+        #expect(f.wholeHeaderSelectionReads <= 300,
+            "Retain deciding ownership and selection checks without redundant pre-action full censuses: \(f.wholeHeaderSelectionReads)")
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("A later header's custody loss discards earlier pairs and prohibits further selection",
+          arguments: ["document", "strip_replacement", "playing", "cancel"])
+    func laterWholeInspectionLossCannotPublishEarlierPairs(_ fault: String) async throws {
+        let f = try Fixture(fourTracks: true)
+        f.routingSelection = { index in
+            if index == 2 {
+                switch fault {
+                case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                case "strip_replacement": f.builder.setChildren(f.mixer, [f.strips[0], f.strips[1], f.strips[2]])
+                case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+                case "cancel": withUnsafeCurrentTask { $0?.cancel() }
+                default: Issue.record("Unexpected fault")
+                }
+            }
+        }
+        let body = try await inspect(f)
+        #expect(body["state"] as? String == "C")
+        #expect(body["associations"] == nil)
+        #expect(f.selections == [1, 2])
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String != "restored")
+    }
+
+    @Test("A fresh changed focus can prove an alias of the original strip without treating unchanged focus as proof")
+    func wholeHeaderAliasOfOriginalHasAnIndependentFocusTransition() async throws {
+        let f = try Fixture(fourTracks: true)
+        f.thirdSharesOriginalStrip = true
+        let cache = StateCache(), registry = TargetRegistry()
+        let body = try await inspect(f, cache: cache, registry: registry)
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        let original = try #require(rows.first { $0["track_index"] as? Int == 0 })
+        let alias = try #require(rows.first { $0["track_index"] as? Int == 2 })
+        #expect(original["mixer_strip_ref"] as? String == alias["mixer_strip_ref"] as? String)
+        #expect(rows.count == 4 && f.selections == [1, 2, 3, 0])
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        let id = try #require(body["snapshot_id"] as? String)
+        let retained = try #require(await cache.retainedInspection(id: id))
+        let source = try #require(retained.capture.channelStrips[1].physicalBinding)
+        let ref = try #require(retained.capture.mixerReference(at: 1))
+        #expect(await cache.retainedMixerAssociation(reference: ref, source: source,
+            snapshot: await registry.currentSnapshot) == nil,
+            "An observed alias of the original strip must not acquire unique scalar actuation custody")
+    }
+
+    @Test("A header with unchanged focus remains unknown without discarding other independently proved pairs")
+    func anUnprovedHeaderDoesNotInventAnAliasOrPoisonOtherProofs() async throws {
+        let f = try Fixture(fourTracks: true)
+        f.thirdRetainsPreviousFocus = true
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == [0, 1, 3])
+        #expect(f.selections == [1, 2, 0, 2, 3, 0])
+        #expect(section["coverage"] as? String == "partial")
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
     }
 

@@ -1152,7 +1152,7 @@ enum SessionPopulationObservation {
                     output: strip.output,
                     input: strip.input,
                     inputObservation: strip.inputObservation,
-                    pluginCount: request.domains == [.routing] && strip.pluginsSource == nil
+                    pluginCount: !request.domains.contains(.strips) && strip.pluginsSource == nil
                         && strip.pluginsReadError == nil ? nil : strip.plugins.count,
                     pluginsSource: strip.pluginsSource,
                     mixerStripRef: capture.mixerReference(at: row)?.rawValue,
@@ -1173,7 +1173,6 @@ enum SessionPopulationObservation {
            let pairs = capture.freshPopulation?.selectionAssociations, !pairs.isEmpty {
             var rows: [AssociationRow] = []
             var heldTracks: [AXTrackBinding.Binding] = []
-            var heldStrips: [AXMixerStripBinding.Binding] = []
             var qualified = true
             for pair in pairs {
                 let trackMatches = live.indices.filter { live[$0].physicalBinding?.matches(pair.track) == true }
@@ -1181,10 +1180,12 @@ enum SessionPopulationObservation {
                 guard trackMatches.count == 1, stripMatches.count == 1,
                       let trackRow = trackMatches.first, let stripRow = stripMatches.first,
                       !heldTracks.contains(where: { $0.matches(pair.track) }),
-                      !heldStrips.contains(where: { $0.matches(pair.strip) }),
                       let trackRef = allRows[trackRow].trackRef,
                       let stripRef = capture.mixerReference(at: stripRow)?.rawValue else { qualified = false; break }
-                heldTracks.append(pair.track); heldStrips.append(pair.strip)
+                // Several independently selected original headers may share one
+                // held strip. Observation does not grant its consumers unique
+                // header ownership or permission to write through that alias.
+                heldTracks.append(pair.track)
                 if request.scope == .wholeProject || live[trackRow].selectionReadback == true {
                     rows.append(.init(trackIndex: live[trackRow].id, trackRef: trackRef, mixerStripRef: stripRef))
                 }

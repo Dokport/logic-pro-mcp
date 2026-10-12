@@ -85,19 +85,27 @@ struct Issue965MixerPresentationWitnessTests {
 
     private func batchedCensusRuntime(
         _ fixture: Fixture, batches: Counter, singles: Counter, help: Counter,
-        fault: String = "", stopped: StopRead? = nil
+        fault: String = "", stopped: StopRead? = nil, childReads: Counter? = nil
     ) -> AXLogicProElements.Runtime {
         let base = fixture.builder.makeAXRuntime(appElement: fixture.app)
-        let attributes = [kAXRoleAttribute, kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
+        let attributes = [kAXRoleAttribute, kAXIdentifierAttribute, kAXDescriptionAttribute,
+            kAXTitleAttribute, kAXChildrenAttribute] as [String]
         let ax = AXHelpers.Runtime(axApp: base.axApp,
             attributeValue: base.attributeValue, attributeIsSettable: base.attributeIsSettable,
             setAttributeValue: base.setAttributeValue, children: base.children,
             performAction: base.performAction, childCount: base.childCount,
             actionNames: base.actionNames, actionNamesResult: base.actionNamesResult,
-            childrenResult: base.childrenResult,
+            childrenResult: { element in
+                _ = childReads?.next()
+                return base.childrenResult!(element)
+            },
             attributeValueResult: { element, attribute in
                 if attributes.contains(attribute) { _ = singles.next() }
                 if attribute == kAXHelpAttribute as String { _ = help.next() }
+                if fault == "help_changes_children", CFEqual(element, fixture.layout),
+                   attribute == kAXHelpAttribute as String {
+                    fixture.builder.setChildren(fixture.layout, [])
+                }
                 return base.attributeValueResult!(element, attribute)
             }, attributeValuesResult: { element, requested in
                 _ = batches.next()
@@ -112,6 +120,22 @@ struct Issue965MixerPresentationWitnessTests {
                 }
                 if CFEqual(element, fixture.window), fault == "short" { return .success([]) }
                 return .success(requested.enumerated().map { index, attribute in
+                    if attribute == kAXChildrenAttribute as String {
+                        if CFEqual(element, fixture.window) {
+                            if fault == "malformed_children" { return "not children" as NSString }
+                            if fault == "mixed_children" { return [NSNumber(value: 1)] as NSArray }
+                            if fault == "unreadable_children" {
+                                var error = AXError.cannotComplete
+                                return AXValueCreate(.axError, &error)!
+                            }
+                        }
+                        switch base.childrenResult!(element) {
+                        case .success(let children): return children as AnyObject
+                        case .failure(let status):
+                            var error = AXError(rawValue: status.raw)!
+                            return AXValueCreate(.axError, &error)!
+                        }
+                    }
                     if CFEqual(element, fixture.window), fault == "malformed", index == 0 {
                         return NSNumber(value: 1)
                     }
@@ -128,6 +152,37 @@ struct Issue965MixerPresentationWitnessTests {
             })
         return .init(logicProPID: { 4242 }, ax: ax,
                      executeAppleScript: { _ in .error("fixture forbids scripts") })
+    }
+
+    @Test func freshMixerMetadataIncludesInitialChildrenWithoutSkippingPostHelpCensus() throws {
+        let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter(), childReads = Counter()
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
+            runtime: batchedCensusRuntime(fixture, batches: batches, singles: singles, help: help,
+                childReads: childReads), requiresCompleteAbsence: true)
+        #expect(CFEqual(try #require(result.binding).mixer, fixture.layout))
+        #expect(childReads.count == help.count,
+            "Only the deciding census following performed Help needs a separate native call")
+        #expect(help.count == 6 && batches.count > help.count)
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test(arguments: ["malformed_children", "mixed_children", "unreadable_children"])
+    func anInvalidInitialChildBatchCannotCertifyMixerAbsence(fault: String) throws {
+        let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter()
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
+            runtime: batchedCensusRuntime(fixture, batches: batches, singles: singles, help: help, fault: fault),
+            requiresCompleteAbsence: true)
+        if case .childrenUnread = result.lookup {} else { Issue.record("Unobserved children became complete absence") }
+        #expect(result.binding == nil)
+        #expect(batches.count == 1)
+    }
+
+    @Test func batchedInitialChildrenCannotSurviveAChangingInspectorHelpRead() throws {
+        let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter()
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
+            runtime: batchedCensusRuntime(fixture, batches: batches, singles: singles, help: help,
+                fault: "help_changes_children"), requiresCompleteAbsence: true)
+        #expect(result.binding == nil, "Performed Help still requires its independently fresh deciding census")
     }
 
     @Test(arguments: [false, true])
@@ -158,7 +213,7 @@ struct Issue965MixerPresentationWitnessTests {
         let binding = try #require(result.binding)
         #expect(CFEqual(binding.mixer, fixture.layout))
         #expect(batches.count > 0)
-        #expect(singles.count == 0, "the four deciding non-Help attributes use one fresh native call per node")
+        #expect(singles.count == 0, "the five deciding non-Help attributes use one fresh native call per node")
         #expect(help.count == 6 && help.count < batches.count, "Only nonleaf containers need separately guarded Inspector Help in this fixture")
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }

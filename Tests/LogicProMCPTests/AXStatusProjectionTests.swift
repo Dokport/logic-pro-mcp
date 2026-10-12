@@ -67,6 +67,14 @@ struct AXStatusProjectionTests {
         #expect(projectsExpectedElements)
     }
 
+    @Test func nonAXArrayMemberCannotBecomeAChild() {
+        let values = [AXUIElementCreateSystemWide() as AnyObject, NSNumber(value: 1)] as NSArray
+        switch AXHelpers.projectChildrenStatus(.success, values) {
+        case .failure(let error): #expect(error == .malformedChildren)
+        case .success: Issue.record("An array member without AX element identity is not a readable child")
+        }
+    }
+
     @Test func productionRuntimeSeamIsAbsent() {
         let seam = AXHelpers.Runtime.production.childrenResult
         print("EVIDENCE AC-7 expected=nil actual=\(seam == nil ? "nil" : "non-nil")")
