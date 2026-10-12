@@ -85,7 +85,8 @@ struct Issue965MixerPresentationWitnessTests {
 
     private func batchedCensusRuntime(
         _ fixture: Fixture, batches: Counter, singles: Counter, help: Counter,
-        fault: String = "", stopped: StopRead? = nil, childReads: Counter? = nil
+        fault: String = "", stopped: StopRead? = nil, childReads: Counter? = nil,
+        noncandidateHelp: Counter? = nil
     ) -> AXLogicProElements.Runtime {
         let base = fixture.builder.makeAXRuntime(appElement: fixture.app)
         let attributes = [kAXRoleAttribute, kAXIdentifierAttribute, kAXDescriptionAttribute,
@@ -102,6 +103,10 @@ struct Issue965MixerPresentationWitnessTests {
             attributeValueResult: { element, attribute in
                 if attributes.contains(attribute) { _ = singles.next() }
                 if attribute == kAXHelpAttribute as String { _ = help.next() }
+                if attribute == kAXHelpAttribute as String,
+                   CFEqual(element, fixture.modes) || CFEqual(element, fixture.filters) {
+                    _ = noncandidateHelp?.next()
+                }
                 if fault == "help_changes_children", CFEqual(element, fixture.layout),
                    attribute == kAXHelpAttribute as String {
                     fixture.builder.setChildren(fixture.layout, [])
@@ -155,14 +160,15 @@ struct Issue965MixerPresentationWitnessTests {
     }
 
     @Test func freshMixerMetadataIncludesInitialChildrenWithoutSkippingPostHelpCensus() throws {
-        let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter(), childReads = Counter()
+        let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter(), childReads = Counter(), noncandidateHelp = Counter()
         let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
             runtime: batchedCensusRuntime(fixture, batches: batches, singles: singles, help: help,
-                childReads: childReads), requiresCompleteAbsence: true)
+                childReads: childReads, noncandidateHelp: noncandidateHelp), requiresCompleteAbsence: true)
         #expect(CFEqual(try #require(result.binding).mixer, fixture.layout))
-        #expect(childReads.count == help.count,
-            "Only the deciding census following performed Help needs a separate native call")
-        #expect(help.count == 6 && batches.count > help.count)
+        #expect(childReads.count == help.count + fixture.modeControls.count + fixture.filterControls.count,
+            "Performed Help keeps its deciding census; observed control leaves also require a typed child read")
+        #expect(noncandidateHelp.count == 0)
+        #expect(batches.count > help.count)
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 
@@ -214,7 +220,7 @@ struct Issue965MixerPresentationWitnessTests {
         #expect(CFEqual(binding.mixer, fixture.layout))
         #expect(batches.count > 0)
         #expect(singles.count == 0, "the five deciding non-Help attributes use one fresh native call per node")
-        #expect(help.count == 6 && help.count < batches.count, "Only nonleaf containers need separately guarded Inspector Help in this fixture")
+        #expect(help.count < batches.count, "Only possible Mixer/Inspector subtrees need separately guarded Help")
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 
@@ -301,6 +307,35 @@ struct Issue965MixerPresentationWitnessTests {
         if fault == "unknown_role" || fault.contains("unread_children") {
             if case .childrenUnread = result.lookup {} else { Issue.record("An unobserved child became complete absence") }
         }
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test func aChangedControlLeafCannotHideAMixerUnderSkippedInspectorHelp() throws {
+        let fixture = Fixture(), reads = Counter()
+        let slider = fixture.builder.element(966_135)
+        let child = fixture.builder.element(966_136)
+        fixture.builder.setRole(slider, kAXSliderRole as String)
+        fixture.builder.setChildren(slider, [child])
+        fixture.builder.setRole(child, kAXValueIndicatorRole as String)
+        fixture.builder.setChildren(child, [])
+        fixture.builder.setAttribute(fixture.window, kAXHelpAttribute as String, "Inspector")
+        fixture.builder.setChildren(fixture.window, [slider])
+        let runtime = fixture.builder.makeLogicRuntime(appElement: fixture.app,
+            childrenResultHandler: { element in
+                guard CFEqual(element, child) else { return nil }
+                if reads.next() == 1 {
+                    // The first qualification observed a leaf control, but the
+                    // deciding recursive census sees a real legacy candidate.
+                    fixture.builder.setRole(child, kAXGroupRole as String)
+                    fixture.builder.setAttribute(child, kAXIdentifierAttribute as String, "Mixer")
+                }
+                return .success([])
+            }, setAttributeHandler: nil, performActionHandler: nil)
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
+            runtime: runtime, requiresCompleteAbsence: true)
+        #expect(result.binding == nil, "A changed leaf cannot renew the earlier Inspector-Help omission")
+        if case .childrenUnread = result.lookup {} else { Issue.record("Changed control roles must make the skipped context unverified") }
+        #expect(reads.count > 0)
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 
