@@ -35,9 +35,10 @@ extension AccessibilityChannel {
         }
         extras["destination"] = OutputAssignment.bus(destination).json
         extras["navigation_attempted"] = true
-        let output = await getOutputObservation(runtime: runtime, timing: timing)
-        recordRead(output, key: "output_acquisition")
-        guard let sink = output.assignment, sink == .stereoOutput || {
+        // This display-only preflight grants no write authority. The one checked
+        // output acquisition below must corroborate it on the input's current owner.
+        guard let outputLabel = AXLogicProElements.outputSlotDestination(in: original.strip, runtime: runtime.ax),
+              let sink = OutputAssignment.observed(slotLabel: outputLabel), sink == .stereoOutput || {
             if case .physical = sink { return true }; return false
         }(), original.currentIndex(runtime: runtime) != nil else {
             return refusal(.routingDependencyUnknown, "Only a checked physical-output sink is supported; no input destination was pressed.")
@@ -68,6 +69,7 @@ extension AccessibilityChannel {
             }
         }
         let renewedOutput = await checkedSink(owner)
+        recordRead(renewedOutput, key: "output_acquisition")
         recordRead(renewedOutput, key: "output_before_write")
         guard renewedOutput.assignment == sink else {
             return refusal(.routingDependencyUnknown, "The current receiver's checked physical output changed during input acquisition.")
@@ -247,6 +249,11 @@ extension AccessibilityChannel {
             extras["source_renewal"] = source.pair.source
             extras["reference_reread_required"] = true
         }
+        // Finish output popup acquisition before the input's final original-header
+        // witness: another popup can invalidate that request-local relationship.
+        // The final same-owner output/send/control checks below still bookend it.
+        let finalOutput = await checkedSink(afterOwner)
+        recordRead(finalOutput, key: "output_after_write")
         let after = await AXMixerStripBinding.$current.withValue(afterOwner) {
             await AXMixerStripBinding.$outputAssociation.withValue(afterPair) {
                 await getInputBusObservation(runtime: runtime, timing: timing)
@@ -258,8 +265,6 @@ extension AccessibilityChannel {
             extras["reference_reread_required"] = true
             extras["source_renewal"] = after.inputRenewal?.pair.source
         }
-        let finalOutput = await checkedSink(finalOwner)
-        recordRead(finalOutput, key: "output_after_write")
         guard let finalPopulation = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: finalOwner.mixer, runtime: runtime.ax) else {
             return uncertain(.readbackUnavailable, "Final population could not be independently read; stop dependent writes.")
         }
@@ -268,11 +273,17 @@ extension AccessibilityChannel {
             return refusal(.unexpectedSideEffect, "Input selection changed the strip population; no cleanup or inverse was attempted.")
         }
         guard case .bus(let actual)? = after.assignment, let finalSlot = after.inputSlot,
-              finalSlot.owner.matches(finalOwner), sinkStillCurrent(finalOwner),
-              finalOutput.assignment == sink,
-              (after.inputRenewal ?? writerRenewal ?? before.inputRenewal).map({ $0.permits(runtime: runtime) }) != false,
-              finalOwner.currentIndex(runtime: runtime) != nil else {
+              finalSlot.owner.matches(finalOwner) else {
             return uncertain(.readbackUnavailable, "The same receiver's committed input did not have checked after-evidence; stop dependent writes.")
+        }
+        guard sinkStillCurrent(finalOwner), finalOutput.assignment == sink else {
+            return uncertain(.readbackUnavailable, "The receiver's physical output or observed-empty sends changed after checked input readback; stop dependent writes.")
+        }
+        guard (after.inputRenewal ?? writerRenewal ?? before.inputRenewal).map({ $0.permits(runtime: runtime) }) != false else {
+            return uncertain(.readbackUnavailable, "Original-header renewal custody ended after checked input readback; stop dependent writes.")
+        }
+        guard finalOwner.currentIndex(runtime: runtime) != nil else {
+            return uncertain(.readbackUnavailable, "The checked receiver retired after final output readback; stop dependent writes.")
         }
         let finalInput = AXLogicProElements.inputSlotRead(in: finalOwner.strip, runtime: runtime.ax)
         guard case .source(let finalLabel) = finalInput.reading, let finalControl = finalInput.control,

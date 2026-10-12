@@ -21,6 +21,7 @@ struct Issue291InputAssignmentTests {
         var conflictAfterWrite = false
         var failedWriterOpenAcknowledgement = false
         var inputOpens = 0
+        var popupReads: [String] = []
         var writerFocusFault: String?
         var lateFault: String?
         var lateFaultObserved = false
@@ -77,6 +78,7 @@ struct Issue291InputAssignmentTests {
             }
             if action == kAXPressAction as String {
                 if CFEqual(node, input) || CFEqual(node, f.outputs[0]) {
+                    popupReads.append(CFEqual(node, input) ? "input" : "output")
                     open = CFEqual(node, input) ? inputRoot : outputRoot
                     refreshInputMarks(); f.b.setChildren(f.mixer, f.strips + [open!])
                     if CFEqual(node, input) {
@@ -176,6 +178,10 @@ struct Issue291InputAssignmentTests {
         let verified = try #require(body["verified"] as? Bool); #expect(verified)
         #expect(f.leafPresses == [destination])
         #expect(f.currentBus == destination)
+        #expect(f.popupReads.filter { $0 == "output" }.count == 2,
+            "Acquire checked physical output once before the write and once after, without a redundant pre-input popup")
+        #expect(Array(f.popupReads.suffix(2)) == ["output", "input"],
+            "The final checked input/renewal must follow the last output popup rather than be invalidated by it")
         let inverse = try #require(sharedJSONObject(await f.write(before, expected: destination).message))
         #expect(inverse["state"] as? String == "A")
         #expect(f.leafPresses == [destination, before])
