@@ -306,6 +306,12 @@ func routingPath(from sourceRef: TargetReference, to sinkNodeID: String, in grap
     guard Dictionary(grouping: outputs, by: \.source).values.allSatisfy({ $0.count == 1 }) else {
         return .unverified
     }
+    // Contradictory source-slot evidence cannot certify a protected path. A genuine
+    // no-output source may still reach the sink through its recorded parallel sends.
+    let outputSources = Set(outputs.map(\.source))
+    guard graph.nodes.allSatisfy({ $0.outputClassification != .noOutput || !outputSources.contains($0.id) }) else {
+        return .unverified
+    }
     return routingNodeReachable(from: source.id, to: sinkNodeID,
         adjacency: Dictionary(grouping: graph.edges, by: \.source)) ? .connected : .disconnected
 }
