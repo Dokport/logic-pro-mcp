@@ -918,7 +918,7 @@ enum SessionPopulationObservation {
         let trackIndex: Int
         let trackRef: String
         let mixerStripRef: String
-        let source = "held_exclusive_selection_focus"
+        var source = "held_exclusive_selection_focus"
         enum CodingKeys: String, CodingKey {
             case trackIndex = "track_index", trackRef = "track_ref", mixerStripRef = "mixer_strip_ref", source
         }
@@ -1217,7 +1217,8 @@ enum SessionPopulationObservation {
                 // header ownership or permission to write through that alias.
                 heldTracks.append(pair.track)
                 if request.scope == .wholeProject || live[trackRow].selectionReadback == true {
-                    rows.append(.init(trackIndex: live[trackRow].id, trackRef: trackRef, mixerStripRef: stripRef))
+                    rows.append(.init(trackIndex: live[trackRow].id, trackRef: trackRef, mixerStripRef: stripRef,
+                        source: pair.source))
                 }
             }
             if qualified, !rows.isEmpty {

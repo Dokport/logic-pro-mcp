@@ -8,6 +8,7 @@ extension AccessibilityChannel {
         struct Pair: @unchecked Sendable {
             let track: AXTrackBinding.Binding
             let strip: AXMixerStripBinding.Binding
+            var source = "held_exclusive_selection_focus"
         }
         typealias ViewportControl = (element: AXUIElement, value: Double, zoomDescription: String?)
         let logic: AXLogicProElements.Runtime
@@ -31,6 +32,8 @@ extension AccessibilityChannel {
         private var expectedViewport: [ViewportControl]
         private var expectedIndex: Int
         private var expectedFocus: AXUIElement
+        private var originalSelectedChild: AXUIElement?
+        private var expectedSelectedChild: AXUIElement?
         private var lost = false
         private(set) var effects = SessionPopulationObservation.UIEffects()
 
@@ -315,7 +318,7 @@ extension AccessibilityChannel {
                   passiveFocusMatches() else { lost = true; return false }
             guard owned(), Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                  CFEqual(final, expectedFocus) else { lost = true; return false }
+                  CFEqual(final, expectedFocus), selectedChildCustodyMatches() else { lost = true; return false }
             return true
         }
 
@@ -426,20 +429,81 @@ extension AccessibilityChannel {
             return true
         }
 
-        private func select(_ index: Int, stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
+        private enum SelectedChildRead {
+            case unavailable, unverified
+            case observed(AXUIElement)
+        }
+
+        /// A relationship supplied by this exact Mixer owner, not a strip ordinal
+        /// or name join. Individual strip AXSelected booleans are not equivalent.
+        private func selectedChildRead() -> SelectedChildRead {
+            let values = AXHelpers.getNonHelpAttributes(mixer, [kAXSelectedChildrenAttribute as String],
+                runtime: logic.ax, permittingRead: {
+                    (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+                })
+            switch values[0] {
+            case .failure(let error) where error.isDefinitiveAbsence: return .unavailable
+            case .success(.none): return .unavailable
+            case .success(.some(let raw)):
+                guard CFGetTypeID(raw) == CFArrayGetTypeID() else { return .unverified }
+                let array = unsafeDowncast(raw, to: CFArray.self)
+                guard CFArrayGetCount(array) == 1 else { return .unverified }
+                let element = unsafeBitCast(CFArrayGetValueAtIndex(array, 0), to: CFTypeRef.self)
+                guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return .unverified }
+                let child = unsafeBitCast(element, to: AXUIElement.self)
+                // Renew reciprocal membership after the relationship read: a
+                // retired child can retain its old parent and CF identity.
+                guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),
+                      Self.same(strips, current.strips),
+                      current.strips.filter({ CFEqual($0, child) }).count == 1,
+                      let parent: AXUIElement = AXHelpers.getAttribute(child, kAXParentAttribute as String,
+                        runtime: logic.ax), CFEqual(parent, mixer) else { return .unverified }
+                return .observed(child)
+            default: return .unverified
+            }
+        }
+
+        private var associationStrip: AXUIElement { expectedSelectedChild ?? expectedFocus }
+
+        private func selectedChildCustodyMatches() -> Bool {
+            guard let expectedSelectedChild else { return true }
+            guard case .observed(let child) = selectedChildRead(), CFEqual(child, expectedSelectedChild),
+                  Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+                  let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
+                    runtime: logic.ax), CFEqual(focus, expectedFocus), passiveStripMatches(focus),
+                  let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
+                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
+                  CFEqual(main, window), CFEqual(focusedWindow, window), currentWindowScopeMatches(),
+                  logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                lost = true; return false
+            }
+            return true
+        }
+
+        private func select(_ index: Int, referenceIsCurrent: @Sendable () async -> Bool,
+                            stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
             guard !lost, !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   AXHelpers.isAttributeSettable(rail, kAXSelectedChildrenAttribute as String,
                 runtime: logic.ax) == true,
                   let beforeViewport = currentViewport(), Self.sameViewport(beforeViewport, expectedViewport),
                   permitsRead(), !stop(),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
-                  owned() else { return false }
+                  owned(), selectedChildCustodyMatches() else { return false }
+            // The selected-child read is a new deciding read. Renew the request
+            // reference after it, then check the pure lease without another AX
+            // read before the selection write.
+            if expectedSelectedChild != nil {
+                guard await referenceIsCurrent(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            }
             // R965-ASSOC-C001: the deciding focus/selection reads in permitsRead
             // can themselves coincide with a document/window switch. Revalidate
             // scoped ownership AFTER them, with no further AX read before write.
             effects.navigationPerformed = true; effects.restoration = "not_restored"
             if !effects.attempted.contains("track_selection") { effects.attempted.append("track_selection") }
             let precedingFocus = expectedFocus
+            let precedingSelectedChild = expectedSelectedChild
             let accepted = AXHelpers.setAttribute(rail, kAXSelectedChildrenAttribute as String, [headers[index]] as CFArray, runtime: logic.ax)
             for attempt in 0..<4 {
                 guard owned() else { return false }
@@ -452,21 +516,33 @@ extension AccessibilityChannel {
                     lost = true; return false
                 }
                 if selectionChanged {
-                    // Selection and passive Mixer focus can settle on different
-                    // host turns. Do not freeze the old focus as the new pair.
+                    let selectedChild: AXUIElement?
+                    if precedingSelectedChild != nil {
+                        guard case .observed(let child) = selectedChildRead() else { lost = true; return false }
+                        selectedChild = child
+                    } else { selectedChild = nil }
+                    // Selection and its Mixer relationship can settle on
+                    // different host turns. Do not freeze the old strip as a pair.
                     // Only original held strips are admitted by the guard above.
-                    let awaitingOwnFocus = index == originalIndex
-                        ? !CFEqual(focus, originalFocus) : CFEqual(focus, precedingFocus)
+                    let awaitingOwnFocus: Bool
+                    if let selectedChild, let precedingSelectedChild, let originalSelectedChild {
+                        awaitingOwnFocus = index == originalIndex
+                            ? !CFEqual(selectedChild, originalSelectedChild) : CFEqual(selectedChild, precedingSelectedChild)
+                    } else {
+                        awaitingOwnFocus = index == originalIndex
+                            ? !CFEqual(focus, originalFocus) : CFEqual(focus, precedingFocus)
+                    }
                     if awaitingOwnFocus && attempt < 3 {
                         do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
                         continue
                     }
                     guard let afterViewport = currentViewport() else { return false }
                     // Logic can select our exact held header while retaining its
-                    // original passive Mixer focus. Retain that owned transition
+                    // original Mixer relationship. Retain that owned transition
                     // for inverse cleanup; observe() still requires a different
-                    // challenge focus before publishing any association pair.
+                    // challenge strip before publishing any association pair.
                     expectedIndex = index; expectedFocus = focus
+                    expectedSelectedChild = selectedChild
                     expectedViewport = afterViewport
                     return permitsRead() && !stop() && accepted
                 }
@@ -568,6 +644,17 @@ extension AccessibilityChannel {
                      collectionNow: @Sendable () -> ContinuousClock.Instant = { .now }) async -> [Pair] {
             guard let firstChallenge = headers.indices.first(where: { $0 != originalIndex }),
                   await referenceIsCurrent(), permitsRead(), !stop() else { return [] }
+            if allHeldHeaders {
+                switch selectedChildRead() {
+                case .observed(let child):
+                    originalSelectedChild = child; expectedSelectedChild = child
+                    guard permitsRead(), !stop() else { return [] }
+                case .unavailable: break
+                case .unverified:
+                    effects.reason = "association_selection_unverified"; return []
+                }
+            }
+            let originalAssociationStrip = originalSelectedChild ?? originalFocus
             let challenges = allHeldHeaders ? headers.indices.filter { $0 != originalIndex } : [firstChallenge]
             // Whole-held pairs are optional partial observations. Do not spend
             // the entire owned deadline on more challenges: the original inverse
@@ -588,7 +675,7 @@ extension AccessibilityChannel {
             var restored = true
             var selectionsVerified = true
             // An initially selected header and passive focus are not a pair
-            // witness. Whole-held collection needs its own changed-focus return
+            // witness. Whole-held collection needs its own changed-strip return
             // to that header, just as it does for every challenged header.
             var originalPairVerified = !allHeldHeaders
             for challenge in challenges {
@@ -597,44 +684,45 @@ extension AccessibilityChannel {
                 // ownership after its deciding viewport reads and immediately
                 // before the action. Do not repeat that census here.
                 guard await referenceIsCurrent(), !stop() else { restored = false; break }
-                let precedingFocus = expectedFocus
-                let advanced = await select(challenge, stoppingWhen: stop)
+                let precedingStrip = associationStrip
+                let advanced = await select(challenge, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
                 let challengeFocus = expectedFocus
+                let challengeStrip = associationStrip
                 if allHeldHeaders {
                     guard advanced else { selectionsVerified = false; break }
-                    if !CFEqual(challengeFocus, precedingFocus) {
-                        // The exclusive original header and a changed passive
-                        // focus are renewed together under full held census
+                    if !CFEqual(challengeStrip, precedingStrip) {
+                        // The exclusive header and a changed Mixer relationship
+                        // are renewed together under full held census
                         // custody. Intermediate proofs need no inverse action.
-                        observed.append((challenge, challengeFocus))
-                    } else if !CFEqual(precedingFocus, originalFocus) {
-                        // Unchanged focus is not alias evidence. Challenge that
+                        observed.append((challenge, challengeStrip))
+                    } else if !CFEqual(precedingStrip, originalAssociationStrip) {
+                        // An unchanged relationship is not alias evidence. Challenge that
                         // header again from the original strip; if it still does
-                        // not change focus, leave just this association unknown.
+                        // not change strip, leave just this association unknown.
                         guard await referenceIsCurrent(),
-                              await select(originalIndex, stoppingWhen: stop) else {
+                              await select(originalIndex, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop) else {
                             selectionsVerified = false; break
                         }
-                        if !CFEqual(expectedFocus, originalFocus) {
+                        if !CFEqual(associationStrip, originalAssociationStrip) {
                             // The original selection can retain a still-owned
-                            // preceding focus. That is no fresh baseline or pair
+                            // preceding strip. That is no fresh baseline or pair
                             // proof, but it does not contradict earlier pairs.
                             originalPairVerified = false
                             continue
                         }
                         originalPairVerified = true
                         guard await referenceIsCurrent(),
-                              await select(challenge, stoppingWhen: stop) else {
+                              await select(challenge, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop) else {
                             selectionsVerified = false; break
                         }
-                        if !CFEqual(expectedFocus, originalFocus) { observed.append((challenge, expectedFocus)) }
+                        if !CFEqual(associationStrip, originalAssociationStrip) { observed.append((challenge, associationStrip)) }
                     }
                     continue
                 }
                 if expectedIndex == originalIndex {
                     restored = permitsRead() && CFEqual(expectedFocus, originalFocus)
                 } else if await referenceIsCurrent() {
-                    restored = await select(originalIndex, stoppingWhen: stop) && CFEqual(expectedFocus, originalFocus)
+                    restored = await select(originalIndex, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop) && CFEqual(expectedFocus, originalFocus)
                 } else { restored = false }
                 // Each proof starts at the same original selection/focus. A
                 // previous challenge's passive focus cannot identify this header.
@@ -645,16 +733,23 @@ extension AccessibilityChannel {
                 observed.append((challenge, challengeFocus))
             }
             if allHeldHeaders {
+                func selectedChildRestored() -> Bool {
+                    guard let originalSelectedChild, let expectedSelectedChild else { return true }
+                    return CFEqual(originalSelectedChild, expectedSelectedChild)
+                }
                 if expectedIndex == originalIndex {
-                    restored = permitsRead() && CFEqual(expectedFocus, originalFocus)
+                    restored = permitsRead() && CFEqual(expectedFocus, originalFocus) && selectedChildRestored()
                 } else if await referenceIsCurrent() {
-                    let precedingFocus = expectedFocus
-                    restored = await select(originalIndex, stoppingWhen: stop) && CFEqual(expectedFocus, originalFocus)
-                    if restored, !CFEqual(precedingFocus, originalFocus) { originalPairVerified = true }
+                    let precedingStrip = associationStrip
+                    let returned = await select(originalIndex, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
+                    if returned, CFEqual(associationStrip, originalAssociationStrip),
+                       !CFEqual(precedingStrip, originalAssociationStrip) { originalPairVerified = true }
+                    restored = returned && CFEqual(expectedFocus, originalFocus) && selectedChildRestored()
                 } else { restored = false }
                 if !restored, !lost, expectedIndex == originalIndex {
-                    originalPairVerified = false
+                    if originalSelectedChild == nil { originalPairVerified = false }
                     restored = await restoreOriginalFocus(referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
+                        && selectedChildRestored()
                 }
             }
             let inverseVerified: Bool
@@ -671,9 +766,10 @@ extension AccessibilityChannel {
             guard selectionsVerified, !observed.isEmpty else {
                 effects.reason = "association_selection_unverified"; return []
             }
-            return (observed + (originalPairVerified ? [(originalIndex, originalFocus)] : [])).map { index, strip in
+            return (observed + (originalPairVerified ? [(originalIndex, originalAssociationStrip)] : [])).map { index, strip in
                 Pair(track: .init(window: window, header: headers[index], document: document, runtime: logic),
-                     strip: .init(window: window, mixer: mixer, strip: strip, document: document))
+                     strip: .init(window: window, mixer: mixer, strip: strip, document: document),
+                     source: originalSelectedChild == nil ? "held_exclusive_selection_focus" : "held_exclusive_selection_selected_child")
             }
         }
     }

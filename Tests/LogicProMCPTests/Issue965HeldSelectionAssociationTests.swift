@@ -201,6 +201,10 @@ struct Issue965HeldSelectionAssociationTests {
         var sharedThirdStrip = false
         var thirdSharesOriginalStrip = false
         var thirdRetainsPreviousFocus = false
+        var selectedChildrenReads = 0
+        var selectedChildrenReadsAtWrite = 0
+        var associationStopReads = 0
+        var associationStopReadsAtWrite = 0
         var routingLateScopeInjected = false
         var inputMenuPresses = 0
         var inputMenuCancels = 0
@@ -354,6 +358,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     return nil
                 }, attributeValueResultHandler: { [self] element, attribute in
+                    if fault == "selected_child_unreadable", CFEqual(element, mixer),
+                       attribute == kAXSelectedChildrenAttribute as String {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
                     if routingOtherReplacement != nil, CFEqual(element, strips[0]) {
                         return .failure(.init(raw: AXError.invalidUIElement.rawValue))
                     }
@@ -1448,6 +1456,188 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.selections == (provedEarlier ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
         #expect(f.focusRestorationWrites.isEmpty)
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("Actual Mixer selected-child transitions can prove held pairs while keyboard focus stays elsewhere",
+          arguments: [false, true])
+    func mixerSelectedChildrenObservePairsWithoutInventingFocus(shared: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let mapping = [0, 3, shared ? 3 : 1, 2]
+        f.routingRead = { element, attribute in
+            if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, attribute, f.strips[1])
+            }
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+            }
+        }
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        let strips = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 4)
+        for index in mapping.indices {
+            let row = try #require(rows.first { $0["track_index"] as? Int == index })
+            #expect(row["mixer_strip_ref"] as? String == strips[mapping[index]]["mixer_strip_ref"] as? String)
+            #expect(row["source"] as? String == "held_exclusive_selection_selected_child")
+        }
+        #expect(f.focusRestorationWrites.isEmpty)
+        #expect(f.selections == (shared ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        #expect(section["coverage"] as? String == "partial", "This does not certify global population")
+    }
+
+    @Test("The deciding selected-child read cannot outlive reference, editor, document or strip custody",
+          arguments: ["reference", "document", "editor", "same_focus_editor", "retired_strip"])
+    func mixerSelectedChildDecidingReadMustRemainOwned(fault: String) async throws {
+        func observe(_ f: Fixture) async throws -> SessionPopulationObservation.FreshPopulation {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            return try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(
+                    request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                    fileReader: .unavailable,
+                    navigationReferenceIsCurrent: { f.referenceCurrent }, stoppingWhen: { false })
+            }
+        }
+        func fixture(injectAt: Int?) throws -> Fixture {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            let mapping = [0, 3, 1, 2]
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                    if !f.cleanupScopeInjected || fault != "editor" {
+                        f.builder.setAttribute(f.app, attribute, f.strips[1])
+                    }
+                }
+                if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    f.selectedChildrenReads += 1
+                    f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                    if f.selections.isEmpty, f.selectedChildrenReads == injectAt {
+                        f.cleanupScopeInjected = true
+                        switch fault {
+                        case "reference": f.referenceCurrent = false
+                        case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        case "editor":
+                            let editor = f.builder.element(1_965_995)
+                            f.builder.setRole(editor, kAXTextFieldRole as String)
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                        case "same_focus_editor":
+                            f.builder.setAttribute(f.strips[1], kAXNumberOfCharactersAttribute as String, 1)
+                        case "retired_strip": f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[0]) })
+                        default: Issue.record("Unexpected fault")
+                        }
+                    }
+                }
+            }
+            f.routingSelection = { index in
+                if index == 1, f.selections == [1] { f.selectedChildrenReadsAtWrite = f.selectedChildrenReads }
+            }
+            return f
+        }
+        let calibration = try fixture(injectAt: nil)
+        let positive = try await observe(calibration)
+        #expect(positive.selectionAssociations.count == 4)
+        #expect(calibration.selectedChildrenReadsAtWrite > 0)
+        let f = try fixture(injectAt: calibration.selectedChildrenReadsAtWrite)
+        let body = try await observe(f)
+        #expect(f.cleanupScopeInjected)
+        #expect(f.selections.isEmpty, "Lost custody at the actual deciding relationship read must prevent the first selection")
+        #expect(body.selectionAssociations.isEmpty)
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("A focus-reading stop callback must precede the final selected-child action proof",
+          arguments: ["reference", "document", "editor", "retired_strip"])
+    func mixerSelectedChildStopReadCannotInvalidateTheFinalActionProof(fault: String) async throws {
+        func observe(_ f: Fixture, injectAt: Int?) async throws -> SessionPopulationObservation.FreshPopulation {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            return try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(
+                    request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                    fileReader: .unavailable, navigationReferenceIsCurrent: { f.referenceCurrent },
+                    stoppingWhen: {
+                        f.associationStopReads += 1
+                        if f.selections.isEmpty, f.associationStopReads == injectAt {
+                            f.cleanupScopeInjected = true
+                            switch fault {
+                            case "reference": f.referenceCurrent = false
+                            case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            case "editor":
+                                let editor = f.builder.element(1_965_997)
+                                f.builder.setRole(editor, kAXTextFieldRole as String)
+                                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                            case "retired_strip": f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[0]) })
+                            default: Issue.record("Unexpected fault")
+                            }
+                        }
+                        return false
+                    })
+            }
+        }
+        func fixture() throws -> Fixture {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    f.builder.setAttribute(f.mixer, attribute, [f.strips[f.selections.last ?? 0]])
+                }
+            }
+            f.routingSelection = { index in
+                if index == 1, f.selections == [1] { f.associationStopReadsAtWrite = f.associationStopReads }
+            }
+            return f
+        }
+        let calibration = try fixture()
+        #expect(try await observe(calibration, injectAt: nil).selectionAssociations.count == 4)
+        #expect(calibration.associationStopReadsAtWrite > 0)
+        let f = try fixture()
+        let body = try await observe(f, injectAt: calibration.associationStopReadsAtWrite)
+        #expect(f.cleanupScopeInjected)
+        #expect(f.selections.isEmpty)
+        #expect(body.selectionAssociations.isEmpty)
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("Malformed or lost Mixer selected-child relationships cannot fall back to keyboard focus",
+          arguments: ["malformed", "non_element", "empty", "multiple", "foreign", "wrong_parent", "unreadable", "lost_after_selection"])
+    func mixerSelectedChildMustBeOneActualReciprocalHeldElement(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        if fault == "unreadable" { f.fault = "selected_child_unreadable" }
+        f.routingRead = { element, attribute in
+            guard CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String else { return }
+            f.selectedChildrenReads += 1
+            let selected = f.strips[f.selections.last ?? 0]
+            switch fault {
+            case "malformed": f.builder.setAttribute(f.mixer, attribute, "not an array")
+            case "non_element": f.builder.setAttribute(f.mixer, attribute, ["not an AX element"])
+            case "empty": f.builder.setAttribute(f.mixer, attribute, [AXUIElement]())
+            case "multiple": f.builder.setAttribute(f.mixer, attribute, [f.strips[0], f.strips[1]])
+            case "foreign": f.builder.setAttribute(f.mixer, attribute, [f.builder.element(1_965_996)])
+            case "wrong_parent":
+                f.builder.setAttribute(selected, kAXParentAttribute as String, f.builder.element(1_965_996))
+                f.builder.setAttribute(f.mixer, attribute, [selected])
+            case "lost_after_selection":
+                f.builder.setAttribute(f.mixer, attribute, f.selections.isEmpty ? [selected] : [AXUIElement]())
+            default: break
+            }
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let body = try await OperationTraceContext.$current.withValue(context) {
+            try await f.channel().readFreshSessionPopulation(
+                request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                fileReader: .unavailable, stoppingWhen: { false })
+        }
+        #expect(body.selectionAssociations.isEmpty)
+        #expect(f.selectedChildrenReads > 0)
+        #expect(f.selections == (fault == "lost_after_selection" ? [1] : []))
+        #expect(f.focusRestorationWrites.isEmpty)
     }
 
     @Test("A header with unchanged focus remains unknown without discarding other independently proved pairs")
