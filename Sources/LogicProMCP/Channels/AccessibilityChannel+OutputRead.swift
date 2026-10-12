@@ -467,7 +467,7 @@ extension AccessibilityChannel {
                        inputControlStillCurrent(control), popupAbsent(), source.permits(runtime: runtime) {
                         sourceAfter = true
                         extras["popup_menu_state"] = "closed"
-                        extras["source_renewal"] = "held_exclusive_selection_focus"
+                        extras["source_renewal"] = source.pair.source
                         extras["reference_reread_required"] = true
                         extras["source_index_after"] = source.index
                         inputRenewal = source

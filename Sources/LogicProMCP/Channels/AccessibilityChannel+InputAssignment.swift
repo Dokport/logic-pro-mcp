@@ -55,7 +55,7 @@ extension AccessibilityChannel {
         let pair = before.inputRenewal?.pair ?? AXMixerStripBinding.outputAssociation
         if before.inputRenewal != nil {
             extras["reference_reread_required"] = true
-            extras["source_renewal"] = "held_exclusive_selection_focus"
+            extras["source_renewal"] = before.inputRenewal?.pair.source
         }
         guard let heldInput = before.inputSlot, heldInput.owner.matches(owner),
               let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: owner.mixer, runtime: runtime.ax) else {
@@ -244,7 +244,7 @@ extension AccessibilityChannel {
             }
             afterOwner = source.pair.strip; afterPair = source.pair
             writerRenewal = source
-            extras["source_renewal"] = "held_exclusive_selection_focus"
+            extras["source_renewal"] = source.pair.source
             extras["reference_reread_required"] = true
         }
         let after = await AXMixerStripBinding.$current.withValue(afterOwner) {
@@ -256,7 +256,7 @@ extension AccessibilityChannel {
         let finalOwner = after.inputRenewal?.pair.strip ?? afterOwner
         if after.inputRenewal != nil {
             extras["reference_reread_required"] = true
-            extras["source_renewal"] = "held_exclusive_selection_focus"
+            extras["source_renewal"] = after.inputRenewal?.pair.source
         }
         let finalOutput = await checkedSink(finalOwner)
         recordRead(finalOutput, key: "output_after_write")

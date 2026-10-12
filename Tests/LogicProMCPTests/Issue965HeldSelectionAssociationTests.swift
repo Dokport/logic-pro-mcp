@@ -7,12 +7,50 @@ import Testing
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
     @Test("A held input popup may move focus without losing its original complete association",
-          arguments: ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window", "popup_unreadable_window", "popup_foreign_window", "foreign_document", "foreign_focus", "detached_search", "retired_strip", "changed_selection", "playing"])
+          arguments: ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window", "popup_unreadable_window", "popup_foreign_window", "foreign_document", "foreign_focus", "detached_search", "retired_strip", "changed_selection", "playing", "rail", "rail_unchanged", "rail_missing_relationship", "rail_changed_child", "rail_editor", "rail_final_child_drift", "rail_final_focus_drift", "rail_final_rail_editor", "rail_final_rail_insertion"])
     func ownedPopupFocusPreservesOnlyActualHeldCustody(_ fault: String) async throws {
         let f = try Fixture(), gate = LogicMutationGate()
+        if fault.hasPrefix("rail") {
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
+        }
         _ = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: ["domains": .array([.string("associations")])], mutationGate: gate) {
-            let base = f.builder.makeLogicRuntime(appElement: f.app, attributeValueResultHandler: { element, attribute in
+            let base = f.builder.makeLogicRuntime(appElement: f.app, attributeValueHandler: { element, attribute in
+                if ["rail_final_child_drift", "rail_final_focus_drift", "rail_final_rail_editor", "rail_final_rail_insertion"].contains(fault), f.ownedPopupObservationStarted,
+                   CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                    f.passivePermissionFocusReads += 1
+                    if f.passivePermissionFocusReads == 2 {
+                        if fault == "rail_final_child_drift" {
+                            f.routingLateScopeInjected = true
+                            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+                        } else { f.passivePermissionArmed = true }
+                    }
+                }
+                if fault == "rail_final_focus_drift", f.passivePermissionArmed,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    let foreign = f.builder.element(1_965_983)
+                    f.builder.setRole(foreign, kAXTextFieldRole as String)
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                    f.routingLateScopeInjected = true
+                }
+                if ["rail_final_rail_editor", "rail_final_rail_insertion"].contains(fault), f.passivePermissionArmed,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    if fault == "rail_final_rail_editor" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
+                    f.routingLateScopeInjected = true
+                }
+                return nil
+            }, attributeValueResultHandler: { element, attribute in
+                if fault.hasPrefix("rail"), CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                    kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                    if fault == "rail_final_rail_insertion", f.routingLateScopeInjected,
+                       attribute == kAXInsertionPointLineNumberAttribute as String { return .success(NSNumber(value: 1)) }
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
+                if fault == "rail_missing_relationship", f.ownedPopupObservationStarted,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
                 if f.ownedPopupObservationStarted, CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
                     if ["popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window"].contains(fault) {
                         return .failure(.init(raw: AXError.noValue.rawValue))
@@ -29,7 +67,8 @@ struct Issue965HeldSelectionAssociationTests {
                 executeAppleScript: { _ in Issue.record("No scripts"); return .error("forbidden") },
                 onScreenWindowList: { [] }, focusedApplicationPID: { 4242 })
             guard let association = AccessibilityChannel.HeldSelectionAssociation(window: f.window,
-                logic: logic, expectedProject: nil, requiresProjectReference: false) else {
+                logic: logic, expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: fault.hasPrefix("rail")) else {
                 Issue.record("Fixture must hold a real association before its popup"); return .init(content: [])
             }
             let root = f.builder.element(1_965_980), search = f.builder.element(1_965_981)
@@ -40,6 +79,8 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, search)
             f.ownedPopupObservationStarted = true
             switch fault {
+            case "rail_unchanged", "rail_final_rail_editor", "rail_final_rail_insertion":
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, association.originalFocus)
             case "unchanged_focus", "popup_unchanged_no_focused_window", "ordinary_no_focused_window":
                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, association.originalFocus)
                 f.builder.setAttribute(association.originalFocus, kAXInsertionPointLineNumberAttribute as String, 0)
@@ -54,11 +95,22 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
                 f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
             case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+            case "rail_changed_child": f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+            case "rail_editor": f.builder.setRole(f.rail, kAXTextFieldRole as String)
             default: break
             }
             let permitted = fault == "ordinary_no_focused_window" ? association.permitsRead() : association.permitsOwnedPopupRead(root)
-            if ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window"].contains(fault) { #expect(permitted) } else { #expect(!permitted) }
+            if ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "rail", "rail_unchanged"].contains(fault) { #expect(permitted) } else { #expect(!permitted) }
             #expect(f.builder.actionCalls.isEmpty)
+            if fault == "rail_final_child_drift" {
+                #expect(f.routingLateScopeInjected, "Reach the deciding popup-focus read before refusing the changed original child")
+            }
+            if fault == "rail_final_focus_drift" {
+                #expect(f.routingLateScopeInjected, "Move focus during the final child read without changing the original child or header")
+            }
+            if ["rail_final_rail_editor", "rail_final_rail_insertion"].contains(fault) {
+                #expect(f.routingLateScopeInjected, "Change passive rail metadata during the final child read while retaining its CF focus identity")
+            }
             return .init(content: [])
         }
     }
@@ -904,6 +956,11 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
             f.routingRead = { element, attribute in
+                if condition == "selected_child", f.routingReplacement != nil,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    let selectedOther = AXValueExtractors.extractSelectedState(f.headers[1], runtime: f.builder.makeAXRuntime()) == true
+                    f.builder.setAttribute(f.mixer, attribute, [selectedOther ? f.strips[0] : replacement])
+                }
                 let inputDescription = f.selections.count == (graph ? 6 : 4) && CFEqual(element, newInput)
                     && attribute == kAXDescriptionAttribute as String
                 let decidingDescription = inputDescription && f.inputPreviousReadWasDescription
@@ -1026,7 +1083,7 @@ struct Issue965HeldSelectionAssociationTests {
             let current = try #require(AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: f.mixer,
                 runtime: f.builder.makeAXRuntime()))
             #expect(!current.strips.contains { CFEqual($0, f.strips[1]) }, "The original source is genuinely absent, not renamed in place")
-            let succeeded = condition == "paired" || condition == "unselected_pair"
+            let succeeded = condition == "paired" || condition == "unselected_pair" || condition == "selected_child"
             #expect(body["state"] as? String == (succeeded ? "A" : "C"), "Input renewal response: \(sharedToolText(result))")
             let attempted = try #require(body["write_attempted"] as? Bool)
             #expect(!attempted)
@@ -1038,6 +1095,8 @@ struct Issue965HeldSelectionAssociationTests {
                     "Bus 256 display text cannot assign the checked Bus 1 value")
                 let reread = try #require(body["reference_reread_required"] as? Bool)
                 #expect(reread)
+                #expect(body["source_renewal"] as? String == (condition == "selected_child"
+                    ? "held_exclusive_selection_selected_child" : "held_exclusive_selection_focus"))
                 #expect(body["popup_menu_state"] as? String == "closed")
                 if condition == "unselected_pair" {
                     let selected = try #require(f.builder.attributeValue(f.headers[1], kAXSelectedAttribute as String) as? Bool)
@@ -1056,9 +1115,9 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: [1, 256])
-    func inputBusRenewsRetiredSourceThroughOriginalCapturedHeader(number: Int) async throws {
-        try await assertInputBusRenewal(number: number, condition: "paired")
+    @Test(arguments: [1, 256], ["paired", "selected_child"])
+    func inputBusRenewsRetiredSourceThroughOriginalCapturedHeader(number: Int, condition: String) async throws {
+        try await assertInputBusRenewal(number: number, condition: condition)
     }
 
     @Test(arguments: [1, 256])
