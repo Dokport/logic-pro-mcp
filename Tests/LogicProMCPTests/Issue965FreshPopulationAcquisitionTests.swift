@@ -3306,8 +3306,9 @@ struct Issue965FreshPopulationAcquisitionTests {
         return (fixture, focus)
     }
 
-    @Test("a fresh Mixer population does not query focus-moving scalar Help", arguments: [false, true])
-    func registeredMixerReadOmitsFocusMovingScalarHelp(hasValueIndicator: Bool) async throws {
+    @Test("a fresh Mixer population does not query focus-moving scalar Help",
+          arguments: ["none", "indicator", "slider", "text"])
+    func registeredMixerReadOmitsFocusMovingScalarHelp(childShape: String) async throws {
         let (fixture, focus) = passiveMixerFocusFixture()
         let volume = fixture.builder.element(965_987)
         let pan = fixture.builder.element(965_988)
@@ -3321,11 +3322,13 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.setAttribute(slider, kAXValueAttribute as String, value)
             fixture.builder.setChildren(slider, [])
         }
-        if hasValueIndicator {
+        if childShape != "none" {
             let indicator = fixture.builder.element(965_989)
-            fixture.builder.setRole(indicator, kAXValueIndicatorRole as String)
+            let role = childShape == "slider" ? kAXSliderRole as String
+                : childShape == "text" ? kAXStaticTextRole as String : kAXValueIndicatorRole as String
+            fixture.builder.setRole(indicator, role)
             fixture.builder.setChildren(indicator, [])
-            fixture.builder.setChildren(volume, [indicator])
+            fixture.builder.setChildren(childShape == "text" ? pan : volume, [indicator])
         }
         fixture.builder.setChildren(focus, [volume, pan])
         let result = try await inspect(fixture: fixture, domains: ["strips"],

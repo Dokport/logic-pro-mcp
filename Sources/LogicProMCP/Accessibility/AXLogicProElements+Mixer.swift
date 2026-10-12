@@ -481,7 +481,7 @@ extension AXLogicProElements {
         // is unavailable, conservatively census every descendant instead: that
         // enlarges the search rather than hiding a possible Mixer. Role, possible
         // candidate identity, children and traversal bounds remain strict.
-        // Native scalar sliders can contain leaf value indicators. Neither the
+        // Native scalar sliders can contain leaf sliders, text or value indicators. Neither the
         // slider nor those fully observed leaves can identify or contain a Mixer.
         // Unknown roles/children and every other subtree retain Inspector Help.
         var hasOnlyScalarLeaves = false
@@ -491,7 +491,9 @@ extension AXLogicProElements {
                 try check()
                 let childRole = AXHelpers.getRole(child, runtime: runtime)
                 observingExposure?.observeRole(element: child, role: childRole)
-                guard childRole == (kAXValueIndicatorRole as String) else {
+                guard childRole == (kAXValueIndicatorRole as String)
+                    || childRole == (kAXSliderRole as String)
+                    || childRole == (kAXStaticTextRole as String) else {
                     if childRole == nil { sawIncompleteAbsence = true }
                     hasOnlyScalarLeaves = false
                     break

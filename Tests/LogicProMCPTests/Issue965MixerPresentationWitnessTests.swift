@@ -230,15 +230,17 @@ struct Issue965MixerPresentationWitnessTests {
         #expect(batches.count == 1 && singles.count == 0)
     }
 
-    @Test(arguments: [false, true], [false, true])
-    func aCompletelyReadNoncandidateLeafNeedsNoInspectorHelp(bulk: Bool, nativeScalar: Bool) throws {
+    @Test(arguments: [false, true], ["button", "indicator", "slider", "text"])
+    func aCompletelyReadNoncandidateLeafNeedsNoInspectorHelp(bulk: Bool, childShape: String) throws {
         let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter(), leafHelp = Counter()
         let leaf = fixture.builder.element(966_130)
-        fixture.builder.setRole(leaf, nativeScalar ? kAXSliderRole as String : kAXButtonRole as String)
+        fixture.builder.setRole(leaf, childShape != "button" ? kAXSliderRole as String : kAXButtonRole as String)
         fixture.builder.setChildren(leaf, [])
-        if nativeScalar {
+        if childShape != "button" {
             let indicator = fixture.builder.element(966_132)
-            fixture.builder.setRole(indicator, kAXValueIndicatorRole as String)
+            let role = childShape == "slider" ? kAXSliderRole as String
+                : childShape == "text" ? kAXStaticTextRole as String : kAXValueIndicatorRole as String
+            fixture.builder.setRole(indicator, role)
             fixture.builder.setChildren(indicator, [])
             fixture.builder.setChildren(leaf, [indicator])
         }
@@ -263,7 +265,8 @@ struct Issue965MixerPresentationWitnessTests {
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 
-    @Test(arguments: ["group", "nonleaf", "unknown_role", "unread_children", "first_unread_children"])
+    @Test(arguments: ["group", "nonleaf", "slider_nonleaf", "text_nonleaf",
+                      "unknown_role", "unread_children", "first_unread_children"])
     func aScalarWithUnobservedOrNonleafChildrenRetainsInspectorHelp(fault: String) throws {
         let fixture = Fixture(), help = Counter(), childReads = Counter()
         let slider = fixture.builder.element(966_133)
@@ -272,9 +275,12 @@ struct Issue965MixerPresentationWitnessTests {
         fixture.builder.setAttribute(slider, kAXHelpAttribute as String, "Inspector")
         fixture.builder.setChildren(slider, [child])
         if fault != "unknown_role" {
-            fixture.builder.setRole(child, fault == "group" ? kAXGroupRole as String : kAXValueIndicatorRole as String)
+            let role = fault == "group" ? kAXGroupRole as String
+                : fault == "slider_nonleaf" ? kAXSliderRole as String
+                : fault == "text_nonleaf" ? kAXStaticTextRole as String : kAXValueIndicatorRole as String
+            fixture.builder.setRole(child, role)
         }
-        fixture.builder.setChildren(child, fault == "group" || fault == "nonleaf" ? [fixture.owner] : [])
+        fixture.builder.setChildren(child, fault == "group" || fault.hasSuffix("nonleaf") ? [fixture.owner] : [])
         fixture.builder.setChildren(fixture.window, [slider])
         let runtime = fixture.builder.makeLogicRuntime(appElement: fixture.app,
             attributeValueResultHandler: { element, attribute in
