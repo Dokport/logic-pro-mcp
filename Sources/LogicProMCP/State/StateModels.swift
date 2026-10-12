@@ -248,9 +248,10 @@ struct SendState: Sendable, Codable {
 
 /// What one send slot was seen to be (#291, ADR-008 section 5's endpoint-and-edge-observations requirement).
 ///
-/// `occupiedKnownDestination` remains unproduced: an assigned send's raw display is not
-/// endpoint identity, so a consumer that later learns one can say so
-/// without the unknown case silently changing meaning. `unreadable` is a slot whose button was
+/// Raw readers never produce `occupiedKnownDestination`: an assigned send's display is not
+/// endpoint identity. A stable session report can project a request-held checked destination
+/// for the exact source/census ordinal without changing the ordinary cached observation.
+/// `unreadable` is a slot whose button was
 /// found but whose successor would not say whether it is the send knob — unknown for that slot
 /// alone, not for the strip. A successor whose role will not read may be a slot of its own, and
 /// then the strip's whole list is unknown.
@@ -278,6 +279,10 @@ struct SendSlotObservation: Sendable, Codable, Equatable {
     /// Raw description of the qualified assigned group; never a bus/port reference,
     /// group-to-knob pairing, endpoint identity, or permission to write a send.
     var destinationDisplay: String? = nil
+    /// Canonical OutputAssignment token from agreeing owned menu reads, never a display join.
+    /// Historical report data only; it conveys neither receiving-strip nor write authority.
+    var checkedDestination: String? = nil
+    var destinationSource: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case ordinal, state
@@ -285,6 +290,8 @@ struct SendSlotObservation: Sendable, Codable, Equatable {
         case levelDescription = "level_description"
         case bypassed
         case destinationDisplay = "destination_display"
+        case checkedDestination = "checked_destination"
+        case destinationSource = "destination_source"
     }
 }
 

@@ -1003,6 +1003,33 @@ enum SessionPopulationObservation {
 
     // MARK: - Build
 
+    /// Qualify only this immutable capture's checked send. Cached/decoded values cannot
+    /// provide the physical source witness, and no extra read or UI action occurs here.
+    static func reportedSendSlots(of strip: ChannelStripState, capture: Capture,
+                                  qualified: Bool) -> [SendSlotObservation]? {
+        guard let slots = strip.sendSlots else { return nil }
+        return slots.map { slot in
+            var result = slot
+            result.checkedDestination = nil; result.destinationSource = nil
+            if result.state == .occupiedKnownDestination { result.state = .occupiedUnknownDestination }
+            guard qualified, capture.freshPopulation?.stable == true,
+                  let owner = strip.physicalBinding,
+                  capture.channelStrips.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1,
+                  slot.state == .occupiedUnknownDestination, slot.ordinal >= 0,
+                  slots.filter({ $0.ordinal == slot.ordinal }).count == 1 else { return result }
+            let checked = capture.freshPopulation?.checkedOutputs.filter {
+                $0.source.matches(owner) && $0.sendOrdinal == slot.ordinal
+            } ?? []
+            guard checked.count == 1, let assignment = checked.first?.assignment,
+                  assignment != .noOutput,
+                  OutputAssignment(token: assignment.token) == assignment else { return result }
+            result.state = .occupiedKnownDestination
+            result.checkedDestination = assignment.token
+            result.destinationSource = "ax_send_menu_checkmark"
+            return result
+        }
+    }
+
     /// Pure: the same capture and request always produce the same report.
     static func build(request: Request, capture: Capture) -> Report {
         let movementReason = captureMovementReason(capture: capture)
@@ -1186,7 +1213,8 @@ enum SessionPopulationObservation {
                         && strip.pluginsReadError == nil ? nil : strip.plugins.count,
                     pluginsSource: strip.pluginsSource,
                     mixerStripRef: capture.mixerReference(at: row)?.rawValue,
-                    sendSlots: strip.sendSlots
+                    sendSlots: reportedSendSlots(of: strip, capture: capture,
+                        qualified: !moved && !referencesStale)
                 )
             }
         )
