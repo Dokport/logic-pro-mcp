@@ -2803,8 +2803,30 @@ struct Issue965FreshPopulationAcquisitionTests {
                 #expect(hierarchy["coverage"] as? String == "unavailable")
                 #expect(hierarchy["disclosure_exposures"] == nil)
             }
-            #expect(rows.allSatisfy { $0["parent"] as? String == "unknown" && $0["depth"] as? String == "unknown" },
-                "a disclosure delta does not establish immediate parents or absolute depth")
+            var observedParents: [String: String] = [:]
+            if navigation, revealedStack == nil {
+                let outer = try #require(rows[0]["track_ref"] as? String)
+                for header in headers[1...23] {
+                    let index = try #require(expectedHeaders.firstIndex(where: { CFEqual($0, header) }))
+                    observedParents[try #require(rows[index]["track_ref"] as? String)] = outer
+                }
+                if nested {
+                    let inner = try #require(rows[1]["track_ref"] as? String)
+                    for row in rows[2...3] { observedParents[try #require(row["track_ref"] as? String)] = inner }
+                }
+            }
+            for row in rows {
+                let ref = try #require(row["track_ref"] as? String)
+                if let parent = observedParents[ref] {
+                    #expect(row["parent"] as? String == parent,
+                        "qualified closed-descendant observations should project their captured physical parent")
+                    #expect(row["parent_source"] as? String == "owned_disclosure_closed_descendants")
+                } else {
+                    #expect(row["parent"] as? String == "unknown" && row["parent_source"] == nil)
+                }
+                #expect(row["depth"] as? String == "unknown",
+                    "captured direct children do not establish root membership or absolute depth")
+            }
             let overall = try #require(body["overall"] as? [String: Any])
             let complete = try #require(overall["complete"] as? Bool)
             #expect(!complete)

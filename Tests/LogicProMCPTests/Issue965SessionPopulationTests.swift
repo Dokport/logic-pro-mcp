@@ -15,6 +15,26 @@ import Testing
 
 private typealias Observation = SessionPopulationObservation
 
+@Test func qualifiedHierarchyParentsRejectContradictions() {
+    func direct(_ stack: String, _ children: [String]) -> Observation.DisclosureExposureRow {
+        .init(stackRef: stack, exposedTrackRefs: children, directChildTrackRefs: children,
+              directChildrenSource: "owned_disclosure_closed_descendants")
+    }
+    #expect(Observation.qualifiedDirectParents([direct("outer", ["inner", "sibling"]), direct("inner", ["leaf"])])
+        == ["inner": "outer", "sibling": "outer", "leaf": "inner"])
+    #expect(Observation.qualifiedDirectParents([direct("a", ["child"]), direct("b", ["child"])]) == nil)
+    #expect(Observation.qualifiedDirectParents([direct("a", ["a"])]) == nil)
+    #expect(Observation.qualifiedDirectParents([direct("a", ["b"]), direct("b", ["a"])]) == nil)
+    #expect(Observation.qualifiedDirectParents([direct("a", ["b"]), direct("b", ["c"]), direct("c", ["a"])]) == nil)
+    #expect(Observation.qualifiedDirectParents([direct("a", ["child", "child"])]) == nil)
+    #expect(Observation.qualifiedDirectParents([direct("a", ["child"]), direct("a", ["child"])]) == ["child": "a"])
+    let weak = Observation.DisclosureExposureRow(stackRef: "other", exposedTrackRefs: ["child"])
+    #expect(Observation.qualifiedDirectParents([direct("a", ["child"]), weak]) == ["child": "a"])
+    let unexposed = Observation.DisclosureExposureRow(stackRef: "a", exposedTrackRefs: [],
+        directChildTrackRefs: ["child"], directChildrenSource: "owned_disclosure_closed_descendants")
+    #expect(Observation.qualifiedDirectParents([unexposed]) == nil)
+}
+
 private let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
 private let freshRead = fixedNow.addingTimeInterval(-1)
 private let staleRead = fixedNow.addingTimeInterval(-60)
