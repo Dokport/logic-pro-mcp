@@ -278,14 +278,17 @@ struct Issue966ApprovedRoutingDiffTests {
         #expect(body["protected_invariants"] == repeated["protected_invariants"])
     }
 
-    @Test(arguments: ["source", "receiver", "send_only", "disconnected"])
-    func protectedPathsCannotCertifyContradictoryNoOutputEvidence(_ kind: String) throws {
+    @Test(arguments: [.noOutput, .physicalOutput] as [RoutingOutputClassification],
+          ["source", "receiver", "send_only", "disconnected"])
+    func protectedPathsCannotCertifyContradictoryNonBusOutputEvidence(
+        _ classification: RoutingOutputClassification, _ kind: String
+    ) throws {
         let original = protectedGraph()
         let contradictedID = kind == "receiver" ? "receiver_one" : "source_opaque"
         let ns = original.nodes.map { node in
             guard node.id == contradictedID else { return node }
             return RoutingNode(id: node.id, kind: node.kind, displayName: node.displayName,
-                busNumber: node.busNumber, targetRef: node.targetRef, outputClassification: .noOutput)
+                busNumber: node.busNumber, targetRef: node.targetRef, outputClassification: classification)
         }
         var es = original.edges
         if kind == "send_only" || kind == "disconnected" {
