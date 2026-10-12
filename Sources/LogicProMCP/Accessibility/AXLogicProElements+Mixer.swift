@@ -1390,6 +1390,23 @@ extension AXLogicProElements {
               case .success(.some(let listRole)) = AXHelpers.getAttributeResult(
                 children[1], kAXRoleAttribute as String, runtime: runtime) as Result<String?, AXHelpers.AXStatusError>,
               listRole == kAXButtonRole as String else { return nil }
+        // Offscreen native controls can expose the generic assigned-slot placeholder
+        // with a default checkbox value. Occupancy stays known; signal bypass does not.
+        if case .success(.some(let description)) = slotDecidingString(group, kAXDescriptionAttribute as String, runtime: runtime),
+           description.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "send button" { return nil }
+        // The display read can itself observe a change. Preserve the same value
+        // and original direct controls after that deciding read, not a stale bit.
+        guard case .success(.some(let current)) = AXHelpers.getAttributeResult(
+            control, kAXValueAttribute as String, runtime: runtime) as Result<NSNumber?, AXHelpers.AXStatusError>,
+              current.doubleValue == value.doubleValue,
+              case .success(.some(let finalRole)) = AXHelpers.getAttributeResult(
+                control, kAXRoleAttribute as String, runtime: runtime) as Result<String?, AXHelpers.AXStatusError>,
+              finalRole == kAXCheckBoxRole as String,
+              case .success(.some(let finalListRole)) = AXHelpers.getAttributeResult(
+                children[1], kAXRoleAttribute as String, runtime: runtime) as Result<String?, AXHelpers.AXStatusError>,
+              finalListRole == kAXButtonRole as String,
+              let finalChildren = childrenIfRead(group, runtime: runtime), finalChildren.count == 2,
+              zip(finalChildren, children).allSatisfy({ CFEqual($0, $1) }) else { return nil }
         return value.doubleValue == 1
     }
 
