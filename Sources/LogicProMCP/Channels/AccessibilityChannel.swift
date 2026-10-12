@@ -887,7 +887,10 @@ actor AccessibilityChannel: Channel {
                   case .success(.some(let enabled)) = AXHelpers.getAttributeResult(scrollbar, kAXEnabledAttribute as String,
                     runtime: logic.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, enabled.doubleValue == 0,
                   case .success(.some(let value)) = AXHelpers.getAttributeResult(scrollbar, kAXValueAttribute as String,
-                    runtime: logic.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, value.doubleValue == 0 else { return nil }
+                    runtime: logic.ax) as Result<NSNumber?, AXHelpers.AXStatusError>,
+                  // Logic exposes either endpoint for a disabled, non-scrollable page.
+                  // Interior/invalid values still cannot establish the independent end.
+                  value.doubleValue == 0 || value.doubleValue == 1 else { return nil }
             // Renew deciding metadata/geometry after the value read: an old
             // scrollbar can still answer after its actual owner replaced it.
             guard AXHelpers.getRole(scrollbar, runtime: logic.ax) == kAXScrollBarRole as String,

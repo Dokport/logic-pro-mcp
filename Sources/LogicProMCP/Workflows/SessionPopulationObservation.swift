@@ -1330,6 +1330,31 @@ enum SessionPopulationObservation {
                         }
                     }
                     hierarchy = .init(coverage: .partial, reasons: [.parentDepthNotObserved], disclosureExposures: exposures)
+                    // Complete population excludes unseen parents; every physical
+                    // stack still needs its own qualified direct-child observation.
+                    // A consistent partial edge set alone cannot establish roots.
+                    let stackRefs = Set(live.indices.filter { live[$0].isStackHeader == true }
+                        .compactMap { allRows[$0].trackRef })
+                    if request.scope == .wholeProject, tracksCoverage == .complete,
+                       capture.freshPopulation?.stable == true,
+                       live.allSatisfy({ $0.isStackHeader != nil && $0.physicalBinding != nil }),
+                       allRows.allSatisfy({ $0.trackRef != nil }),
+                       Set(allRows.compactMap(\.trackRef)).count == live.count,
+                       Set(fullExposures.map(\.stackRef)) == stackRefs,
+                       fullExposures.allSatisfy({ $0.directChildTrackRefs != nil
+                           && $0.directChildrenSource == "owned_disclosure_closed_descendants" }) {
+                        for index in tracks.rows.indices {
+                            guard let ref = tracks.rows[index].trackRef else { continue }
+                            var depth = 0, current = ref
+                            while let parent = parents[current] { depth += 1; current = parent }
+                            if parents[ref] == nil {
+                                tracks.rows[index].parentSource = "ax_complete_disclosure_population"
+                            }
+                            tracks.rows[index].observedDepth = depth
+                            tracks.rows[index].depthSource = "ax_complete_disclosure_population"
+                        }
+                        hierarchy = .init(coverage: .complete, reasons: [], disclosureExposures: exposures)
+                    }
                 } else {
                     for index in exposures.indices {
                         exposures[index].directChildTrackRefs = nil
