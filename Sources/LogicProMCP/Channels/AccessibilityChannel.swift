@@ -808,6 +808,104 @@ actor AccessibilityChannel: Channel {
             exposure?.observeHiddenView(control: reading?.control, shown: reading?.shown)
             return reading
         }
+        struct SinglePageEnd {
+            let rail: AXUIElement
+            let headerScroll: AXUIElement
+            let workspace: AXUIElement
+            let content: AXUIElement
+            let scrollbar: AXUIElement
+            let viewport: CGRect
+            let frames: [CGRect]
+            func matches(_ other: Self?) -> Bool {
+                guard let other else { return false }
+                return CFEqual(rail, other.rail) && CFEqual(headerScroll, other.headerScroll)
+                    && CFEqual(workspace, other.workspace) && CFEqual(content, other.content)
+                    && CFEqual(scrollbar, other.scrollbar) && viewport == other.viewport && frames == other.frames
+            }
+        }
+        // No scrolling, Help or inferred membership. A matching saved count may
+        // use this independent end only for the fully shown, unvirtualized page.
+        func readSinglePageEnd(_ headers: [AXUIElement]?, tracks: [TrackState]?,
+                               hiddenView: HiddenView?, in window: AXUIElement) throws -> SinglePageEnd? {
+            guard request.scope == .wholeProject, hiddenView?.shown == true,
+                  let headers, !headers.isEmpty, let tracks, tracks.count == headers.count,
+                  tracks.allSatisfy({ $0.isStackHeader == false || ($0.isStackHeader == true && $0.stackCollapsed == false) }),
+                  let rail: AXUIElement = AXHelpers.getAttribute(headers[0], kAXParentAttribute as String, runtime: logic.ax),
+                  let headerScroll: AXUIElement = AXHelpers.getAttribute(rail, kAXParentAttribute as String, runtime: logic.ax),
+                  AXHelpers.getRole(headerScroll, runtime: logic.ax) == kAXScrollAreaRole as String,
+                  let split: AXUIElement = AXHelpers.getAttribute(headerScroll, kAXParentAttribute as String, runtime: logic.ax),
+                  AXHelpers.getRole(split, runtime: logic.ax) == kAXSplitGroupRole as String,
+                  case .success(let siblings) = AXHelpers.childrenResult(split, runtime: logic.ax),
+                  siblings.filter({ CFEqual($0, headerScroll) }).count == 1 else { return nil }
+            func frame(_ element: AXUIElement) -> CGRect? {
+                guard case .success(.some(let p)) = AXHelpers.getAttributeResult(element, kAXPositionAttribute as String,
+                    runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                      case .success(.some(let s)) = AXHelpers.getAttributeResult(element, kAXSizeAttribute as String,
+                    runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                      let point = AXHelpers.point(fromRawAttribute: p), let size = AXHelpers.size(fromRawAttribute: s),
+                      point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
+                      size.width > 0, size.height > 0 else { return nil }
+                return CGRect(origin: point, size: size)
+            }
+            var candidates: [(AXUIElement, AXUIElement, [AXUIElement])] = []
+            for sibling in siblings where !CFEqual(sibling, headerScroll) {
+                try checkAXRead()
+                guard let role = AXHelpers.getRole(sibling, runtime: logic.ax) else { return nil }
+                guard role == kAXScrollAreaRole as String else { continue }
+                guard case .success(let children) = AXHelpers.childrenResult(sibling, runtime: logic.ax) else { return nil }
+                var contents: [AXUIElement] = []
+                for child in children {
+                    guard let role = AXHelpers.getRole(child, runtime: logic.ax) else { return nil }
+                    if role == kAXGroupRole as String,
+                       AXLocalePolicy.trackContentExplicit.matches(AXHelpers.getDescription(child, runtime: logic.ax)) {
+                        contents.append(child)
+                    }
+                }
+                if contents.count == 1 { candidates.append((sibling, contents[0], children)) }
+            }
+            guard candidates.count == 1, let (workspace, content, children) = candidates.first,
+                  let viewport = frame(headerScroll) else { return nil }
+            var vertical: [AXUIElement] = []
+            for child in children where AXHelpers.getRole(child, runtime: logic.ax) == kAXScrollBarRole as String {
+                guard let orientation: String = AXHelpers.getAttribute(child, kAXOrientationAttribute as String, runtime: logic.ax) else { return nil }
+                if orientation == kAXVerticalOrientationValue as String { vertical.append(child) }
+            }
+            guard vertical.count == 1, let scrollbar = vertical.first else { return nil }
+            var frames: [CGRect] = []
+            for header in headers {
+                try checkAXRead()
+                guard let current = frame(header), viewport.contains(current),
+                      frames.last.map({ $0.maxY <= current.minY }) ?? true else { return nil }
+                frames.append(current)
+            }
+            guard case .success(let currentRows) = AXHelpers.childrenResult(rail, runtime: logic.ax),
+                  currentRows.count == headers.count && zip(currentRows, headers).allSatisfy({ CFEqual($0, $1) }),
+                  case .success(let currentChildren) = AXHelpers.childrenResult(workspace, runtime: logic.ax),
+                  currentChildren.count == children.count && zip(currentChildren, children).allSatisfy({ CFEqual($0, $1) }),
+                  let owner: AXUIElement = AXHelpers.getAttribute(scrollbar, kAXWindowAttribute as String, runtime: logic.ax), CFEqual(owner, window),
+                  let parent: AXUIElement = AXHelpers.getAttribute(scrollbar, kAXParentAttribute as String, runtime: logic.ax), CFEqual(parent, workspace),
+                  case .success(.some(let enabled)) = AXHelpers.getAttributeResult(scrollbar, kAXEnabledAttribute as String,
+                    runtime: logic.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, enabled.doubleValue == 0,
+                  case .success(.some(let value)) = AXHelpers.getAttributeResult(scrollbar, kAXValueAttribute as String,
+                    runtime: logic.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, value.doubleValue == 0 else { return nil }
+            // Renew deciding metadata/geometry after the value read: an old
+            // scrollbar can still answer after its actual owner replaced it.
+            guard AXHelpers.getRole(scrollbar, runtime: logic.ax) == kAXScrollBarRole as String,
+                  let orientationAfter: String = AXHelpers.getAttribute(scrollbar, kAXOrientationAttribute as String, runtime: logic.ax),
+                  orientationAfter == kAXVerticalOrientationValue as String,
+                  let ownerAfter: AXUIElement = AXHelpers.getAttribute(scrollbar, kAXWindowAttribute as String, runtime: logic.ax), CFEqual(ownerAfter, window),
+                  let parentAfter: AXUIElement = AXHelpers.getAttribute(scrollbar, kAXParentAttribute as String, runtime: logic.ax), CFEqual(parentAfter, workspace),
+                  frame(headerScroll) == viewport, zip(headers, frames).allSatisfy({ frame($0) == $1 }),
+                  case .success(.some(let enabledAfter)) = AXHelpers.getAttributeResult(scrollbar, kAXEnabledAttribute as String,
+                    runtime: logic.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, enabledAfter.doubleValue == 0,
+                  case .success(let decidingRows) = AXHelpers.childrenResult(rail, runtime: logic.ax),
+                  decidingRows.count == headers.count && zip(decidingRows, headers).allSatisfy({ CFEqual($0, $1) }),
+                  case .success(let decidingChildren) = AXHelpers.childrenResult(workspace, runtime: logic.ax),
+                  decidingChildren.count == children.count && zip(decidingChildren, children).allSatisfy({ CFEqual($0, $1) })
+            else { return nil }
+            return .init(rail: rail, headerScroll: headerScroll, workspace: workspace, content: content,
+                scrollbar: scrollbar, viewport: viewport, frames: frames)
+        }
         struct SelectedTrackRead {
             let rail: AXUIElement
             let headers: [AXUIElement]
@@ -871,6 +969,7 @@ actor AccessibilityChannel: Channel {
             let transport: AXLogicProElements.ObservedTransportActivity?
             let uiLocale: String?
             let hiddenView: HiddenView?
+            let singlePageEnd: SinglePageEnd?
             let selectedTracks: SelectedTrackRead?
         }
         func check() throws {
@@ -939,13 +1038,14 @@ actor AccessibilityChannel: Channel {
                 observingExposure: exposure, checking: checkAXRead)
             let locale = try readObservedUILocale(in: window, checking: checkAXRead)
             let hiddenView = wantsTracks ? readHiddenView(headers, in: window) : nil
+            let singlePageEnd = wantsTracks ? try readSinglePageEnd(headers, tracks: tracks, hiddenView: hiddenView, in: window) : nil
             let selectedTracks = wantsTracks ? try readSelectedTracks(headers, states: tracks, in: window) : nil
             try check()
             return Read(title: title, document: document, documentReadable: documentReadable,
                         headers: headers, mixer: mixer, mixerOwners: lookup.binding?.owners ?? [],
                         stripElements: stripElements, tracks: tracks, strips: strips,
                         presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: locale,
-                        hiddenView: hiddenView, selectedTracks: selectedTracks)
+                        hiddenView: hiddenView, singlePageEnd: singlePageEnd, selectedTracks: selectedTracks)
         }
         func sameElements(_ lhs: [AXUIElement]?, _ rhs: [AXUIElement]?) -> Bool {
             switch (lhs, rhs) {
@@ -1077,6 +1177,9 @@ actor AccessibilityChannel: Channel {
             try check()
             let finalTitle = AXHelpers.getTitle(window, runtime: logic.ax)
             let finalHiddenView = wantsTracks ? readHiddenView(currentHeaders, in: window) : nil
+            let finalSinglePageEnd = wantsTracks ? try readSinglePageEnd(currentHeaders, tracks: after.tracks,
+                hiddenView: finalHiddenView, in: window) : nil
+            let decidingHiddenView = wantsTracks ? readHiddenView(currentHeaders, in: window) : nil
             let finalSelectedTracks = wantsTracks ? try readSelectedTracks(currentHeaders, states: after.tracks, in: window) : nil
             let finalDocument: String?
             let finalDocumentReadable: Bool
@@ -1093,6 +1196,7 @@ actor AccessibilityChannel: Channel {
                 && sameBytes(after.title, finalTitle) && sameBytes(after.document, finalDocument)
                 && sameElements(before.headers, after.headers)
                 && sameHiddenView(before.hiddenView, after.hiddenView) && sameHiddenView(after.hiddenView, finalHiddenView)
+                && sameHiddenView(finalHiddenView, decidingHiddenView)
                 && sameSelectedTracks(before.selectedTracks, after.selectedTracks)
                 && sameSelectedTracks(after.selectedTracks, finalSelectedTracks)
                 && (!wantsTracks || after.tracks == nil || (sameElements(after.headers, currentHeaders) && sameStackExposure))
@@ -1135,6 +1239,8 @@ actor AccessibilityChannel: Channel {
                         uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil,
                         mixerOwners: before.mixerOwners) : nil,
                 hiddenTracksShown: stable ? before.hiddenView?.shown : nil,
+                populationEndSource: stable && before.singlePageEnd?.matches(after.singlePageEnd) == true
+                    && after.singlePageEnd?.matches(finalSinglePageEnd) == true ? "ax_all_shown_single_page" : nil,
                 selectedTrackMembershipObserved: stable && before.selectedTracks != nil
             )
             if stable { return candidate }

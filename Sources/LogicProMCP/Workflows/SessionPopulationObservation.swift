@@ -32,6 +32,9 @@ enum SessionPopulationObservation {
         var restoredTracks: [TrackState]? = nil
         /// The live held view control, not a claim about saved/live population equivalence.
         var hiddenTracksShown: Bool? = nil
+        /// Read-only end witness from three exact native page/scrollbar bookends.
+        /// Requires an independent bound count for complete whole-population coverage.
+        var populationEndSource: String? = nil
         /// Strict selected-child membership corroborated against physical headers
         /// throughout the fresh read. Never an end witness for the whole project.
         var selectedTrackMembershipObserved = false
@@ -757,6 +760,7 @@ enum SessionPopulationObservation {
         /// Present only beside `expected_count`. A match is evidence, not completeness.
         let expectedCountMatchesRail: Bool?
         let hiddenTracksShown: Bool?
+        var populationEndSource: String? = nil
         var selectionMembershipSource: String? = nil
 
         enum CodingKeys: String, CodingKey {
@@ -767,6 +771,7 @@ enum SessionPopulationObservation {
             case expectedCountSource = "expected_count_source"
             case expectedCountMatchesRail = "expected_count_matches_rail"
             case hiddenTracksShown = "hidden_tracks_shown"
+            case populationEndSource = "population_end_source"
             case selectionMembershipSource = "selection_membership_source"
         }
 
@@ -779,6 +784,7 @@ enum SessionPopulationObservation {
             try container.encodeIfPresent(expectedCountSource, forKey: .expectedCountSource)
             try container.encodeIfPresent(expectedCountMatchesRail, forKey: .expectedCountMatchesRail)
             try container.encodeIfPresent(hiddenTracksShown, forKey: .hiddenTracksShown)
+            try container.encodeIfPresent(populationEndSource, forKey: .populationEndSource)
             try container.encodeIfPresent(selectionMembershipSource, forKey: .selectionMembershipSource)
         }
     }
@@ -1118,10 +1124,13 @@ enum SessionPopulationObservation {
                 // The independently observed selected set is this request's
                 // population. It says nothing about hidden or virtualized peers.
             } else if let expected = capture.fileTrackCount {
-                // A matching count says the rail has as many rows as the file has tracks, not
-                // that these rows are those tracks: nothing in the cache witnesses where the rail
-                // ends, so a count alone never makes the population complete (#965).
-                tracksReasons.append(expected == live.count ? .countIsTheOnlyEndWitness : .trackReadbackGap)
+                // Count agreement alone is not an end. Only the fresh all-shown
+                // single-page witness can corroborate it; cached rows retain
+                // the original count-only limitation (#965).
+                if expected != live.count { tracksReasons.append(.trackReadbackGap) }
+                else if capture.freshPopulation?.populationEndSource != "ax_all_shown_single_page" {
+                    tracksReasons.append(.countIsTheOnlyEndWitness)
+                }
             } else {
                 if capture.projectFileNotBound {
                     tracksReasons.append(.projectFileNotBound)
@@ -1155,6 +1164,7 @@ enum SessionPopulationObservation {
                 expectedCountSource: capture.fileTrackCount == nil ? nil : "project_file",
                 expectedCountMatchesRail: capture.fileTrackCount.map { $0 == live.count },
                 hiddenTracksShown: capture.freshPopulation?.stable == true ? capture.freshPopulation?.hiddenTracksShown : nil,
+                populationEndSource: capture.freshPopulation?.stable == true ? capture.freshPopulation?.populationEndSource : nil,
                 selectionMembershipSource: selectedMembershipObserved ? "ax_selected_children" : nil
             ),
             rows: rows,
