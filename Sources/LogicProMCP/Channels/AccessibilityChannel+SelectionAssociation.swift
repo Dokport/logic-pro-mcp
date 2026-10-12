@@ -348,6 +348,13 @@ extension AccessibilityChannel {
         }
 
         func permitsOwnedPopupRead(_ root: AXUIElement) -> Bool {
+            func heldRailChildMatches() -> Bool {
+                guard originalRailFocus != nil else { return true }
+                guard let expectedSelectedChild, case .observed(let child) = selectedChildRead(),
+                      CFEqual(child, expectedSelectedChild),
+                      Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex else { lost = true; return false }
+                return true
+            }
             // This is not a general editor exemption or a new association. Keep
             // the original complete census and exclusive selection; only allow
             // focus on the search field reciprocally owned by this exact popup.
@@ -360,8 +367,8 @@ extension AccessibilityChannel {
                 Log.info("Input popup ownership refused: original selection/root/focus", subsystem: "ax")
                 lost = true; return false
             }
-            guard passiveStripMatches(expectedFocus) else {
-                Log.info("Input popup ownership refused: original passive strip metadata", subsystem: "ax")
+            guard passiveAssociationFocusMatches(expectedFocus), heldRailChildMatches() else {
+                Log.info("Input popup ownership refused: original passive association metadata", subsystem: "ax")
                 return false
             }
             // Some owned popups keep the original passive strip focused. Its
@@ -371,7 +378,9 @@ extension AccessibilityChannel {
                 guard passiveFocusMatches(), owned(ownedPopup: root),
                       Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                       let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                      CFEqual(final, expectedFocus) else { lost = true; return false }
+                      CFEqual(final, expectedFocus), heldRailChildMatches(), passiveAssociationFocusMatches(expectedFocus),
+                      let afterChild: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                      CFEqual(afterChild, expectedFocus) else { lost = true; return false }
                 return true
             }
             guard
@@ -403,9 +412,12 @@ extension AccessibilityChannel {
             }
             guard
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+                  heldRailChildMatches(), passiveAssociationFocusMatches(expectedFocus),
                   currentWindowScopeMatches(), logic.logicProPID() == pid,
                   logic.focusedApplicationPID() == pid,
-                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { lost = true; return false }
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  let afterChild: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(afterChild, focus) else { lost = true; return false }
             return true
         }
 
