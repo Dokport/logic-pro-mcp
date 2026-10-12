@@ -616,6 +616,81 @@ struct Issue965HeldSelectionAssociationTests {
         return try #require(sharedJSONObject(sharedToolText(result)))
     }
 
+    @Test("A complete fresh track population qualifies only its fully observed physical associations",
+          arguments: ["complete", "count_gap", "missing_pair", "hidden"])
+    func completeFreshPopulationQualifiesAllObservedAssociations(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            if fault == "missing_pair" { f.thirdRetainsPreviousFocus = true }
+            let split = f.builder.element(1_966_000), headerSplit = f.builder.element(1_966_001)
+            let legendSplit = f.builder.element(1_966_002), headerScroll = f.builder.element(1_966_003)
+            let legend = f.builder.element(1_966_004), hide = f.builder.element(1_966_005)
+            let workspace = f.builder.element(1_966_006), content = f.builder.element(1_966_007)
+            let vertical = f.builder.element(1_966_008)
+            for element in [split, headerSplit, legendSplit] {
+                f.builder.setRole(element, kAXSplitGroupRole as String)
+            }
+            f.builder.setRole(headerScroll, kAXScrollAreaRole as String)
+            f.builder.setFrame(headerScroll, x: 0, y: 0, width: 200, height: 200)
+            f.builder.setRole(f.rail, kAXGroupRole as String)
+            f.builder.setAttribute(f.rail, kAXDescriptionAttribute as String, "Tracks header")
+            for (index, header) in f.headers.enumerated() {
+                f.builder.setFrame(header, x: 0, y: CGFloat(index * 40), width: 200, height: 40)
+            }
+            f.builder.setRole(legend, kAXGroupRole as String)
+            f.builder.setRole(hide, kAXCheckBoxRole as String)
+            f.builder.setAttribute(hide, kAXDescriptionAttribute as String, "Show/Hide Hidden Tracks   H")
+            f.builder.setAttribute(hide, kAXValueAttribute as String, NSNumber(value: fault == "hidden" ? 0 : 1))
+            f.builder.setAttribute(hide, kAXWindowAttribute as String, f.window)
+            f.builder.setChildren(hide, [])
+            f.builder.setChildren(legend, [hide])
+            f.builder.setRole(workspace, kAXScrollAreaRole as String)
+            f.builder.setRole(content, kAXGroupRole as String)
+            f.builder.setAttribute(content, kAXDescriptionAttribute as String, "Tracks contents")
+            f.builder.setChildren(content, [])
+            f.builder.setRole(vertical, kAXScrollBarRole as String)
+            f.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+            f.builder.setAttribute(vertical, kAXEnabledAttribute as String, NSNumber(value: false))
+            f.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.window)
+            f.builder.setChildren(vertical, [])
+            f.builder.setChildren(workspace, [content, vertical])
+            f.builder.setChildren(headerScroll, [f.rail])
+            f.builder.setChildren(headerSplit, [headerScroll, workspace])
+            f.builder.setChildren(legendSplit, [legend])
+            f.builder.setChildren(split, [legendSplit, headerSplit])
+            f.builder.setChildren(f.window, [split, f.mixer, f.builder.element(1_965_720), f.scroll])
+            let data = try PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": fault == "count_gap" ? 5 : 4],
+                                                         format: .xml, options: 0)
+            let reader = LogicProjectFileReader.Runtime(currentDocumentPath: { nil }, now: Date.init,
+                readPlistData: { _ in data }, mtime: { _ in Date(timeIntervalSince1970: 0) }, sleep: { _ in })
+            let body = try await inspect(f, fileReader: reader, domains: ["tracks", "associations"])
+            let tracks = try #require(body["tracks"] as? [String: Any])
+            let associations = try #require(body["associations"] as? [String: Any])
+            let pairs = try #require(associations["rows"] as? [[String: Any]])
+            if fault == "complete" {
+                #expect(tracks["coverage"] as? String == "complete")
+                #expect(pairs.count == 4)
+                #expect(associations["coverage"] as? String == "complete")
+                #expect(associations["reasons"] as? [String] == [])
+                let overall = try #require(body["overall"] as? [String: Any])
+                let complete = try #require(overall["complete"] as? Bool)
+                #expect(complete)
+            } else {
+                #expect(associations["coverage"] as? String == "partial")
+                #expect(associations["reasons"] as? [String] == ["association_population_not_observed"])
+                if fault == "missing_pair" {
+                    #expect(tracks["coverage"] as? String == "complete")
+                    #expect(pairs.count < 4)
+                } else {
+                    #expect(tracks["coverage"] as? String == "partial")
+                    #expect(pairs.count == 4)
+                }
+            }
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        }
+    }
+
     @Test func retainedMixerPairUsesActualCaptureAndExactPhysicalReferenceOnly() async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture()
