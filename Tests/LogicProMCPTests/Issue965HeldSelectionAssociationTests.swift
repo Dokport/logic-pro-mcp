@@ -593,7 +593,7 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: ["paired", "missing_pair", "replaced_header", "foreign_project", "foreign_focus", "deciding_read", "partial_restore", "track_ref", "track_ref_missing_pair", "track_ref_replaced_strip"])
+    @Test(arguments: ["paired", "missing_pair", "replaced_header", "foreign_project", "foreign_focus", "deciding_read", "partial_restore", "track_ref", "track_ref_missing_pair", "track_ref_replaced_strip", "rail", "rail_editor", "rail_missing_relationship", "rail_unselected_header"])
     func outputReadbackRenewsRetiredSourceOnlyThroughOriginalCapturedHeader(condition: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture()
@@ -629,6 +629,30 @@ struct Issue965HeldSelectionAssociationTests {
             }
             f.builder.setChildren(leaf, []); f.builder.setChildren(submenu, [leaf])
             f.builder.setChildren(parent, [submenu]); f.builder.setChildren(root, [parent])
+            if condition.hasPrefix("rail") {
+                f.routingRead = { element, attribute in
+                    guard f.routingReplacement != nil else { return }
+                    if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                        f.builder.setAttribute(f.app, attribute, f.rail)
+                    }
+                    if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                        let selectedOther = AXValueExtractors.extractSelectedState(f.headers[1], runtime: f.builder.makeAXRuntime()) == true
+                        f.builder.setAttribute(f.mixer, attribute, [selectedOther ? f.strips[0] : replacement])
+                    }
+                }
+                f.routingReadResult = { element, attribute in
+                    guard f.routingReplacement != nil else { return nil }
+                    if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String,
+                       condition == "rail_missing_relationship" {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                        kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    return nil
+                }
+            }
             if condition == "deciding_read" {
                 f.routingRead = { element, attribute in
                     if f.selections.count == 4, CFEqual(element, newOutput), attribute == kAXDescriptionAttribute as String {
@@ -660,7 +684,13 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     f.routingReplacement = replacement
                     f.builder.setChildren(f.mixer, [f.strips[0], replacement])
-                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                        condition.hasPrefix("rail") ? f.rail : replacement)
+                    if condition == "rail_editor" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
+                    if condition == "rail_unselected_header" {
+                        f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
+                        f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
+                    }
                     if condition == "replaced_header" {
                         let foreign = f.builder.element(1_965_957)
                         f.builder.setRole(foreign, kAXLayoutItemRole as String)
@@ -725,13 +755,15 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.selections == [1, 0])
                 return
             }
-            let succeeds = condition == "paired" || condition == "track_ref"
+            let succeeds = condition == "paired" || condition == "track_ref" || condition == "rail"
             #expect(body["state"] as? String == (succeeds ? "A" : "B"), "Actual response: \(sharedToolText(result))")
             let verified = try #require(body["verified"] as? Bool)
             if succeeds {
                 #expect(verified)
                 let reread = try #require(body["reference_reread_required"] as? Bool)
                 #expect(reread)
+                #expect(body["source_renewal"] as? String == (condition == "rail"
+                    ? "held_exclusive_selection_selected_child" : "held_exclusive_selection_focus"))
             } else { #expect(!verified) }
             #expect(f.routingReplacement != nil)
             let expectedSelections = condition == "partial_restore" ? [1, 0, 1]
