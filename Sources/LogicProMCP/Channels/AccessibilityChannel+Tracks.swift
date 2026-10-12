@@ -769,11 +769,32 @@ extension AccessibilityChannel {
                 Log.info("Population navigation ownership unavailable: transport", subsystem: "ax"); return false
             }
             guard let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                  CFEqual(focus, observedFocus), !stop(), logic.logicProPID() == pid,
+                  retainCompletedPassiveFocus(focus), !stop(), logic.logicProPID() == pid,
                   isBoundHiddenMenuTarget(target) || logic.focusedApplicationPID() == pid,
-                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(finalFocus, focus),
+                  let finalMain: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
+                  let finalWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
+                  CFEqual(finalMain, window), CFEqual(finalWindow, window),
+                  case .success(.some(let finalDoc)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
+                  finalDoc.utf8.elementsEqual(document.utf8) else {
                 Log.info("Population navigation ownership unavailable: final focus or process", subsystem: "ax"); return false
             }
+            return true
+        }
+
+        private func retainCompletedPassiveFocus(_ focus: AXUIElement) -> Bool {
+            if CFEqual(focus, observedFocus) { return true }
+            // Native ownership reads can move focus between the exact controls
+            // held before our completed click. Revalidate that same passive
+            // custody, not a new role/name/index match or arbitrary workspace.
+            guard completedClickFocus != nil, passiveClickFocus(matching: focus) != nil,
+                  permitsHeldPassiveHeaderFocus(),
+                  let current: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(current, focus) else { return false }
+            observedFocus = focus
+            if !effects.changed.contains("keyboard_focus") { effects.changed.append("keyboard_focus") }
             return true
         }
 

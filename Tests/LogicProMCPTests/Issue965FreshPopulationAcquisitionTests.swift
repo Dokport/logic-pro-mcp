@@ -1290,6 +1290,16 @@ struct Issue965FreshPopulationAcquisitionTests {
             sliderMetadataObservations: Reads(), sliderMutationAt: finalRead)
     }
 
+    @Test func registeredStackRetainsPreheldPassiveFocusWhenOwnershipReadsMoveIt() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "slider_to_label", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
+    }
+
+    @Test func registeredStackRefusesForeignPassiveLabelAfterOwnershipReads() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "slider_to_foreign_label", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
+    }
+
     @Test(arguments: ["slider_foreign", "slider_replacement", "slider_changed", "slider_insertion", "slider_text", "slider_late_changed"])
     func registeredStackRefusesLostOrEditingSliderFocus(headerFocus: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false,
@@ -1746,6 +1756,14 @@ struct Issue965FreshPopulationAcquisitionTests {
                 fixture.builder.setAttribute(shownLabel, kAXValueAttribute as String, 0)
                 fixture.builder.setAttribute(shownLabel, kAXWindowAttribute as String, fixture.window)
                 fixture.builder.setChildren(headers[0], [disclosure, passiveLabel, shownLabel])
+            }
+            if headerFocus == "slider_to_label" || headerFocus == "slider_to_foreign_label" {
+                fixture.builder.setRole(shownLabel, kAXTextFieldRole as String)
+                fixture.builder.setAttribute(shownLabel, kAXValueAttribute as String, 0)
+                fixture.builder.setAttribute(shownLabel, kAXWindowAttribute as String, fixture.window)
+                if headerFocus == "slider_to_label" {
+                    fixture.builder.setChildren(headers[0], [disclosure, passiveLabel, shownLabel])
+                }
             }
             if headerFocus == "radio_ambiguous" { fixture.builder.setChildren(headers[0], [disclosure, passiveLabel, otherLabel]) }
             if headerFocus == "radio_editable" { fixture.builder.setAttributeSettable(passiveLabel, kAXValueAttribute as String, true) }
@@ -2221,6 +2239,13 @@ struct Issue965FreshPopulationAcquisitionTests {
                         fixture.builder.setChildren(fixture.rail, changed)
                     }
                 }, readingAttribute: { element, attribute in
+                    if ["slider_to_label", "slider_to_foreign_label"].contains(headerFocus ?? ""),
+                       fixture.events.count == 2, CFEqual(element, play), attribute == kAXValueAttribute as String,
+                       Thread.callStackSymbols.contains(where: { $0.contains("owned") }),
+                       !fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read") {
+                        fixture.reads.record("held_slider_focus_moved_by_owned_transport_read")
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, shownLabel)
+                    }
                     if headerFocus?.hasPrefix("slider_") == true,
                        CFEqual(element, passiveLabel) || CFEqual(element, otherLabel),
                        [kAXInsertionPointLineNumberAttribute as String, kAXSelectedTextRangeAttribute as String,
@@ -2677,7 +2702,10 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty && gate.currentOperation() == nil)
             return
         }
-        if let headerFocus, headerFocus.hasPrefix("slider_"), headerFocus != "slider_held" {
+        if let headerFocus, headerFocus.hasPrefix("slider_"), headerFocus != "slider_held", headerFocus != "slider_to_label" {
+            if headerFocus == "slider_to_foreign_label" {
+                #expect(fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read"))
+            }
             if headerFocus == "slider_late_changed" || headerFocus == "slider_final_changed" {
                 #expect(fixture.reads.recorded.contains("slider_value_changed_at_final_metadata"))
             }
@@ -2694,6 +2722,9 @@ struct Issue965FreshPopulationAcquisitionTests {
         }
         if let focusRestoration {
             let restored = focusRestoration == "restored"
+            if headerFocus == "slider_to_label" {
+                #expect(fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read"))
+            }
             let setters = fixture.reads.recorded.filter { $0 == "workspace_focus_setter" }
             #expect(setters.count == (["restored", "declined", "wrong_readback"].contains(focusRestoration) ? 1 : 0))
             let stackEvents = nested
