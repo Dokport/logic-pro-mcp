@@ -328,12 +328,14 @@ struct Issue965FreshPopulationAcquisitionTests {
     }
 
     @Test("Whole population needs a real all-shown single-page end, not merely saved count agreement",
-          arguments: ["complete", "hidden", "scrollable", "scrolled", "offscreen", "missing_row",
+          arguments: ["complete", "flat_hierarchy", "flat_hierarchy_no_navigation",
+                      "flat_hierarchy_hidden", "flat_hierarchy_count_gap", "flat_hierarchy_open_stack",
+                      "hidden", "scrollable", "scrolled", "offscreen", "missing_row",
                       "unreadable_enabled", "foreign_scrollbar", "duplicate_scrollbar",
                       "late_scrollbar_retirement", "late_frame_loss", "late_scrollbar_role", "late_hidden_view",
                       "late_scrollbar_orientation", "late_scrollbar_parent", "late_scrollbar_window"])
     func registeredSinglePageTrackPopulationEnd(fault: String) async throws {
-        let f = hiddenViewFixture(shown: fault != "hidden")
+        let f = hiddenViewFixture(shown: fault != "hidden" && fault != "flat_hierarchy_hidden")
         let second = f.builder.element(965_990), workspace = f.builder.element(965_991)
         let content = f.builder.element(965_992), vertical = f.builder.element(965_993)
         for (i, header) in [f.header, second].enumerated() {
@@ -345,6 +347,12 @@ struct Issue965FreshPopulationAcquisitionTests {
             f.builder.setChildren(header, [])
         }
         f.builder.setChildren(f.rail, fault == "missing_row" ? [f.header] : [f.header, second])
+        if fault == "flat_hierarchy_open_stack" {
+            let disclosure = f.builder.element(965_996)
+            f.builder.setRole(disclosure, kAXDisclosureTriangleRole as String)
+            f.builder.setAttribute(disclosure, kAXValueAttribute as String, NSNumber(value: 1))
+            f.builder.setChildren(f.header, [disclosure])
+        }
         let headerScroll = f.builder.element(965_971), headerSplit = f.builder.element(965_976)
         f.builder.setFrame(headerScroll, x: 0, y: 0, width: 200, height: 200)
         f.builder.setRole(workspace, kAXScrollAreaRole as String)
@@ -377,11 +385,13 @@ struct Issue965FreshPopulationAcquisitionTests {
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: bundle) }
         f.builder.setAttribute(f.window, kAXDocumentAttribute as String, bundle.absoluteString)
-        let metadata = try PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": 2], format: .xml, options: 0)
+        let metadata = try PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": fault == "flat_hierarchy_count_gap" ? 3 : 2], format: .xml, options: 0)
         let reader = LogicProjectFileReader.Runtime(currentDocumentPath: { nil }, now: Date.init,
             readPlistData: { _ in metadata }, mtime: { _ in Date(timeIntervalSince1970: 0) }, sleep: { _ in })
         let endBoundaryReads = Reads()
-        let result = try await inspect(fixture: f, domains: ["tracks"], fileReader: reader,
+        let flatHierarchy = fault.hasPrefix("flat_hierarchy")
+        let result = try await inspect(fixture: f, domains: flatHierarchy ? ["tracks", "hierarchy"] : ["tracks"],
+            navigation: fault == "flat_hierarchy", fileReader: reader,
             readingAttribute: { element, attribute in
                 if fault == "unreadable_enabled", CFEqual(element, vertical), attribute == kAXEnabledAttribute as String {
                     return .failure(.init(raw: AXError.cannotComplete.rawValue))
@@ -418,11 +428,34 @@ struct Issue965FreshPopulationAcquisitionTests {
         let body = try #require(sharedJSONObject(sharedToolText(result)))
         let tracks = try #require(body["tracks"] as? [String: Any])
         let witnesses = try #require(tracks["witnesses"] as? [String: Any])
-        if fault == "complete" {
+        let completeFlat = fault == "flat_hierarchy" || fault == "flat_hierarchy_no_navigation"
+        if fault == "complete" || completeFlat || fault == "flat_hierarchy_open_stack" {
             #expect(tracks["coverage"] as? String == "complete", "A real one-page end must be usable, not unconditional count-only partial coverage")
             #expect(witnesses["population_end_source"] as? String == "ax_all_shown_single_page")
         } else {
             #expect(tracks["coverage"] as? String != "complete")
+        }
+        if completeFlat {
+            let hierarchy = try #require(body["hierarchy"] as? [String: Any])
+            #expect(hierarchy["coverage"] as? String == "complete")
+            #expect(hierarchy["reasons"] as? [String] == [])
+            let rows = try #require(tracks["rows"] as? [[String: Any]])
+            #expect(rows.count == 2)
+            for row in rows {
+                #expect(row["parent"] is NSNull)
+                #expect(row["depth"] as? Int == 0)
+                #expect(row["parent_source"] as? String == "ax_complete_flat_population")
+                #expect(row["depth_source"] as? String == "ax_complete_flat_population")
+                #expect(row["track_ref"] as? String != nil)
+            }
+        } else if flatHierarchy {
+            let hierarchy = try #require(body["hierarchy"] as? [String: Any])
+            #expect(hierarchy["coverage"] as? String != "complete")
+            for row in try #require(tracks["rows"] as? [[String: Any]]) {
+                #expect(row["parent"] as? String == "unknown")
+                #expect(row["depth"] as? String == "unknown")
+                #expect(row["parent_source"] == nil && row["depth_source"] == nil)
+            }
         }
         if fault.hasPrefix("late_") { #expect(endBoundaryReads.count >= 3, "Actually execute the deciding final end read") }
         #expect(f.events.recorded.isEmpty && f.builder.setCalls.isEmpty && f.builder.actionCalls.isEmpty)

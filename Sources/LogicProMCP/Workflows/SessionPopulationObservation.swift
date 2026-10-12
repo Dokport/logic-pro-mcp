@@ -707,6 +707,8 @@ enum SessionPopulationObservation {
         var parent = "unknown"
         var parentSource: String? = nil
         let depth = "unknown"
+        var observedDepth: Int? = nil
+        var depthSource: String? = nil
         let isSelected: Bool?
         let placeholder: Bool?
         let trackRef: String?
@@ -723,6 +725,7 @@ enum SessionPopulationObservation {
             case parent
             case parentSource = "parent_source"
             case depth
+            case depthSource = "depth_source"
             case isSelected = "is_selected"
             case placeholder
             case trackRef = "track_ref"
@@ -741,9 +744,12 @@ enum SessionPopulationObservation {
             try container.encode(stackCollapsed, forKey: .stackCollapsed)
             if let hidden { try container.encode(hidden, forKey: .hidden) }
             else { try container.encode("unknown", forKey: .hidden) }
-            try container.encode(parent, forKey: .parent)
+            if observedDepth == 0 { try container.encodeNil(forKey: .parent) }
+            else { try container.encode(parent, forKey: .parent) }
             try container.encodeIfPresent(parentSource, forKey: .parentSource)
-            try container.encode(depth, forKey: .depth)
+            if let observedDepth { try container.encode(observedDepth, forKey: .depth) }
+            else { try container.encode(depth, forKey: .depth) }
+            try container.encodeIfPresent(depthSource, forKey: .depthSource)
             try container.encode(isSelected, forKey: .isSelected)
             try container.encode(placeholder, forKey: .placeholder)
             try container.encodeIfPresent(trackRef, forKey: .trackRef)
@@ -1264,6 +1270,23 @@ enum SessionPopulationObservation {
             }
         }
         var hierarchy = deferred(.parentDepthNotObserved)
+        // An exhaustive fresh flat population has no possible stack parent.
+        // Count-only, cached, selected, unknown and partially exposed rails do
+        // not establish roots. This projection adds no AX action or authority.
+        if movementReason == nil, request.scope == .wholeProject,
+           request.domains.contains(.hierarchy), tracksCoverage == .complete,
+           let fresh = capture.freshPopulation, fresh.stable,
+           fresh.disclosureExposures.isEmpty, !live.isEmpty,
+           live.allSatisfy({ $0.isStackHeader == false && $0.physicalBinding != nil }),
+           allRows.allSatisfy({ $0.trackRef != nil }),
+           Set(allRows.compactMap(\.trackRef)).count == live.count {
+            for index in tracks.rows.indices {
+                tracks.rows[index].parentSource = "ax_complete_flat_population"
+                tracks.rows[index].observedDepth = 0
+                tracks.rows[index].depthSource = "ax_complete_flat_population"
+            }
+            hierarchy = .init(coverage: .complete, reasons: [])
+        }
         if movementReason == nil, request.allowUINavigation, request.domains.contains(.hierarchy),
            tracksCoverage == .partial || tracksCoverage == .complete,
            let observations = capture.freshPopulation?.disclosureExposures, !observations.isEmpty {
