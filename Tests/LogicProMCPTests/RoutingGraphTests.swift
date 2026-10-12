@@ -4,10 +4,13 @@ import Testing
 
 @Suite("RoutingGraphTests")
 struct RoutingGraphTests {
-    @Test(arguments: ["contradiction", "send_only", "disconnected"])
-    func noOutputPathEvidenceCannotHideAContradictoryMainEdge(_ kind: String) {
+    @Test(arguments: [.noOutput, .physicalOutput] as [RoutingOutputClassification],
+          ["contradiction", "send_only", "disconnected"])
+    func nonBusOutputPathEvidenceCannotHideAContradictoryMainEdge(
+        _ classification: RoutingOutputClassification, _ kind: String
+    ) {
         let source = RoutingNode(id: "track-1", kind: .track, displayName: "Same",
-            busNumber: nil, targetRef: sourceRef, outputClassification: .noOutput)
+            busNumber: nil, targetRef: sourceRef, outputClassification: classification)
         var edges: [RoutingEdge] = []
         if kind == "contradiction" {
             edges.append(assignment(.mainOutput, source: source.id, destination: "bus-1"))
