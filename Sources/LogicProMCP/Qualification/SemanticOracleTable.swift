@@ -529,6 +529,7 @@ enum SemanticOracleTable {
         systemSagaStatus,
         pluginsGetInventory,
         pluginsGetParamVerified,
+        pluginsPlanParameterChanges,
         pluginsGetChannelEQStateVerified,
         projectIsRunning,
         projectGetRegions,
@@ -667,6 +668,8 @@ enum SemanticOracleTable {
         // Eight ordered bands have conditional numeric/choice/Boolean fields and
         // separate plugin enable/bypass semantics; flat constraints cannot express these.
         .pluginsGetChannelEQStateVerified,
+        // Conditional Boolean/numeric before-values and deltas need per-entry checks.
+        .pluginsPlanParameterChanges,
     ]
 
     static var customOracles: [OperationOracle] { all.filter { $0.strength == .custom } }
@@ -920,6 +923,62 @@ enum SemanticOracleTable {
         case "absent", "unreadable", "malformed": return display is NSNull
         default: return false
         }
+    }
+
+    // Protocol-only: repeated B0 reads do not supply an independent hosted-state validator.
+    static let pluginsPlanParameterChanges = OperationOracle(
+        custom: .pluginsPlanParameterChanges,
+        reason: "Requested-subset entries carry conditional Boolean/numeric before-values and exact deltas; flat constraints cannot check their correspondence. This checks the plan protocol, not native/provider qualification.",
+        independentReadbackDeferral: QualificationDeferral(code: .semanticValidatorUnavailable,
+            detail: "Parameter-plan bookends reuse the B0 host reader; no independent typed supported-subset readback is available")
+    ) { responseData, _ in
+        guard let object = JSONInspector.parse(responseData) as? [String: Any],
+              object["state"] as? String == "A", object["hc_schema"].flatMap(JSONInspector.number) == 2,
+              object["operation"] as? String == "logic_plugins.plan_parameter_changes",
+              object["observation_scope"] as? String == "requested_supported_subset",
+              let reference = object["target_ref"] as? String, !reference.isEmpty,
+              let fingerprint = object["target_fingerprint"] as? String, !fingerprint.isEmpty,
+              let identity = object["target_identity"] as? [String: Any],
+              let plugin = identity["plugin_id"] as? String,
+              let entries = object["entries"] as? [[String: Any]], !entries.isEmpty else { return false }
+        for (key, expected) in [("success", true), ("verified", true), ("complete", true),
+                                ("write_attempted", false), ("application_authorized", false), ("atomic_snapshot", false)] {
+            guard let raw = object[key], JSONInspector.isBoolean(raw), (raw as? Bool) == expected else { return false }
+        }
+        var params = Set<String>()
+        for entry in entries {
+            guard let param = entry["param"] as? String, params.insert(param).inserted,
+                  let metadata = VerifiedPluginCatalog.productionEntryLookup(plugin)?.parameters.first(where: { $0.id == param }),
+                  entry["raw_unit"] as? String == metadata.unit,
+                  let requested = entry["requested_value"].flatMap(JSONInspector.number), requested.isFinite,
+                  let delta = entry["delta"].flatMap(JSONInspector.number), delta.isFinite,
+                  let rawBefore = entry["observed_before"],
+                  let original = entry["requested"] as? [String: Any], Set(original.keys) == ["param", "value", "unit"],
+                  let observations = entry["read_observations"] as? [[String: Any]], observations.count == 2 else { return false }
+            guard let alias = original["param"] as? String,
+                  (VerifiedPluginCatalog.canonicalParamKey(pluginID: plugin, alias: alias)
+                    ?? alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) == param,
+                  let unit = original["unit"] as? String, let requestedRaw = original["value"] else { return false }
+            let requestedFromInput: Double?
+            if metadata.unit == "boolean", JSONInspector.isBoolean(requestedRaw), let flag = requestedRaw as? Bool {
+                requestedFromInput = flag ? 1 : 0
+            } else { requestedFromInput = JSONInspector.number(of: requestedRaw) }
+            let percentAlias = plugin == "logic.stock.effect.compressor" && param == "threshold"
+                && (metadata.acceptedUnits ?? []).contains(unit)
+            guard requestedFromInput == requested, unit == metadata.unit || percentAlias else { return false }
+            let before: Double
+            if metadata.unit == "boolean" {
+                guard JSONInspector.isBoolean(rawBefore), let flag = rawBefore as? Bool,
+                      requested == 0 || requested == 1 else { return false }
+                before = flag ? 1 : 0
+            } else {
+                guard let value = JSONInspector.number(of: rawBefore), value.isFinite else { return false }
+                before = value
+            }
+            guard delta == requested - before,
+                  entry["status"] as? String == (requested == before ? "unchanged" : "change") else { return false }
+        }
+        return true
     }
 
     // Protocol validation only. Independent native/UI qualification is separate;

@@ -180,6 +180,20 @@ enum SemanticOracleFixtures {
     }()
 
     static let byOperationID: [OperationID: SemanticOracleFixture] = [
+        .pluginsPlanParameterChanges: SemanticOracleFixture(response: HonestContract.encodeV2StateA(extras: [
+            "operation": "logic_plugins.plan_parameter_changes", "complete": true,
+            "observation_scope": "requested_supported_subset", "atomic_snapshot": false,
+            "application_authorized": false, "write_attempted": false,
+            "target_ref": "ins_00000000-0000-0000-0000-000000000955", "target_fingerprint": "synthetic-plan-fixture",
+            "target_identity": ["track_index": 0, "insert": 6, "plugin_id": "logic.stock.effect.compressor"],
+            "entries": [["param": "threshold", "raw_unit": "normalized", "requested_value": 38.0,
+                "observed_before": 51.0, "delta": -13.0, "status": "change",
+                "requested": ["param": "threshold", "value": 38, "unit": "normalized"],
+                "read_observations": [["bookend": "initial"], ["bookend": "final"]]]],
+        ]), readback: "{}", customMutants: [
+            .init(.malformed, "{}"),
+            .init(.wellFormedButWrong, HonestContract.encodeV2StateA(extras: ["complete": false])),
+        ]),
         .pluginsGetChannelEQStateVerified: channelEQStateRead,
         .pluginsGetParamVerified: parameterRead,
         .audioCompareSpectra: spectrumComparison,

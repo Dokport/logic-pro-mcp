@@ -223,6 +223,14 @@ The supported read subset is the catalogued Channel EQ native-editor sliders and
 
 The observation scope is one parameter of the **current referenced physical insert**, not a historical AU-object identity, an atomic whole-plugin snapshot, or all-parameter completeness. Project, slot, editor and control identity are checked around collection. Observed raw-value drift during display collection refuses with `parameter_read_status: unstable`; matching bookends cannot detect every intervening change. This audio-read-only operation shares the existing verified-operation serializer because editor acquisition can open windows, change focus or temporarily switch views. It does not select a track or write an audio parameter. It restores its observed entry view while ownership remains valid, closes only an editor it created, and reports unavailable restoration instead of acting through lost ownership. A confirmed view restoration is not a general focus-restoration guarantee. Ordinary inventory remains ungated. New-reader live qualification and the remaining snapshot/batch/application scope are tracked in #955.
 
+`plan_parameter_changes` is a read-only before-state and diff for an explicitly requested supported subset:
+
+```json
+{"command":"plan_parameter_changes","params":{"target_ref":"ins_…","changes":[{"param":"threshold","value":38,"unit":"percent"},{"param":"limiter_on","value":false,"unit":"boolean"}]}}
+```
+
+The whole request is checked before editor acquisition. Unknown, unsupported, missing, duplicate and extra fields remain in the returned entries; a known-invalid later entry prevents every read. Valid entries reuse `get_param_verified` under one UI lease, with two value-observation sweeps and current-reference/project checks. Entries report observed before values, requested values, exact deltas, `change`/`unchanged` or explicit failed observation statuses, and each read's separate UI-cleanup receipt. `complete` applies only to this requested subset; matching bookends are not atomic or whole-plugin completeness. Use the canonical raw units; Compressor threshold also accepts its same-scale `percent`/`%` aliases. Engineering-unit conversions are not inferred. The result has `application_authorized:false`: it is not a retained approval, apply/reset command, inverse proof or audio-outcome recommendation. Application remains unimplemented in #955.
+
 `get_channel_eq_state_verified` reads the eight bands of the current referenced Channel EQ insert in one owned Controls-view acquisition:
 
 ```json

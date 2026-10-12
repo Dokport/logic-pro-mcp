@@ -3955,6 +3955,58 @@ private func parameterReadParams(_ param: String = "threshold") -> [String: Stri
      "expected_slot_read_status": "ok", "expected_plugin_identity": "logic.stock.effect.compressor"]
 }
 
+@Test func testIssue955ParameterPlanUsesActualAXReadersAndRestoresViewsWithoutAudioWrites() async throws {
+    try await FeatureFlags.withAdr002TargetRefForTests(true) {
+        let fixture = LiveFixture(beforeValue: 51, controlsViewRowLabel: "Limiter On",
+            controlsCheckboxBefore: true, controlsViewInitiallySelected: true, viewSettleDelay: 0)
+        fixture.builder.setAttribute(fixture.builder.element(1001), kAXDocumentAttribute as String,
+                                     URL(fileURLWithPath: expectedPath).absoluteString)
+        let channel = AccessibilityChannel(runtime: .axBacked(
+            isTrusted: { true }, isLogicProRunning: { true }, hasVisibleWindow: { true },
+            logicRuntime: parameterReadRuntime(fixture), canPostEvents: { false }))
+        let router = ChannelRouter(), cache = StateCache(), registry = TargetRegistry()
+        await router.register(channel)
+        let project = ProjectInfo(name: "Parameter fixture", filePath: expectedPath)
+        await cache.updateProject(project)
+        await cache.updateTracks([TrackState(id: 0, name: trackName, type: .audio)])
+        let snapshot = await registry.currentSnapshot
+        _ = await registry.snapshotForObservedProject(project, ifCurrent: snapshot, stoppingWhen: { false })
+        let descriptor = TargetDescriptor(trackIndex: 0, trackName: trackName)
+        let reference = await registry.bind(kind: .pluginInsert, descriptor: descriptor,
+            fingerprint: TargetRefResolver.pluginInsertFingerprint(descriptor: descriptor, insert: 6,
+                pluginIdentity: "logic.stock.effect.compressor"))
+        let result = await PluginsDispatcher.handle(verifiedGate: VerifiedOpGate(), command: "plan_parameter_changes",
+            params: ["target_ref": .string(reference.rawValue), "changes": .array([
+                .object(["param": "threshold", "value": .int(38), "unit": "percent"]),
+                .object(["param": "limiter_on", "value": false, "unit": "boolean"]),
+            ])], router: router, cache: cache, targetRegistry: registry)
+        let object = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(object["state"] as? String == "A", "Injected real B0 acquisition must produce a plan: \(object)")
+        #expect(try #require(object["complete"] as? Bool))
+        let entries = try #require(object["entries"] as? [[String: Any]])
+        #expect(entries.count == 2)
+        let threshold = try #require(entries.first { $0["param"] as? String == "threshold" })
+        #expect(threshold["observed_before"] as? Double == 51)
+        #expect(threshold["requested_value"] as? Double == 38)
+        let limiter = try #require(entries.first { $0["param"] as? String == "limiter_on" })
+        let limiterBefore = try #require(limiter["observed_before"] as? Bool)
+        #expect(limiterBefore)
+        #expect(fixture.sliderWriteCount.value == 0)
+        #expect(fixture.controlsCheckboxPressCount.value == 0)
+        #expect(fixture.currentSliderValue == 51)
+        #expect(fixture.currentPluginViewTitle == "컨트롤")
+        for entry in entries {
+            let observations = try #require(entry["read_observations"] as? [[String: Any]])
+            #expect(observations.count == 2)
+            for observation in observations {
+                let response = try #require(observation["response"] as? [String: Any])
+                let restored = try #require(response["plugin_view_restore_observed"] as? Bool)
+                #expect(restored)
+            }
+        }
+    }
+}
+
 @Test func testIssue301StateReaderUsesOwnedEditorAndReportsMissingBandsWithoutWriting() async throws {
     // The real acquisition path, deliberately incomplete Controls data. A
     // single observed enable must not masquerade as a complete eight-band EQ.
