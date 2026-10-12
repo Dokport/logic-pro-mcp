@@ -738,7 +738,10 @@ extension AccessibilityChannel {
                 // preserve the initial snapshot without starting UI navigation.
                 let reserve = max(.zero, populationReadDuration) * 2
                 guard remaining > reserve else { return [] }
-                collectionEnd = start.advanced(by: min(remaining / 4, remaining - reserve))
+                // An actual measured reserve already bounds the available
+                // work. Keep the conservative fraction only without a sample;
+                // do not truncate otherwise qualified original-header pairs.
+                collectionEnd = start.advanced(by: reserve > .zero ? remaining - reserve : remaining / 4)
             } else { collectionEnd = nil }
             var observed: [(Int, AXUIElement)] = []
             var restored = true

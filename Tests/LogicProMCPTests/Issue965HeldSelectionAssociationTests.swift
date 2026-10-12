@@ -1418,6 +1418,34 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Measured population cost reserves both rechecks without an unrelated quarter-deadline cap",
+          arguments: [6, 11, 16])
+    func measuredCollectionUsesAvailableTimeWithoutSpendingRecheckReserve(elapsedSeconds: Int) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+                                            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, populationReadDuration: .seconds(2), collectionNow: {
+                    start.advanced(by: f.selections.isEmpty ? .zero : .seconds(elapsedSeconds))
+                })
+            if elapsedSeconds < 16 {
+                #expect(f.selections == [1, 2, 3, 0])
+                #expect(pairs.count == 4)
+            } else {
+                #expect(f.selections == [1, 0], "The measured two-read reserve still ends optional challenges")
+                #expect(pairs.count == 2)
+            }
+            #expect(association.effects.restoration == "restored")
+        }
+    }
+
     @Test("Insufficient measured recheck time refuses optional navigation without inventing instability")
     func measuredRecheckReservePreservesUnchangedInitialPopulation() async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
