@@ -51,13 +51,20 @@ extension AccessibilityChannel {
         states.reserveCapacity(headers.count)
         for (index, header) in headers.enumerated() {
             if stop() { return (nil, true) }
-            guard var state = AXValueExtractors.extractTrackState(
-                from: header, index: index, runtime: runtime.ax,
-                observingStackChildren: { exposure?.observeDisclosureChildren(header: header, children: $0, selected: $1) },
-                observingExposure: exposure,
-                readingTypeHelp: readingTypeHelp,
-                stoppingBeforeHelp: stop
-            ) else { return (nil, true) }
+            func extract() -> TrackState? {
+                AXValueExtractors.extractTrackState(
+                    from: header, index: index, runtime: runtime.ax,
+                    observingStackChildren: { exposure?.observeDisclosureChildren(header: header, children: $0, selected: $1) },
+                    observingExposure: exposure,
+                    readingTypeHelp: readingTypeHelp,
+                    stoppingBeforeHelp: stop)
+            }
+            // Population reads already omit focus-moving type Help. Scalar
+            // selectors also query Help, so omit it for this entire header
+            // extraction. Keep non-Help scalar evidence and the ordinary reader.
+            let extracted = readingTypeHelp ? extract() : AXHelpers.HelpReadGuard.$current.withValue(
+                AXHelpers.HelpReadGuard(allowHelpReads: false, stop: { false }), operation: extract)
+            guard var state = extracted else { return (nil, true) }
             if !readingTypeHelp, let window {
                 state.hideButtonReadback = readTrackHideButton(header, in: window, runtime: runtime, exposure: exposure)
             }

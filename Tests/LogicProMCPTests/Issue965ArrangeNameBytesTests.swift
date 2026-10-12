@@ -17,6 +17,47 @@ struct Issue965ArrangeNameBytesTests {
         case fieldDescription, fieldTitle, fieldValue, staticText, quotedDescription, headerTitle
     }
 
+    @Test(arguments: [true, false])
+    func populationHeaderReadsOmitFocusMovingScalarHelp(readingTypeHelp: Bool) throws {
+        let builder = FakeAXRuntimeBuilder()
+        let header = header(builder, source: .fieldDescription, name: "Original")
+        let field = builder.element(965_301), slider = builder.element(965_302)
+        let app = builder.element(965_303), workspace = builder.element(965_304)
+        builder.setRole(slider, kAXSliderRole as String)
+        builder.setAttribute(slider, kAXDescriptionAttribute as String, "Volume")
+        builder.setAttribute(slider, kAXHelpAttribute as String, "Volume fader")
+        builder.setAttribute(slider, kAXMinValueAttribute as String, 0)
+        builder.setAttribute(slider, kAXMaxValueAttribute as String, 233)
+        builder.setAttribute(slider, kAXValueAttribute as String, 173)
+        builder.setChildren(slider, [])
+        builder.setChildren(header, [field, slider])
+        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, workspace)
+        let reads = FieldReads()
+        let ax = builder.makeAXRuntime(attributeValueHandler: { element, attribute in
+            if CFEqual(element, slider), attribute == kAXHelpAttribute as String {
+                reads.record(attribute)
+                builder.setAttribute(app, kAXFocusedUIElementAttribute as String, slider)
+            }
+            return nil
+        }, setAttributeHandler: nil, performActionHandler: nil)
+        let runtime = AXLogicProElements.Runtime(logicProPID: { nil }, ax: ax)
+        let states = try #require(AccessibilityChannel.readTrackStates(
+            from: [header], runtime: runtime, readingTypeHelp: readingTypeHelp,
+            stoppingWhen: { false }).states)
+        #expect(states.count == 1)
+        #expect(states[0].name == "Original")
+        #expect(states[0].volume > 0, "Description-backed scalar evidence must remain available")
+        if readingTypeHelp {
+            #expect(!reads.values.isEmpty, "The ordinary track reader retains its existing Help behavior")
+        } else {
+            #expect(reads.values.isEmpty, "Population reads must not query scalar Help after omitting type Help")
+            let focus = try #require(builder.attributeValue(app, kAXFocusedUIElementAttribute as String))
+            #expect(CFEqual(focus as AnyObject, workspace), "An unrequested scalar selector must not move focus to another header")
+        }
+        #expect(builder.setCalls.isEmpty)
+        #expect(builder.actionCalls.isEmpty)
+    }
+
     private func header(_ builder: FakeAXRuntimeBuilder, source: Source, name: String) -> AXUIElement {
         let header = builder.element(965_300)
         let child = builder.element(965_301)
