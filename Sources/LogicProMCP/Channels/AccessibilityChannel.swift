@@ -552,13 +552,17 @@ actor AccessibilityChannel: Channel {
                         stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
                     let valuesAgree = (try? encoder.encode(population.strips)) == (try? encoder.encode(current.strips))
+                    let rows = current.strips ?? []
+                    let survivingRenewals = renewals.filter { renewal in
+                        rows.filter { $0.physicalBinding?.matches(renewal.pair.strip) == true }.count == 1
+                    }
                     let ownersAgree: Bool
-                    if renewals.count == 1, let renewal = renewals.first {
+                    if survivingRenewals.count == 1, let renewal = survivingRenewals.first,
+                       renewals.last?.pair.strip.matches(renewal.pair.strip) == true {
                         // Cancel may retire the entire physical census. These are
                         // new raw rows, not old identities mapped by label/index.
                         // Bookend their exact ordered ownership against the full
                         // census held by the actual renewed selection/inverse.
-                        let rows = current.strips ?? []
                         ownersAgree = population.strips?.count == current.strips?.count
                             && rows.count == renewal.observation.strips.count
                             && zip(rows, renewal.observation.strips).allSatisfy { row, strip in
@@ -575,10 +579,16 @@ actor AccessibilityChannel: Channel {
                             }
                     }
                     let slotsAgree = renewedSlots.allSatisfy { slot in
-                        current.strips?.filter { $0.inputSlotBinding?.matches(slot) == true }.count == 1
+                        if rows.contains(where: { $0.physicalBinding?.matches(slot.owner) == true }) {
+                            return rows.filter { $0.inputSlotBinding?.matches(slot) == true }.count == 1
+                        }
+                        // A later owned acquisition can retire an earlier checked
+                        // receiver again. Discard that fact, never transfer it to
+                        // the new row; a still-current owner's changed slot refuses.
+                        return renewals.contains { $0.pair.strip.matches(slot.owner) }
                     }
                     if current.stable, valuesAgree, ownersAgree, slotsAgree,
-                       renewals.allSatisfy({ $0.permits(runtime: runtime.logicRuntime) }),
+                       survivingRenewals.allSatisfy({ $0.permits(runtime: runtime.logicRuntime) }),
                        current.project?.filePath == population.project?.filePath,
                        await navigationReferenceIsCurrent(), !stop() {
                         var restored = current
