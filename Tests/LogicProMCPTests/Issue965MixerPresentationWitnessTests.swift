@@ -230,12 +230,20 @@ struct Issue965MixerPresentationWitnessTests {
         #expect(batches.count == 1 && singles.count == 0)
     }
 
-    @Test(arguments: [false, true])
-    func aCompletelyReadNoncandidateLeafNeedsNoInspectorHelp(bulk: Bool) throws {
+    @Test(arguments: [false, true], ["button", "indicator", "slider", "text"])
+    func aCompletelyReadNoncandidateLeafNeedsNoInspectorHelp(bulk: Bool, childShape: String) throws {
         let fixture = Fixture(), batches = Counter(), singles = Counter(), help = Counter(), leafHelp = Counter()
         let leaf = fixture.builder.element(966_130)
-        fixture.builder.setRole(leaf, kAXButtonRole as String)
+        fixture.builder.setRole(leaf, childShape != "button" ? kAXSliderRole as String : kAXButtonRole as String)
         fixture.builder.setChildren(leaf, [])
+        if childShape != "button" {
+            let indicator = fixture.builder.element(966_132)
+            let role = childShape == "slider" ? kAXSliderRole as String
+                : childShape == "text" ? kAXStaticTextRole as String : kAXValueIndicatorRole as String
+            fixture.builder.setRole(indicator, role)
+            fixture.builder.setChildren(indicator, [])
+            fixture.builder.setChildren(leaf, [indicator])
+        }
         fixture.builder.setChildren(fixture.window, [fixture.owner, leaf])
         let base = bulk ? batchedCensusRuntime(fixture, batches: batches, singles: singles, help: help)
             : fixture.builder.makeLogicRuntime(appElement: fixture.app)
@@ -254,6 +262,45 @@ struct Issue965MixerPresentationWitnessTests {
             requiresCompleteAbsence: true)
         #expect(CFEqual(try #require(result.binding).mixer, fixture.layout))
         #expect(leafHelp.count == 0, "An observed childless noncandidate cannot contain a Mixer or Inspector subtree")
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test(arguments: ["group", "nonleaf", "slider_nonleaf", "text_nonleaf",
+                      "unknown_role", "unread_children", "first_unread_children"])
+    func aScalarWithUnobservedOrNonleafChildrenRetainsInspectorHelp(fault: String) throws {
+        let fixture = Fixture(), help = Counter(), childReads = Counter()
+        let slider = fixture.builder.element(966_133)
+        let child = fixture.builder.element(966_134)
+        fixture.builder.setRole(slider, kAXSliderRole as String)
+        fixture.builder.setAttribute(slider, kAXHelpAttribute as String, "Inspector")
+        fixture.builder.setChildren(slider, [child])
+        if fault != "unknown_role" {
+            let role = fault == "group" ? kAXGroupRole as String
+                : fault == "slider_nonleaf" ? kAXSliderRole as String
+                : fault == "text_nonleaf" ? kAXStaticTextRole as String : kAXValueIndicatorRole as String
+            fixture.builder.setRole(child, role)
+        }
+        fixture.builder.setChildren(child, fault == "group" || fault.hasSuffix("nonleaf") ? [fixture.owner] : [])
+        fixture.builder.setChildren(fixture.window, [slider])
+        let runtime = fixture.builder.makeLogicRuntime(appElement: fixture.app,
+            attributeValueResultHandler: { element, attribute in
+                if CFEqual(element, slider), attribute == kAXHelpAttribute as String { _ = help.next() }
+                return nil
+            }, childrenResultHandler: { element in
+                guard CFEqual(element, child), fault.contains("unread_children") else { return nil }
+                let attempt = childReads.next()
+                if fault == "unread_children" || attempt == 1 {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return nil
+            }, setAttributeHandler: nil, performActionHandler: nil)
+        let result = try AXLogicProElements.mixerPopulationAreaLookup(in: fixture.window,
+            runtime: runtime, requiresCompleteAbsence: true)
+        #expect(result.binding == nil, "Scalar Help must still exclude a real Inspector subtree")
+        #expect(help.count > 0, "Unknown or nonleaf scalar children are not permission to omit Help")
+        if fault == "unknown_role" || fault.contains("unread_children") {
+            if case .childrenUnread = result.lookup {} else { Issue.record("An unobserved child became complete absence") }
+        }
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 

@@ -49,7 +49,7 @@ extension AccessibilityChannel {
     static func readChannelStrips(
         from strips: [AXUIElement], runtime: AXLogicProElements.Runtime,
         window: AXUIElement? = nil, mixer: AXUIElement? = nil,
-        readingPlugins: Bool = true, stoppingWhen stop: () -> Bool
+        readingPlugins: Bool = true, readingScalarHelp: Bool = true, stoppingWhen stop: () -> Bool
     ) -> [ChannelStripState]? {
         var channelStrips: [ChannelStripState] = []
         let document: String?
@@ -64,17 +64,31 @@ extension AccessibilityChannel {
             let samples = (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
                 ? AXHelpers.StripHelpSamples() : nil
             let state = AXHelpers.StripHelpSamples.$current.withValue(samples) {
-                let volume = AXLogicProElements.findVolumeFader(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
-                    .flatMap { AXValueExtractors.extractLogicMixerFaderValue($0, runtime: runtime.ax) }
-                    ?? 0.0
-                let pan = AXLogicProElements.findPanControl(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
-                    .flatMap { AXValueExtractors.extractCenteredSliderValue($0, runtime: runtime.ax) }
-                    ?? 0.0
+                func readScalars() -> (volume: Double, pan: Double) {
+                    let volume = AXLogicProElements.findVolumeFader(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
+                        .flatMap { AXValueExtractors.extractLogicMixerFaderValue($0, runtime: runtime.ax) }
+                        ?? 0.0
+                    let pan = AXLogicProElements.findPanControl(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
+                        .flatMap { AXValueExtractors.extractCenteredSliderValue($0, runtime: runtime.ax) }
+                        ?? 0.0
+                    return (volume, pan)
+                }
+                let scalars: (volume: Double, pan: Double)
+                if readingScalarHelp {
+                    scalars = readScalars()
+                } else {
+                    // Scalar Help can move focus. Keep Description-backed values,
+                    // without caching intentionally omitted Help as a native failure
+                    // for later required send/slot classifiers on the same control.
+                    scalars = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: false, stop: { false })) {
+                        AXHelpers.StripHelpSamples.$current.withValue(nil) { readScalars() }
+                    }
+                }
 
                 var state = ChannelStripState(
                     trackIndex: index,
-                    volume: volume,
-                    pan: pan
+                    volume: scalars.volume,
+                    pan: scalars.pan
                 )
                 if let window, let mixer, let document {
                     state.physicalBinding = .init(window: window, mixer: mixer, strip: strip, document: document)
