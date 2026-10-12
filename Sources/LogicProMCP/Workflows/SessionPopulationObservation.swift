@@ -1266,7 +1266,12 @@ enum SessionPopulationObservation {
                 }
             }
             if qualified, !rows.isEmpty {
-                associations = .init(coverage: .partial, reasons: [.associationPopulationNotObserved], rows: rows)
+                // Each row already required a distinct held physical header and
+                // its actual current strip. Only an independently complete whole
+                // track population can make those exhaustive observations complete.
+                let complete = request.scope == .wholeProject && tracksCoverage == .complete && rows.count == live.count
+                associations = .init(coverage: complete ? .complete : .partial,
+                    reasons: complete ? [] : [.associationPopulationNotObserved], rows: rows)
             }
         }
         var hierarchy = deferred(.parentDepthNotObserved)
