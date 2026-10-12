@@ -587,7 +587,10 @@ extension AccessibilityChannel {
             var observed: [(Int, AXUIElement)] = []
             var restored = true
             var selectionsVerified = true
-            var originalPairVerified = true
+            // An initially selected header and passive focus are not a pair
+            // witness. Whole-held collection needs its own changed-focus return
+            // to that header, just as it does for every challenged header.
+            var originalPairVerified = !allHeldHeaders
             for challenge in challenges {
                 if let collectionEnd, collectionNow() >= collectionEnd { break }
                 // select() renews selection/focus and the complete scoped
@@ -619,6 +622,7 @@ extension AccessibilityChannel {
                             originalPairVerified = false
                             continue
                         }
+                        originalPairVerified = true
                         guard await referenceIsCurrent(),
                               await select(challenge, stoppingWhen: stop) else {
                             selectionsVerified = false; break
@@ -644,7 +648,9 @@ extension AccessibilityChannel {
                 if expectedIndex == originalIndex {
                     restored = permitsRead() && CFEqual(expectedFocus, originalFocus)
                 } else if await referenceIsCurrent() {
+                    let precedingFocus = expectedFocus
                     restored = await select(originalIndex, stoppingWhen: stop) && CFEqual(expectedFocus, originalFocus)
+                    if restored, !CFEqual(precedingFocus, originalFocus) { originalPairVerified = true }
                 } else { restored = false }
                 if !restored, !lost, expectedIndex == originalIndex {
                     originalPairVerified = false

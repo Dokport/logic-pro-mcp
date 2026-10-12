@@ -4,6 +4,23 @@ import Testing
 
 @Suite("RoutingGraphTests")
 struct RoutingGraphTests {
+    @Test(arguments: ["contradiction", "send_only", "disconnected"])
+    func noOutputPathEvidenceCannotHideAContradictoryMainEdge(_ kind: String) {
+        let source = RoutingNode(id: "track-1", kind: .track, displayName: "Same",
+            busNumber: nil, targetRef: sourceRef, outputClassification: .noOutput)
+        var edges: [RoutingEdge] = []
+        if kind == "contradiction" {
+            edges.append(assignment(.mainOutput, source: source.id, destination: "bus-1"))
+        }
+        if kind != "disconnected" {
+            edges.append(sendEdge(send(slot: 0, bus: 1, level: 0), destination: "bus-1"))
+        }
+        let candidate = graph(nodes: [source, busNode(1)], edges: edges)
+        let expected: RoutingPathState = kind == "contradiction" ? .unverified
+            : kind == "send_only" ? .connected : .disconnected
+        #expect(routingPath(from: sourceRef, to: "bus-1", in: candidate) == expected)
+    }
+
     @Test(arguments: [nil, -1, 0, 257] as [Int?])
     func completeGraphsRejectInvalidLogicalBusNumbers(_ number: Int?) {
         let bus = RoutingNode(id: "invalid-bus", kind: .bus, displayName: "Bus",
