@@ -691,10 +691,22 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await observeStack(navigation: true, initiallyExpanded: false, headerFocus: "initial_passive")
     }
 
+    @Test func registeredMixerInclusiveStackReadsItsOriginalNoneditablePassiveName() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "initial_passive", includeStrips: true)
+    }
+
     @Test(arguments: ["initial_editable", "initial_insertion", "initial_foreign", "initial_range",
         "initial_alias", "initial_string", "initial_value", "initial_wrong_window"])
     func registeredStackInitialFocusExceptionCannotAcquireAnEditorOrOtherField(focus: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, headerFocus: focus)
+    }
+
+    @Test(arguments: ["initial_editable", "initial_insertion", "initial_foreign", "initial_range",
+        "initial_alias", "initial_string", "initial_value", "initial_wrong_window"])
+    func registeredMixerInclusiveInitialFocusStillRefusesAnEditorOrOtherField(focus: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: focus, includeStrips: true)
     }
 
     @Test(arguments: [false, true])
@@ -1676,7 +1688,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                               knownInnerReplacement: Bool = false, disclosureDecision: String? = nil,
                               delayedLanding: Bool = false, headerFocus: String? = nil,
                               helpMovesFocus: Bool = false, focusRestoration: String? = nil,
-                              originalFocusRole: String = "AXLayoutArea",
+                              originalFocusRole: String = "AXLayoutArea", includeStrips: Bool = false,
                               hiddenViewLoss: Bool = false, hiddenView: Bool = false,
                               hiddenFocusFault: String? = nil, lateScopeFault: String? = nil,
                               verifyHierarchy: Bool = false, verifyDirectChildren: Bool = false,
@@ -2387,7 +2399,8 @@ struct Issue965FreshPopulationAcquisitionTests {
             liveTrackNames: { [:] }, projectFileReader: fileReader)
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
         let params: [String: Value] = ["domains": .array(verifyHierarchy
-            ? [.string("tracks"), .string("hierarchy")] : [.string("tracks")]), "allow_ui_navigation": .bool(navigation),
+            ? [.string("tracks"), .string("hierarchy")] : includeStrips
+                ? [.string("tracks"), .string("strips")] : [.string("tracks")]), "allow_ui_navigation": .bool(navigation),
             "scope": .string(selectedCensusLoss || selectedEnumerationLoss ? "selection" : "whole_project")]
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: params, mutationGate: gate) {
@@ -3343,6 +3356,41 @@ struct Issue965FreshPopulationAcquisitionTests {
         let isError = result.isError ?? false
         #expect(!isError)
         #expect(scalarReads.count == 0, "Scalar metadata is not permission to move focus during a fresh population")
+        let held = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+        #expect(CFEqual(held as AnyObject, focus))
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test("fresh Mixer discovery omits focus-moving Help on a completely read header control forest")
+    func registeredMixerDiscoveryOmitsFocusMovingHeaderHelp() async throws {
+        let (fixture, focus) = passiveMixerFocusFixture()
+        let roles = [kAXRadioButtonRole, kAXSplitterRole, kAXDisclosureTriangleRole,
+                     kAXCheckBoxRole, kAXSliderRole, kAXTextFieldRole] as [String]
+        var controls: [AXUIElement] = []
+        for (index, role) in roles.enumerated() {
+            let control = fixture.builder.element(965_990 + index)
+            fixture.builder.setRole(control, role)
+            fixture.builder.setChildren(control, [])
+            controls.append(control)
+        }
+        let thumb = fixture.builder.element(965_996)
+        fixture.builder.setRole(thumb, kAXSliderRole as String)
+        fixture.builder.setChildren(thumb, [])
+        fixture.builder.setChildren(controls[4], [thumb])
+        fixture.builder.setChildren(fixture.header, controls)
+        fixture.builder.setAttribute(fixture.header, kAXHelpAttribute as String, "Track header. Mute or solo the track.")
+        let headerHelp = Reads()
+        let result = try await inspect(fixture: fixture, domains: ["strips"],
+            readingAttribute: { element, attribute in
+                if CFEqual(element, fixture.header), attribute == kAXHelpAttribute as String {
+                    headerHelp.record(attribute)
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header)
+                }
+                return nil
+            })
+        let isError = result.isError ?? false
+        #expect(!isError)
+        #expect(headerHelp.count == 0, "A fully read forest of non-Mixer controls needs no Inspector exclusion")
         let held = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
         #expect(CFEqual(held as AnyObject, focus))
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)

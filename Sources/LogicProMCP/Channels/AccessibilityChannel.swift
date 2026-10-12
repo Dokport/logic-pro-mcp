@@ -360,6 +360,18 @@ actor AccessibilityChannel: Channel {
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
             readFocusScope?.retainPassiveMixer(in: window, logic: runtime.logicRuntime)
         }
+        if request.allowUINavigation, request.needsTracks, request.needsStrips,
+           association == nil, runtime.canPostEvents(), let mouse = runtime.observationMouseRuntime,
+           case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime),
+           let candidate = OwnedTrackStackObservationNavigation(window: window, logic: runtime.logicRuntime, mouse: mouse,
+                expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
+                referenceIsCurrent: navigationReferenceIsCurrent) {
+            // Hold the same original passive control before the Mixer baseline
+            // consults its focus guard. No disclosure is changed until that
+            // baseline and the existing matching-window checks succeed.
+            stackNavigation = candidate
+            readFocusScope?.retain(candidate)
+        }
         if request.allowUINavigation, request.needsStrips,
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
             if association == nil {
@@ -377,7 +389,7 @@ actor AccessibilityChannel: Channel {
         if request.allowUINavigation, request.needsTracks, runtime.canPostEvents(),
            let mouse = runtime.observationMouseRuntime,
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
-            if let candidate = OwnedTrackStackObservationNavigation(window: window, logic: runtime.logicRuntime, mouse: mouse,
+            if let candidate = stackNavigation ?? OwnedTrackStackObservationNavigation(window: window, logic: runtime.logicRuntime, mouse: mouse,
                 expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
                 referenceIsCurrent: navigationReferenceIsCurrent),
                navigation.map({ CFEqual(candidate.window, $0.window)
