@@ -3306,6 +3306,45 @@ struct Issue965FreshPopulationAcquisitionTests {
         return (fixture, focus)
     }
 
+    @Test("a fresh Mixer population does not query focus-moving scalar Help", arguments: [false, true])
+    func registeredMixerReadOmitsFocusMovingScalarHelp(hasValueIndicator: Bool) async throws {
+        let (fixture, focus) = passiveMixerFocusFixture()
+        let volume = fixture.builder.element(965_987)
+        let pan = fixture.builder.element(965_988)
+        let scalarReads = Reads()
+        for (slider, name, value) in [(volume, "Volume", 0.75), (pan, "Pan", 0.25)] {
+            fixture.builder.setRole(slider, kAXSliderRole as String)
+            fixture.builder.setAttribute(slider, kAXDescriptionAttribute as String, name)
+            fixture.builder.setAttribute(slider, kAXHelpAttribute as String, name)
+            fixture.builder.setAttribute(slider, kAXMinValueAttribute as String, 0.0)
+            fixture.builder.setAttribute(slider, kAXMaxValueAttribute as String, 1.0)
+            fixture.builder.setAttribute(slider, kAXValueAttribute as String, value)
+            fixture.builder.setChildren(slider, [])
+        }
+        if hasValueIndicator {
+            let indicator = fixture.builder.element(965_989)
+            fixture.builder.setRole(indicator, kAXValueIndicatorRole as String)
+            fixture.builder.setChildren(indicator, [])
+            fixture.builder.setChildren(volume, [indicator])
+        }
+        fixture.builder.setChildren(focus, [volume, pan])
+        let result = try await inspect(fixture: fixture, domains: ["strips"],
+            readingAttribute: { element, attribute in
+                if attribute == kAXHelpAttribute as String,
+                   CFEqual(element, volume) || CFEqual(element, pan) {
+                    scalarReads.record(attribute)
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, element)
+                }
+                return nil
+            })
+        let isError = result.isError ?? false
+        #expect(!isError)
+        #expect(scalarReads.count == 0, "Scalar metadata is not permission to move focus during a fresh population")
+        let held = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+        #expect(CFEqual(held as AnyObject, focus))
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
     private func passiveMixerAttributeRead(_ focus: AXUIElement, fault: String? = nil)
         -> @Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>? {
         { element, attribute in

@@ -908,7 +908,8 @@ actor AccessibilityChannel: Channel {
                             // Routing/association bookends still need physical strips,
                             // but classify inserts only for a requested strip footprint.
                             // Default and explicit strip requests retain the full chain.
-                            readingPlugins: request.domains.contains(.strips), stoppingWhen: stop)
+                            readingPlugins: request.domains.contains(.strips),
+                            readingScalarHelp: false, stoppingWhen: stop)
                     }
                 }
             }

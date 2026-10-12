@@ -481,10 +481,35 @@ extension AXLogicProElements {
         // is unavailable, conservatively census every descendant instead: that
         // enlarges the search rather than hiding a possible Mixer. Role, possible
         // candidate identity, children and traversal bounds remain strict.
-        // A completely read childless nonlegacy node cannot be a candidate or
-        // contain one. Omit its side-effecting Help, not any deciding metadata,
-        // child/status read, traversal or remaining per-Help guard.
-        let needsInspectorHelp = observedChildren?.isEmpty != true || canBeEmptyLegacyMixer
+        // Native scalar sliders can contain leaf value indicators. Neither the
+        // slider nor those fully observed leaves can identify or contain a Mixer.
+        // Unknown roles/children and every other subtree retain Inspector Help.
+        var hasOnlyScalarLeaves = false
+        if requiresCompleteAbsence, role == (kAXSliderRole as String), let observedChildren {
+            hasOnlyScalarLeaves = true
+            for child in observedChildren {
+                try check()
+                let childRole = AXHelpers.getRole(child, runtime: runtime)
+                observingExposure?.observeRole(element: child, role: childRole)
+                guard childRole == (kAXValueIndicatorRole as String) else {
+                    if childRole == nil { sawIncompleteAbsence = true }
+                    hasOnlyScalarLeaves = false
+                    break
+                }
+                try check()
+                guard let grandchildren = childrenIfRead(child, runtime: runtime) else {
+                    sawIncompleteAbsence = true
+                    hasOnlyScalarLeaves = false
+                    break
+                }
+                observingExposure?.observeChildren(element: child, children: grandchildren)
+                if !grandchildren.isEmpty { hasOnlyScalarLeaves = false; break }
+            }
+        }
+        // Omit only side-effecting Help; all metadata, status reads and bounded
+        // descendant traversal still run. Performed Help keeps its deciding census.
+        let needsInspectorHelp = (observedChildren?.isEmpty != true && !hasOnlyScalarLeaves)
+            || canBeEmptyLegacyMixer
         let help = needsInspectorHelp
             ? try metadata(kAXHelpAttribute, allowUnreadContext: role != nil) : nil
         let text = [identifier, description, title, help].compactMap { $0 }.joined(separator: " ").lowercased()
