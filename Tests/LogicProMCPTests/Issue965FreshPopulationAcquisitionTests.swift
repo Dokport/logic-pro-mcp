@@ -328,9 +328,9 @@ struct Issue965FreshPopulationAcquisitionTests {
     }
 
     @Test("Whole population needs a real all-shown single-page end, not merely saved count agreement",
-          arguments: ["complete", "flat_hierarchy", "flat_hierarchy_no_navigation",
+          arguments: ["complete", "complete_bottom", "flat_hierarchy", "flat_hierarchy_no_navigation", "flat_hierarchy_bottom",
                       "flat_hierarchy_hidden", "flat_hierarchy_count_gap", "flat_hierarchy_open_stack",
-                      "hidden", "scrollable", "scrolled", "offscreen", "missing_row",
+                      "hidden", "scrollable", "scrolled", "negative_scroll", "out_of_range_scroll", "nonfinite_scroll", "infinite_scroll", "offscreen", "missing_row",
                       "unreadable_enabled", "foreign_scrollbar", "duplicate_scrollbar",
                       "late_scrollbar_retirement", "late_frame_loss", "late_scrollbar_role", "late_hidden_view",
                       "late_scrollbar_orientation", "late_scrollbar_parent", "late_scrollbar_window"])
@@ -363,7 +363,17 @@ struct Issue965FreshPopulationAcquisitionTests {
         f.builder.setRole(vertical, kAXScrollBarRole as String)
         f.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
         f.builder.setAttribute(vertical, kAXEnabledAttribute as String, NSNumber(value: fault == "scrollable"))
-        f.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: fault == "scrolled" ? 0.5 : 0))
+        let scrollValue: Double
+        switch fault {
+        case "scrolled": scrollValue = 0.5
+        case "complete_bottom", "flat_hierarchy_bottom": scrollValue = 1
+        case "negative_scroll": scrollValue = -1
+        case "out_of_range_scroll": scrollValue = 2
+        case "nonfinite_scroll": scrollValue = .nan
+        case "infinite_scroll": scrollValue = .infinity
+        default: scrollValue = 0
+        }
+        f.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: scrollValue))
         f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.window)
         f.builder.setChildren(vertical, [])
         f.builder.setChildren(workspace, [content, vertical])
@@ -428,8 +438,8 @@ struct Issue965FreshPopulationAcquisitionTests {
         let body = try #require(sharedJSONObject(sharedToolText(result)))
         let tracks = try #require(body["tracks"] as? [String: Any])
         let witnesses = try #require(tracks["witnesses"] as? [String: Any])
-        let completeFlat = fault == "flat_hierarchy" || fault == "flat_hierarchy_no_navigation"
-        if fault == "complete" || completeFlat || fault == "flat_hierarchy_open_stack" {
+        let completeFlat = fault == "flat_hierarchy" || fault == "flat_hierarchy_no_navigation" || fault == "flat_hierarchy_bottom"
+        if fault == "complete" || fault == "complete_bottom" || completeFlat || fault == "flat_hierarchy_open_stack" {
             #expect(tracks["coverage"] as? String == "complete", "A real one-page end must be usable, not unconditional count-only partial coverage")
             #expect(witnesses["population_end_source"] as? String == "ax_all_shown_single_page")
         } else {
@@ -803,6 +813,20 @@ struct Issue965FreshPopulationAcquisitionTests {
     func registeredHierarchyRetainsDirectChildrenOnlyWhenRevealedStacksWereClosed(nested: Bool) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: nested,
             verifyHierarchy: true, verifyDirectChildren: true)
+    }
+
+    @Test("A complete population and every stack's actual direct children establish the whole forest",
+          arguments: [false, true], ["complete", "complete_bottom", "count_gap", "offscreen"])
+    func registeredCompleteStackHierarchy(nested: Bool, fault: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: nested,
+            verifyHierarchy: true, verifyDirectChildren: true, completeHierarchy: fault)
+    }
+
+    @Test("A complete visible population cannot fill an unobserved stack's direct children",
+          arguments: ["open", "boolean"])
+    func registeredCompletePopulationStillNeedsEveryDirectStackObservation(child: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            verifyHierarchy: true, verifyDirectChildren: true, revealedStack: child, completeHierarchy: "complete")
     }
 
     @Test(arguments: ["open", "boolean", "late_open"])
@@ -1829,7 +1853,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                               verifyHierarchy: Bool = false, verifyDirectChildren: Bool = false,
                               revealedStack: String? = nil, selectedCensusLoss: Bool = false,
                               selectedEnumerationLoss: Bool = false, postAckForeignFocus: Bool = false,
-                              sliderMetadataObservations: Reads? = nil, sliderMutationAt: Int? = nil) async throws {
+                              sliderMetadataObservations: Reads? = nil, sliderMutationAt: Int? = nil,
+                              completeHierarchy: String? = nil) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -2009,6 +2034,43 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.setChildren(menuBar, [trackMenu])
             fixture.builder.setAttribute(fixture.app, kAXMenuBarAttribute as String, menuBar)
         }
+        if let completeHierarchy {
+            // The same real end scaffold as the registered flat-population test,
+            // now around actual owned outer/inner disclosure transitions.
+            let split = fixture.builder.element(965_246), legendSplit = fixture.builder.element(965_247)
+            let headerSplit = fixture.builder.element(965_248), scroll = fixture.builder.element(965_249)
+            let legend = fixture.builder.element(965_250), pageWorkspace = fixture.builder.element(965_258)
+            let content = fixture.builder.element(965_259), vertical = fixture.builder.element(965_260)
+            for element in [split, legendSplit, headerSplit] { fixture.builder.setRole(element, kAXSplitGroupRole as String) }
+            fixture.builder.setRole(fixture.rail, kAXGroupRole as String)
+            fixture.builder.setAttribute(fixture.rail, kAXDescriptionAttribute as String, "Tracks header")
+            fixture.builder.setRole(scroll, kAXScrollAreaRole as String)
+            fixture.builder.setFrame(scroll, x: 0, y: 0, width: 200, height: 2000)
+            for (index, header) in fullyExposed.enumerated() {
+                fixture.builder.setFrame(header, x: 0, y: CGFloat(index * 40), width: 200, height: 40)
+            }
+            if completeHierarchy == "offscreen" {
+                fixture.builder.setFrame(headers.last!, x: 0, y: 1990, width: 200, height: 40)
+            }
+            fixture.builder.setRole(legend, kAXGroupRole as String)
+            fixture.builder.setRole(hide, kAXCheckBoxRole as String)
+            fixture.builder.setAttribute(hide, kAXDescriptionAttribute as String, "Show/Hide Hidden Tracks   H")
+            fixture.builder.setAttribute(hide, kAXValueAttribute as String, NSNumber(value: 1))
+            fixture.builder.setAttribute(hide, kAXWindowAttribute as String, fixture.window)
+            fixture.builder.setChildren(legend, [hide]); fixture.builder.setChildren(scroll, [fixture.rail])
+            fixture.builder.setRole(pageWorkspace, kAXScrollAreaRole as String)
+            fixture.builder.setRole(content, kAXGroupRole as String)
+            fixture.builder.setAttribute(content, kAXDescriptionAttribute as String, "Tracks contents")
+            fixture.builder.setChildren(content, [])
+            fixture.builder.setRole(vertical, kAXScrollBarRole as String)
+            fixture.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+            fixture.builder.setAttribute(vertical, kAXEnabledAttribute as String, NSNumber(value: false))
+            fixture.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: completeHierarchy == "complete_bottom" ? 1 : 0))
+            fixture.builder.setAttribute(vertical, kAXWindowAttribute as String, fixture.window)
+            fixture.builder.setChildren(vertical, []); fixture.builder.setChildren(pageWorkspace, [content, vertical])
+            fixture.builder.setChildren(legendSplit, [legend]); fixture.builder.setChildren(headerSplit, [scroll, pageWorkspace])
+            fixture.builder.setChildren(split, [legendSplit, headerSplit]); fixture.builder.setChildren(fixture.window, [split, controlBar])
+        }
         let replacement = fixture.builder.element(965_231)
         fixture.builder.setRole(replacement, kAXLayoutItemRole as String)
         fixture.builder.setAttribute(replacement, kAXTitleAttribute as String, "Repeated grandchild")
@@ -2176,7 +2238,11 @@ struct Issue965FreshPopulationAcquisitionTests {
                     fixture.builder.setChildren(fixture.rail, fullyExposed)
                 }
                 return nil
-            }, sleep: { _ in }) : .unavailable
+            }, sleep: { _ in }) : completeHierarchy == nil ? .unavailable : .init(
+                currentDocumentPath: { nil }, now: Date.init, readPlistData: { _ in
+                    try? PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": fullyExposed.count
+                        + (completeHierarchy == "count_gap" ? 1 : 0)], format: .xml, options: 0)
+                }, mtime: { _ in Date(timeIntervalSince1970: 0) }, sleep: { _ in })
         let dependencies = HandlerDependencies(router: ChannelRouter(), cache: cache, targetRegistry: registry,
             poller: StatePoller(axChannel: fixture.channel(disclosure: disclosure,
                 additionalDisclosure: nested ? inner : nil, observationMouse: observationMouse,
@@ -3014,12 +3080,15 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.attributeValue($0, kAXTitleAttribute as String) as? String
         })
         #expect(rows.compactMap { $0["track_ref"] as? String }.count == expectedHeaders.count)
-        #expect(tracks["coverage"] as? String == "partial", "exposure alone does not prove hidden/nested/global completion")
+        let completeForest = (completeHierarchy == "complete" || completeHierarchy == "complete_bottom") && revealedStack == nil
+        let completePopulation = completeHierarchy == "complete" || completeHierarchy == "complete_bottom"
+        #expect(tracks["coverage"] as? String == (completePopulation ? "complete" : "partial"),
+            "only an independently complete all-shown page plus its bound saved count establishes the full population")
         if verifyHierarchy {
             let hierarchy = try #require(body["hierarchy"] as? [String: Any])
             if navigation {
                 let exposures = try #require(hierarchy["disclosure_exposures"] as? [[String: Any]])
-                #expect(hierarchy["coverage"] as? String == "partial")
+                #expect(hierarchy["coverage"] as? String == (completeForest ? "complete" : "partial"))
                 #expect(exposures.count == (nested ? 2 : 1))
                 #expect(exposures.first?["stack_ref"] as? String == rows[0]["track_ref"] as? String)
                 #expect(exposures.first?["exposed_track_refs"] as? [String]
@@ -3072,14 +3141,24 @@ struct Issue965FreshPopulationAcquisitionTests {
                         "qualified closed-descendant observations should project their captured physical parent")
                     #expect(row["parent_source"] as? String == "owned_disclosure_closed_descendants")
                 } else {
-                    #expect(row["parent"] as? String == "unknown" && row["parent_source"] == nil)
+                    if completeForest {
+                        #expect(row["parent"] is NSNull)
+                        #expect(row["parent_source"] as? String == "ax_complete_disclosure_population")
+                    } else { #expect(row["parent"] as? String == "unknown" && row["parent_source"] == nil) }
                 }
-                #expect(row["depth"] as? String == "unknown",
-                    "captured direct children do not establish root membership or absolute depth")
+                if completeForest {
+                    var depth = 0, current = ref
+                    while let parent = observedParents[current] { depth += 1; current = parent }
+                    #expect(row["depth"] as? Int == depth)
+                    #expect(row["depth_source"] as? String == "ax_complete_disclosure_population")
+                } else {
+                    #expect(row["depth"] as? String == "unknown",
+                        "partial population or missing direct-stack proof cannot establish absolute depth")
+                }
             }
             let overall = try #require(body["overall"] as? [String: Any])
             let complete = try #require(overall["complete"] as? Bool)
-            #expect(!complete)
+            if completeForest { #expect(complete) } else { #expect(!complete) }
         }
         let current = await cache.getTracks()
         #expect(current.count == (initiallyExpanded ? 42 : 19), "collapsed descendants must not become ordinary current cache rows")
