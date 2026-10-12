@@ -947,6 +947,45 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("The input reader must not press any destination, decoy, or replacement popup")
                 return false
             }
+            if condition == "two_input_retirements" {
+                let otherInput = decoy, renewedOtherInput = f.builder.element(1_965_976)
+                let finalOther = f.builder.element(1_965_977), finalOtherInput = f.builder.element(1_965_978)
+                for control in [otherInput, renewedOtherInput, finalOtherInput] {
+                    f.builder.setButton(control, description: "Bus 256", help: "Input slot. Choose the channel strip input source.",
+                        x: 0, y: 0, width: 1, height: 1)
+                    f.builder.setChildren(control, []); f.builder.setActionNames(control, [kAXPressAction as String])
+                }
+                for strip in [otherReplacement, finalOther] {
+                    f.builder.setRole(strip, kAXLayoutItemRole as String)
+                    f.builder.setAttribute(strip, kAXNumberOfCharactersAttribute as String, 0)
+                    f.builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+                }
+                f.routingAction = { element, action in
+                    if action == kAXPressAction as String, CFEqual(element, otherInput) || CFEqual(element, input) {
+                        f.inputMenuPresses += 1
+                        f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1], root])
+                        return true
+                    }
+                    if CFEqual(element, root), action == kAXCancelAction as String {
+                        f.inputMenuCancels += 1
+                        if f.inputMenuCancels == 1 {
+                            f.builder.setChildren(otherReplacement,
+                                f.builder.makeAXRuntime().children(f.strips[0]).filter { !CFEqual($0, otherInput) } + [renewedOtherInput])
+                            f.routingOtherReplacement = otherReplacement
+                        } else {
+                            f.builder.setChildren(finalOther,
+                                f.builder.makeAXRuntime().children(otherReplacement).filter { !CFEqual($0, renewedOtherInput) } + [finalOtherInput])
+                            f.routingOtherReplacement = finalOther
+                            f.routingReplacement = replacement
+                        }
+                        f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
+                        return true
+                    }
+                    Issue.record("Only the two exact receiver input menus and their Cancel actions are permitted")
+                    return false
+                }
+            }
             if condition == "partial_restore" {
                 f.routingSelection = { _ in
                     if f.selections.count == (graph ? 5 : 3) {
@@ -1007,6 +1046,25 @@ struct Issue965HeldSelectionAssociationTests {
                 } else { nil as SessionPopulationObservation.Capture? }
                 let routing = retained.map { SessionPopulationObservation.routingGraph(capture: $0) }
                 let edges = routing?.edges.filter { $0.kind == .inputAssignment } ?? []
+                if condition == "two_input_retirements" {
+                    #expect(f.inputMenuPresses == 2 && f.inputMenuCancels == 2,
+                        "Both registered input acquisitions must actually replace physical owners")
+                    let fresh = try #require(retained)
+                    let receiver = try #require(fresh.channelStrips.indices.first {
+                        $0 < fresh.channelStrips.count && fresh.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, replacement) } == true
+                    })
+                    #expect(edges.count == 1 && edges.first?.source == "bus_\(number)",
+                        "Retain the last fresh checked receiver, not an all-or-nothing loss after a second renewal")
+                    #expect(edges.first?.destination == fresh.mixerReference(at: receiver)?.rawValue)
+                    #expect(edges.first?.provenance == .axInputMenuCheckmark)
+                    #expect(!fresh.channelStrips.contains {
+                        $0.physicalBinding.map { CFEqual($0.strip, otherReplacement) } == true
+                    }, "The first checked physical owner really retired again; do not transfer its checked bus to a replacement")
+                    #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+                    let complete = try #require(routing?.complete)
+                    #expect(!complete)
+                    return
+                }
                 if condition == "navigation_disabled" {
                     #expect(edges.isEmpty && f.inputMenuPresses == 0 && f.inputMenuCancels == 0)
                     #expect(f.selections == [1, 0])
@@ -1137,6 +1195,10 @@ struct Issue965HeldSelectionAssociationTests {
     @Test(arguments: [1, 256])
     func registeredInputGraphUsesActualRenewalCensusWithoutRetargetingOldAssociations(number: Int) async throws {
         try await assertInputBusRenewal(number: number, condition: "whole_census_retirement", graph: true)
+    }
+
+    @Test func registeredInputGraphKeepsOnlyTheSurvivingSecondRenewal() async throws {
+        try await assertInputBusRenewal(number: 1, condition: "two_input_retirements", graph: true)
     }
 
     @Test(arguments: ["missing_pair", "replaced_header", "foreign_project", "foreign_focus", "partial_restore",
