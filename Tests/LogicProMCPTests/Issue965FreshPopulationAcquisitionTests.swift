@@ -327,6 +327,108 @@ struct Issue965FreshPopulationAcquisitionTests {
         return fixture
     }
 
+    @Test("Whole population needs a real all-shown single-page end, not merely saved count agreement",
+          arguments: ["complete", "hidden", "scrollable", "scrolled", "offscreen", "missing_row",
+                      "unreadable_enabled", "foreign_scrollbar", "duplicate_scrollbar",
+                      "late_scrollbar_retirement", "late_frame_loss", "late_scrollbar_role", "late_hidden_view",
+                      "late_scrollbar_orientation", "late_scrollbar_parent", "late_scrollbar_window"])
+    func registeredSinglePageTrackPopulationEnd(fault: String) async throws {
+        let f = hiddenViewFixture(shown: fault != "hidden")
+        let second = f.builder.element(965_990), workspace = f.builder.element(965_991)
+        let content = f.builder.element(965_992), vertical = f.builder.element(965_993)
+        for (i, header) in [f.header, second].enumerated() {
+            f.builder.setRole(header, kAXLayoutItemRole as String)
+            f.builder.setAttribute(header, kAXTitleAttribute as String, "Track \(i + 1)")
+            f.builder.setAttribute(header, kAXDescriptionAttribute as String, "Track \(i + 1) “Track \(i + 1)”")
+            f.builder.setAttribute(header, kAXSelectedAttribute as String, false)
+            f.builder.setFrame(header, x: 0, y: CGFloat(i * 40), width: 200, height: 40)
+            f.builder.setChildren(header, [])
+        }
+        f.builder.setChildren(f.rail, fault == "missing_row" ? [f.header] : [f.header, second])
+        let headerScroll = f.builder.element(965_971), headerSplit = f.builder.element(965_976)
+        f.builder.setFrame(headerScroll, x: 0, y: 0, width: 200, height: 200)
+        f.builder.setRole(workspace, kAXScrollAreaRole as String)
+        f.builder.setFrame(workspace, x: 200, y: 0, width: 400, height: 200)
+        f.builder.setRole(content, kAXGroupRole as String)
+        f.builder.setAttribute(content, kAXDescriptionAttribute as String, "Tracks contents")
+        f.builder.setChildren(content, [])
+        f.builder.setRole(vertical, kAXScrollBarRole as String)
+        f.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+        f.builder.setAttribute(vertical, kAXEnabledAttribute as String, NSNumber(value: fault == "scrollable"))
+        f.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: fault == "scrolled" ? 0.5 : 0))
+        f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.window)
+        f.builder.setChildren(vertical, [])
+        f.builder.setChildren(workspace, [content, vertical])
+        f.builder.setChildren(headerSplit, [headerScroll, workspace])
+        if fault == "offscreen" { f.builder.setFrame(second, x: 0, y: 190, width: 200, height: 40) }
+        if fault == "foreign_scrollbar" {
+            f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.builder.element(965_994))
+        }
+        if fault == "duplicate_scrollbar" {
+            let other = f.builder.element(965_995)
+            f.builder.setRole(other, kAXScrollBarRole as String)
+            f.builder.setAttribute(other, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+            f.builder.setAttribute(other, kAXEnabledAttribute as String, NSNumber(value: false))
+            f.builder.setAttribute(other, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setChildren(other, [])
+            f.builder.setChildren(workspace, [content, vertical, other])
+        }
+        let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-single-page-\(UUID().uuidString).logicx")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, bundle.absoluteString)
+        let metadata = try PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": 2], format: .xml, options: 0)
+        let reader = LogicProjectFileReader.Runtime(currentDocumentPath: { nil }, now: Date.init,
+            readPlistData: { _ in metadata }, mtime: { _ in Date(timeIntervalSince1970: 0) }, sleep: { _ in })
+        let endBoundaryReads = Reads()
+        let result = try await inspect(fixture: f, domains: ["tracks"], fileReader: reader,
+            readingAttribute: { element, attribute in
+                if fault == "unreadable_enabled", CFEqual(element, vertical), attribute == kAXEnabledAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                if fault.hasPrefix("late_"), CFEqual(element, vertical), attribute == kAXValueAttribute as String {
+                    endBoundaryReads.record("deciding_value")
+                    if endBoundaryReads.count == 3 {
+                        if fault == "late_frame_loss" {
+                            f.builder.setFrame(second, x: 0, y: 190, width: 200, height: 40)
+                        } else if fault == "late_scrollbar_role" {
+                            f.builder.setRole(vertical, kAXButtonRole as String)
+                        } else if fault == "late_hidden_view" {
+                            f.builder.setAttribute(f.builder.element(965_973), kAXValueAttribute as String, NSNumber(value: 0))
+                        } else if fault == "late_scrollbar_orientation" {
+                            f.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXHorizontalOrientationValue as String)
+                        } else if fault == "late_scrollbar_parent" {
+                            f.builder.setAttribute(vertical, kAXParentAttribute as String, f.builder.element(965_994))
+                        } else if fault == "late_scrollbar_window" {
+                            f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.builder.element(965_994))
+                        } else {
+                            let replacement = f.builder.element(965_995)
+                            f.builder.setRole(replacement, kAXScrollBarRole as String)
+                            f.builder.setAttribute(replacement, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+                            f.builder.setAttribute(replacement, kAXEnabledAttribute as String, NSNumber(value: false))
+                            f.builder.setAttribute(replacement, kAXValueAttribute as String, NSNumber(value: 0))
+                            f.builder.setChildren(replacement, [])
+                            f.builder.setChildren(workspace, [content, replacement])
+                        }
+                    }
+                    return .success(NSNumber(value: 0))
+                }
+                return nil
+            })
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        let tracks = try #require(body["tracks"] as? [String: Any])
+        let witnesses = try #require(tracks["witnesses"] as? [String: Any])
+        if fault == "complete" {
+            #expect(tracks["coverage"] as? String == "complete", "A real one-page end must be usable, not unconditional count-only partial coverage")
+            #expect(witnesses["population_end_source"] as? String == "ax_all_shown_single_page")
+        } else {
+            #expect(tracks["coverage"] as? String != "complete")
+        }
+        if fault.hasPrefix("late_") { #expect(endBoundaryReads.count >= 3, "Actually execute the deciding final end read") }
+        #expect(f.events.recorded.isEmpty && f.builder.setCalls.isEmpty && f.builder.actionCalls.isEmpty)
+        #expect(f.reads.helpCount == 0)
+    }
+
     @Test("permitted hidden-track observation captures hidden members and restores the current rail", arguments: [false, true])
     func registeredHiddenViewObservationCapturesAndRestoresMembership(needsWindowServerBootstrap: Bool) async throws {
         try await observeHiddenView(needsWindowServerBootstrap: needsWindowServerBootstrap)
@@ -3663,6 +3765,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         navigation: Bool = false,
         stopBeforeRead: Bool? = nil,
         keyboardFocus: @escaping @Sendable () -> AccessibilityChannel.LogicKeyboardFocus = { .notTextEditing },
+        fileReader: LogicProjectFileReader.Runtime = .unavailable,
         readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil
     ) async throws -> CallTool.Result {
         let cache = StateCache()
@@ -3672,7 +3775,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         let gate = LogicMutationGate()
         let poller = StatePoller(axChannel: fixture.channel(unreadableRail: unreadableRail,
                                                          readingAttribute: readingAttribute), cache: cache,
-                                 runtime: .init(hasVisibleWindow: { hasVisibleWindow }, projectFileReader: .unavailable,
+                                 runtime: .init(hasVisibleWindow: { hasVisibleWindow }, projectFileReader: fileReader,
                                                 keyboardFocus: keyboardFocus))
         if let awaitStop = stopBeforeRead {
             if awaitStop { await poller.stop() }
@@ -3682,7 +3785,7 @@ struct Issue965FreshPopulationAcquisitionTests {
             router: ChannelRouter(), cache: cache, targetRegistry: TargetRegistry(),
             poller: poller,
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
-            liveTrackNames: { [:] }, projectFileReader: .unavailable
+            liveTrackNames: { [:] }, projectFileReader: fileReader
         )
         let handler = try #require(OperationHandlerRegistry.handler(
             tool: "logic_project", command: "inspect_session"
