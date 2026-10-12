@@ -1429,6 +1429,27 @@ struct Issue965HeldSelectionAssociationTests {
             "An observed alias of the original strip must not acquire unique scalar actuation custody")
     }
 
+    @Test("Returning an already focused strip proves restoration, not a new baseline association",
+          arguments: [false, true])
+    func finalChallengeAtOriginalFocusRequiresAnIndependentOriginalHeaderWitness(provedEarlier: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.thirdRetainsPreviousFocus = provedEarlier
+        f.routingRead = { element, attribute in
+            if f.selections.last == 3, CFEqual(element, f.app),
+               attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+            }
+        }
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        let expected: Set<Int> = provedEarlier ? [0, 1] : [1, 2, 3]
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == expected)
+        #expect(f.selections == (provedEarlier ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
+        #expect(f.focusRestorationWrites.isEmpty)
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
     @Test("A header with unchanged focus remains unknown without discarding other independently proved pairs")
     func anUnprovedHeaderDoesNotInventAnAliasOrPoisonOtherProofs() async throws {
         let f = try Fixture(fourTracks: true)
