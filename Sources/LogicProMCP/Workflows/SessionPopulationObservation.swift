@@ -248,6 +248,7 @@ enum SessionPopulationObservation {
         case noObservedAssociationEvidence = "no_observed_association_evidence"
         case associationPopulationNotObserved = "association_population_not_observed"
         case parentDepthNotObserved = "parent_depth_not_observed"
+        case hierarchyLinksInconsistent = "hierarchy_links_inconsistent"
         case routingGraphPartial = "routing_graph_partial"
         case routingGraphUnavailable = "routing_graph_unavailable"
         case colorDeferredToIssue970 = "color_deferred_to_issue_970"
@@ -700,7 +701,8 @@ enum SessionPopulationObservation {
         let isStackHeader: Bool?
         let stackCollapsed: Bool?
         var hidden: Bool? = nil
-        let parent = "unknown"
+        var parent = "unknown"
+        var parentSource: String? = nil
         let depth = "unknown"
         let isSelected: Bool?
         let placeholder: Bool?
@@ -716,6 +718,7 @@ enum SessionPopulationObservation {
             case stackCollapsed = "stack_collapsed"
             case hidden
             case parent
+            case parentSource = "parent_source"
             case depth
             case isSelected = "is_selected"
             case placeholder
@@ -736,6 +739,7 @@ enum SessionPopulationObservation {
             if let hidden { try container.encode(hidden, forKey: .hidden) }
             else { try container.encode("unknown", forKey: .hidden) }
             try container.encode(parent, forKey: .parent)
+            try container.encodeIfPresent(parentSource, forKey: .parentSource)
             try container.encode(depth, forKey: .depth)
             try container.encode(isSelected, forKey: .isSelected)
             try container.encode(placeholder, forKey: .placeholder)
@@ -783,7 +787,7 @@ enum SessionPopulationObservation {
         let coverage: Coverage
         let reasons: [Reason]
         let witnesses: TrackWitnesses
-        let rows: [TrackRow]
+        var rows: [TrackRow]
         let ambiguousTrackIndices: [Int]
         let collapsedStackRows: [Int]
 
@@ -882,6 +886,32 @@ enum SessionPopulationObservation {
             case directChildTrackRefs = "direct_child_track_refs"
             case directChildrenSource = "direct_children_source"
         }
+    }
+
+    // Only already-qualified historical direct-child witnesses are projected. This
+    // does not establish absolute depth, root membership, or current write authority.
+    static func qualifiedDirectParents(_ exposures: [DisclosureExposureRow]) -> [String: String]? {
+        var parents: [String: String] = [:]
+        for exposure in exposures {
+            guard exposure.directChildrenSource == "owned_disclosure_closed_descendants",
+                  let children = exposure.directChildTrackRefs else { continue }
+            guard Set(children).count == children.count,
+                  Set(children).isSubset(of: Set(exposure.exposedTrackRefs)) else { return nil }
+            for child in children {
+                guard child != exposure.stackRef,
+                      parents[child] == nil || parents[child] == exposure.stackRef else { return nil }
+                parents[child] = exposure.stackRef
+            }
+        }
+        for child in parents.keys {
+            var seen: Set<String> = [child]
+            var cursor = child
+            while let parent = parents[cursor] {
+                guard seen.insert(parent).inserted else { return nil }
+                cursor = parent
+            }
+        }
+        return parents
     }
 
     struct AssociationRow: Encodable, Sendable {
@@ -1087,7 +1117,7 @@ enum SessionPopulationObservation {
         case .selection:
             rows = allRows.filter { $0.isSelected == true }
         }
-        let tracks = TracksSection(
+        var tracks = TracksSection(
             coverage: tracksCoverage,
             reasons: tracksReasons,
             witnesses: TrackWitnesses(
@@ -1204,6 +1234,7 @@ enum SessionPopulationObservation {
                 return (row, ref)
             }
             var exposures: [DisclosureExposureRow] = []
+            var fullExposures: [DisclosureExposureRow] = []
             var qualified = true
             for observation in observations {
                 guard let (_, stackRef) = reference(for: observation.stack) else { qualified = false; break }
@@ -1212,6 +1243,9 @@ enum SessionPopulationObservation {
                       Set(members.map(\.1)).count == members.count,
                       !members.contains(where: { $0.1 == stackRef }) else { qualified = false; break }
                 let refs = members.filter { request.scope == .wholeProject || live[$0.0].selectionReadback == true }.map(\.1)
+                fullExposures.append(.init(stackRef: stackRef, exposedTrackRefs: members.map(\.1),
+                    directChildTrackRefs: observation.revealedStacksWereClosed ? members.map(\.1) : nil,
+                    directChildrenSource: observation.revealedStacksWereClosed ? "owned_disclosure_closed_descendants" : nil))
                 if !refs.isEmpty {
                     exposures.append(.init(stackRef: stackRef, exposedTrackRefs: refs,
                         directChildTrackRefs: observation.revealedStacksWereClosed ? refs : nil,
@@ -1219,7 +1253,23 @@ enum SessionPopulationObservation {
                 }
             }
             if qualified, !exposures.isEmpty {
-                hierarchy = .init(coverage: .partial, reasons: [.parentDepthNotObserved], disclosureExposures: exposures)
+                if let parents = qualifiedDirectParents(fullExposures) {
+                    if request.scope == .wholeProject {
+                        for index in tracks.rows.indices {
+                            if let ref = tracks.rows[index].trackRef, let parent = parents[ref] {
+                                tracks.rows[index].parent = parent
+                                tracks.rows[index].parentSource = "owned_disclosure_closed_descendants"
+                            }
+                        }
+                    }
+                    hierarchy = .init(coverage: .partial, reasons: [.parentDepthNotObserved], disclosureExposures: exposures)
+                } else {
+                    for index in exposures.indices {
+                        exposures[index].directChildTrackRefs = nil
+                        exposures[index].directChildrenSource = nil
+                    }
+                    hierarchy = .init(coverage: .partial, reasons: [.parentDepthNotObserved, .hierarchyLinksInconsistent], disclosureExposures: exposures)
+                }
             }
         }
         let routing = request.domains.contains(.routing) ? routingSection(capture: capture, moved: moved) : nil
