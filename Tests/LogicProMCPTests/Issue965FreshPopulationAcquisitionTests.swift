@@ -1595,6 +1595,12 @@ struct Issue965FreshPopulationAcquisitionTests {
             originalFocusRole: originalFocusRole)
     }
 
+    @Test(arguments: [false, true])
+    func registeredStackRestoresWorkspaceAfterItsHeldHeaderTakesFocus(nested: Bool) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, mouseCase: "held_header_focus",
+            nested: nested, focusRestoration: "restored")
+    }
+
     @Test(arguments: ["restored", "unavailable", "declined", "wrong_readback", "reparented", "foreign_focus"])
     func registeredStackRestoresOnlyItsOriginalOwnedContainerFocus(focusRestoration: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false,
@@ -2050,6 +2056,9 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.setChildren(header, index == 0 ? [disclosure] : [])
         }
         let collapsed = fullDomainMixerOpen ? [headers[0]] : [headers[0]] + Array(headers[24...])
+        if mouseCase == "held_header_focus" {
+            fixture.builder.setAttribute(headers[0], kAXWindowAttribute as String, fixture.window)
+        }
         if selectedCensusLoss || selectedEnumerationLoss {
             fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [headers[0]])
         }
@@ -2460,6 +2469,10 @@ struct Issue965FreshPopulationAcquisitionTests {
                 }
                 if mouseCase == "held_focus" || mouseCase == "held_focus_returned" {
                     fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, disclosure)
+                }
+                if mouseCase == "held_header_focus" {
+                    fixture.reads.record("completed_gesture_focused_original_header")
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, headers[0])
                 }
             }
             if type == .leftMouseUp {
@@ -3557,6 +3570,9 @@ struct Issue965FreshPopulationAcquisitionTests {
         }
         if let focusRestoration {
             let restored = focusRestoration == "restored"
+            if mouseCase == "held_header_focus" {
+                #expect(fixture.reads.recorded.contains("completed_gesture_focused_original_header"))
+            }
             if headerFocus == "slider_to_label" {
                 #expect(fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read"))
             }

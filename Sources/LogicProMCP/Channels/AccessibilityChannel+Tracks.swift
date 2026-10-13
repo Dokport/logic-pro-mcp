@@ -1261,16 +1261,18 @@ extension AccessibilityChannel {
 
         private func permitsHeldFocusRestoration() -> Bool {
             if permitsHeldPassiveHeaderFocus() { return true }
-            // The final paired inverse can leave focus on its exact disclosure,
-            // not a label. Admit only that completed, accepted, collapsed target
+            // The final paired inverse can leave focus on its exact disclosure
+            // or original header. Admit only that completed, accepted, collapsed target
             // for restoring the original workspace; owned() and the final action
             // boundary still verify the full scope before the focus setter.
             if !releaseUnverified, restorationStarted, acquired.isEmpty, hiddenControl == nil,
                let completed = completedClickFocus,
                CFEqual(completed.target.header, header), CFEqual(completed.target.disclosure, disclosure),
                let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-               CFEqual(focus, observedFocus), CFEqual(focus, disclosure),
-               AXHelpers.getRole(focus, runtime: logic.ax) == kAXDisclosureTriangleRole as String,
+               CFEqual(focus, observedFocus),
+               (CFEqual(focus, disclosure)
+                && AXHelpers.getRole(focus, runtime: logic.ax) == kAXDisclosureTriangleRole as String)
+                    || isHeldHeaderRestorationOrigin(focus),
                AXLogicProElements.heldTrackDisclosureValue(header: header, disclosure: disclosure, runtime: logic) == 0,
                let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                CFEqual(finalFocus, focus) { return true }
@@ -1278,6 +1280,20 @@ extension AccessibilityChannel {
                   let current: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax)
             else { return false }
             return CFEqual(current, hiddenControl) && CFEqual(observedFocus, hiddenControl)
+        }
+
+        private func isHeldHeaderRestorationOrigin(_ focus: AXUIElement) -> Bool {
+            guard CFEqual(focus, header),
+                  AXHelpers.getRole(focus, runtime: logic.ax) == kAXLayoutItemRole as String,
+                  let parent: AXUIElement = AXHelpers.getAttribute(header, kAXParentAttribute as String, runtime: logic.ax),
+                  CFEqual(parent, rail),
+                  let owner: AXUIElement = AXHelpers.getAttribute(header, kAXWindowAttribute as String, runtime: logic.ax),
+                  CFEqual(owner, window),
+                  case .success(let rows) = AXHelpers.childrenResult(rail, runtime: logic.ax),
+                  rows.filter({ CFEqual($0, header) }).count == 1,
+                  noEditingAttribute(header, kAXInsertionPointLineNumberAttribute as String),
+                  noEditingAttribute(header, kAXSelectedTextRangeAttribute as String) else { return false }
+            return true
         }
 
         /// A completed click may focus its held target. Corroborate that limited
