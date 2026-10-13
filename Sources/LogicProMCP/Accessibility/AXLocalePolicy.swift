@@ -1686,13 +1686,14 @@ enum AXLocalePolicy {
 
     static let transportMetronomeControl = LabelSet(
         canonical: "metronome",
-        variants: ["click", "Metronome Click", "메트로놈", "클릭", "メトロノームクリック", "メトロノーム", "クリック",
+        variants: ["click", "Metronome Click", "메트로놈 클릭", "메트로놈", "클릭", "メトロノームクリック", "メトロノーム", "クリック",
                    "Metronom", "Metrónomo", "Métronome", "Metronomo", "Metrônomo",
                    "节拍器", "節拍器"],
         rationale: "Identifies the Metronome/Click transport control; read-only."
             + " The English own Control Bar AXCheckBox is titled and described `Metronome Click`"
-            + " in docs/observations/evidence/2026-09-12-en-US-navigation-free.census.json; retain"
-            + " that observed compound for exact checkbox reads, not only its substring fragments."
+            + " in docs/observations/evidence/2026-09-12-en-US-navigation-free.census.json; the KO"
+            + " own checkbox is `메트로놈 클릭` in docs/observations/evidence/2026-09-05-ko-KR-navigation-free.census.json."
+            + " Retain those observed compounds for exact checkbox reads, not only their substring fragments."
             + " Matching is `containsAny` over a lowercased description and is"
             + " DIACRITIC-SENSITIVE, so the seven members it had reached English, Korean and"
             + " Japanese and nothing else: German renders `Metronom-Klick`, which contains neither"

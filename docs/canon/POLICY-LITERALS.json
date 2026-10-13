@@ -1554,6 +1554,7 @@
     "마커 편집": "strings_value",
     "메뉴": "strings_value",
     "메트로놈": "strings_value",
+    "메트로놈 클릭": "strings_value",
     "모노": "strings_value",
     "모노->스테레오": "strings_value",
     "모니터링": "strings_value",

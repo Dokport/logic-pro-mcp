@@ -109,7 +109,8 @@ func transportResourceCarriesActualTempoWithoutReplacingTheLegacyDefault(shape: 
     else { #expect(!envelope.keys.contains("observed_tempo")) }
 }
 
-@Test func measuredMetronomeClickCheckboxPublishesItsObservedState() async throws {
+@Test(arguments: ["Metronome Click", "메트로놈 클릭"])
+func measuredMetronomeClickCheckboxPublishesItsObservedState(metronomeLabel: String) async throws {
     let builder = FakeAXRuntimeBuilder()
     let app = builder.element(25_550)
     let window = builder.element(25_551)
@@ -122,9 +123,9 @@ func transportResourceCarriesActualTempoWithoutReplacingTheLegacyDefault(shape: 
     builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
     builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
     builder.setChildren(bar, [play, record, metronome])
-    // The compound is the actual own AXCheckBox description/title in the retained EN census,
-    // not an expectation generated from the policy bag being repaired.
-    for (element, title) in [(play, "Play"), (record, "Record"), (metronome, "Metronome Click")] {
+    // These own AXCheckBox descriptions/titles come from the retained EN and KO censuses,
+    // not expectations generated from the policy bag being repaired.
+    for (element, title) in [(play, "Play"), (record, "Record"), (metronome, metronomeLabel)] {
         builder.setAttribute(element, kAXRoleAttribute as String, kAXCheckBoxRole as String)
         builder.setAttribute(element, kAXTitleAttribute as String, title)
         builder.setAttribute(element, kAXDescriptionAttribute as String, title)
