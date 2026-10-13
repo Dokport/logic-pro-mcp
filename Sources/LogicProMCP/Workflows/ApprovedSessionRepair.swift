@@ -101,21 +101,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard changed.count <= SagaWire.maxPlanSteps else { return nil }
         var selectionOrigin: AXTrackBinding.Binding?
         if changed.count > 1 {
-            // Distinct transitions only: no swaps or collisions with any captured peer.
+            // Display-name collisions do not retarget these exact physical pairs.
+            // Earlier peer changes still require the adapter's own per-target receipts.
             guard source.tracks.allSatisfy({ $0.selectionReadback != nil }),
                   source.tracks.filter({ $0.selectionReadback == true }).count == 1,
                   let original = source.tracks.first(where: { $0.selectionReadback == true })?.physicalBinding,
-                  Set(changed.map { Data($0.name.utf8) }).count == changed.count else { return nil }
-            for goal in changed {
-                guard let strip = source.freshPopulation?.selectionAssociations.first(where: {
-                    $0.track.matches(goal.binding)
-                })?.strip,
-                !source.tracks.contains(where: { $0.physicalBinding?.matches(goal.binding) != true
-                    && $0.name.utf8.elementsEqual(goal.name.utf8) }),
-                source.channelStrips.allSatisfy({ $0.name != nil }),
-                !source.channelStrips.contains(where: { $0.physicalBinding?.matches(strip) != true
-                    && $0.name?.utf8.elementsEqual(goal.name.utf8) == true }) else { return nil }
-            }
+                  source.channelStrips.allSatisfy({ $0.name != nil }) else { return nil }
             selectionOrigin = original
         }
         for goal in changed {
