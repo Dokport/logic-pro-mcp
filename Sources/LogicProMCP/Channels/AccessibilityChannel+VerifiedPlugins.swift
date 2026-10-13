@@ -3037,10 +3037,8 @@ extension AccessibilityChannel {
             return .error(invalidParamsStateC(operation, "missing parameter access"))
         }
 
-        // Step 10 — read the before value (for rollback + provenance). A
-        // direct AXValue write is never safe to issue without a recoverable
-        // state: an accepted write followed by lost readback needs this exact
-        // value for compensation.
+        // Step 10 — retain the before value for provenance and a possible owned
+        // inverse. It does not authorize compensation if the after-state is lost.
         guard let before = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax) else {
             return .error(HonestContract.encodeV2StateC(
                 error: .readbackUnavailable,
@@ -3108,6 +3106,19 @@ extension AccessibilityChannel {
             ))
         }
 
+        func rollbackTargetIsCurrent() -> Bool {
+            guard pluginRollbackOperationIsCurrent(),
+                  targetPluginIdentityIsStable(target: target, insert: insert, pluginID: pluginID,
+                    originalSlot: slots[insert].element, runtime: runtime),
+                  acquiredPluginWindowFailureStateC(acquiredWindow: window, operation: operation,
+                    identity: identity, pluginID: pluginID, trackName: trackName,
+                    axDescription: axDescription, detail: "the acquired editor changed before rollback", runtime: runtime) == nil,
+                  case .unique(let current) = AXLogicProElements.pluginWindowSliderResolution(
+                    in: window, axDescription: axDescription, runtime: runtime.ax),
+                  CFEqual(current, slider) else { return false }
+            return pluginRollbackOperationIsCurrent()
+        }
+
         // Step 11 — choose the declared AX write method. Compressor threshold
         // remains a single AXValue assignment; Channel EQ's measured controls
         // require readback-driven AXValue nudges.
@@ -3117,6 +3128,8 @@ extension AccessibilityChannel {
                 let rollback = rollbackSliderValue(
                     slider,
                     to: before,
+                    ownedAfter: nil,
+                    targetIsCurrent: rollbackTargetIsCurrent,
                     writeMethod: writeMethod,
                     tolerance: tolerance,
                     runtime: runtime.ax
@@ -3132,9 +3145,9 @@ extension AccessibilityChannel {
                         "rollback_attempted": rollback.attempted,
                         "rollback_succeeded": rollback.succeeded,
                         "rollback_observed": rollback.observed ?? NSNull(),
-                        "rolled_back": rollback.succeeded,
-                        "parameter_left_changed": !rollback.succeeded,
-                        "what_was_observed": "the AX value write was rejected; rollback to the readable pre-write value was attempted",
+                        "rolled_back": rollback.attempted && rollback.succeeded,
+                        "parameter_left_changed": rollback.parameterLeftChanged(before: before, tolerance: tolerance),
+                        "what_was_observed": "the AX value write was rejected; no inverse was authorized without an owned after-state",
                         "safe_to_retry": rollback.succeeded,
                         "write_attempted": true,
                     ]
@@ -3147,6 +3160,8 @@ extension AccessibilityChannel {
                 let rollback = rollbackSliderValue(
                     slider,
                     to: before,
+                    ownedAfter: nil,
+                    targetIsCurrent: rollbackTargetIsCurrent,
                     writeMethod: writeMethod,
                     tolerance: tolerance,
                     runtime: runtime.ax
@@ -3162,9 +3177,9 @@ extension AccessibilityChannel {
                         "rollback_attempted": rollback.attempted,
                         "rollback_succeeded": rollback.succeeded,
                         "rollback_observed": rollback.observed ?? NSNull(),
-                        "rolled_back": rollback.succeeded,
-                        "parameter_left_changed": !rollback.succeeded,
-                        "what_was_observed": "the slider value could not be read after the write; rollback to the readable pre-write value was attempted",
+                        "rolled_back": rollback.attempted && rollback.succeeded,
+                        "parameter_left_changed": rollback.parameterLeftChanged(before: before, tolerance: tolerance),
+                        "what_was_observed": "the slider value could not be read after the write; no inverse was authorized from an unknown state",
                         "safe_to_retry": rollback.succeeded,
                         "write_attempted": true,
                     ]
@@ -3188,11 +3203,13 @@ extension AccessibilityChannel {
                 ]))
             }
 
-            // Mismatch — roll back to the before value (re-set + re-read) so a
-            // failed verified write does not leave the parameter changed.
+            // The observed mismatch is not permanent ownership: a fresh exact
+            // value and target check must still permit any inverse.
             let rollback = rollbackSliderValue(
                 slider,
                 to: before,
+                ownedAfter: after,
+                targetIsCurrent: rollbackTargetIsCurrent,
                 writeMethod: writeMethod,
                 tolerance: tolerance,
                 runtime: runtime.ax
@@ -3211,8 +3228,8 @@ extension AccessibilityChannel {
                     "rollback_attempted": rollback.attempted,
                     "rollback_succeeded": rollback.succeeded,
                     "rollback_observed": rollback.observed ?? NSNull(),
-                    "rolled_back": rollback.succeeded,
-                    "parameter_left_changed": !rollback.succeeded,
+                    "rolled_back": rollback.attempted && rollback.succeeded,
+                    "parameter_left_changed": rollback.parameterLeftChanged(before: before, tolerance: tolerance),
                     "rollback_outcome": rollback.walkOutcome ?? NSNull(),
                     "rollback_to": before,
                     "what_was_attempted": "verify the '\(axDescription)' write within tolerance \(tolerance)",
@@ -3279,9 +3296,17 @@ extension AccessibilityChannel {
                 }
                 return .success(verifiedParameterEnvelope(extras: extras))
             case .noProgress(_, _), .budgetExhausted(_, _), .overshot(_, _), .readbackLost(_):
+                let ownedAfter: Double?
+                switch outcome {
+                case let .noProgress(_, last), let .budgetExhausted(_, last), let .overshot(_, last):
+                    ownedAfter = last.value
+                case .readbackLost, .arrived: ownedAfter = nil
+                }
                 let rollback = rollbackSliderValue(
                     slider,
                     to: before,
+                    ownedAfter: ownedAfter,
+                    targetIsCurrent: rollbackTargetIsCurrent,
                     writeMethod: writeMethod,
                     tolerance: tolerance,
                     runtime: runtime.ax,
@@ -3422,7 +3447,7 @@ extension AccessibilityChannel {
         case .some(false):
             restorationObservation = "restore not observed: AXValue did not return to the pre-press state"
         case nil:
-            restorationObservation = "restore not observed: AXValue was unreadable after the compensating press"
+            restorationObservation = "restore not observed: the after-state is unknown and no inverse was sent"
         }
         let failureObservation = [
             toggle.refusal ?? "Controls-view checkbox verification did not establish the requested state",
@@ -3442,7 +3467,7 @@ extension AccessibilityChannel {
                 "restore_attempted": toggle.restoreAttempted,
                 "restore_observed": toggle.restoreObserved ?? NSNull(),
                 "restore_observed_boolean": toggle.restoreObservedValue ?? NSNull(),
-                "parameter_left_changed": toggle.restoreAttempted && toggle.restoreObserved == false,
+                "parameter_left_changed": toggle.observedAfterPress == nil ? NSNull() : false,
                 "what_was_attempted": "AXPress the labelled Controls-view AXCheckBox then require changed AXValue readback",
                 "what_was_observed": failureObservation,
                 "safe_to_retry": false,
@@ -3456,55 +3481,87 @@ extension AccessibilityChannel {
         let succeeded: Bool
         let observed: Double?
         let walkOutcome: String?
+
+        func parameterLeftChanged(before: Double, tolerance: Double) -> Any {
+            guard let observed, observed.isFinite, before.isFinite else { return NSNull() }
+            return abs(observed - before) > tolerance
+        }
     }
 
-    /// Roll a slider back to its pre-write value. A slider that required an
-    /// increment walk for the forward write gets the same walk for rollback;
-    /// using one AXValue set there would only leave it one step closer.
+    private static func pluginRollbackOperationIsCurrent() -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let context = OperationTraceContext.current else { return true }
+        return context.ownsGate() && !context.cancellationRequested()
+            && (context.deadline.map { ContinuousClock.now < $0 } ?? true)
+    }
+
+    /// An inverse requires a finite observed after-state, the exact retained
+    /// target, and an equal fresh value. A before-value alone is not ownership.
     private static func rollbackSliderValue(
         _ slider: AXUIElement,
         to before: Double?,
+        ownedAfter: Double?,
+        targetIsCurrent: () -> Bool,
         writeMethod: String,
         tolerance: Double,
         runtime: AXHelpers.Runtime,
         incrementWalkBudget: Int = ChannelEQBandCatalog.incrementWalkBudget
     ) -> SliderRollback {
-        guard let before else {
+        guard let before, before.isFinite, let ownedAfter, ownedAfter.isFinite,
+              targetIsCurrent(),
+              let current = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+              current.isFinite, current == ownedAfter, targetIsCurrent(),
+              pluginRollbackOperationIsCurrent() else {
             return SliderRollback(attempted: false, succeeded: false, observed: nil, walkOutcome: nil)
+        }
+        if current == before {
+            return SliderRollback(attempted: false, succeeded: true, observed: current, walkOutcome: nil)
         }
         switch writeMethod {
         case "ax_slider_increment_walk":
+            var ownedCurrent = current
+            var inverseAttempted = false
             let outcome = SliderIncrementWalk.walk(
                 to: .rawValue(before, tolerance: tolerance),
                 read: {
-                    AXValueExtractors.extractSliderValue(slider, runtime: runtime).map {
-                        SliderIncrementWalk.Reading(value: $0, display: "")
-                    }
+                    guard targetIsCurrent(),
+                          let value = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+                          value.isFinite, (inverseAttempted || value == ownedCurrent),
+                          pluginRollbackOperationIsCurrent() else { return nil }
+                    ownedCurrent = value
+                    return SliderIncrementWalk.Reading(value: value, display: "")
                 },
                 nudge: { rawTarget in
-                    AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime)
+                    guard targetIsCurrent(),
+                          let latest = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+                          latest.isFinite, latest == ownedCurrent,
+                          pluginRollbackOperationIsCurrent() else { return false }
+                    inverseAttempted = true
+                    return AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime)
                 },
                 budget: incrementWalkBudget
             )
             if case let .arrived(_, final) = outcome {
                 return SliderRollback(
-                    attempted: true,
+                    attempted: inverseAttempted,
                     succeeded: true,
                     observed: final.value,
                     walkOutcome: "arrived"
                 )
             }
             return SliderRollback(
-                attempted: true,
+                attempted: inverseAttempted,
                 succeeded: false,
                 observed: nil,
                 walkOutcome: incrementWalkOutcomeName(outcome)
             )
         default:
-            guard AXValueExtractors.setSliderValue(slider, before, runtime: runtime) else {
-                return SliderRollback(attempted: true, succeeded: false, observed: nil, walkOutcome: nil)
-            }
-            guard let restored = AXValueExtractors.extractSliderValue(slider, runtime: runtime) else {
+            // ACK is not the resulting state. An accepted inverse can lose its
+            // readback, and a rejected ACK can still leave the original value.
+            _ = AXValueExtractors.setSliderValue(slider, before, runtime: runtime)
+            guard targetIsCurrent(), pluginRollbackOperationIsCurrent(),
+                  let restored = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+                  restored.isFinite, targetIsCurrent(), pluginRollbackOperationIsCurrent() else {
                 return SliderRollback(attempted: true, succeeded: false, observed: nil, walkOutcome: nil)
             }
             return SliderRollback(
