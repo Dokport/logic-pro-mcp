@@ -163,7 +163,7 @@ struct OperationCatalogTests {
         .systemExportSupportBundle: ["dir"],
         .systemHelp: ["category"],
         .systemSagaPreflight: ["idempotency_key", "steps"],
-        .systemSagaExecute: ["idempotency_key", "steps"],
+        .systemSagaExecute: ["idempotency_key", "steps", "confirmed_plan_hash"],
         .systemSagaStatus: ["idempotency_key"],
         .systemSagaCancel: ["idempotency_key"],
         .systemSetupArmKey: ["consent"],

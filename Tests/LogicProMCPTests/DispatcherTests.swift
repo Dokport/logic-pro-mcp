@@ -3365,6 +3365,32 @@ func testEditDispatcherQuantizeCarriesTheExactValidAlias(_ input: String) async 
     #expect(harness.scripts == [LogicProTarget.appleScriptTarget().activateByBundleID])
 }
 
+@Test(arguments: ["running", "delayed", "absent"])
+func testProjectDispatcherLaunchReconcilesTimeoutOnlyWithObservedRunningState(_ outcome: String) async {
+    let states = outcome == "running" ? [false, true]
+        : outcome == "delayed" ? [false, false, true] : [false]
+    let harness = ProjectLifecycleHarness(
+        execution: .init(executionError: nil, timedOut: true, terminationStatus: -1, stderrOutput: ""),
+        runningStates: states
+    )
+    let result = await ProjectDispatcher.handle(
+        command: "launch", params: [:], router: ChannelRouter(), cache: StateCache(),
+        isLogicProRunning: { harness.isRunning() },
+        executeLifecycleScript: { script in await harness.execute(script: script) },
+        sleep: { duration in await harness.sleep(nanoseconds: duration) }
+    )
+    #expect(harness.scripts == [LogicProTarget.appleScriptTarget().activateByBundleID])
+    let isError = result.isError ?? false
+    if outcome == "absent" { #expect(isError) }
+    else { #expect(!isError) }
+    if outcome == "absent" {
+        #expect(dispatcherText(result) == "Failed to launch Logic Pro: timed out after 5s")
+    } else {
+        #expect(dispatcherText(result) == "Logic Pro is running after launch; AppleScript activation timed out after 5s")
+        #expect(harness.sleepCalls.count == (outcome == "delayed" ? 1 : 0))
+    }
+}
+
 @Test func testProjectDispatcherLifecycleRunnerSurfacesExecutionErrorsAndTimeouts() async {
     let launchHarness = ProjectLifecycleHarness(
         execution: .init(executionError: "spawn failed", timedOut: false, terminationStatus: -1, stderrOutput: ""),

@@ -20,7 +20,25 @@ extension AccessibilityChannel {
         }
         func recordRead(_ read: CheckedOutputReading, key: String) {
             if let data = read.result.message.data(using: .utf8),
-               let receipt = try? JSONSerialization.jsonObject(with: data) { extras[key] = receipt }
+               let receipt = try? JSONSerialization.jsonObject(with: data) {
+                extras[key] = receipt
+                // The final acquisition may navigate after an earlier writer inverse restored.
+                // Merge receipts only; no decoded field supplies source or write authority.
+                if key == "after_acquisition",
+                   let incoming = (receipt as? [String: Any])?["ui_effects"] as? [String: Any],
+                   let navigated = incoming["navigation_performed"] as? Bool, navigated {
+                    var effects = extras["ui_effects"] as? [String: Any] ?? [:]
+                    effects["navigation_performed"] = true
+                    for field in ["attempted", "changed"] {
+                        let prior = effects[field] as? [String] ?? []
+                        effects[field] = prior + (incoming[field] as? [String] ?? []).filter { !prior.contains($0) }
+                    }
+                    if let restoration = incoming["restoration"] as? String,
+                       restoration != "restored" || effects["restoration"] == nil { effects["restoration"] = restoration }
+                    if let reason = incoming["reason"] as? String, effects["reason"] as? String == nil { effects["reason"] = reason }
+                    extras["ui_effects"] = effects
+                }
+            }
         }
         guard params.keys.allSatisfy({ ["destination", "expected_current", "replace_existing"].contains($0) }),
               params["replace_existing"] == "true",

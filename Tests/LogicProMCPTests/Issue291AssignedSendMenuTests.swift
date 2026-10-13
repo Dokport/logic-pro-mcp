@@ -106,8 +106,13 @@ struct Issue291AssignedSendMenuTests {
         } else {
             #expect(rows[1]["plugin_count"] == nil || rows[1]["plugin_count"] is NSNull)
         }
-        let hasSend = try #require(states.first?.sendSlots?.contains { $0.ordinal == 1 })
-        #expect(hasSend)
+        if domain == .routing || includeStrips {
+            let hasSend = try #require(states.first?.sendSlots?.contains { $0.ordinal == 1 })
+            #expect(hasSend)
+        } else {
+            // Association-only capture leaves unrequested routing unknown.
+            #expect(states.allSatisfy { $0.sendSlots == nil })
+        }
         #expect(f.mutations.isEmpty)
     }
     @Test("Explicit fresh routing capture retains the occupied send's checked destination")

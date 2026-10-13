@@ -1430,13 +1430,14 @@ struct ProjectDispatcher: OperationTraceDispatching {
         if let executionError = execution.executionError {
             return toolTextResult("Failed to \(actionLabel) Logic Pro: \(executionError)", isError: true)
         }
-        if execution.timedOut {
+        let launchTimedOut = expectedRunning && execution.timedOut
+        if execution.timedOut && !launchTimedOut {
             return toolTextResult(
                 "Failed to \(actionLabel) Logic Pro: timed out after \(Int(ServerConfig.appleScriptTimeout))s",
                 isError: true
             )
         }
-        if execution.terminationStatus != 0 {
+        if !launchTimedOut && execution.terminationStatus != 0 {
             let message = execution.stderrOutput.isEmpty
                 ? "osascript exited with status \(execution.terminationStatus)"
                 : execution.stderrOutput
@@ -1446,13 +1447,17 @@ struct ProjectDispatcher: OperationTraceDispatching {
         let statePolls = Int(max(1, ServerConfig.appleScriptTimeout * 10))
         for _ in 0..<statePolls {
             if isLogicProRunning() == expectedRunning {
-                return toolTextResult(successMessage)
+                return toolTextResult(launchTimedOut
+                    ? "Logic Pro is running after launch; AppleScript activation timed out after \(Int(ServerConfig.appleScriptTimeout))s"
+                    : successMessage)
             }
             await sleep(100_000_000)
         }
 
         return toolTextResult(
-            "Lifecycle command completed but Logic Pro did not reach expected running state",
+            launchTimedOut
+                ? "Failed to \(actionLabel) Logic Pro: timed out after \(Int(ServerConfig.appleScriptTimeout))s"
+                : "Lifecycle command completed but Logic Pro did not reach expected running state",
             isError: true
         )
     }

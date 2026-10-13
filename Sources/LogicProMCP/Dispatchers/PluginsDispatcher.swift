@@ -28,6 +28,43 @@ final class VerifiedOpGate: @unchecked Sendable {
     }
 }
 
+/// A single release for one acquired existing gate, including terminal/defer
+/// paths. A later request's gate must never be released by an old defer.
+final class VerifiedPluginSagaLease: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate: VerifiedOpGate
+    private var active = true
+    private var closing = false
+    private var workers = 0
+    init?(gate: VerifiedOpGate) {
+        guard gate.tryAcquire() else { return nil }
+        self.gate = gate
+    }
+    func matches(_ other: VerifiedOpGate) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return active && !closing && gate === other
+    }
+    func beginWorker() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard active, !closing else { return false }
+        workers += 1
+        return true
+    }
+    func endWorker() {
+        lock.lock(); defer { lock.unlock() }
+        workers -= 1
+        if closing && workers == 0 && active { active = false; gate.release() }
+    }
+    func release() {
+        lock.lock(); defer { lock.unlock() }
+        guard active else { return }
+        // A deadline can return before an inner AX worker exits. Close admission
+        // immediately, but retain the actual gate until that worker unwinds.
+        closing = true
+        if workers == 0 { active = false; gate.release() }
+    }
+}
+
 /// `logic_plugins` — verified plugin apply-back surface (R16 Plane 1).
 ///
 /// Commands: get_inventory, get_param_verified, get_channel_eq_state_verified, set_param_verified, set_eq_band_verified,
@@ -37,6 +74,9 @@ final class VerifiedOpGate: @unchecked Sendable {
 /// (router chain is `[.accessibility]` alone) so a State C is always the honest
 /// AX result.
 struct PluginsDispatcher: OperationTraceDispatching {
+    // An internal Saga scope holds the same gate across its complete before-set,
+    // forward writes and compensation. No client-supplied lease is accepted.
+    @TaskLocal static var sagaLease: VerifiedPluginSagaLease?
     // Keeps dispatcher cases auditable against the registry so fallback cannot bypass strict validation.
     static let handledCommands: Set<String> = OperationRegistry.commands(for: .logicPlugins)
 
@@ -406,7 +446,11 @@ struct PluginsDispatcher: OperationTraceDispatching {
         gate: VerifiedOpGate,
         _ body: () async -> CallTool.Result
     ) async -> CallTool.Result {
-        guard gate.tryAcquire() else {
+        let inheritedLease = sagaLease
+        let acquired: Bool
+        if let inheritedLease { acquired = inheritedLease.matches(gate) }
+        else { acquired = gate.tryAcquire() }
+        guard acquired else {
             return toolTextResult(HonestContract.encodeV2StateC(
                 error: .verifiedOpInProgress,
                 extras: [
@@ -418,7 +462,7 @@ struct PluginsDispatcher: OperationTraceDispatching {
                 ]
             ), isError: true)
         }
-        defer { gate.release() }
+        defer { if inheritedLease == nil { gate.release() } }
         return await body()
     }
 

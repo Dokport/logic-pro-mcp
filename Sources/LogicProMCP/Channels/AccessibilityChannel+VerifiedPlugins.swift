@@ -1951,6 +1951,18 @@ extension AccessibilityChannel {
         }
     }
 
+    /// Pure selected-plan validation through the same catalog/unit/actuation
+    /// resolver as the writer. Placeholder indices supply no target authority.
+    static func verifiedEQParameterPreflight(band: String, parameter: String, value: Double, unit: String) -> Bool {
+        switch resolveVerifiedParameter(selector: .channelEQ(bandName: band, parameterName: parameter),
+            requested: value, unit: unit, operation: "logic_plugins.set_eq_band_verified", track: 0, insert: 0,
+            entryLookup: VerifiedPluginCatalog.productionEntryLookup,
+            paramAliasLookup: VerifiedPluginCatalog.canonicalParamKey, preResolutionIdentity: [:]) {
+        case .success: true
+        case .failure: false
+        }
+    }
+
     private static func resolveVerifiedParameter(
         selector: VerifiedParameterSelector,
         requested: Double,
@@ -2350,6 +2362,7 @@ extension AccessibilityChannel {
                 extras: ["operation": operation, "write_attempted": false]))
         }
         let contextIsCurrent: () -> Bool = {
+            if PluginsDispatcher.sagaLease != nil, !pluginRollbackOperationIsCurrent() { return false }
             guard !Task.isCancelled,
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime),
                   CFEqual(currentWindow, projectWindow),
@@ -3342,7 +3355,22 @@ extension AccessibilityChannel {
                 window: window,
                 runtime: runtime.ax,
                 verifiedWriteEnvelope: verifiedParameterEnvelope,
-                stateCWithPluginViewRestoration: stateCWithPluginViewRestoration
+                stateCWithPluginViewRestoration: stateCWithPluginViewRestoration,
+                allowingPress: { checkbox, before in
+                    guard let expected = PluginSagaExpectedBefore.current else { return true }
+                    guard expected.matches(track: track, insert: insert, pluginID: pluginID, param: paramKey,
+                        projectPath: referenceParams["project_expected_path"] ?? "", observed: .bool(before)),
+                        pluginRollbackOperationIsCurrent(),
+                        targetPluginIdentityIsStable(target: target, insert: insert, pluginID: pluginID,
+                            originalSlot: slots[insert].element, runtime: runtime),
+                        controlsViewAcquiredPluginWindowFailureStateC(acquiredWindow: window, operation: operation,
+                            identity: identity, pluginID: pluginID, trackName: trackName, runtime: runtime) == nil,
+                        case .found(.checkBox(let current)) = ControlsViewBooleanParameterWriter.locate(
+                            label: controlsViewRowLabel, in: window, runtime: runtime.ax), CFEqual(current, checkbox),
+                        case .success(.some(let latest)) = AXValueExtractors.extractButtonStateResult(checkbox, runtime: runtime.ax),
+                        latest == before else { return false }
+                    return pluginRollbackOperationIsCurrent()
+                }
             )
         }
 
@@ -3463,7 +3491,7 @@ extension AccessibilityChannel {
 
         // Step 10 — retain the before value for provenance and a possible owned
         // inverse. It does not authorize compensation if the after-state is lost.
-        guard let before = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax) else {
+        guard let before = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax), before.isFinite else {
             return .error(HonestContract.encodeV2StateC(
                 error: .readbackUnavailable,
                 extras: [
@@ -3543,11 +3571,33 @@ extension AccessibilityChannel {
             return pluginRollbackOperationIsCurrent()
         }
 
+        // Identity reads can outlive the numeric before-read even while every
+        // original CF survives. A later user value is not this write's baseline.
+        func beforeValueIsCurrent() -> Bool {
+            guard rollbackTargetIsCurrent(),
+                  let current = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax),
+                  current.isFinite, current == before else { return false }
+            if let expected = PluginSagaExpectedBefore.current,
+               !expected.matches(track: track, insert: insert, pluginID: pluginID, param: paramKey,
+                    projectPath: referenceParams["project_expected_path"] ?? "", observed: .double(current)) { return false }
+            return pluginRollbackOperationIsCurrent()
+        }
+        func beforeValueRefusal() -> ChannelResult {
+            .error(HonestContract.encodeV2StateC(error: .readbackUnavailable, extras: [
+                "operation": operation, "target_identity": identity, "param": paramAlias,
+                "before_normalized": before,
+                "what_was_attempted": "require the retained before-value and target immediately before the first parameter mutation",
+                "what_was_observed": "the current value was changed, unreadable or non-finite, or target/operation ownership ended; no parameter mutation or inverse was sent",
+                "write_attempted": false, "rollback_attempted": false, "safe_to_retry": false,
+            ]))
+        }
+
         // Step 11 — choose the declared AX write method. Compressor threshold
         // remains a single AXValue assignment; Channel EQ's measured controls
         // require readback-driven AXValue nudges.
         switch writeMethod {
         case "ax_slider_axvalue":
+            guard beforeValueIsCurrent() else { return beforeValueRefusal() }
             guard AXValueExtractors.setSliderValue(slider, requested, runtime: runtime.ax) else {
                 let rollback = rollbackSliderValue(
                     slider,
@@ -3684,6 +3734,8 @@ extension AccessibilityChannel {
             } else {
                 needsDisplay = false
             }
+            var nudgeAttempted = false
+            var firstNudgeRefused = false
             let outcome = SliderIncrementWalk.walk(
                 to: walkTarget,
                 read: {
@@ -3695,10 +3747,20 @@ extension AccessibilityChannel {
                     return SliderIncrementWalk.Reading(value: value, display: display ?? "")
                 },
                 nudge: { rawTarget in
-                    AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime.ax)
+                    if !nudgeAttempted, !beforeValueIsCurrent() {
+                        firstNudgeRefused = true
+                        return false
+                    }
+                    nudgeAttempted = true
+                    return AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime.ax)
                 },
                 budget: incrementWalkBudget
             )
+            if firstNudgeRefused { return beforeValueRefusal() }
+            if !nudgeAttempted {
+                if case .readbackLost = outcome { return beforeValueRefusal() }
+                guard beforeValueIsCurrent() else { return beforeValueRefusal() }
+            }
             switch outcome {
             case let .arrived(steps, final):
                 var extras: [String: Any] = [
@@ -3796,7 +3858,8 @@ extension AccessibilityChannel {
         window: AXUIElement,
         runtime: AXHelpers.Runtime,
         verifiedWriteEnvelope: ([String: Any]) -> String,
-        stateCWithPluginViewRestoration: (HonestContract.FailureError, [String: Any]) -> String
+        stateCWithPluginViewRestoration: (HonestContract.FailureError, [String: Any]) -> String,
+        allowingPress: (AXUIElement, Bool) -> Bool = { _, _ in true }
     ) -> ChannelResult {
         // The caller already selected and structurally confirmed Controls view.
         // Do not repeat the selection here: reopening its menu would make this
@@ -3846,7 +3909,8 @@ extension AccessibilityChannel {
         let toggle = ControlsViewBooleanParameterWriter.pressAndVerify(
             checkbox,
             requested: requestedState,
-            runtime: runtime
+            runtime: runtime,
+            allowingPress: { allowingPress(checkbox, $0) }
         )
         if toggle.verified, let observed = toggle.observedAfterPress {
             return .success(verifiedWriteEnvelope([

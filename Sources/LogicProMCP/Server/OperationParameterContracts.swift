@@ -499,7 +499,8 @@ extension OperationRegistry {
             // the generic unknown-parameter gate).
             "system.saga_preflight": .init(params: ["idempotency_key": .enforced(.string, .string("k-957")), "steps": .enforced(.array, .array([]))],
                                            required: [["idempotency_key"], ["steps"]]),
-            "system.saga_execute": .init(params: ["idempotency_key": .enforced(.string, .string("k-957")), "steps": .enforced(.array, .array([]))],
+            "system.saga_execute": .init(params: ["idempotency_key": .enforced(.string, .string("k-957")), "steps": .enforced(.array, .array([])),
+                "confirmed_plan_hash": .enforced(.string, .string(String(repeating: "a", count: 64)))],
                                          required: [["idempotency_key"], ["steps"]]),
             "system.saga_status": .init(params: ["idempotency_key": .enforced(.string, .string("k-957"))], required: [["idempotency_key"]]),
             "system.saga_cancel": .init(params: ["idempotency_key": .enforced(.string, .string("k-957"))], required: [["idempotency_key"]]),

@@ -886,23 +886,25 @@ actor AccessibilityChannel: Channel {
         }
     }
 
-    /// Locale is captured only beside the same held project's window/app. It does not
-    /// qualify population or a sort leaf, and unknown locale does not poison view reads.
-    private func readObservedUILocale(in window: AXUIElement, checking check: () throws -> Void) throws -> String? {
+    /// Host metadata is captured beside the same held project's window/app. It does not
+    /// qualify population or a sort leaf; unknown metadata does not poison view reads.
+    private func readObservedHost(in window: AXUIElement, checking check: () throws -> Void) throws
+        -> (locale: String?, version: ProcessUtils.LogicHostObservation?) {
         try check()
         let logic = runtime.logicRuntime
         guard let pid = logic.logicProPID(), let app = AXLogicProElements.appRoot(runtime: logic),
               let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-              CFEqual(main, window) else { return nil }
+              CFEqual(main, window) else { return (nil, nil) }
         try check()
         let reading = AXLogicProElements.logicUILocaleIdentifierRead(runtime: logic)
+        let version = logic.observeHost(pid)
         try check()
         guard logic.logicProPID() == pid, let currentApp = AXLogicProElements.appRoot(runtime: logic), CFEqual(app, currentApp),
               let current: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-              CFEqual(current, window) else { return nil }
+              CFEqual(current, window) else { return (nil, nil) }
         try check()
-        if case .locale(let locale) = reading { return locale }
-        return nil
+        if case .locale(let locale) = reading { return (locale, version) }
+        return (nil, version)
     }
 
     private func readPresentationBaseline(stoppingWhen stop: @Sendable () -> Bool) throws -> SessionPopulationObservation.FreshPopulation? {
@@ -915,7 +917,7 @@ actor AccessibilityChannel: Channel {
         guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: logic),
               let title = AXHelpers.getTitle(window, runtime: logic.ax),
               case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic) else { return nil }
-        let localeBefore = try readObservedUILocale(in: window, checking: check)
+        let hostBefore = try readObservedHost(in: window, checking: check)
         let lookup = try AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: logic,
             requiresCompleteAbsence: true, checking: check)
         let transport = try AXLogicProElements.observedTransportActivity(in: window, runtime: logic, checking: check)
@@ -924,8 +926,8 @@ actor AccessibilityChannel: Channel {
               AXHelpers.getTitle(window, runtime: logic.ax)?.utf8.elementsEqual(title.utf8) == true,
               case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
               currentDocument.utf8.elementsEqual(document.utf8) else { return nil }
-        let localeAfter = try readObservedUILocale(in: window, checking: check)
-        let locale = localeBefore == localeAfter ? localeBefore : nil
+        let hostAfter = try readObservedHost(in: window, checking: check)
+        let locale = hostBefore.locale == hostAfter.locale ? hostBefore.locale : nil
         try check()
         let visible: Bool?
         switch lookup.lookup {
@@ -937,6 +939,7 @@ actor AccessibilityChannel: Channel {
         return .init(project: nil, tracks: nil, strips: nil, fileTrackCount: nil, beganAt: now, endedAt: now, stable: true,
             presentationObservation: .init(mixerVisible: visible, isPlaying: transport?.isPlaying, isRecording: transport?.isRecording,
                 uiLocale: locale),
+            hostObservation: hostBefore.version == hostAfter.version ? hostBefore.version : nil,
             presentationBinding: .init(window: window, title: title, document: document,
                 mixer: lookup.binding?.mixer, transport: transport, runtime: logic, uiLocale: locale,
                 mixerOwners: lookup.binding?.owners ?? []))
@@ -1135,6 +1138,7 @@ actor AccessibilityChannel: Channel {
             let mixerVisible: Bool?
             let transport: AXLogicProElements.ObservedTransportActivity?
             let uiLocale: String?
+            let hostObservation: ProcessUtils.LogicHostObservation?
             let hiddenView: HiddenView?
             let singlePageEnd: SinglePageEnd?
             let selectedTracks: SelectedTrackRead?
@@ -1204,7 +1208,7 @@ actor AccessibilityChannel: Channel {
             }
             let transport = try AXLogicProElements.observedTransportActivity(in: window, runtime: logic,
                 observingExposure: exposure, checking: checkAXRead)
-            let locale = try readObservedUILocale(in: window, checking: checkAXRead)
+            let host = try readObservedHost(in: window, checking: checkAXRead)
             let hiddenView = wantsTracks ? readHiddenView(headers, in: window) : nil
             let singlePageEnd = wantsTracks ? try readSinglePageEnd(headers, tracks: tracks, hiddenView: hiddenView, in: window) : nil
             let selectedTracks = wantsTracks ? try readSelectedTracks(headers, states: tracks, in: window) : nil
@@ -1212,7 +1216,8 @@ actor AccessibilityChannel: Channel {
             return Read(title: title, document: document, documentReadable: documentReadable,
                         headers: headers, mixer: mixer, mixerBinding: lookup.binding, mixerOwners: lookup.binding?.owners ?? [],
                         stripElements: stripElements, tracks: tracks, strips: strips,
-                        presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: locale,
+                        presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: host.locale,
+                        hostObservation: host.version,
                         hiddenView: hiddenView, singlePageEnd: singlePageEnd, selectedTracks: selectedTracks)
         }
         func sameElements(_ lhs: [AXUIElement]?, _ rhs: [AXUIElement]?) -> Bool {
@@ -1413,6 +1418,7 @@ actor AccessibilityChannel: Channel {
                         isPlaying: transportStable ? before.transport?.isPlaying : nil,
                         isRecording: transportStable ? before.transport?.isRecording : nil,
                         uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil),
+                    hostObservation: stable && before.hostObservation == after.hostObservation ? before.hostObservation : nil,
                     presentationBinding: stable && mixerStable && transportStable && path != nil && before.title != nil && before.document != nil
                         ? .init(window: window, title: before.title!, document: before.document!,
                             mixer: before.mixer, transport: before.transport, runtime: logic,

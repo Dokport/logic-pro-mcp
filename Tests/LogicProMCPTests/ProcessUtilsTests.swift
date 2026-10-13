@@ -136,6 +136,33 @@ private func makeBundleURL(version: String, build: String? = nil) throws -> URL 
     #expect(ProcessUtils.parseLogicProPID(fromProcessList: output) == 7174)
 }
 
+@Test(arguments: [
+    "/Applications/Logic Pro.app/Contents/PlugIns/LogicProThumbnailExtension.appex/Contents/MacOS/LogicProThumbnailExtension",
+    "/Applications/Logic Pro.app/Contents/MacOS/Logic Pro Helper",
+    "/Applications/Logic Pro.app/Contents/PlugIns/Preview.appex/Contents/MacOS/Logic Pro",
+    "osascript -e tell application \"Logic Pro\" to activate",
+    "/bin/sh -c '/Applications/Logic Pro.app/Contents/MacOS/Logic Pro'",
+    "/usr/bin/env /Applications/Logic Pro.app/Contents/MacOS/Logic Pro"
+])
+func testProcessUtilsRejectsHelpersAndCommandsThatOnlyMentionLogic(_ command: String) {
+    #expect(ProcessUtils.parseLogicProPID(fromProcessList: "2000000001 \(command)") == nil)
+}
+
+@Test func testProcessUtilsDoesNotPreferAThumbnailProcessBeforeTheMainExecutable() {
+    let output = """
+    2000000001 /Applications/Logic Pro.app/Contents/PlugIns/LogicProThumbnailExtension.appex/Contents/MacOS/LogicProThumbnailExtension
+    2000000002 /Applications/Logic Pro.app/Contents/MacOS/Logic Pro
+    """
+    #expect(ProcessUtils.parseLogicProPID(fromProcessList: output) == 2000000002)
+}
+
+@Test(arguments: LogicProVariantPolicy.records)
+func testProcessUtilsAcceptsTheSupportedMainExecutableWithoutDependingOnItsInstallDirectory(_ variant: LogicProVariantRecord) {
+    let app = URL(fileURLWithPath: variant.defaultInstallPath).lastPathComponent
+    let executable = "/Volumes/Alternate Apps/\(app)/Contents/MacOS/\(variant.processName)"
+    #expect(ProcessUtils.parseLogicProPID(fromProcessList: "2000000002 \(executable)") == 2000000002)
+}
+
 @Test func testProcessUtilsParsesLogicProPIDFromWindowList() {
     let output: [[String: Any]] = [
         [

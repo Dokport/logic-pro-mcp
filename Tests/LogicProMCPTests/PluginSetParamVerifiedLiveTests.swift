@@ -97,6 +97,7 @@ private final class LiveFixture: @unchecked Sendable {
         sliderDisplayRoundsDown: Bool = false,
         sliderUsesSignedPositiveDisplay: Bool = false,
         onSliderDisplayAfterWrite: (@Sendable (FakeAXRuntimeBuilder, AXUIElement) -> Void)? = nil,
+        onSliderAttributeRead: (@Sendable (FakeAXRuntimeBuilder, AXUIElement, String, Int) -> Void)? = nil,
         pluginWindowStaticTextValues: [String]? = nil,
         pluginWindowTitleReadFails: Bool = false,
         pluginWindowsReadStatusBeforeTargetOpen: AXHelpers.AXStatusError? = nil,
@@ -405,6 +406,9 @@ private final class LiveFixture: @unchecked Sendable {
         let runtime = b.makeLogicRuntime(
             appElement: app,
             attributeValueHandler: { element, attribute in
+                if CFEqual(element, slider) {
+                    onSliderAttributeRead?(b, slider, attribute, sliderWriteCount.value)
+                }
                 if CFEqual(element, slider), attribute == (kAXValueDescriptionAttribute as String),
                    sliderWriteCount.value > 0 {
                     onSliderDisplayAfterWrite?(b, slider)
@@ -412,6 +416,9 @@ private final class LiveFixture: @unchecked Sendable {
                 return nil
             },
             attributeValueResultHandler: { element, attribute in
+                if CFEqual(element, slider) {
+                    onSliderAttributeRead?(b, slider, attribute, sliderWriteCount.value)
+                }
                 if let status = pluginWindowsReadStatusBeforeTargetOpen,
                    CFEqual(element, app),
                    attribute == (kAXWindowsAttribute as String),
@@ -1035,6 +1042,167 @@ private func namedEQBandParams(
     let noViewMenuSelection = fixture.controlsViewMenuPressCount.value == 0
         && fixture.editorViewMenuPressCount.value == 0
     #expect(noViewMenuSelection)
+}
+
+@Test(arguments: ["75", "60.5", "unknown", "nonfinite", "gate", "cancellation", "deadline"])
+func testForwardWriteDoesNotOverwriteItsChangedBeforeValue(_ fault: String) async throws {
+    let retainedBefore = MutableBox<Double?>(nil)
+    let injected = MutableBox(false)
+    let zeroSettersAtInjection = MutableBox(false)
+    let fixture = LiveFixture(beforeValue: 60, onSliderAttributeRead: { builder, slider, attribute, writes in
+        guard writes == 0 else { return }
+        if attribute == (kAXValueAttribute as String), retainedBefore.value == nil {
+            retainedBefore.value = builder.attributeValue(slider, attribute) as? Double
+        }
+        guard attribute == (kAXDescriptionAttribute as String), retainedBefore.value != nil,
+              !injected.value else { return }
+        // The engine already read its numeric before-state. This later identity
+        // read retains the SAME description, slot, editor and control CFs.
+        injected.value = true
+        zeroSettersAtInjection.value = writes == 0
+        if let value = Double(fault) {
+            builder.setAttribute(slider, kAXValueAttribute as String, value)
+        } else if fault == "unknown" {
+            builder.setAttribute(slider, kAXValueAttribute as String, NSNull())
+        } else if fault == "nonfinite" {
+            builder.setAttribute(slider, kAXValueAttribute as String, Double.nan)
+        }
+    })
+    let context = OperationTraceContext(mutationGateAcquired: true,
+        ownsGate: { fault != "gate" || !injected.value },
+        deadline: fault == "deadline" ? ContinuousClock.now.advanced(by: .seconds(-1)) : nil,
+        cancellationRequested: { fault == "cancellation" && injected.value })
+    let result = await OperationTraceContext.$current.withValue(context) {
+        await runLive(fixture: fixture, params: thresholdParams(value: "38"))
+    }
+    #expect(retainedBefore.value == 60)
+    #expect(injected.value)
+    #expect(zeroSettersAtInjection.value)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(result["state"] as? String == "C")
+    if let value = Double(fault) { #expect(fixture.currentSliderValue == value) }
+    else if fault == "unknown" { #expect(fixture.currentSliderValue == nil) }
+    else if fault == "nonfinite" {
+        let current = try #require(fixture.currentSliderValue)
+        #expect(current.isNaN)
+    } else { #expect(fixture.currentSliderValue == 60) }
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test func testForwardWriteWithStableBeforeStillSetsRequestedValue() async throws {
+    let fixture = LiveFixture(beforeValue: 60)
+    let result = await runLive(fixture: fixture, params: thresholdParams(value: "38"))
+    #expect(result["state"] as? String == "A")
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 38)
+}
+
+@Test func testSagaApprovedThresholdBeforeIsCheckedByTheActualWriter() async throws {
+    let fixture = LiveFixture(beforeValue: 75)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: "threshold", observed: .double(60))
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: thresholdParams(value: "38"))
+    }
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.currentSliderValue == 75)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test(arguments: ["frequency", "gain"])
+func testSelectedEQApprovedRawBeforeIsCheckedByTheActualWriter(_ parameter: String) async throws {
+    let label = parameter == "frequency" ? "Frequency" : "Gain"
+    for (approved, state, count) in [(1.0, "C", 0), (0.0, "A", 3)] {
+        let fixture = LiveFixture(thresholdDescription: "Peak 1 \(label)", pluginSlotName: "Channel EQ",
+            beforeValue: 0, sliderWriteBehavior: .oneStepTowardRequest)
+        let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+            param: "peak_1_\(parameter)", observed: .double(approved), pluginID: "logic.stock.effect.channel_eq")
+        let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+            await AccessibilityChannel.defaultSetEQBandVerified(params: namedEQBandParams(parameter: label),
+                runtime: fixture.runtime, frontDocumentPath: { expectedPath },
+                pluginPopupMenuCleaner: { _ in .noPopupObserved })
+        }
+        #expect(fixture.sliderWriteCount.value == count)
+        #expect(fixture.currentSliderValue == Double(count))
+        let body = try #require(decodedJSONObject(result.message))
+        #expect(body["state"] as? String == state)
+        if state == "C" {
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!attempted)
+        }
+    }
+}
+
+@Test func testSagaApprovedLimiterBeforeIsCheckedBeforeTheActualCheckboxPress() async throws {
+    let fixture = LiveFixture(controlsViewRowLabel: "Limiter On", controlsCheckboxBefore: true,
+        controlsViewInitiallySelected: true)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: "limiter_on", observed: .bool(false))
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: controlsBooleanParams())
+    }
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+    let current = try #require(fixture.builder.attributeValue(fixture.builder.element(100_908), kAXValueAttribute as String) as? Bool)
+    #expect(current)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test(arguments: ["threshold", "limiter_on"])
+func testSagaMatchingApprovedBeforeReachesItsActualParameterMutation(_ param: String) async throws {
+    let fixture = param == "threshold" ? LiveFixture(beforeValue: 60)
+        : LiveFixture(controlsViewRowLabel: "Limiter On", controlsViewInitiallySelected: true)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: param, observed: param == "threshold" ? .double(60) : .bool(false))
+    let params = param == "threshold" ? thresholdParams(value: "38") : controlsBooleanParams()
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: params)
+    }
+    #expect(result["state"] as? String == "A")
+    if param == "threshold" {
+        #expect(fixture.sliderWriteCount.value == 1)
+        #expect(fixture.currentSliderValue == 38)
+    } else {
+        #expect(fixture.controlsCheckboxPressCount.value == 1)
+        let current = try #require(fixture.builder.attributeValue(fixture.builder.element(100_908), kAXValueAttribute as String) as? Bool)
+        #expect(current)
+    }
+}
+
+@Test func testFirstIncrementNudgeDoesNotOverwriteAChangedEntryReading() async throws {
+    let reads = MutableBox(0)
+    let injected = MutableBox(false)
+    let zeroSettersAtInjection = MutableBox(false)
+    let fixture = LiveFixture(
+        thresholdDescription: channelEQFixtureAXDescription, pluginSlotName: "Channel EQ",
+        beforeValue: 0, sliderWriteBehavior: .oneStepTowardRequest,
+        onSliderAttributeRead: { builder, slider, attribute, writes in
+            guard writes == 0 else { return }
+            if attribute == (kAXValueAttribute as String) { reads.value += 1 }
+            if attribute == (kAXValueDescriptionAttribute as String), reads.value >= 2, !injected.value {
+                // The walk's entry numeric reading is retained before its display
+                // is read. An external edit happens before the FIRST nudge.
+                injected.value = true
+                zeroSettersAtInjection.value = writes == 0
+                builder.setAttribute(slider, kAXValueAttribute as String, 7.0)
+            }
+        }
+    )
+    let result = try await runChannelEQFixture(fixture: fixture,
+        params: channelEQFixtureParams(value: "3", unit: "raw_ax_value"),
+        writeMethod: "ax_slider_increment_walk")
+    #expect(reads.value >= 2)
+    #expect(injected.value)
+    #expect(zeroSettersAtInjection.value)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.currentSliderValue == 7)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
 }
 
 @Test func testVerifiedParameterBindsArrangeNineToMixerElevenPastTwoAuxes() async {

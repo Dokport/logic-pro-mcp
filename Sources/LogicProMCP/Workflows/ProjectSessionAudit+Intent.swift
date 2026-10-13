@@ -29,11 +29,18 @@ extension ProjectSessionAudit {
 
     // MARK: - Approved intent (input)
 
-    /// An exact existing track the client names. `handle` is local to the policy; `trackRef` is a
-    /// reference the #965 capture issued, which is the only binding to an observed host object.
+    /// An exact issued target. A physical Mixer naming origin keeps its original reference until
+    /// a retained #965 pair resolves the existing coupled Track action; it grants no Track routing
+    /// authority. `handle` is local to the policy, never a host name or an ordinal identity.
     struct IntentTarget: Equatable, Sendable {
         let handle: String
         let trackRef: TargetReference
+        /// A physical naming origin, retained even after its captured pair resolves a Track action.
+        let mixerRef: TargetReference?
+
+        init(handle: String, trackRef: TargetReference, mixerRef: TargetReference? = nil) {
+            self.handle = handle; self.trackRef = trackRef; self.mixerRef = mixerRef
+        }
     }
 
     struct IntentRoleMember: Equatable, Sendable {
@@ -505,6 +512,13 @@ extension ProjectSessionAudit {
             }
         }
         validate(targets: targets, roles: roles, outputs: outputs, into: &rejections)
+        // Mixer origins contribute only names, never Track routing/role or presentation authority.
+        if !roles.isEmpty || !outputs.isEmpty || !sends.isEmpty || !receivers.isEmpty
+            || !protectedPaths.isEmpty || mixerVisible != nil || trackSort != nil {
+            for target in targets where target.mixerRef != nil {
+                rejections.append(.unsupportedTargetRef(handle: target.handle, ref: target.trackRef.rawValue))
+            }
+        }
 
         guard rejections.isEmpty else {
             var unique: [IntentPolicyRejection] = []
@@ -659,13 +673,69 @@ extension ProjectSessionAudit {
                 rejections.append(.wrongType(path: path, expected: "object"))
                 continue
             }
-            rejectUnknownKeys(entry, allowed: ["handle", "track_ref"], path: path, into: &rejections)
+            let mixerOrigin = entry["mixer_ref"] != nil
+            let referenceKey = mixerOrigin ? "mixer_ref" : "track_ref"
+            rejectUnknownKeys(entry, allowed: ["handle", referenceKey], path: path, into: &rejections)
             let handle = requiredString(entry, key: "handle", path: path, into: &rejections)
-            let trackRef = requiredString(entry, key: "track_ref", path: path, into: &rejections)
+            let trackRef = requiredString(entry, key: referenceKey, path: path, into: &rejections)
             guard let handle, let trackRef else { continue }
-            targets.append(IntentTarget(handle: handle, trackRef: TargetReference(rawValue: trackRef)))
+            let reference = TargetReference(rawValue: trackRef)
+            targets.append(IntentTarget(handle: handle, trackRef: reference, mixerRef: mixerOrigin ? reference : nil))
         }
         return targets
+    }
+
+    /// Resolve only a producer-retained physical pair into the already qualified coupled Track
+    /// action. Mixer indices, equal labels and caller JSON cannot create or renew this association.
+    static func normalizedMixerNaming(
+        policy: IntentPolicy, names: [ApprovedName], capture: SessionPopulationObservation.Capture,
+        request: SessionPopulationObservation.Request
+    ) -> (policy: IntentPolicy, reasons: [String: String]) {
+        guard policy.targets.contains(where: { $0.mixerRef != nil }) else { return (policy, [:]) }
+        var targets = policy.targets
+        var reasons: [String: String] = [:]
+        for index in targets.indices {
+            let original = targets[index]
+            guard let mixerRef = original.mixerRef else { continue }
+            reasons[original.handle] = "mixer_name_association_unverified"
+            guard request.domains.contains(.tracks), request.domains.contains(.strips),
+                  request.domains.contains(.associations), capture.referencesEnabled, !capture.referencesStale,
+                  capture.before == capture.after, !capture.before.axOccluded,
+                  capture.requestedProjectMatches != false,
+                  let fresh = capture.freshPopulation, fresh.stable, fresh.uiEffects.restoration == "restored",
+                  case .issued(let project)? = capture.projectIssuance, policy.projectRef == project,
+                  let issued = capture.issued, let path = capture.project.filePath,
+                  let desired = names.first(where: { $0.target == original.handle }) else { continue }
+            let stripRows = capture.channelStrips.indices.filter { capture.mixerReference(at: $0) == mixerRef }
+            guard stripRows.count == 1, let stripRow = stripRows.first,
+                  let strip = capture.channelStrips[stripRow].physicalBinding,
+                  strip.projectPath?.utf8.elementsEqual(path.utf8) == true else { continue }
+            let pairs = fresh.selectionAssociations.filter { $0.strip.matches(strip) }
+            guard pairs.count == 1, let pair = pairs.first,
+                  fresh.selectionAssociations.filter({ $0.track.matches(pair.track) }).count == 1,
+                  CFEqual(pair.track.window, pair.strip.window),
+                  pair.track.document.utf8.elementsEqual(pair.strip.document.utf8) else { continue }
+            let rows = capture.tracks.filter { $0.physicalBinding?.matches(pair.track) == true }
+            guard rows.count == 1, let track = rows.first,
+                  let reference = issued.byTrackIndex[track.id],
+                  case .located(let located) = locate(reference, in: issued), located == track.id else { continue }
+            guard ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
+                targetReference: reference, expectedBefore: track.name, desiredAfter: desired.name), capture: capture) else {
+                reasons[original.handle] = "mixer_name_coupled_footprint_unavailable"
+                continue
+            }
+            targets[index] = .init(handle: original.handle, trackRef: reference, mixerRef: mixerRef)
+            reasons.removeValue(forKey: original.handle)
+        }
+        // Two declarations of the same actual pair remain two rejected tasks, not two writes or
+        // a silently collapsed instruction, even when their approved strings happen to agree.
+        for aliases in Dictionary(grouping: targets, by: \.trackRef).values
+            where aliases.count > 1 && aliases.contains(where: { $0.mixerRef != nil }) {
+            for target in aliases { reasons[target.handle] = "naming_target_alias_conflict" }
+        }
+        return (IntentPolicy(projectRef: policy.projectRef, targets: targets, roles: policy.roles,
+            outputs: policy.outputs, sends: policy.sends, receivers: policy.receivers,
+            mixerVisible: policy.mixerVisible, trackSort: policy.trackSort, protectedPaths: policy.protectedPaths), reasons)
     }
 
     private static func parseRoles(
@@ -867,7 +937,7 @@ extension ProjectSessionAudit {
             }
         }
 
-        for target in targets where !target.trackRef.rawValue.hasPrefix(trackReferencePrefix) {
+        for target in targets where !target.trackRef.rawValue.hasPrefix(target.mixerRef == nil ? trackReferencePrefix : "mix_") {
             rejections.append(.unsupportedTargetRef(handle: target.handle, ref: target.trackRef.rawValue))
         }
 

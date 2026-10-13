@@ -354,6 +354,34 @@ enum ProcessUtils {
         logicProVersion(runtime: .production)
     }
 
+    struct LogicHostObservation: Encodable, Equatable, Sendable {
+        var logicVersion: String? = nil
+        var logicBuild: String? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case logicVersion = "logic_version"
+            case logicBuild = "logic_build"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(logicVersion, forKey: .logicVersion)
+            try container.encode(logicBuild, forKey: .logicBuild)
+        }
+    }
+
+    /// Metadata from the observed process's bundle, never an installed-app fallback.
+    static func logicHostObservation(pid: pid_t) -> LogicHostObservation? {
+        guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+              let identifier = app.bundleIdentifier, LogicProTarget.isKnownBundleID(identifier),
+              let url = app.bundleURL, let bundle = Bundle(url: url),
+              bundle.bundleIdentifier == identifier else { return nil }
+        let observation = LogicHostObservation(
+            logicVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            logicBuild: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+        return app.isTerminated ? nil : observation
+    }
+
     static func logicProVersion(runtime: Runtime) -> String? {
         let bundleURL = runtime.logicProBundleURL()
         guard let bundleURL, let bundle = Bundle(url: bundleURL) else {
@@ -401,7 +429,9 @@ enum ProcessUtils {
 
     static func parseLogicProPID(fromProcessList output: String) -> pid_t? {
         var candidates: [pid_t] = []
-        let installPathMarkers = LogicProVariantPolicy.macOSExecutablePathMarkers
+        let mainExecutableSuffixes = LogicProVariantPolicy.records.map {
+            "/\(URL(fileURLWithPath: $0.defaultInstallPath).lastPathComponent)/Contents/MacOS/\($0.processName)"
+        }
         for rawLine in output.split(whereSeparator: \.isNewline) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty else { continue }
@@ -412,9 +442,16 @@ enum ProcessUtils {
             }
 
             let command = String(parts[1])
-            if LogicProTarget.knownProcessNames.contains(where: { command.contains($0) })
-                || installPathMarkers.contains(where: { command.contains($0) })
-            {
+            let pathComponents = command.split(separator: "/")
+            let parents = pathComponents.dropLast()
+            let hasBundleParent = parents.contains { $0.hasSuffix(".app") || $0.hasSuffix(".appex") }
+            // Match the executable itself, not a bundle ancestor or quoted argv.
+            // Unbundled exact-name paths retain the existing stdio fallback.
+            let isMainExecutablePath = command.hasPrefix("/")
+                && LogicProTarget.isLogicProcessName((command as NSString).lastPathComponent)
+                && !parents.contains(where: { $0.last?.isWhitespace == true })
+                && (!hasBundleParent || mainExecutableSuffixes.contains(where: { command.hasSuffix($0) }))
+            if LogicProTarget.isLogicProcessName(command) || isMainExecutablePath {
                 candidates.append(rawPID)
             }
         }
