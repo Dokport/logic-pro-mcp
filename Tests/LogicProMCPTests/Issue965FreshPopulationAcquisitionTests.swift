@@ -974,6 +974,21 @@ struct Issue965FreshPopulationAcquisitionTests {
             fullDomainAssociation: true, fullDomainMixerEnd: true, headerHelpHasNoEffect: true)
     }
 
+    @Test func registeredHeaderReturnReassertsOnlyItsUnchangedOriginalSelection() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
+            fullDomainAssociation: true, fullDomainMixerEnd: true, headerFocusSetterOpensEditor: true,
+            headerReturnSelection: "complete")
+    }
+
+    @Test(arguments: ["declined", "no_landing", "selection_conflict"])
+    func registeredHeaderSelectionReturnRequiresActualLandingAndUnchangedSelection(_ fault: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
+            fullDomainAssociation: true, fullDomainMixerEnd: true, headerFocusSetterOpensEditor: true,
+            headerReturnSelection: fault)
+    }
+
     @Test(arguments: ["wrong_hit", "changed_hit", "up_failed", "click_no_effect"])
     func registeredMixerFocusFallbackRefusesUnownedHitsIncompleteReleaseAndNoLanding(_ fault: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
@@ -1993,7 +2008,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                               fullDomainMixerEnd: Bool = false, mixerEndFault: String? = nil,
                               mixerFocusACKHasNoEffect: Bool = false, mixerFocusClickDelayed: Bool = false,
                               mixerFocusClickFault: String? = nil, headerFocusSetterOpensEditor: Bool = false,
-                              headerHelpHasNoEffect: Bool = false) async throws {
+                              headerHelpHasNoEffect: Bool = false, headerReturnSelection: String? = nil) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -2550,6 +2565,21 @@ struct Issue965FreshPopulationAcquisitionTests {
                     return exposedStrips[associationStripIndices[0]]
                 }, wrongDisclosureHit: mouseCase == "wrong_hit", focusSetter: { element, attribute, value in
                     if fullDomainMixerEnd {
+                        if CFEqual(element, fixture.rail), attribute == kAXSelectedChildrenAttribute as String,
+                           fixture.reads.recorded.contains("owned_end_select_all") {
+                            let requested = AXHelpers.decodeChildrenArray(value)
+                            #expect(requested.count == 1 && CFEqual(requested[0], headers[0]))
+                            let before = fixture.builder.attributeValue(fixture.rail, kAXSelectedChildrenAttribute as String)
+                            let heldSelection = before.map { AXHelpers.decodeChildrenArray($0 as CFTypeRef) } ?? []
+                            #expect(heldSelection.count == requested.count && zip(heldSelection, requested).allSatisfy { CFEqual($0, $1) })
+                            fixture.reads.record("owned_end_header_focus_inverse")
+                            fixture.reads.record("original_selection_reasserted")
+                            if headerReturnSelection == "declined" || mixerEndFault == "declined_inverse" { return false }
+                            if headerReturnSelection != "no_landing", !headerHelpHasNoEffect {
+                                fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, passiveLabel)
+                            }
+                            return true
+                        }
                         if attribute == kAXFocusedAttribute as String,
                            CFEqual(element, passiveLabel) || CFEqual(element, exposedStrips[associationStripIndices[0]]) {
                             fixture.reads.record(CFEqual(element, passiveLabel) ? "owned_end_header_focus_inverse" : "owned_end_mixer_focus_forward")
@@ -2793,6 +2823,15 @@ struct Issue965FreshPopulationAcquisitionTests {
                         fixture.builder.setChildren(fixture.rail, changed)
                     }
                 }, readingAttribute: { element, attribute in
+                    if headerReturnSelection == "selection_conflict", CFEqual(element, fixture.rail),
+                       attribute == kAXSelectedChildrenAttribute as String,
+                       fixture.reads.recorded.contains("owned_end_select_all"),
+                       !fixture.reads.recorded.contains("header_selection_conflict") {
+                        fixture.reads.record("header_selection_conflict")
+                        fixture.builder.setAttribute(headers[0], kAXSelectedAttribute as String, false)
+                        fixture.builder.setAttribute(headers[1], kAXSelectedAttribute as String, true)
+                        fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [headers[1]])
+                    }
                     if fullDomainMixerEnd, CFEqual(element, passiveLabel), attribute == kAXHelpAttribute as String {
                         fixture.reads.record("owned_end_header_focus_inverse")
                         fixture.reads.record("original_passive_help_return")
@@ -2801,7 +2840,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                             #expect(CFEqual(current as AnyObject, exposedStrips[associationStripIndices[0]]))
                         } catch { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
                         if mixerEndFault == "declined_inverse" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
-                        if headerHelpHasNoEffect { return .success("Passive track name Help" as NSString) }
+                        if headerHelpHasNoEffect || headerReturnSelection != nil { return .success("Passive track name Help" as NSString) }
                         fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, passiveLabel)
                         return .success("Passive track name Help" as NSString)
                     }
@@ -3024,8 +3063,24 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(pairs.isEmpty, "unrestored or conflicted exposed relationships must not be published")
             return
         }
+        if let headerReturnSelection {
+            #expect(!fixture.reads.recorded.contains("passive_name_AXFocused_opened_real_editor"))
+            if headerReturnSelection == "selection_conflict" {
+                #expect(fixture.reads.recorded.contains("header_selection_conflict"))
+                #expect(!fixture.reads.recorded.contains("original_selection_reasserted"))
+            } else { #expect(fixture.reads.recorded.contains("original_selection_reasserted")) }
+            if headerReturnSelection != "complete" {
+                #expect(fixture.events.count == 4, "No selection ACK can authorize unobserved original-focus restoration")
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                let effects = try #require(body["ui_effects"] as? [String: Any])
+                #expect(effects["restoration"] as? String == "not_restored")
+                #expect(body["snapshot_id"] == nil)
+                #expect(gate.currentOperation() == nil && fixture.builder.actionCalls.isEmpty)
+                return
+            }
+        }
         if headerHelpHasNoEffect {
-            #expect(fixture.reads.recorded.contains("original_passive_help_return"))
+            #expect(fixture.reads.recorded.contains("original_selection_reasserted"))
             #expect(fixture.events.count == 4, "No Help string can authorize an original-focus or disclosure inverse")
             let body = try #require(sharedJSONObject(sharedToolText(result)))
             let effects = try #require(body["ui_effects"] as? [String: Any])
@@ -3077,9 +3132,9 @@ struct Issue965FreshPopulationAcquisitionTests {
             return
         }
         if fullDomainMixerOpen {
-            if headerFocusSetterOpensEditor {
+            if headerFocusSetterOpensEditor, headerReturnSelection == nil {
                 #expect(!fixture.reads.recorded.contains("passive_name_AXFocused_opened_real_editor"))
-                #expect(fixture.reads.recorded.contains("original_passive_help_return"))
+                #expect(fixture.reads.recorded.contains("original_selection_reasserted"))
             }
             let headerHelpReads = fixture.reads.recorded.filter { $0 == "initial_header_help_moved_focus" }.count
             #expect(headerHelpReads == 0, "The request-owned reveal must retain the fresh census's proved control-forest Help omission")

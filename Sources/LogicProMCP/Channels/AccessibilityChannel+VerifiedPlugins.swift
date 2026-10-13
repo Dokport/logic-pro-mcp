@@ -1299,12 +1299,29 @@ extension AccessibilityChannel {
             // Positive closed-menu evidence ends the earlier acquired-menu flag.
             menuOpen = false
             focusRestoreAttempted = true
-            if headerFocus != nil {
-                // AXFocused on a passive name opens a different rename editor.
-                // Use the ordinary guarded focus-moving Help read instead;
-                // neither its returned text nor status proves restoration.
-                let _: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
-                    focus, kAXHelpAttribute as String, runtime: runtime.ax)
+            if let headerFocus {
+                guard let inverseSource else { return false }
+                // Reassert only the unchanged original selection on its retained
+                // rail. AXFocused on the passive name opens a different editor;
+                // neither selection ACK nor Help text proves focus restoration.
+                let expected = zip(headers, selected).filter { $0.1 }.map { $0.0 }
+                guard expected.filter({ CFEqual($0, headerFocus.header) }).count == 1,
+                      headerFocus.permitsOwnedMixerInverseMetadata(from: inverseSource),
+                      case .success(.elements(let original)) = AXHelpers.getAXUIElementArrayRead(
+                        headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
+                      original.count == expected.count, zip(original, expected).allSatisfy({ CFEqual($0, $1) }),
+                      AXHelpers.isAttributeSettable(headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax) == true,
+                      await stillOwned(stoppingWhen: stop),
+                      case .success(.elements(let deciding)) = AXHelpers.getAXUIElementArrayRead(
+                        headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
+                      deciding.count == original.count, zip(deciding, original).allSatisfy({ CFEqual($0, $1) }),
+                      headerFocus.permitsOwnedMixerInverseMetadata(from: inverseSource), !stop(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                      AXHelpers.setAttribute(headerFocus.rail, kAXSelectedChildrenAttribute as String,
+                        original as CFArray, runtime: runtime.ax),
+                      case .success(.elements(let after)) = AXHelpers.getAXUIElementArrayRead(
+                        headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
+                      after.count == original.count, zip(after, original).allSatisfy({ CFEqual($0, $1) }) else { return false }
             } else {
                 guard AXHelpers.setAttribute(focus, kAXFocusedAttribute as String,
                     NSNumber(value: true), runtime: runtime.ax) else { return false }
