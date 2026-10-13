@@ -1006,13 +1006,48 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(existingBus: true)
     }
 
+    @Test func registeredSingleSendRemovalProvesOwnedRetirementAndSoleEmptyAfter() async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true)
+    }
+
+    @Test func survivingSingleSendRemovalRetainsOriginalSourceAndHeaderProof() async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, survivingSource: true)
+    }
+
+    @Test(arguments: ["healthy_sibling_replaced", "healthy_occupied", "healthy_unreadable", "healthy_header_retired"])
+    func survivingSingleSendRemovalRefusesChangedFootprintOrOwnership(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(fault, removing: true, survivingSource: true)
+    }
+
+    @Test func typedRemovedSendInverseRestoresOnlyItsRetainedSoleEmptyBinding() async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true)
+    }
+
+    @Test(arguments: ["empty_replaced", "another_occupied", "foreign_project", "after_level", "after_bypass", "after_mode",
+                      "conflicting_echo", "unreadable_echo_mark"])
+    func typedRemovedSendInverseRefusesNewerOrUnknownState(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, inverseFault: fault)
+    }
+
+    @Test(arguments: ["late_role_nil", "late_role_number", "late_title_nil", "late_title_number", "late_child_role"])
+    func removalFinalSelectorCannotSkipUnknownCandidates(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(fault, removing: true)
+    }
+
+    @Test(arguments: ["multiple_occupied", "footprint", "foreign_project", "foreign_focus", "unreadable", "missing_pair"])
+    func removedSingleSendCannotAdoptAmbiguityOrLostOwnership(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(fault, removing: true)
+    }
+
     @Test(arguments: ["multiple_occupied", "footprint", "level", "bypass", "mode", "foreign_project",
                       "foreign_focus", "unreadable", "missing_pair", "deciding_control", "deciding_level"])
     func retiredSingleSendCannotAdoptAmbiguityOrNewerState(fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(fault)
     }
 
-    private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false) async throws {
+    private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
+                                               removing: Bool = false, restoring: Bool = false,
+                                               inverseFault: String? = nil, survivingSource: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1026,9 +1061,12 @@ struct Issue965HeldSelectionAssociationTests {
                 f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
             }), registry = TargetRegistry()
             let replacement = b.element(1_965_2600), root = b.element(1_965_2601)
+            let restoredSource = b.element(1_965_2700)
             let echo = b.element(1_965_2602), mode = b.element(1_965_2603)
             let parent = b.element(1_965_2604), menu = b.element(1_965_2605)
             let stereo = b.element(1_965_2606), destination = b.element(1_965_2607)
+            let competitor = b.element(1_965_2720), leafChild = b.element(1_965_2721)
+            let lateRemovalChoice = removing && fault?.hasPrefix("late_") == true
             func send(_ base: Int) -> [AXUIElement] {
                 let anchor = b.element(base), group = b.element(base + 1), bypass = b.element(base + 2)
                 let list = b.element(base + 3), level = b.element(base + 4)
@@ -1048,7 +1086,8 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
             let originalList = b.element(1_965_2623), renewedList = b.element(1_965_2643)
-            b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + originalSend)
+            let originalChildren = b.makeAXRuntime().children(f.strips[1])
+            b.setChildren(f.strips[1], originalChildren + originalSend)
             b.setRole(replacement, kAXLayoutItemRole as String)
             b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
             b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
@@ -1056,6 +1095,11 @@ struct Issue965HeldSelectionAssociationTests {
             b.setRole(name, kAXTextFieldRole as String); b.setAttribute(name, kAXDescriptionAttribute as String, "Name")
             b.setAttribute(name, kAXValueAttribute as String, "Duplicate"); b.setChildren(name, [])
             b.setChildren(replacement, [name] + renewedSend)
+            b.setRole(restoredSource, kAXLayoutItemRole as String)
+            b.setAttribute(restoredSource, kAXNumberOfCharactersAttribute as String, 0)
+            b.setAttribute(restoredSource, kAXInsertionPointLineNumberAttribute as String, 0)
+            b.setChildren(restoredSource, [name] + extraSend)
+            b.setActionNames(renewedSend[0], [kAXPressAction as String])
             for container in [root, menu] { b.setRole(container, kAXMenuRole as String) }
             for (item, title) in [(echo, "Stereo Output"), (mode, "Post Pan"), (parent, "Output"),
                                   (stereo, "Stereo Output"), (destination, "Output 3-4")] {
@@ -1065,6 +1109,18 @@ struct Issue965HeldSelectionAssociationTests {
             }
             for item in [echo, mode, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
             b.setChildren(menu, [stereo, destination]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, mode, parent])
+            if removing {
+                b.setAttribute(destination, kAXTitleAttribute as String, "No Send")
+                b.setChildren(menu, [stereo]); b.setChildren(root, [echo, mode, parent, destination])
+                if lateRemovalChoice {
+                    b.setRole(competitor, kAXMenuItemRole as String)
+                    b.setAttribute(competitor, kAXTitleAttribute as String, "Unselected alternative")
+                    b.setChildren(competitor, [])
+                    b.setRole(leafChild, kAXStaticTextRole as String); b.setChildren(leafChild, [])
+                    b.setChildren(root, [echo, mode, parent, destination, competitor])
+                    if fault == "late_child_role" { b.setChildren(destination, [leafChild]) }
+                }
+            }
             if existingBus {
                 let input = b.element(1_965_2680), busParent = b.element(1_965_2681), busMenu = b.element(1_965_2682)
                 b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
@@ -1080,7 +1136,11 @@ struct Issue965HeldSelectionAssociationTests {
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
                 let source = f.routingReplacement ?? f.strips[1]
-                if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList) {
+                if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
+                    || (restoring && CFEqual(element, b.element(1_965_2663))) {
+                    b.setChildren(f.mixer, [f.strips[0], source, root]); return true
+                }
+                if restoring, action == kAXPressAction as String, CFEqual(element, renewedSend[0]) {
                     b.setChildren(f.mixer, [f.strips[0], source, root]); return true
                 }
                 if action == kAXCancelAction as String, CFEqual(element, root) {
@@ -1090,6 +1150,10 @@ struct Issue965HeldSelectionAssociationTests {
                     f.routingDestinationPresses += 1; f.routingReplacement = replacement
                     b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : "Output 3-4")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                    if removing {
+                        b.setChildren(replacement, [name, renewedSend[0]])
+                        b.setAttribute(echo, "AXMenuItemMarkChar", "")
+                    }
                     if fault == "multiple_occupied" { b.setChildren(replacement, [name] + renewedSend + extraSend) }
                     if fault == "footprint" { b.setChildren(replacement, [name] + renewedSend + [extraSend[0]]) }
                     if fault == "level" { b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1) }
@@ -1097,13 +1161,80 @@ struct Issue965HeldSelectionAssociationTests {
                     if fault == "mode" { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
                     b.setChildren(f.mixer, [f.strips[0], replacement])
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                    if survivingSource {
+                        f.routingReplacement = nil
+                        b.setChildren(f.strips[1], originalChildren + [renewedSend[0]])
+                        b.setChildren(f.mixer, f.strips)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                        if fault == "healthy_sibling_replaced" {
+                            f.routingOtherReplacement = replacement
+                            b.setChildren(f.mixer, [replacement, f.strips[1]])
+                        }
+                        if fault == "healthy_occupied" { b.setChildren(f.strips[1], originalChildren + renewedSend) }
+                        if fault == "healthy_header_retired" {
+                            let foreignHeader = b.element(1_965_2730)
+                            b.setRole(foreignHeader, kAXLayoutItemRole as String)
+                            b.setAttribute(foreignHeader, kAXTitleAttribute as String, "Duplicate")
+                            b.setChildren(foreignHeader, [])
+                            b.setChildren(f.rail, [foreignHeader, f.headers[1]])
+                        }
+                    }
                     if fault == "foreign_project" { b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
                     if fault == "foreign_focus" { b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, name) }
                     return true
                 }
+                if restoring, action == kAXPressAction as String, CFEqual(element, stereo) {
+                    f.routingDestinationPresses += 1; f.routingReplacement = restoredSource
+                    b.setAttribute(echo, kAXTitleAttribute as String, "Stereo Output")
+                    b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
+                    b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
+                    b.setAttribute(destination, "AXMenuItemMarkChar", "")
+                    b.setChildren(f.mixer, [f.strips[0], restoredSource])
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, restoredSource)
+                    if let inverseFault, inverseFault.hasPrefix("after_") {
+                        f.routingLateScopeInjected = true
+                        if inverseFault == "after_level" { b.setAttribute(b.element(1_965_2664), kAXValueAttribute as String, 1) }
+                        if inverseFault == "after_bypass" { b.setAttribute(b.element(1_965_2662), kAXValueAttribute as String, 1) }
+                        if inverseFault == "after_mode" { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
+                    }
+                    return true
+                }
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
-            f.routingReadResult = { element, _ in
+            f.routingReadResult = { element, attribute in
+                if survivingSource, f.routingDestinationPresses == 1 {
+                    if fault == "healthy_header_retired", CFEqual(element, f.headers[0]) {
+                        return .failure(.init(raw: AXError.invalidUIElement.rawValue))
+                    }
+                    if fault == "healthy_unreadable", CFEqual(element, renewedSend[0]) {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                    if (originalSend + [originalList, b.element(1_965_2622)]).contains(where: { CFEqual($0, element) }) {
+                        return .failure(.init(raw: AXError.invalidUIElement.rawValue))
+                    }
+                }
+                if lateRemovalChoice {
+                    if CFEqual(element, b.element(1_965_2622)), attribute == kAXIdentifierAttribute as String {
+                        f.routingClassifierHelpReads = 1
+                    }
+                    if CFEqual(element, destination), attribute == kAXTitleAttribute as String,
+                       f.routingClassifierHelpReads > 0 { f.routingClassifierHelpReads += 1 }
+                    let candidate = fault == "late_child_role" ? leafChild : competitor
+                    let decidingAttribute = fault?.hasPrefix("late_title") == true ? kAXTitleAttribute : kAXRoleAttribute
+                    if f.routingClassifierHelpReads == 5, !f.routingLateScopeInjected,
+                       CFEqual(element, candidate), attribute == decidingAttribute as String {
+                        f.routingLateScopeInjected = true
+                        return fault?.hasSuffix("number") == true ? .success(NSNumber(value: 123)) : .success(nil)
+                    }
+                }
+                if restoring, inverseFault == "unreadable_echo_mark", f.routingLateScopeInjected,
+                   f.routingDestinationPresses == 1, CFEqual(element, echo), attribute == "AXMenuItemMarkChar" {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                if removing, fault == "unreadable", f.routingReplacement != nil,
+                   CFEqual(element, renewedSend[0]) {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
                 if fault == "unreadable", f.routingReplacement != nil, CFEqual(element, b.element(1_965_2644)) {
                     return .failure(.init(raw: AXError.cannotComplete.rawValue))
                 }
@@ -1126,6 +1257,14 @@ struct Issue965HeldSelectionAssociationTests {
             let initialSelections = f.selections
             if fault == "missing_pair" { f.expireRetainedCapture = true }
             f.routingRead = { element, attribute in
+                // Legacy getRole uses the untyped attribute channel, whereas
+                // the strict selector uses the typed result channel above.
+                if lateRemovalChoice, fault == "late_child_role", f.routingClassifierHelpReads == 5,
+                   !f.routingLateScopeInjected, CFEqual(element, leafChild), attribute == kAXRoleAttribute as String {
+                    f.routingLateScopeInjected = true
+                    b.setAttribute(leafChild, kAXRoleAttribute as String, NSNumber(value: 123))
+                    return
+                }
                 guard f.routingReplacement != nil, f.selections.count == initialSelections.count + 2,
                       CFEqual(element, renewedList), attribute == kAXDescriptionAttribute as String,
                       b.makeAXRuntime().children(f.mixer).contains(where: { CFEqual($0, root) }),
@@ -1147,19 +1286,94 @@ struct Issue965HeldSelectionAssociationTests {
                 dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate, liveTrackNames: { [:] })
             let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))
             let params: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
-                "destination": existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
+                "destination": removing ? .object(["kind": .string("no_send")])
+                    : existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
                     : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
                 "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
             let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
                 commandParams: params, mutationGate: gate) {
-                await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
+                await FeatureFlags.withAdr002TargetRefForTests(true) {
+                    if restoring {
+                        return await AXMixerStripBinding.$current.withValue(originalPair.strip) {
+                            await AXMixerStripBinding.$outputAssociation.withValue(originalPair) {
+                                let removed = await AccessibilityChannel.removeAssignedSendObservation(ordinal: 1,
+                                    expected: .stereoOutput, runtime: f.logic(), timing: .immediate)
+                                let proof = try? #require(removed.removedSend)
+                                guard let proof else { return toolTextResult(removed.result) }
+                                #expect(proof.permits(runtime: f.logic()))
+                                guard let beforeBypassed = try? #require(proof.before.bypassed) else {
+                                    return toolTextResult(removed.result)
+                                }
+                                #expect(proof.before.levelRaw == 0 && !beforeBypassed)
+                                #expect(proof.checkedDestination == .stereoOutput && proof.nonRoutingChecks == ["Post Pan"])
+                                if let inverseFault, !inverseFault.hasPrefix("after_") {
+                                    f.routingLateScopeInjected = true
+                                    switch inverseFault {
+                                    case "empty_replaced": b.setChildren(replacement, [name, extraSend[0]])
+                                    case "another_occupied": b.setChildren(replacement, [name] + renewedSend)
+                                    case "foreign_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                                    case "conflicting_echo": b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
+                                    case "unreadable_echo_mark": break
+                                    default: Issue.record("Unknown inverse fixture fault")
+                                    }
+                                }
+                                let restored = await AccessibilityChannel.restoreRemovedSendObservation(proof,
+                                    runtime: f.logic(), timing: .immediate)
+                                return toolTextResult(restored.result)
+                            }
+                        }
+                    }
+                    return await handler(dependencies, params)
+                }
             }
             let body = try #require(sharedJSONObject(sharedToolText(result)))
-            #expect(f.routingDestinationPresses == 1, "The actual one-leaf retirement boundary must be reached")
+            if lateRemovalChoice {
+                #expect(f.routingLateScopeInjected, "The actual second removal selector must reach the unknown read after strict checked/menu reads")
+                #expect(f.routingDestinationPresses == 0)
+                #expect(body["state"] as? String == "C", "Actual final selector response: \(sharedToolText(result))")
+                let attempted = try #require(body["write_attempted"] as? Bool)
+                #expect(!attempted && f.routingReplacement == nil)
+                return
+            }
+            let inverseReached = restoring && (inverseFault == nil || inverseFault?.hasPrefix("after_") == true)
+            #expect(f.routingDestinationPresses == (inverseReached ? 2 : 1), "Actual removal and explicit inverse leaves must be reached")
             let originalRole: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
                 f.strips[1], kAXRoleAttribute as String, runtime: f.logic().ax)
-            if case .failure(let error) = originalRole { #expect(error.raw == AXError.invalidUIElement.rawValue) }
-            else { Issue.record("The original source must actually be retired") }
+            if survivingSource {
+                if case .success(let role) = originalRole { #expect(role == kAXLayoutItemRole as String) }
+                else { Issue.record("The original physical source must actually survive this observed No Send shape") }
+                let deleted: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(originalList,
+                    kAXRoleAttribute as String, runtime: f.logic().ax)
+                if case .failure(let error) = deleted { #expect(error.raw == AXError.invalidUIElement.rawValue) }
+                else { Issue.record("The original occupied send control must actually retire, not mutate in place") }
+            } else {
+                if case .failure(let error) = originalRole { #expect(error.raw == AXError.invalidUIElement.rawValue) }
+                else { Issue.record("The original source must actually be retired") }
+            }
+            if restoring {
+                if let inverseFault {
+                    #expect(f.routingLateScopeInjected, "The calibrated native state boundary must be reached")
+                    #expect(body["state"] as? String == (inverseReached ? "B" : "C"), "Actual inverse refusal: \(sharedToolText(result))")
+                    let attempted = try #require(body["write_attempted"] as? Bool)
+                    #expect(attempted == inverseReached)
+                    #expect(body["after"] == nil)
+                    if inverseReached {
+                        let verified = try #require(body["verified"] as? Bool)
+                        #expect(!verified)
+                    }
+                    #expect(f.routingDestinationPresses == (inverseReached ? 2 : 1), "No blind retry/compensation after lost ownership")
+                    return
+                }
+                #expect(body["state"] as? String == "A", "Actual inverse response: \(sharedToolText(result))")
+                let verified = try #require(body["verified"] as? Bool)
+                #expect(verified)
+                let slots = try #require(AXLogicProElements.sendSlotObservations(in: restoredSource, runtime: f.logic().ax))
+                #expect(slots.count == 2)
+                let restoredBypassed = try #require(slots[1].bypassed)
+                #expect(slots[1].levelRaw == 0 && !restoredBypassed)
+                #expect(Array(f.selections.dropFirst(initialSelections.count)) == [1, 0, 1, 0])
+                return
+            }
             if let fault {
                 #expect(body["state"] as? String == "B", "Actual uncertain retired-send response: \(sharedToolText(result))")
                 let verified = try #require(body["verified"] as? Bool)
@@ -1177,6 +1391,13 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(reread)
             #expect(Array(f.selections.dropFirst(initialSelections.count)) == [1, 0])
             #expect(body["after"] as? [String: Any] != nil)
+            if removing {
+                let after = try #require(body["after"] as? [String: Any])
+                #expect(after["state"] as? String == "observed_empty")
+                let slots = try #require(AXLogicProElements.sendSlotObservations(in: survivingSource ? f.strips[1] : replacement,
+                    runtime: f.logic().ax))
+                #expect(slots.count == 1 && slots.allSatisfy { $0.state == .observedEmpty })
+            }
             #expect(!gate.isHeldByEntitledHolder())
         }
     }
