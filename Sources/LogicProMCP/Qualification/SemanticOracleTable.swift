@@ -341,6 +341,10 @@ enum SemanticOracleTable {
             "semantic oracle pending — a bounded native round trip verifies the checked bus "
             + "input, physical output and unchanged strip count, but no independent typed-source "
             + "readback oracle exists; the writer's same-host menu receipt is not promotion evidence",
+        .mixerSetSendOutputVerified:
+            "semantic oracle pending — bounded native round trips verify one occupied send's "
+            + "checked destination and unchanged strip count, but no independent typed-source "
+            + "readback oracle exists; the writer's same-host menu receipt is not promotion evidence",
         .pluginsSetEQBandVerified:
             "live 2026-08-30 evidence establishes the Channel EQ raw AXValue ranges and "
             + "one-step increment-walk behavior only; no end-to-end write/readback round "
