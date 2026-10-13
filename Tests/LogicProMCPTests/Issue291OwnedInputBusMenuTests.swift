@@ -96,6 +96,42 @@ struct Issue291OwnedInputBusMenuTests {
             #expect(p.f.mutations[1].1 == kAXCancelAction as String)
         }
     }
+    @Test(arguments: [1, 256])
+    func koreanInputAliasMustAgreeAcrossOwnedEchoAndBusLeaf(_ number: Int) async throws {
+        let p = try prepare(number), title = "Bus \(number)  (버스 \(number))"
+        for item in [p.echo, p.leaf] { p.f.b.setAttribute(item, kAXTitleAttribute as String, title) }
+        p.f.b.setAttribute(p.f.b.element(291_942), kAXTitleAttribute as String, "버스")
+        let choice = AccessibilityChannel.outputMenuChoice(for: .bus(number), in: p.f.root,
+            runtime: p.f.logic.ax, receiverArrow: "←")
+        if case .item(let leaf, _) = choice { #expect(CFEqual(leaf, p.leaf)) }
+        else { Issue.record("The actual Korean input Bus leaf must be uniquely selectable: \(choice.failureLabel)") }
+        let body = try #require(sharedJSONObject(await read(p).message))
+        #expect(body["state"] as? String == "A", "Actual Korean checked input: \(body)")
+        #expect((body["current_input"] as? [String: Any])?["number"] as? Int == number)
+        #expect(body["popup_menu_state"] as? String == "closed")
+        #expect(p.f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+        #expect(OutputAssignment.busNumber(ofMenuItemTitle: title) == nil, "Output/send menus do not inherit input alias grammar")
+        #expect(RoutingGraphPublication.classifyOutputLabel(title).0 == .unclassified)
+    }
+
+    @Test(arguments: ["Bus 1 (버스 2)", "Bus 1 (버스 1) (버스 1)", "Bus 1 (Receiver 1)",
+                      "Bus 1 (버스 1", "Bus 1 ((버스 1))", "Bus 1 (버스 1) → Audio 2",
+                      "Bus 257 (버스 257)", "Bus 1 (버스 1) extra", "Bus 1 (버스 one)",
+                      "Bus 1 (버스 1) ← Audio 2 ← Audio 3"])
+    func malformedInputAliasesCannotBecomeCheckedBusAuthority(_ title: String) async throws {
+        let p = try prepare(1)
+        for item in [p.echo, p.leaf] { p.f.b.setAttribute(item, kAXTitleAttribute as String, title) }
+        let choice = AccessibilityChannel.outputMenuChoice(for: .bus(1), in: p.f.root,
+            runtime: p.f.logic.ax, receiverArrow: "←")
+        if case .item = choice { Issue.record("Malformed alias cannot choose an input destination") }
+        let body = try #require(sharedJSONObject(await read(p).message))
+        #expect(body["state"] as? String == "C")
+        #expect(body["current_input"] == nil)
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(p.f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+    }
+
     @Test("Invalid bus choice and a checked nonbus competitor remain unknown", arguments:[false,true])
     func inputChoicesMustBeKnown(_ conflict: Bool) async throws {
         let p=try prepare(conflict ? 1 : 257)
