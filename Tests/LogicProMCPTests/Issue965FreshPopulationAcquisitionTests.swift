@@ -4227,6 +4227,10 @@ struct Issue965FreshPopulationAcquisitionTests {
         }
     }
 
+    @Test func registeredSelectAllDispatchSettlesBeforeOwnedMenuCleanup() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: "delayed_dispatch")
+    }
+
     @Test("owned Mixer Select All observes offscreen population and restores the actual original subset",
           arguments: [1, 2, 4], ["healthy", "no_navigation", "not_all", "filter_off", "hidden_off", "not_settable",
                              "unread_selection", "duplicate_original", "missing_menu", "duplicate_menu", "noop_selection",
@@ -4373,11 +4377,16 @@ struct Issue965FreshPopulationAcquisitionTests {
             observationAction: { element, action in
                 if CFEqual(element, edit) {
                     fixture.events.record(action == kAXPressAction as String ? "open_edit" : "cancel_edit")
+                    if fault == "delayed_dispatch", action == kAXCancelAction as String,
+                       !selectionReads.recorded.contains("delayed_dispatch_settled") {
+                        selectionReads.record("delayed_dispatch_cancelled")
+                    }
                     fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, action == kAXPressAction as String)
                     return true
                 }
                 if CFEqual(element, selectAll), action == kAXPressAction as String {
                     fixture.events.record("select_all")
+                    if fault == "delayed_dispatch" { return true }
                     if fault != "noop_selection" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips) }
                     if fault == "omitted_offscreen" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.suffix(2))) }
                     if fault == "foreign_selected" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [fixture.header]) }
@@ -4439,6 +4448,16 @@ struct Issue965FreshPopulationAcquisitionTests {
                 if fault == "restore_visible" { fixture.builder.setAttribute(mixer, kAXVisibleChildrenAttribute as String, [strips[3]]) }
                 return fault != "restore_false"
             }, readingAttribute: { element, attribute in
+                if fault == "delayed_dispatch", CFEqual(element, edit), attribute == kAXSelectedAttribute as String,
+                   fixture.events.recorded.contains("select_all"), !fixture.events.recorded.contains("cancel_edit"),
+                   !selectionReads.recorded.contains("delayed_dispatch_settled") {
+                    selectionReads.record("pending_menu_read")
+                    if selectionReads.recorded.filter({ $0 == "pending_menu_read" }).count == 3 {
+                        selectionReads.record("delayed_dispatch_settled")
+                        fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
+                        fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, false)
+                    }
+                }
                 if sharedRead, CFEqual(element, fixture.builder.element(966_040)), attribute == kAXValueAttribute as String {
                     snapshotReads.record(fixture.events.recorded.contains("select_all") ? "after" : "before")
                     if fixture.events.recorded.contains("restore_captured_focus") {
@@ -4484,7 +4503,7 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
             section = body["strips"] as? [String: Any] ?? [:]
         } else { section = try #require(body["strips"] as? [String: Any]) }
-        let completeExpected = ["healthy", "restore_selected_focus"].contains(fault)
+        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch"].contains(fault)
             || (["full_population_restore_focus", "full_population_shared"].contains(fault) && originalCount == 1)
             || (originalCount == strips.count && ["noop_selection", "restore_ack_only", "restore_focus_false",
                 "restore_focus_ack_only", "restore_focus_unselected", "restore_focus_selection_drift"].contains(fault))
@@ -4499,6 +4518,12 @@ struct Issue965FreshPopulationAcquisitionTests {
                 #expect(!changed.contains("mixer_selection") && !changed.contains("mixer_selection_restoration"))
             }
         } else { #expect(section["coverage"] as? String != "complete") }
+        if fault == "delayed_dispatch" {
+            #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)
+            #expect(selectionReads.recorded.contains("pending_menu_read"))
+            #expect(selectionReads.recorded.contains("delayed_dispatch_settled"))
+            #expect(!selectionReads.recorded.contains("delayed_dispatch_cancelled"))
+        }
         if fault == "before_menu_document" { #expect(!fixture.events.recorded.contains("open_edit")) }
         if fault == "before_leaf_document" { #expect(!fixture.events.recorded.contains("select_all")) }
         if fault == "before_leaf_transport_document" {

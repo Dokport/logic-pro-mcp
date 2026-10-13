@@ -1163,6 +1163,33 @@ extension AccessibilityChannel {
             mixerSelectionRestorationPending = true
             let accepted = AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax)
             menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
+            if accepted {
+                // A successful dispatch can settle after its ACK. Observe at
+                // most three owned states before cancelling a still-open menu;
+                // never retry the leaf or manufacture its selected children.
+                for attempt in 0..<3 {
+                    guard await held() else {
+                        _ = await dismissOwnedMenu(stoppingWhen: stop)
+                        effects.reason = "mixer_global_selection_unverified"; return nil
+                    }
+                    if attempt > 0 {
+                        menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
+                    }
+                    if !menuOpen {
+                        guard sameFocus(), passive.permits(),
+                              let observed = elements(kAXSelectedChildrenAttribute as String), subset(observed, of: strips) else {
+                            effects.reason = "mixer_global_selection_unverified"; return nil
+                        }
+                        if sameSet(observed, strips) { break }
+                    }
+                    guard attempt < 2 else { break }
+                    do { try await Task.sleep(for: .milliseconds(25)) }
+                    catch {
+                        _ = await dismissOwnedMenu(stoppingWhen: stop)
+                        effects.reason = "navigation_cancelled"; return nil
+                    }
+                }
+            }
             guard await dismissOwnedMenu(stoppingWhen: stop), await held(), sameFocus(), passive.permits(),
                   let selected = elements(kAXSelectedChildrenAttribute as String), subset(selected, of: strips) else {
                 effects.reason = "mixer_global_selection_unverified"; return nil
