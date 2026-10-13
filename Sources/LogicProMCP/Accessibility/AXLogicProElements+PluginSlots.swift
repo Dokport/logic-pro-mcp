@@ -496,7 +496,20 @@ extension AXLogicProElements {
         _ element: AXUIElement,
         runtime: AXHelpers.Runtime
     ) -> String {
-        [
+        if runtime.attributeValuesResult != nil {
+            // One fresh semantic sample, not another classifier's metadata.
+            // Help remains separate and last, under its original full guardian.
+            let attributes = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
+            let metadata = AXHelpers.getNonHelpAttributes(element, attributes, runtime: runtime).map { reading -> String? in
+                guard case .success(.some(let value)) = reading else { return nil }
+                return value as? String
+            }
+            return (metadata + [AXHelpers.getHelp(element, runtime: runtime)])
+                .compactMap { $0 }.joined(separator: " ").lowercased()
+        }
+        // Existing runtimes (including failure-noting wrappers) retain their
+        // original individual-read seams and ordering.
+        return [
             AXHelpers.getIdentifier(element, runtime: runtime),
             AXHelpers.getDescription(element, runtime: runtime),
             AXHelpers.getTitle(element, runtime: runtime),
