@@ -295,7 +295,9 @@ extension AccessibilityChannel {
             /// no-navigation track acquisition or explicitly permitted routing acquisition.
             /// The caller's Help guard remains decisive; this proof grants neither
             /// keyboard/selection actions nor musical write permission.
-            struct PassiveMixerReadFocus {
+            // Copied AX identities and already-Sendable callbacks have no shared mutable Swift storage.
+            // Every read still requires the existing current owner, focus and custody predicates.
+            struct PassiveMixerReadFocus: @unchecked Sendable {
                 private let acquisitionPermitted: @Sendable () -> Bool
                 let logic: AXLogicProElements.Runtime
                 let pid: pid_t

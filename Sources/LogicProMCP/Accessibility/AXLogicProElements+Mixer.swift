@@ -69,7 +69,9 @@ struct AXMixerInputSlotBinding: @unchecked Sendable {
 extension AXLogicProElements {
     /// Ephemeral read-only control custody from the existing complete send census.
     /// Neither the displayed destination nor a knob level supplies endpoint identity.
-    struct AssignedSendMenuControl {
+    // Copied AX identity values contain no shared mutable Swift storage.
+    // Sendability does not replace current control custody or imply atomic AX state.
+    struct AssignedSendMenuControl: @unchecked Sendable {
         let ordinal: Int
         let group: AXUIElement
         let list: AXUIElement
