@@ -1630,6 +1630,12 @@ struct Issue965FreshPopulationAcquisitionTests {
             headerFocus: "slider_to_label", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
     }
 
+    @Test func nestedStackRetainsPassiveFocusAcceptedByItsOwnershipRead() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "slider_to_label", focusRestoration: "restored",
+            originalFocusRole: kAXLayoutAreaRole as String, retainOwnershipReadFocus: true)
+    }
+
     @Test func registeredStackRefusesForeignPassiveLabelAfterOwnershipReads() async throws {
         try await observeStack(navigation: true, initiallyExpanded: false,
             headerFocus: "slider_to_foreign_label", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
@@ -2024,7 +2030,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                               mixerFocusACKHasNoEffect: Bool = false, mixerFocusClickDelayed: Bool = false,
                               mixerFocusClickFault: String? = nil, headerFocusSetterOpensEditor: Bool = false,
                               headerHelpHasNoEffect: Bool = false, headerReturnSelection: String? = nil,
-                              headerReturnClick: String? = nil) async throws {
+                              headerReturnClick: String? = nil, retainOwnershipReadFocus: Bool = false) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -2436,7 +2442,12 @@ struct Issue965FreshPopulationAcquisitionTests {
                     if headerFocus == "radio_ambiguous_late" {
                         fixture.builder.setChildren(headers[0], [disclosure, passiveLabel, otherLabel])
                     }
-                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, focused)
+                    if retainOwnershipReadFocus, eventCount > 2 {
+                        fixture.reads.record("ownership_read_focus_retained_during_later_click")
+                    } else {
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
+                            retainOwnershipReadFocus ? disclosure : focused)
+                    }
                 }
                 if mouseCase == "unrelated_text_focus" {
                     fixture.builder.setRole(replacement, kAXTextFieldRole as String)
@@ -2874,9 +2885,15 @@ struct Issue965FreshPopulationAcquisitionTests {
                        [kAXValueAttribute as String, kAXSelectedTextAttribute as String].contains(attribute) {
                         return .failure(.init(raw: AXError.noValue.rawValue))
                     }
+                    if retainOwnershipReadFocus, fixture.events.count == 2,
+                       CFEqual(element, fixture.app), attribute == kAXFocusedUIElementAttribute as String,
+                       Thread.callStackSymbols.contains(where: { $0.contains("acceptHeldGestureFocus") }) {
+                        fixture.reads.record("disclosure_focus_accepted_before_owned_read")
+                    }
                     if ["slider_to_label", "slider_to_foreign_label"].contains(headerFocus ?? ""),
                        fixture.events.count == 2, CFEqual(element, play), attribute == kAXValueAttribute as String,
                        Thread.callStackSymbols.contains(where: { $0.contains("owned") }),
+                       !retainOwnershipReadFocus || fixture.reads.recorded.contains("disclosure_focus_accepted_before_owned_read"),
                        !fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read") {
                         fixture.reads.record("held_slider_focus_moved_by_owned_transport_read")
                         fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, shownLabel)
@@ -3008,6 +3025,9 @@ struct Issue965FreshPopulationAcquisitionTests {
                     }
                 }), cache: cache,
                 runtime: .init(hasVisibleWindow: { true }, projectFileReader: fileReader, keyboardFocus: {
+                    if retainOwnershipReadFocus,
+                       let current = fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String),
+                       CFEqual(current as AnyObject, disclosure) { return .notTextEditing }
                     if fullDomainMixerOpen {
                         let current = fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String)
                         if headerFocusSetterOpensEditor, let current, CFEqual(current as AnyObject, returnEditor) {
@@ -3539,6 +3559,11 @@ struct Issue965FreshPopulationAcquisitionTests {
             let restored = focusRestoration == "restored"
             if headerFocus == "slider_to_label" {
                 #expect(fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read"))
+            }
+            if retainOwnershipReadFocus {
+                #expect(fixture.reads.recorded.contains("disclosure_focus_accepted_before_owned_read"))
+                #expect(fixture.reads.recorded.contains("ownership_read_focus_retained_during_later_click"),
+                        "the later nested gesture must leave the independently accepted outer label focused")
             }
             let setters = fixture.reads.recorded.filter { $0 == "workspace_focus_setter" }
             #expect(setters.count == (["restored", "declined", "wrong_readback"].contains(focusRestoration) ? 1 : 0))

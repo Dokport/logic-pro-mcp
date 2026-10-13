@@ -815,10 +815,13 @@ extension AccessibilityChannel {
             // Native ownership reads can move focus between the exact controls
             // held before our completed click. Revalidate that same passive
             // custody, not a new role/name/index match or arbitrary workspace.
-            guard completedClickFocus != nil, passiveClickFocus(matching: focus) != nil,
+            guard completedClickFocus != nil, let accepted = passiveClickFocus(matching: focus),
                   permitsHeldPassiveHeaderFocus(),
                   let current: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(current, focus) else { return false }
+            // Preserve this independently validated tuple before another click
+            // replaces completedClickFocus with its own target's controls.
+            acceptedPassiveClickFocus = accepted
             observedFocus = focus
             if !effects.changed.contains("keyboard_focus") { effects.changed.append("keyboard_focus") }
             return true
