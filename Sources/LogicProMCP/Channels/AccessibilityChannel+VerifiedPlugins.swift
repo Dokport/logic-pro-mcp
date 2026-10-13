@@ -1299,8 +1299,17 @@ extension AccessibilityChannel {
             // Positive closed-menu evidence ends the earlier acquired-menu flag.
             menuOpen = false
             focusRestoreAttempted = true
-            guard AXHelpers.setAttribute(focus, kAXFocusedAttribute as String, NSNumber(value: true), runtime: runtime.ax),
-                  await stillOwned(stoppingWhen: stop), ownedMenuFocus(), sameFocus(),
+            if headerFocus != nil {
+                // AXFocused on a passive name opens a different rename editor.
+                // Use the ordinary guarded focus-moving Help read instead;
+                // neither its returned text nor status proves restoration.
+                let _: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                    focus, kAXHelpAttribute as String, runtime: runtime.ax)
+            } else {
+                guard AXHelpers.setAttribute(focus, kAXFocusedAttribute as String,
+                    NSNumber(value: true), runtime: runtime.ax) else { return false }
+            }
+            guard await stillOwned(stoppingWhen: stop), ownedMenuFocus(), sameFocus(),
                   runtime.logicProPID() == pid,
                   let restoredApp = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, restoredApp),
                   let restoredPath = Self.retainedPath(focus, in: window, runtime: runtime.ax),

@@ -962,6 +962,18 @@ struct Issue965FreshPopulationAcquisitionTests {
             mixerFocusClickDelayed: true)
     }
 
+    @Test func registeredPassiveHeaderReturnDoesNotAXFocusAnInlineRenameEditor() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
+            fullDomainAssociation: true, fullDomainMixerEnd: true, headerFocusSetterOpensEditor: true)
+    }
+
+    @Test func registeredSuccessfulHeaderHelpWithoutFocusReturnCannotCertifyRestoration() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
+            fullDomainAssociation: true, fullDomainMixerEnd: true, headerHelpHasNoEffect: true)
+    }
+
     @Test(arguments: ["wrong_hit", "changed_hit", "up_failed", "click_no_effect"])
     func registeredMixerFocusFallbackRefusesUnownedHitsIncompleteReleaseAndNoLanding(_ fault: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
@@ -1980,7 +1992,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                               fullDomainAssociation: Bool = false, fullDomainAssociationFault: String? = nil,
                               fullDomainMixerEnd: Bool = false, mixerEndFault: String? = nil,
                               mixerFocusACKHasNoEffect: Bool = false, mixerFocusClickDelayed: Bool = false,
-                              mixerFocusClickFault: String? = nil) async throws {
+                              mixerFocusClickFault: String? = nil, headerFocusSetterOpensEditor: Bool = false,
+                              headerHelpHasNoEffect: Bool = false) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -2202,6 +2215,18 @@ struct Issue965FreshPopulationAcquisitionTests {
         let associationStripIndices = [5, 1, 7, 3]
         let endFocusPoint = CGPoint(x: CGFloat((associationStripIndices[0] + 1) * 80 + 40), y: 500)
         let endEdit = fixture.builder.element(965_310), endSelectAll = fixture.builder.element(965_311)
+        let returnEditor = fixture.builder.element(965_390)
+        if headerFocusSetterOpensEditor {
+            #expect(!CFEqual(returnEditor, passiveLabel))
+            fixture.builder.setRole(returnEditor, kAXTextFieldRole as String)
+            fixture.builder.setAttribute(returnEditor, kAXValueAttribute as String, "Original stack")
+            fixture.builder.setAttributeSettable(returnEditor, kAXValueAttribute as String, true)
+            fixture.builder.setAttribute(returnEditor, kAXInsertionPointLineNumberAttribute as String, 0)
+            fixture.builder.setAttribute(returnEditor, kAXNumberOfCharactersAttribute as String, 14)
+            fixture.builder.setAttribute(returnEditor, kAXSelectedTextAttribute as String, "Original stack")
+            fixture.builder.setAttribute(returnEditor, kAXParentAttribute as String, fixture.window)
+            fixture.builder.setAttribute(returnEditor, kAXWindowAttribute as String, fixture.window)
+        }
         if fullDomainMixerOpen {
             // Native-style named Mixer, with no legacy AXIdentifier shortcut.
             // The one exposed root cannot initialize the two-header association.
@@ -2528,6 +2553,11 @@ struct Issue965FreshPopulationAcquisitionTests {
                         if attribute == kAXFocusedAttribute as String,
                            CFEqual(element, passiveLabel) || CFEqual(element, exposedStrips[associationStripIndices[0]]) {
                             fixture.reads.record(CFEqual(element, passiveLabel) ? "owned_end_header_focus_inverse" : "owned_end_mixer_focus_forward")
+                            if CFEqual(element, passiveLabel), headerFocusSetterOpensEditor {
+                                fixture.reads.record("passive_name_AXFocused_opened_real_editor")
+                                fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, returnEditor)
+                                return true
+                            }
                             if mixerFocusACKHasNoEffect, !CFEqual(element, passiveLabel) {
                                 do {
                                     let current = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
@@ -2763,6 +2793,18 @@ struct Issue965FreshPopulationAcquisitionTests {
                         fixture.builder.setChildren(fixture.rail, changed)
                     }
                 }, readingAttribute: { element, attribute in
+                    if fullDomainMixerEnd, CFEqual(element, passiveLabel), attribute == kAXHelpAttribute as String {
+                        fixture.reads.record("owned_end_header_focus_inverse")
+                        fixture.reads.record("original_passive_help_return")
+                        do {
+                            let current = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+                            #expect(CFEqual(current as AnyObject, exposedStrips[associationStripIndices[0]]))
+                        } catch { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                        if mixerEndFault == "declined_inverse" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                        if headerHelpHasNoEffect { return .success("Passive track name Help" as NSString) }
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, passiveLabel)
+                        return .success("Passive track name Help" as NSString)
+                    }
                     if mixerFocusClickDelayed, CFEqual(element, fixture.app), attribute == kAXFocusedUIElementAttribute as String,
                        fixture.reads.recorded.contains("owned_end_focus_up"),
                        !fixture.reads.recorded.contains("owned_focus_click_landed") {
@@ -2913,6 +2955,9 @@ struct Issue965FreshPopulationAcquisitionTests {
                 runtime: .init(hasVisibleWindow: { true }, projectFileReader: fileReader, keyboardFocus: {
                     if fullDomainMixerOpen {
                         let current = fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String)
+                        if headerFocusSetterOpensEditor, let current, CFEqual(current as AnyObject, returnEditor) {
+                            return .textEditing(role: kAXTextFieldRole as String, byInsertionPoint: false)
+                        }
                         if fullDomainMixerEnd, let current,
                            exposedStrips.contains(where: { CFEqual($0, current as AnyObject) }) {
                             return .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true)
@@ -2979,6 +3024,16 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(pairs.isEmpty, "unrestored or conflicted exposed relationships must not be published")
             return
         }
+        if headerHelpHasNoEffect {
+            #expect(fixture.reads.recorded.contains("original_passive_help_return"))
+            #expect(fixture.events.count == 4, "No Help string can authorize an original-focus or disclosure inverse")
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let effects = try #require(body["ui_effects"] as? [String: Any])
+            #expect(effects["restoration"] as? String == "not_restored")
+            #expect(body["snapshot_id"] == nil)
+            #expect(gate.currentOperation() == nil && fixture.builder.actionCalls.isEmpty)
+            return
+        }
         if let mixerFocusClickFault {
             #expect(fixture.reads.recorded.contains("owned_focus_ack_ineffective"))
             #expect(!fixture.reads.recorded.contains("owned_end_select_all"))
@@ -3022,6 +3077,10 @@ struct Issue965FreshPopulationAcquisitionTests {
             return
         }
         if fullDomainMixerOpen {
+            if headerFocusSetterOpensEditor {
+                #expect(!fixture.reads.recorded.contains("passive_name_AXFocused_opened_real_editor"))
+                #expect(fixture.reads.recorded.contains("original_passive_help_return"))
+            }
             let headerHelpReads = fixture.reads.recorded.filter { $0 == "initial_header_help_moved_focus" }.count
             #expect(headerHelpReads == 0, "The request-owned reveal must retain the fresh census's proved control-forest Help omission")
             #expect(fixture.events.recorded == ["disclosure_down", "disclosure_up", "inner_down", "inner_up",
