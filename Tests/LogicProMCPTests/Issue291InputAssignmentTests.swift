@@ -25,6 +25,7 @@ struct Issue291InputAssignmentTests {
         var writerFocusFault: String?
         var lateFault: String?
         var lateFaultObserved = false
+        var koreanInputAlias = false
 
         init() throws {
             f = try .init()
@@ -66,7 +67,13 @@ struct Issue291InputAssignmentTests {
             refreshInputMarks()
         }
         func refreshInputMarks() {
-            f.b.setAttribute(echo, kAXTitleAttribute as String, "Bus \(currentBus)")
+            f.b.setAttribute(echo, kAXTitleAttribute as String,
+                koreanInputAlias ? "Bus \(currentBus)  (버스 \(currentBus))" : "Bus \(currentBus)")
+            if koreanInputAlias {
+                f.b.setAttribute(one, kAXTitleAttribute as String, "Bus 1  (버스 1)")
+                f.b.setAttribute(last, kAXTitleAttribute as String, "Bus 256  (버스 256)")
+                f.b.setAttribute(f.b.element(291_986), kAXTitleAttribute as String, "버스")
+            }
             f.b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
             f.b.setAttribute(one, "AXMenuItemMarkChar", currentBus == 1 || conflictAfterWrite && !leafPresses.isEmpty ? "✓" : "")
             f.b.setAttribute(last, "AXMenuItemMarkChar", currentBus == 256 || conflictAfterWrite && !leafPresses.isEmpty ? "✓" : "")
@@ -188,6 +195,17 @@ struct Issue291InputAssignmentTests {
         #expect(f.currentBus == before)
         #expect(f.open == nil)
     }
+    @Test func koreanInputAliasWriterUsesCheckedBeforeAndActualAfter() async throws {
+        let f = try Fixture(); f.koreanInputAlias = true; f.refreshInputMarks()
+        for (destination, before) in [(1, 256), (256, 1)] {
+            let body = try #require(sharedJSONObject(await f.write(destination, expected: before).message))
+            #expect(body["state"] as? String == "A", "Actual input alias writer: \(body)")
+            #expect(f.currentBus == destination)
+            #expect(f.open == nil)
+        }
+        #expect(f.leafPresses == [1, 256])
+    }
+
     @Test("Replacement and actual current input must agree before a write", arguments: [false, true])
     func refusesMissingReplacementOrStaleBefore(_ stale: Bool) async throws {
         let f = try Fixture()

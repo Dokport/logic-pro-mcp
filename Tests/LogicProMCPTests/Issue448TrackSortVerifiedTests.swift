@@ -1,5 +1,6 @@
 @preconcurrency import ApplicationServices
 import Foundation
+import MCP
 import Testing
 @testable import LogicProMCP
 
@@ -11,12 +12,14 @@ private actor TrackSortStateBChannel: Channel {
     nonisolated let id: ChannelID = .accessibility
     private(set) var calls: [(operation: String, params: [String: String])] = []
     private let result: ChannelResult
+    private let runtime: AXLogicProElements.Runtime?
 
     init(result: ChannelResult = .success(HonestContract.encodeStateB(
         reason: .readbackMismatch,
         extras: ["operation": "track.sort_verified"]
-    ))) {
+    )), runtime: AXLogicProElements.Runtime? = nil) {
         self.result = result
+        self.runtime = runtime
     }
 
     func start() async throws {}
@@ -24,6 +27,12 @@ private actor TrackSortStateBChannel: Channel {
 
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
         calls.append((operation, params))
+        if let runtime, operation == "track.sort_verified" {
+            return AccessibilityChannel.defaultSortTracks(params: params, runtime: runtime)
+        }
+        if let runtime, operation == "view.set_mixer_visibility" {
+            return await AccessibilityChannel.defaultSetMixerVisibility(params: params, runtime: runtime)
+        }
         return result
     }
 
@@ -37,6 +46,13 @@ private final class TrackSortActionProbe: @unchecked Sendable {
     private var count = 0
     private var postPressRailReadCount = 0
     private var enabledReadCallbacks = 0
+    private var helpReads = 0
+    var viewEvents: [String] = []
+    var actionOrder: [String] = []
+    var mixerShowing = false
+
+    func recordHelpRead() { lock.lock(); helpReads += 1; lock.unlock() }
+    var helpReadCount: Int { lock.lock(); defer { lock.unlock() }; return helpReads }
 
     func recordEnabledReadCallback() {
         lock.lock()
@@ -79,6 +95,8 @@ private let trackNameActuation = TrackSortVerifier.ActuatedMenuItem(
 // Construction precedes child execution; parent reads follow await child.value. Counters use their own lock.
 // Builder access is sequential in these tests; no production AX reference is captured here.
 private struct TrackSortAXFixture: @unchecked Sendable {
+    let builder: FakeAXRuntimeBuilder
+    let app: AXUIElement
     let runtime: AXLogicProElements.Runtime
     let expectedOrderJSON: String
     let actionProbe: TrackSortActionProbe
@@ -100,13 +118,16 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         windowsReadStatus: AXHelpers.AXStatusError? = nil,
         railRoleReadStatus: AXHelpers.AXStatusError? = nil,
         menuEnabledReadStatus: AXHelpers.AXStatusError? = nil,
-        onMenuEnabledRead: (@Sendable () -> Void)? = nil
+        onMenuEnabledRead: (@Sendable () -> Void)? = nil,
+        includingMixerView: Bool = false
     ) {
         precondition(names.count == 3)
         let builder = FakeAXRuntimeBuilder()
+        self.builder = builder
         let probe = TrackSortActionProbe()
         actionProbe = probe
         let app = builder.element(448_000)
+        self.app = app
         let arrange = builder.element(448_001)
         arrangeWindow = arrange
         let rail = builder.element(448_002)
@@ -116,8 +137,11 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         let track = builder.element(448_006)
         let sortBy = builder.element(448_007)
         let sortByName = builder.element(448_008)
+        let sortByCreation = builder.element(448_009)
+        let view = builder.element(448_010), mixerToggle = builder.element(448_011), mixer = builder.element(448_012)
 
         builder.setAttribute(app, kAXMainWindowAttribute as String, arrange)
+        builder.setAttribute(app, kAXFocusedWindowAttribute as String, arrange)
         builder.setAttribute(app, kAXMenuBarAttribute as String, menuBar)
         builder.setChildren(arrange, [rail])
         builder.setAttribute(rail, kAXRoleAttribute as String, kAXGroupRole as String)
@@ -127,6 +151,7 @@ private struct TrackSortAXFixture: @unchecked Sendable {
             let header = builder.element(448_100 + offset)
             builder.setAttribute(header, kAXRoleAttribute as String, kAXLayoutItemRole as String)
             builder.setAttribute(header, kAXTitleAttribute as String, observedNames?[offset] ?? names[offset])
+            builder.setAttribute(header, kAXSelectedAttribute as String, false)
             if collapsedStackAt == offset {
                 let disclosure = builder.element(448_200 + offset)
                 builder.setAttribute(disclosure, kAXRoleAttribute as String, kAXDisclosureTriangleRole as String)
@@ -148,13 +173,38 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         builder.setAttribute(sortBy, kAXTitleAttribute as String, "트랙을 다음으로 정렬")
         builder.setAttribute(sortByName, kAXTitleAttribute as String, "트랙 이름")
         builder.setAttribute(sortByName, kAXEnabledAttribute as String, true)
+        builder.setAttribute(sortByCreation, kAXTitleAttribute as String, TrackSortCriterion.creationDate.measuredLabel(for: "ko-KR")!)
+        builder.setAttribute(sortByCreation, kAXEnabledAttribute as String, true)
         builder.setChildren(menuBar, [file, edit, track])
         builder.setChildren(track, [sortBy])
-        builder.setChildren(sortBy, [sortByName])
+        builder.setChildren(sortBy, [sortByName, sortByCreation])
+        if includingMixerView {
+            builder.setAttribute(app, kAXFrontmostAttribute as String, true)
+            builder.setRole(arrange, kAXWindowRole as String)
+            for item in [file, edit, track] { builder.setRole(item, kAXMenuBarItemRole as String) }
+            builder.setRole(view, kAXMenuBarItemRole as String)
+            builder.setAttribute(view, kAXTitleAttribute as String, "보기")
+            builder.setAttribute(view, kAXSelectedAttribute as String, false)
+            builder.setActionNames(view, [kAXPressAction as String, kAXCancelAction as String])
+            builder.setRole(mixerToggle, kAXMenuItemRole as String)
+            builder.setAttribute(mixerToggle, kAXTitleAttribute as String, "믹서 보기")
+            builder.setAttribute(mixerToggle, kAXEnabledAttribute as String, true)
+            builder.setActionNames(mixerToggle, [kAXPressAction as String])
+            builder.setChildren(view, [mixerToggle])
+            builder.setChildren(menuBar, [file, edit, track, view])
+            builder.setRole(mixer, kAXGroupRole as String)
+            builder.setAttribute(mixer, kAXIdentifierAttribute as String, "Mixer")
+            builder.setChildren(mixer, [])
+        }
 
         let ax = builder.makeAXRuntime(
             appElement: app,
+            attributeValueHandler: { _, attribute in
+                if attribute == kAXHelpAttribute as String { probe.recordHelpRead() }
+                return nil
+            },
             attributeValueResultHandler: { element, attribute in
+                if attribute == kAXHelpAttribute as String { probe.recordHelpRead() }
                 if let windowsReadStatus,
                    builder.elementID(element) == builder.elementID(app),
                    attribute == (kAXWindowsAttribute as String) {
@@ -199,17 +249,41 @@ private struct TrackSortAXFixture: @unchecked Sendable {
             },
             setAttributeHandler: nil,
             performActionHandler: { element, action in
+                if includingMixerView, CFEqual(element, view) {
+                    if action == kAXPressAction as String {
+                        probe.viewEvents.append("open_view")
+                        builder.setAttribute(view, kAXSelectedAttribute as String, true)
+                        return true
+                    }
+                    if action == kAXCancelAction as String {
+                        probe.viewEvents.append("cancel_view")
+                        builder.setAttribute(view, kAXSelectedAttribute as String, false)
+                        return true
+                    }
+                }
+                if includingMixerView, CFEqual(element, mixerToggle), action == kAXPressAction as String {
+                    probe.mixerShowing.toggle()
+                    probe.viewEvents.append(probe.mixerShowing ? "show_mixer" : "hide_mixer")
+                    probe.actionOrder.append(probe.mixerShowing ? "show_mixer" : "hide_mixer")
+                    let children = builder.makeAXRuntime(appElement: app).children(arrange)
+                    builder.setChildren(arrange, children.filter { !CFEqual($0, mixer) } + (probe.mixerShowing ? [mixer] : []))
+                    builder.setAttribute(mixerToggle, kAXTitleAttribute as String, probe.mixerShowing ? "믹서 가리기" : "믹서 보기")
+                    builder.setAttribute(view, kAXSelectedAttribute as String, false)
+                    return true
+                }
                 guard action == kAXPressAction as String,
-                      builder.elementID(element) == builder.elementID(sortByName) else {
+                      [sortByName, sortByCreation].contains(where: { CFEqual($0, element) }) else {
                     return false
                 }
                 probe.recordPress()
+                probe.actionOrder.append(CFEqual(element, sortByCreation) ? "sort_inverse" : "sort_forward")
                 if let namesAfterPress {
-                    for (index, name) in namesAfterPress.enumerated() {
+                    let actualNames = CFEqual(element, sortByCreation) ? names : namesAfterPress
+                    for (index, name) in actualNames.enumerated() {
                         builder.setAttribute(headers[index], kAXTitleAttribute as String, name)
                     }
                 }
-                builder.setChildren(rail, orderAfterPress.map { headers[$0] })
+                builder.setChildren(rail, CFEqual(element, sortByCreation) ? headers : orderAfterPress.map { headers[$0] })
                 return pressReturnsSuccess
             }, executeAppleScript: { _ in Issue.record("AppleScript forbidden in the injected sort fixture"); return .error("forbidden") }
         )
@@ -236,6 +310,170 @@ private struct TrackSortAXFixture: @unchecked Sendable {
 
 @Suite("#448 verified track sort")
 struct Issue448TrackSortVerifiedTests {
+    @Test(arguments: [false, true])
+    func canonicalFlatNameSortUsesItsMeasuredLeafAndOwnedCreationDateInverse(cancelAfterSort: Bool) async throws {
+        try await canonicalSort(cancelAfterSort: cancelAfterSort)
+    }
+
+    @Test(arguments: ["forward", "cancel_sort", "cancel_view", "view_refuses", "foreign_project", "unowned_name"])
+    func canonicalFlatSortAndMixerFinalViewUseTheirOwnedSteps(mode: String) async throws {
+        try await canonicalSort(cancelAfterSort: mode == "cancel_sort", composedMode: mode)
+    }
+
+    private func canonicalSort(cancelAfterSort: Bool, composedMode: String? = nil) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                // Logic's physical header CFs can stay at their rail indexes
+                // while contents move. The existing unique-name tier must decide order.
+                let f = TrackSortAXFixture(orderAfterPress: [0, 1, 2], expectedReferenceOrder: [1, 0, 2],
+                    namesAfterPress: ["Bass", "Kick", "Piano"], includingMixerView: composedMode != nil)
+                let project = ProjectInfo(name: "SortFixture", filePath: "/tmp/SortFixture.logicx")
+                f.builder.setAttribute(f.arrangeWindow, kAXTitleAttribute as String, "SortFixture")
+                f.builder.setAttribute(f.arrangeWindow, kAXDocumentAttribute as String, "file:///tmp/SortFixture.logicx")
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.headerRail)
+                f.builder.setAttribute(f.app, kAXWindowsAttribute as String, [f.arrangeWindow])
+                for header in f.initialHeaders {
+                    f.builder.setAttribute(header, kAXHelpAttribute as String, "audio track")
+                }
+                let bar = f.builder.element(969_010), play = f.builder.element(969_011), record = f.builder.element(969_012)
+                f.builder.setRole(bar, kAXGroupRole as String)
+                f.builder.setAttribute(bar, kAXDescriptionAttribute as String, AXLocalePolicy.controlBarGroupLabel.canonical)
+                for (control, label) in [(play, AXLocalePolicy.transportPlayControl.canonical),
+                                         (record, AXLocalePolicy.transportRecordControl.canonical)] {
+                    f.builder.setRole(control, kAXCheckBoxRole as String)
+                    f.builder.setAttribute(control, kAXTitleAttribute as String, label)
+                    f.builder.setAttribute(control, kAXValueAttribute as String, 0)
+                    f.builder.setChildren(control, [])
+                }
+                f.builder.setChildren(bar, [play, record])
+                let scroll = f.builder.element(969_020), headerSplit = f.builder.element(969_021)
+                let split = f.builder.element(969_022), legendSplit = f.builder.element(969_023)
+                let legend = f.builder.element(969_024), showHidden = f.builder.element(969_025)
+                for (element, role) in [(scroll, kAXScrollAreaRole), (headerSplit, kAXSplitGroupRole),
+                    (split, kAXSplitGroupRole), (legendSplit, kAXSplitGroupRole), (legend, kAXGroupRole),
+                    (showHidden, kAXCheckBoxRole)] { f.builder.setRole(element, role as String) }
+                f.builder.setChildren(scroll, [f.headerRail]); f.builder.setChildren(headerSplit, [scroll])
+                f.builder.setChildren(split, [headerSplit, legendSplit]); f.builder.setChildren(legendSplit, [legend])
+                f.builder.setChildren(legend, [showHidden]); f.builder.setChildren(showHidden, [])
+                f.builder.setAttribute(showHidden, kAXDescriptionAttribute as String, AXLocalePolicy.trackHiddenViewControl.canonical)
+                f.builder.setAttribute(showHidden, kAXWindowAttribute as String, f.arrangeWindow)
+                f.builder.setAttribute(showHidden, kAXValueAttribute as String, 1)
+                f.builder.setChildren(f.arrangeWindow, [split, bar])
+                let transport = try #require(try AXLogicProElements.observedTransportActivity(
+                    in: f.arrangeWindow, runtime: f.runtime, checking: {}))
+                let cache = StateCache(), registry = TargetRegistry(), journal = SagaJournal(), router = ChannelRouter()
+                await cache.updateProject(project)
+                let legacy = try #require(AccessibilityChannel.defaultGetTrackStates(runtime: f.runtime))
+                #expect(legacy.allSatisfy { $0.type == .audio })
+                let tracks = try #require(AccessibilityChannel.readTrackStates(from: f.initialHeaders,
+                    in: f.arrangeWindow, runtime: f.runtime, readingTypeHelp: false, stoppingWhen: { false }).states)
+                #expect(tracks.allSatisfy { $0.type == .unknown })
+                for row in tracks { #expect(row.physicalBinding?.currentIndex() == row.id) }
+                await cache.updateTracks(tracks)
+                var population = SessionPopulationObservation.FreshPopulation(project: project, tracks: tracks,
+                    strips: nil, fileTrackCount: 3, beganAt: Date(), endedAt: Date(), stable: true)
+                population.hiddenTracksShown = true
+                population.populationEndSource = "ax_all_shown_single_page"
+                population.presentationObservation = .init(mixerVisible: false, isPlaying: false, isRecording: false, uiLocale: "ko-KR")
+                population.presentationBinding = .init(window: f.arrangeWindow, title: "SortFixture",
+                    document: "file:///tmp/SortFixture.logicx", mixer: nil, transport: transport, runtime: f.runtime, uiLocale: "ko-KR")
+                let boundary = await cache.captureBoundary(watching: SessionPopulationObservation.watchedSections)
+                let capture = await SessionPopulationObservation.capture(cache: cache, targetRegistry: registry,
+                    fileReader: .unavailable, accepted: .init(reading: .init(state: await cache.auditSnapshot(),
+                        fileTrackCount: 3, projectFileNotBound: false), boundary: boundary, population: population))
+                guard case .issued(let projectRef)? = capture.projectIssuance else {
+                    Issue.record("the actual captured project must issue a reference"); return
+                }
+                let order = try capture.issued!.byRow.map { try #require($0) }
+                let request = SessionPopulationObservation.Request(domains: [.tracks])
+                let report = SessionPopulationObservation.build(request: request, capture: capture)
+                #expect(report.tracks.coverage == .complete)
+                #expect(await cache.retainSessionReport(id: capture.captureID,
+                    json: String(decoding: try JSONEncoder().encode(report), as: UTF8.self),
+                    capturedEpoch: capture.projectEpoch, capturedPath: project.filePath, capture: capture, request: request))
+                var presentation: [String: Value] = ["sort": .object(["criterion": .string("track_name"),
+                    "expected_order": .array([order[1], order[0], order[2]].map { .string($0.rawValue) }),
+                    "inverse_criterion": .string("creation_date")])]
+                if composedMode != nil { presentation["mixer_visible"] = .bool(true) }
+                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(projectRef.rawValue), "targets": .array([]),
+                    "presentation": .object(presentation)]
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                    Issue.record("the supported flat sort policy must parse"); return
+                }
+                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: [], capture: capture, request: request, snapshotCurrent: true)
+                let executable = try #require(sharedJSONObject(plan.json)?["executable"] as? Bool)
+                #expect(executable)
+                #expect(await cache.retainRepairPlan(plan, snapshotID: capture.captureID))
+                let key = "canonical-flat-name-sort"
+                let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
+                    key: key, cache: cache, registry: registry, journal: journal))
+                await router.register(TrackSortStateBChannel(runtime: f.runtime))
+                let generation = await registry.currentTopologyGeneration
+                let helpReads = f.actionProbe.helpReadCount
+                let result = await SystemDispatcher.handle(command: "saga_execute", params: [:], router: router,
+                    cache: cache, targetRegistry: registry, dialogPresent: { false }, sagaJournal: journal,
+                    mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {
+                        if cancelAfterSort, f.actionProbe.pressCount == 1 {
+                            #expect(await journal.cancel(idempotencyKey: key) == .requested)
+                        }
+                        if composedMode == "cancel_view", f.actionProbe.mixerShowing {
+                            #expect(await journal.cancel(idempotencyKey: key) == .requested)
+                        }
+                        if composedMode == "foreign_project", f.actionProbe.pressCount == 1 {
+                            f.builder.setAttribute(f.arrangeWindow, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+                        }
+                        if composedMode == "unowned_name", f.actionProbe.pressCount == 1 {
+                            f.builder.setAttribute(f.initialHeaders[2], kAXTitleAttribute as String, "Human")
+                        }
+                        if composedMode == "view_refuses", f.actionProbe.pressCount == 1 {
+                            let menu = f.builder.element(448_003)
+                            f.builder.setChildren(menu, [f.builder.element(448_004), f.builder.element(448_005), f.builder.element(448_006)])
+                        }
+                    }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if ["foreign_project", "unowned_name"].contains(composedMode) {
+                    let verified = try #require(body["verified"] as? Bool)
+                    #expect(!verified)
+                    #expect(!f.actionProbe.mixerShowing)
+                    #expect(f.actionProbe.viewEvents.isEmpty)
+                    #expect(f.actionProbe.pressCount == 1)
+                    return
+                }
+                let compensates = cancelAfterSort || composedMode == "cancel_view" || composedMode == "view_refuses"
+                if composedMode == nil {
+                    #expect(f.actionProbe.helpReadCount == helpReads, "The public no-Help population footprint must not acquire focus-moving Help during approved sort")
+                }
+                #expect(body["saga_state"] as? String == (compensates ? "fullyCompensated" : "completed"))
+                #expect(f.actionProbe.pressCount == (compensates ? 2 : 1))
+                if composedMode != nil {
+                    #expect(f.actionProbe.mixerShowing == !compensates)
+                    #expect(f.actionProbe.viewEvents.filter { $0 != "open_view" && $0 != "cancel_view" }
+                        == (cancelAfterSort || composedMode == "view_refuses" ? [] : compensates ? ["show_mixer", "hide_mixer"] : ["show_mixer"]))
+                    #expect(f.actionProbe.actionOrder == (cancelAfterSort || composedMode == "view_refuses"
+                        ? ["sort_forward", "sort_inverse"] : compensates
+                        ? ["sort_forward", "show_mixer", "hide_mixer", "sort_inverse"] : ["sort_forward", "show_mixer"]))
+                }
+                let afterRows = try #require(AXLogicProElements.trackNames(runtime: f.runtime))
+                let after = afterRows.keys.sorted().compactMap { afterRows[$0] }
+                #expect(after == (compensates ? ["Kick", "Bass", "Piano"] : ["Bass", "Kick", "Piano"]))
+                #expect(await registry.currentTopologyGeneration == generation + (compensates ? 2 : 1))
+                #expect(await registry.resolve(order[0]) == nil, "Pre-sort references cannot authorize the inverse")
+                let params: [String: Value] = ["plan_id": .string(plan.id), "digest": .string(plan.digest),
+                    "confirmed": .bool(true), "idempotency_key": .string(key)]
+                let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                    poller: StatePoller(axChannel: AccessibilityChannel(), cache: cache, runtime: .init(hasVisibleWindow: { false })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal, mutationGate: LogicMutationGate(),
+                    projectFileReader: .unavailable)
+                let replay = await ApprovedSessionRepair.apply(request: try #require(.parse(params)), dependencies: dependencies)
+                let duplicate = try #require(sharedJSONObject(sharedToolText(replay))?["duplicate"] as? Bool)
+                #expect(duplicate)
+                #expect(f.actionProbe.pressCount == (compensates ? 2 : 1))
+            }
+        }
+    }
+
     @Test(arguments: ["e\u{0301}", "\u{00e9}"])
     func byteIdenticalNonASCIINameRetainsItsSortReference(name: String) throws {
         let fixture = TrackSortAXFixture(orderAfterPress: [1, 0, 2], names: [name, "Bass", "Piano"])

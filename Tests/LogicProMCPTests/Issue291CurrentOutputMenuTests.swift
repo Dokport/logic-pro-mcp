@@ -47,6 +47,43 @@ func currentOutputMenuReadsCheckedStereoAlias() {
     #expect(f.b.setCalls.isEmpty)
 }
 
+@Test("Send destinations use their complete Output/Mono/Stereo tree, never the current root echo",
+      arguments: ["stereo", "pair", "root_only", "duplicate_leaf", "duplicate_parent", "unread_mono"])
+func sendOutputChoiceUsesActualNestedStructure(fault: String) throws {
+    let f = CurrentOutputMenuFixture()
+    let stereo = f.item("Stereo Output"), pair = f.item("Output 3-4")
+    let monoMenu = f.menu([f.item("Output 1"), f.item("Output 2"), f.item("Output 3"), f.item("Output 4")])
+    let stereoMenu = f.menu([stereo, pair])
+    let outputMenu = f.menu([f.item("Mono", children: [monoMenu]), f.item("Stereo", children: [stereoMenu])])
+    if fault == "duplicate_leaf" { f.b.setChildren(stereoMenu, [stereo, pair, f.item("Output 3-4")]) }
+    if fault == "unread_mono" { f.b.removeAttribute(monoMenu, kAXRoleAttribute as String) }
+    let output = f.item("Output", children: [outputMenu])
+    var rows = [f.item("Output 3-4", mark: "✓"), f.item("Post Pan", mark: "✓")]
+    if fault != "root_only" { rows.append(output) }
+    if fault == "duplicate_parent" { rows.append(f.item("Output", children: [outputMenu])) }
+    let root = f.menu(rows)
+    let destination: OutputAssignment = fault == "stereo" ? .stereoOutput : .physical(3, 4)
+    let choice = AccessibilityChannel.sendMenuChoice(for: destination, in: root, runtime: f.runtime)
+    if fault == "stereo" || fault == "pair" {
+        guard case .item(let leaf, let path) = choice else {
+            Issue.record("Actual nested send output was not offered: \(choice.failureLabel)"); return
+        }
+        #expect(CFEqual(leaf, fault == "stereo" ? stereo : pair))
+        #expect(path == ["Output", "Stereo", fault == "stereo" ? "Stereo Output" : "Output 3-4"])
+        // The existing main-output selector remains deliberately flat.
+        #expect(AccessibilityChannel.outputMenuChoice(for: destination, in: root, runtime: f.runtime).failureLabel == "destination_not_offered")
+    } else {
+        switch fault {
+        case "root_only": #expect(choice.failureLabel == "submenu_not_offered")
+        case "duplicate_leaf": #expect(choice.failureLabel == "destination_title_repeated")
+        case "duplicate_parent": #expect(choice.failureLabel == "submenu_title_repeated")
+        default: #expect(choice.failureLabel == "menu_not_read")
+        }
+    }
+    #expect(f.b.actionCalls.isEmpty)
+    #expect(f.b.setCalls.isEmpty)
+}
+
 @Test("Conflicting checked routing choices are unknown, not first-match authority")
 func currentOutputMenuRefusesContradictoryChecks() {
     let f = CurrentOutputMenuFixture()

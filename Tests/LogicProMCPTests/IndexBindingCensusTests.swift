@@ -71,7 +71,7 @@ struct IndexBindingCensusTests {
         // This new bounded writer never supported an ordinal path. Catalog
         // metadata must describe its existing physical-only dispatcher contract;
         // no legacy operation is promoted or loses an index compatibility path.
-        let expected: Set<OperationID> = [.mixerSetInputBusVerified]
+        let expected: Set<OperationID> = [.mixerSetInputBusVerified, .mixerSetSendOutputVerified]
         #expect(OperationRegistry.refRequiredOperationIDs == expected)
         #expect(Self.ids { $0.indexBinding == .refRequired } == expected)
         let spec = try #require(OperationRegistry.specs.first { $0.id == .mixerSetInputBusVerified })
@@ -254,6 +254,7 @@ struct IndexBindingCensusTests {
         #expect(published["tracks.rename"] == "legacy_index_allowed")
         #expect(published["plugins.insert_verified"] == "corroborated")
         #expect(published["mixer.set_input_bus_verified"] == "ref_required")
+        #expect(published["mixer.set_send_output_verified"] == "ref_required")
         #expect(published["plugins.get_inventory"] == nil, "read-only op has no index binding")
         #expect(Set(published.values) == ["corroborated", "legacy_index_allowed", "ref_required"])
     }

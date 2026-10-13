@@ -73,6 +73,7 @@ struct OperationRegistryCoverageTests {
             .mixerSetPan,
             .mixerSetOutputVerified,
             .mixerSetInputBusVerified,
+            .mixerSetSendOutputVerified,
             .pluginsSetParamVerified,
             .pluginsSetEQBandVerified,
             .pluginsInsertVerified,
@@ -88,7 +89,7 @@ struct OperationRegistryCoverageTests {
             .tracksSetInstrument,
         ]
 
-        #expect(mutating.count == 96)   // #291 adds the physical-reference-only input bus replacement;
+        #expect(mutating.count == 97)   // #291 adds physical-reference-only input and occupied-send replacements;
                                         // #971 applies an approved Mixer view;
                                         // #448: sort_verified is a mutating structural verb;
                                         // #301 added plugins.set_eq_band_verified, which is

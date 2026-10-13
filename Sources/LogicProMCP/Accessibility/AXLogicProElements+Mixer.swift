@@ -69,7 +69,9 @@ struct AXMixerInputSlotBinding: @unchecked Sendable {
 extension AXLogicProElements {
     /// Ephemeral read-only control custody from the existing complete send census.
     /// Neither the displayed destination nor a knob level supplies endpoint identity.
-    struct AssignedSendMenuControl {
+    // Copied AX identity values contain no shared mutable Swift storage.
+    // Sendability does not replace current control custody or imply atomic AX state.
+    struct AssignedSendMenuControl: @unchecked Sendable {
         let ordinal: Int
         let group: AXUIElement
         let list: AXUIElement
@@ -83,6 +85,22 @@ extension AXLogicProElements {
                 && sourcePath.count == other.sourcePath.count
                 && zip(sourcePath, other.sourcePath).allSatisfy { CFEqual($0, $1) }
         }
+    }
+
+    /// Shares the existing census-owned assigned control with routing actions.
+    /// The ordinal is a census identity, never a physical screen slot or label.
+    static func assignedSendMenuControl(in strip: AXUIElement, ordinal: Int,
+        runtime: AXHelpers.Runtime = .production) -> AssignedSendMenuControl? {
+        guard ordinal >= 0 else { return nil }
+        var controls: [AssignedSendMenuControl] = []
+        guard let slots = sendSlotObservations(in: strip, runtime: runtime,
+            observingAssignedGroup: { controls.append($0) }), slots.indices.contains(ordinal),
+            slots[ordinal].ordinal == ordinal,
+            slots[ordinal].state == .occupiedUnknownDestination else { return nil }
+        let matches = controls.filter { $0.ordinal == ordinal }
+        guard matches.count == 1, let selected = matches.first,
+              controls.filter({ CFEqual($0.list, selected.list) }).count == 1 else { return nil }
+        return selected
     }
     // MARK: - Mixer
 

@@ -561,6 +561,25 @@ extension AccessibilityChannel {
         }
     }
 
+    /// Send output choices have an additional Mono/Stereo branch in Logic.
+    /// This remains observation only; callers must retain source/menu custody.
+    static func sendMenuChoice(for destination: OutputAssignment, in root: AXUIElement,
+        runtime: AXHelpers.Runtime) -> OutputMenuChoice {
+        if case .bus = destination { return outputMenuChoice(for: destination, in: root, runtime: runtime) }
+        guard destination != .noOutput else { return .notOffered(offered: []) }
+        guard let roots = titledMenuItems(of: root, runtime: runtime) else { return .menuUnread(path: []) }
+        let parent = submenu(titled: AXLocalePolicy.outputPopupOutputSubmenuTitle, among: roots, runtime: runtime)
+        guard case .found(let title, let menu) = parent else { return parent.choice }
+        guard let leaves = leafItems(under: menu, path: [title], depth: 0, runtime: runtime) else {
+            return .menuUnread(path: [title])
+        }
+        let matches = leaves.filter { OutputAssignment.observed(slotLabel: $0.title) == destination }
+        let offered = leaves.compactMap { OutputAssignment.observed(slotLabel: $0.title) }.filter {
+            if case .bus = $0 { return false }; return $0 != .noOutput
+        }.map(\.token)
+        return single(matches.map { ($0.element, $0.path) }, offered: offered)
+    }
+
     /// Reads the host's checked current-output echo and its matching checked routing leaf.
     /// AXSelected is menu focus, not the checkmark. Root panner marks are not routing choices;
     /// root/submenu aliases must agree, and each routing submenu is read completely.
@@ -569,6 +588,26 @@ extension AccessibilityChannel {
         in root: AXUIElement, runtime: AXHelpers.Runtime
     ) -> OutputAssignment? {
         currentRoutingMenuAssignment(in: root, runtime: runtime, inputBusOnly: false)
+    }
+
+    /// Complete raw non-routing root checkmarks, solely to detect collateral
+    /// changes during an occupied-send replacement. No label supplies routing authority.
+    static func sendMenuNonRoutingChecks(in root: AXUIElement, runtime: AXHelpers.Runtime) -> [String]? {
+        guard let roots = titledMenuItems(of: root, runtime: runtime) else { return nil }
+        var checked: [String] = []
+        for item in roots where !item.hasSubmenu {
+            if OutputAssignment.observed(slotLabel: item.title) != nil
+                || OutputAssignment.isBusMenuItemTitle(item.title, receiverArrow: "→") { continue }
+            let result: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(item.element,
+                "AXMenuItemMarkChar", runtime: runtime)
+            switch result {
+            case .success(nil), .success(""): break
+            case .success("✓"): checked.append(item.title)
+            case .failure(let error) where error.raw == -25212: break
+            default: return nil
+            }
+        }
+        return checked
     }
 
     /// Input bus echoes use the incoming arrow. Other input kinds stay unqualified.

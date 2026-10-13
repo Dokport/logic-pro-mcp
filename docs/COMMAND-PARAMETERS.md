@@ -68,6 +68,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `set_output_verified` | `destination`: object, `expected_current`: object, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `destination` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `set_pan` | `index`: integer, `pan`: number, `project_ref`, `target_ref`, `track`: integer, `value`: number | `index` or `track` or `target_ref`; `value` or `pan` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `set_plugin_param` | `insert`: integer, `param`: integer, `track`: integer, `value`: number | `track`; `insert`; `param`; `value` | closed | mutating | none | none | readback_required | never_automatic | default_install |
+| `set_send_output_verified` | `destination`: object, `expected_current`: object, `ordinal`: integer, `project_ref`, `replace_existing`: boolean, `target_ref`: string | `target_ref`; `ordinal`; `destination`; `expected_current`; `replace_existing` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `set_volume` | `index`: integer, `project_ref`, `target_ref`, `track`: integer, `value`: number, `volume`: number | `index` or `track` or `target_ref`; `value` or `volume` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 
 ## `logic_navigate`

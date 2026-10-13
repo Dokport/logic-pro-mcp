@@ -122,6 +122,21 @@ enum OutputAssignment: Equatable, Sendable {
     private static func classifiedMenuBusNumber(_ title: String, receiverArrow: Character) -> Int? {
         let head = title.split(separator: receiverArrow, maxSplits: 1, omittingEmptySubsequences: false)
             .first.map(String.init) ?? title
+        // Logic's Korean input menu echoes `Bus 1  (버스 1)` in both
+        // the checked root and its Bus leaf. This is incoming-menu syntax,
+        // not a display/receiver identity alias or an outgoing send grammar.
+        if receiverArrow == "←", head.contains("(") || head.contains(")") {
+            guard !title.contains("→"), title.filter({ $0 == "←" }).count <= 1,
+                  head.filter({ $0 == "(" }).count == 1, head.filter({ $0 == ")" }).count == 1 else { return nil }
+            let pieces = head.split(separator: "(", maxSplits: 1, omittingEmptySubsequences: false)
+            let tail = pieces[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard tail.hasSuffix(")") else { return nil }
+            let outer = RoutingGraphPublication.classifyOutputLabel(String(pieces[0]).trimmingCharacters(in: .whitespacesAndNewlines))
+            let inner = RoutingGraphPublication.classifyOutputLabel(String(tail.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines))
+            guard outer.0 == .bus, inner.0 == .bus, let number = outer.busNumber,
+                  inner.busNumber == number else { return nil }
+            return number
+        }
         let (classification, busNumber) = RoutingGraphPublication.classifyOutputLabel(
             head.trimmingCharacters(in: .whitespacesAndNewlines)
         )

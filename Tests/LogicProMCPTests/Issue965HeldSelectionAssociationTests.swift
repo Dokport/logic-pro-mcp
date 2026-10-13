@@ -998,6 +998,189 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test func occupiedSingleSendRenewsRetiredSourceThroughItsCapturedHeader() async throws {
+        try await assertOccupiedSingleSendRenewal()
+    }
+
+    @Test func occupiedExistingBusSendRenewsOnlyItsCapturedSingleSlot() async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true)
+    }
+
+    @Test(arguments: ["multiple_occupied", "footprint", "level", "bypass", "mode", "foreign_project",
+                      "foreign_focus", "unreadable", "missing_pair", "deciding_control", "deciding_level"])
+    func retiredSingleSendCannotAdoptAmbiguityOrNewerState(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(fault)
+    }
+
+    private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(), b = f.builder
+            let mixerOwner = b.element(1_965_2599)
+            b.setRole(mixerOwner, kAXGroupRole as String); b.setAttribute(mixerOwner, kAXDescriptionAttribute as String, "Mixer")
+            b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
+            let windowChildren = b.makeAXRuntime().children(f.window)
+            b.setChildren(mixerOwner, [f.mixer])
+            b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? mixerOwner : $0 })
+            let captureNow = ContinuousClock.now
+            let cache = StateCache(sessionCaptureNow: {
+                f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
+            }), registry = TargetRegistry()
+            let replacement = b.element(1_965_2600), root = b.element(1_965_2601)
+            let echo = b.element(1_965_2602), mode = b.element(1_965_2603)
+            let parent = b.element(1_965_2604), menu = b.element(1_965_2605)
+            let stereo = b.element(1_965_2606), destination = b.element(1_965_2607)
+            func send(_ base: Int) -> [AXUIElement] {
+                let anchor = b.element(base), group = b.element(base + 1), bypass = b.element(base + 2)
+                let list = b.element(base + 3), level = b.element(base + 4)
+                b.setButton(anchor, description: "send button", help: "Send slot. Route signal.", x: 0, y: 0, width: 1, height: 1)
+                b.setChildren(anchor, [])
+                b.setRole(group, kAXGroupRole as String)
+                b.setAttribute(group, kAXDescriptionAttribute as String, "not an endpoint identity")
+                b.setRole(bypass, kAXCheckBoxRole as String); b.setAttribute(bypass, kAXValueAttribute as String, 0)
+                b.setChildren(bypass, [])
+                b.setButton(list, description: "list", x: 0, y: 0, width: 1, height: 1)
+                b.setChildren(list, []); b.setActionNames(list, [kAXPressAction as String])
+                b.setChildren(group, [bypass, list])
+                b.setRole(level, kAXSliderRole as String)
+                b.setAttribute(level, kAXHelpAttribute as String, "Send Level knob. Set level.")
+                b.setAttribute(level, kAXValueAttribute as String, 0); b.setChildren(level, [])
+                return [anchor, group, level]
+            }
+            let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
+            let originalList = b.element(1_965_2623), renewedList = b.element(1_965_2643)
+            b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + originalSend)
+            b.setRole(replacement, kAXLayoutItemRole as String)
+            b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+            b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+            let name = b.element(1_965_2608)
+            b.setRole(name, kAXTextFieldRole as String); b.setAttribute(name, kAXDescriptionAttribute as String, "Name")
+            b.setAttribute(name, kAXValueAttribute as String, "Duplicate"); b.setChildren(name, [])
+            b.setChildren(replacement, [name] + renewedSend)
+            for container in [root, menu] { b.setRole(container, kAXMenuRole as String) }
+            for (item, title) in [(echo, "Stereo Output"), (mode, "Post Pan"), (parent, "Output"),
+                                  (stereo, "Stereo Output"), (destination, "Output 3-4")] {
+                b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
+                b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
+                b.setActionNames(item, [kAXPressAction as String])
+            }
+            for item in [echo, mode, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
+            b.setChildren(menu, [stereo, destination]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, mode, parent])
+            if existingBus {
+                let input = b.element(1_965_2680), busParent = b.element(1_965_2681), busMenu = b.element(1_965_2682)
+                b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
+                    x: 0, y: 0, width: 1, height: 1)
+                b.setChildren(input, [])
+                b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]) + [input])
+                b.setRole(busParent, kAXMenuItemRole as String); b.setAttribute(busParent, kAXTitleAttribute as String, "Bus")
+                b.setRole(busMenu, kAXMenuRole as String)
+                b.setAttribute(destination, kAXTitleAttribute as String, "Bus 1 → Existing")
+                b.setChildren(menu, [stereo]); b.setChildren(busMenu, [destination]); b.setChildren(busParent, [busMenu])
+                b.setChildren(root, [echo, mode, parent, busParent])
+            }
+            b.setActionNames(root, [kAXCancelAction as String])
+            f.routingAction = { element, action in
+                let source = f.routingReplacement ?? f.strips[1]
+                if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList) {
+                    b.setChildren(f.mixer, [f.strips[0], source, root]); return true
+                }
+                if action == kAXCancelAction as String, CFEqual(element, root) {
+                    b.setChildren(f.mixer, [f.strips[0], source]); return true
+                }
+                if action == kAXPressAction as String, CFEqual(element, destination) {
+                    f.routingDestinationPresses += 1; f.routingReplacement = replacement
+                    b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : "Output 3-4")
+                    b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                    if fault == "multiple_occupied" { b.setChildren(replacement, [name] + renewedSend + extraSend) }
+                    if fault == "footprint" { b.setChildren(replacement, [name] + renewedSend + [extraSend[0]]) }
+                    if fault == "level" { b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1) }
+                    if fault == "bypass" { b.setAttribute(b.element(1_965_2642), kAXValueAttribute as String, 1) }
+                    if fault == "mode" { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
+                    b.setChildren(f.mixer, [f.strips[0], replacement])
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                    if fault == "foreign_project" { b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
+                    if fault == "foreign_focus" { b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, name) }
+                    return true
+                }
+                Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
+            }
+            f.routingReadResult = { element, _ in
+                if fault == "unreadable", f.routingReplacement != nil, CFEqual(element, b.element(1_965_2644)) {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                guard f.routingReplacement != nil,
+                      (originalSend + [originalList, b.element(1_965_2622)]).contains(where: { CFEqual($0, element) })
+                else { return nil }
+                return .failure(.init(raw: AXError.invalidUIElement.rawValue))
+            }
+            let before = try await inspect(f, cache: cache, registry: registry)
+            let id = try #require(before["snapshot_id"] as? String)
+            let capture = try #require(await cache.retainedInspection(id: id)).capture
+            let row = try #require(capture.channelStrips.indices.first {
+                capture.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, f.strips[1]) } == true
+            })
+            let reference = try #require(capture.mixerReference(at: row))
+            let originalPair = try #require(capture.freshPopulation?.selectionAssociations.first {
+                CFEqual($0.strip.strip, f.strips[1])
+            })
+            #expect(CFEqual(originalPair.track.header, f.headers[0]))
+            let initialSelections = f.selections
+            if fault == "missing_pair" { f.expireRetainedCapture = true }
+            f.routingRead = { element, attribute in
+                guard f.routingReplacement != nil, f.selections.count == initialSelections.count + 2,
+                      CFEqual(element, renewedList), attribute == kAXDescriptionAttribute as String,
+                      b.makeAXRuntime().children(f.mixer).contains(where: { CFEqual($0, root) }),
+                      ["deciding_control", "deciding_level"].contains(fault ?? ""), !f.routingLateScopeInjected else { return }
+                f.routingLateScopeInjected = true
+                if fault == "deciding_level" { b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1) }
+                else {
+                    let decoy = b.element(1_965_2690)
+                    b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
+                    b.setChildren(decoy, []); b.setActionNames(decoy, [kAXPressAction as String])
+                    b.setChildren(b.element(1_965_2641), [b.element(1_965_2642), decoy])
+                }
+            }
+            let router = ChannelRouter(); await router.register(f.channel())
+            let gate = LogicMutationGate()
+            let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                poller: StatePoller(axChannel: f.channel(), cache: cache,
+                    runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate, liveTrackNames: { [:] })
+            let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))
+            let params: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
+                "destination": existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
+                    : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
+                "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
+            let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
+                commandParams: params, mutationGate: gate) {
+                await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
+            }
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(f.routingDestinationPresses == 1, "The actual one-leaf retirement boundary must be reached")
+            let originalRole: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                f.strips[1], kAXRoleAttribute as String, runtime: f.logic().ax)
+            if case .failure(let error) = originalRole { #expect(error.raw == AXError.invalidUIElement.rawValue) }
+            else { Issue.record("The original source must actually be retired") }
+            if let fault {
+                #expect(body["state"] as? String == "B", "Actual uncertain retired-send response: \(sharedToolText(result))")
+                let verified = try #require(body["verified"] as? Bool)
+                #expect(!verified)
+                #expect(body["after"] == nil)
+                #expect(f.routingDestinationPresses == 1, "No guessed retry or inverse after a lost correspondence")
+                if fault.hasPrefix("deciding_") { #expect(f.routingLateScopeInjected, "The actual deciding control read must reach the fault") }
+                #expect(!gate.isHeldByEntitledHolder())
+                return
+            }
+            #expect(body["state"] as? String == "A", "Actual retired-send response: \(sharedToolText(result))")
+            let verified = try #require(body["verified"] as? Bool)
+            #expect(verified)
+            let reread = try #require(body["reference_reread_required"] as? Bool)
+            #expect(reread)
+            #expect(Array(f.selections.dropFirst(initialSelections.count)) == [1, 0])
+            #expect(body["after"] as? [String: Any] != nil)
+            #expect(!gate.isHeldByEntitledHolder())
+        }
+    }
+
     private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), registry = TargetRegistry()
