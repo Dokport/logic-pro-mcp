@@ -1,5 +1,6 @@
 @preconcurrency import ApplicationServices
 import Foundation
+import MCP
 import Testing
 @testable import LogicProMCP
 
@@ -66,6 +67,368 @@ struct Issue291AssignedSendMenuTests {
         return await AXMixerStripBinding.$current.withValue(binding) {
             await AccessibilityChannel.getAssignedSendVerified(ordinal:ordinal,runtime:f.logic,timing:.immediate)
         }
+    }
+    private final class SendWriterProbe: @unchecked Sendable {
+        let p: Prepared
+        let stereo: AXUIElement
+        let pair: AXUIElement
+        let mode: AXUIElement
+        var current = "Stereo Output"
+        var open = false
+        var pressed: [String] = []
+        var cancels = 0
+        var closeWindowReads = 0
+        var foregroundLost = false
+        var fault: String?
+        init(_ p: Prepared) {
+            self.p = p
+            let b = p.f.b
+            stereo = b.element(291_970); pair = b.element(291_971)
+            mode = b.element(291_972)
+            let output = b.element(291_973), outputs = b.element(291_974)
+            let stereoParent = b.element(291_975), stereoMenu = b.element(291_976)
+            for (e, title) in [(stereo,"Stereo Output"),(pair,"Output 3-4"),(mode,"Post Pan"),
+                               (output,"Output"),(stereoParent,"Stereo")] {
+                b.setRole(e,kAXMenuItemRole as String); b.setAttribute(e,kAXTitleAttribute as String,title)
+                b.setAttribute(e,kAXEnabledAttribute as String,true); b.setChildren(e,[])
+                b.setActionNames(e,[kAXPressAction as String])
+            }
+            b.setRole(outputs,kAXMenuRole as String); b.setRole(stereoMenu,kAXMenuRole as String)
+            b.setChildren(stereoMenu,[stereo,pair]); b.setChildren(stereoParent,[stereoMenu])
+            b.setChildren(outputs,[stereoParent]); b.setChildren(output,[outputs])
+            b.setChildren(p.f.root,[p.checkedEcho,mode,output])
+            b.setAttribute(p.f.app,kAXFrontmostAttribute as String,true)
+            refresh()
+        }
+        func refresh() {
+            let b = p.f.b
+            b.setAttribute(p.checkedEcho,kAXTitleAttribute as String,current)
+            b.setAttribute(p.checkedEcho,"AXMenuItemMarkChar","✓")
+            b.setAttribute(stereo,"AXMenuItemMarkChar",current == "Stereo Output" ? "✓" : "")
+            b.setAttribute(pair,"AXMenuItemMarkChar",current == "Output 3-4" ? "✓" : "")
+            b.setAttribute(mode,"AXMenuItemMarkChar","✓")
+        }
+        func action(_ node: AXUIElement, _ action: String) -> Bool {
+            let f = p.f
+            if action == kAXCancelAction as String, CFEqual(node,f.root), open {
+                cancels += 1
+                open = false; f.b.setChildren(f.mixer,f.strips)
+                if fault == "cancel_source_retired" { f.b.setChildren(f.mixer, [f.strips[1]]) }
+                if fault == "cancel_level" { f.b.setAttribute(p.knob, kAXValueAttribute as String, 1) }
+                if fault == "cancel_project" { f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///wrong.logicx") }
+                return fault != "cancel_failed_ack"
+            }
+            if action == kAXPressAction as String, CFEqual(node,f.outputs[0]) {
+                open = true; refresh(); f.b.setChildren(f.mixer,f.strips + [f.root]); return true
+            }
+            if action == kAXPressAction as String, open, CFEqual(node,pair) || CFEqual(node,stereo) {
+                let next = CFEqual(node,pair) ? "Output 3-4" : "Stereo Output"
+                pressed.append(next)
+                if fault != "no_effect" { current = next }
+                if fault == "destination_label" {
+                    f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, next)
+                }
+                if fault == "unreadable_label" {
+                    f.b.removeAttribute(f.outputs[0], kAXDescriptionAttribute as String)
+                }
+                if fault == "control_retired" { f.b.setChildren(f.strips[0], [p.anchor, p.knob]) }
+                if fault == "level" { f.b.setAttribute(p.knob,kAXValueAttribute as String,1) }
+                if fault == "mode" { f.b.setAttribute(mode,kAXTitleAttribute as String,"Pre Fader") }
+                if fault == "post_open_foreground" {
+                    foregroundLost = true; refresh(); return true
+                }
+                if fault == "source_retired" { f.b.setChildren(f.mixer,[f.strips[1]]) }
+                else { f.b.setChildren(f.mixer,f.strips) }
+                open = false; refresh(); return true
+            }
+            Issue.record("Unexpected send action \(action)"); return false
+        }
+        var runtime: AXLogicProElements.Runtime {
+            let f = p.f, base = f.logic
+            let ax = f.b.makeAXRuntime(appElement:f.app,
+                attributeValueResultHandler: { [self] node, _ in
+                    guard fault == "strip_invalid", !pressed.isEmpty, CFEqual(node, f.strips[0]) else { return nil }
+                    return .failure(.init(raw: -25202))
+                },
+                childrenResultHandler: { [self] node in
+                    guard fault == "strip_invalid", !pressed.isEmpty, CFEqual(node, f.strips[0]) else { return nil }
+                    return .failure(.init(raw: -25202))
+                },
+                actionNamesHandler: { [self] node in
+                    guard CFEqual(node,pair) else { return nil }
+                    switch fault {
+                    case "late_wrong_project": f.b.setAttribute(f.window,kAXDocumentAttribute as String,"file:///wrong.logicx")
+                    case "late_label": f.b.setAttribute(f.outputs[0],kAXDescriptionAttribute as String,"changed before press")
+                    case "late_foreground": foregroundLost = true
+                    case "late_background": f.b.setAttribute(f.app,kAXFrontmostAttribute as String,false)
+                    case "late_foreign_editor":
+                        let editor = f.b.element(291_978)
+                        f.b.setRole(editor,kAXTextFieldRole as String); f.b.setChildren(editor,[])
+                        f.b.setChildren(f.window,AXHelpers.getChildren(f.window,runtime:base.ax) + [editor])
+                        f.b.setAttribute(f.app,kAXFocusedUIElementAttribute as String,editor)
+                    default: return nil
+                    }
+                    return [kAXPressAction as String]
+                },
+                setAttributeHandler: { _,_,_ in Issue.record("Send parameter setter forbidden"); return false },
+                performActionHandler: { [self] in action($0,$1) },
+                performActionResultHandler: { [self] in action($0,$1) ? .success(()) : .failure(.init(raw:-25204)) })
+            return .init(logicProPID:base.logicProPID,ax:ax,
+                executeAppleScript: { _ in Issue.record("AppleScript forbidden"); return .error("forbidden") },
+                onScreenWindowList: { [self] in
+                    var visible = open
+                    if cancels > 0, fault?.hasPrefix("cancel_cg_") == true {
+                        closeWindowReads += 1
+                        if fault == "cancel_cg_unreadable" { return nil }
+                        visible = fault == "cancel_cg_persistent" || closeWindowReads == 1
+                        if fault == "cancel_cg_project", closeWindowReads == 2 {
+                            f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///wrong.logicx")
+                        }
+                    }
+                    return visible ? [[kCGWindowOwnerPID as String:f.pid,
+                        kCGWindowNumber as String:291_979,
+                        kCGWindowLayer as String:LogicOnScreenWindows.popupMenuLevel]] : []
+                },
+                postPopupMenuEscape: { Issue.record("Escape forbidden") },
+                focusedApplicationPID: { [self] in foregroundLost ? f.pid + 1 : base.focusedApplicationPID() },
+                observeFrontmost:base.observeFrontmost)
+        }
+        func write(destination: String = "physical:3-4", expected: String = "stereo_output",
+                   replacement: Bool = true, ordinal: Int = 1,
+                   timing: AccessibilityChannel.OutputAssignmentTiming = .immediate) async -> ChannelResult {
+            let f = p.f, gate = LogicMutationGate()
+            guard let claim = gate.tryAcquire(operation:"logic_mixer.set_send_output_verified") else { return .error("gate") }
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired:true,ownsGate: { gate.stillOwns(claim) })
+            return await OperationTraceContext.$current.withValue(context) {
+                await AXMixerStripBinding.$current.withValue(.init(window:f.window,mixer:f.mixer,
+                    strip:f.strips[0],document:f.bundle.absoluteString)) {
+                    await AccessibilityChannel.setAssignedSendOutputVerified(params:["destination":destination,
+                        "expected_current":expected,"replace_existing":replacement ? "true" : "false",
+                        "send_ordinal":String(ordinal)],runtime:runtime,timing:timing)
+                }
+            }
+        }
+    }
+    @Test("A matching send waits for observed asynchronous popup closure without another action",
+          arguments: ["cancel_cg_delayed", "cancel_cg_persistent", "cancel_cg_unreadable", "cancel_cg_project"])
+    func occupiedSendNoOpWaitsForPopupClosure(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = fault
+        let result = try #require(sharedJSONObject(await probe.write(destination: "stereo_output",
+            timing: .init(popupOpenTimeoutMs: 0, popupCloseTimeoutMs: 30, readbackTimeoutMs: 0, pollIntervalMs: 1)).message))
+        #expect(result["state"] as? String == (fault == "cancel_cg_delayed" ? "A" : "C"), "\(result)")
+        let attempted = try #require(result["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(probe.pressed.isEmpty)
+        #expect(probe.cancels == 1)
+        if fault == "cancel_cg_delayed" {
+            #expect(probe.closeWindowReads >= 2)
+            #expect(result["popup_menu_state"] as? String == "closed")
+        } else {
+            #expect(result["after"] == nil)
+        }
+    }
+    @Test("An already-matching checked send closes its popup without reapplying the destination",
+          arguments: ["source_retired", "cancel_failed_ack"])
+    func occupiedSendAlreadyMatchingDoesNotWrite(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        // A redundant destination press can retire the native source. A no-op
+        // must use checked evidence without entering that mutation boundary.
+        probe.fault = fault
+        let before = AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax)
+        let result = try #require(sharedJSONObject(await probe.write(destination: "stereo_output").message))
+        #expect(result["state"] as? String == "A", "\(result)")
+        let attempted = try #require(result["write_attempted"] as? Bool)
+        let changed = try #require(result["changed"] as? Bool)
+        #expect(!attempted)
+        #expect(!changed)
+        #expect(probe.pressed.isEmpty)
+        #expect(probe.cancels == 1)
+        #expect(!probe.open)
+        #expect(result["popup_menu_state"] as? String == "closed")
+        #expect(AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax) == before)
+    }
+
+    @Test("A matching send does not publish verified state after cleanup loses source or protected state",
+          arguments: ["cancel_source_retired", "cancel_level", "cancel_project"])
+    func occupiedSendNoOpStillRequiresCleanupCustody(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = fault
+        let result = try #require(sharedJSONObject(await probe.write(destination: "stereo_output").message))
+        #expect(result["state"] as? String == "C", "\(result)")
+        let attempted = try #require(result["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(probe.pressed.isEmpty)
+        #expect(probe.cancels == 1)
+        #expect(!probe.open)
+        #expect(result["after"] == nil)
+    }
+
+    @Test("Occupied-send output replacement and explicit inverse retain level, bypass, mode and exact slot",
+        arguments: ["fixed_label", "destination_label", "missing_identifiers"])
+    func occupiedSendOutputRoundtrip(label: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = label
+        for (element, identifier) in [(p.f.strips[0], "original-source"), (p.group, "occupied-group"),
+                                       (p.f.outputs[0], "occupied-list"), (p.bypass, "occupied-bypass")] {
+            if label != "missing_identifiers" {
+                p.f.b.setAttribute(element, kAXIdentifierAttribute as String, identifier)
+            }
+        }
+        let before = AXLogicProElements.sendSlotObservations(in:p.f.strips[0],runtime:probe.runtime.ax)
+        let forward = try #require(sharedJSONObject(await probe.write().message))
+        #expect(forward["state"] as? String == "A", "\(forward)")
+        if label == "missing_identifiers" {
+            let identifiers = try #require(forward["pre_press_source_identifiers"] as? [String: Any])
+            #expect(identifiers.count == 4 && identifiers.values.allSatisfy { $0 is NSNull })
+        } else {
+            #expect(forward["pre_press_source_identifiers"] as? [String: String] == [
+                "strip": "original-source", "send_group": "occupied-group",
+                "send_list": "occupied-list", "send_bypass": "occupied-bypass"])
+            #expect(forward["pre_press_identifier_read_status"] as? [String: Int] == [
+                "strip": 0, "send_group": 0, "send_list": 0, "send_bypass": 0])
+        }
+        let identity = try #require(forward["post_press_control_identity"] as? [String: Bool])
+        #expect(identity == ["observed": true, "ordinal": true, "group": true,
+            "list": true, "bypass": true, "parent_proxy": true, "source_path": true])
+        #expect(probe.pressed == ["Output 3-4"])
+        #expect(probe.current == "Output 3-4")
+        let inverse = try #require(sharedJSONObject(await probe.write(destination:"stereo_output",expected:"physical:3-4").message))
+        #expect(inverse["state"] as? String == "A", "\(inverse)")
+        #expect(probe.pressed == ["Output 3-4","Stereo Output"])
+        #expect(AXLogicProElements.sendSlotObservations(in:p.f.strips[0],runtime:probe.runtime.ax) == before)
+        #expect(!probe.open)
+    }
+    @Test("Occupied-send refusals never press a destination",
+        arguments:["stale", "empty", "replacement", "bus", "late_wrong_project", "late_label"])
+    func occupiedSendOutputRefusals(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = fault
+        let body = try #require(sharedJSONObject(await probe.write(destination:fault == "bus" ? "bus:1" : "physical:3-4",
+            expected:fault == "stale" ? "physical:3-4" : "stereo_output",
+            replacement:fault != "replacement",ordinal:fault == "empty" ? 0 : 1).message))
+        #expect(body["state"] as? String == "C", "\(body)")
+        #expect(probe.pressed.isEmpty)
+        if fault == "late_label" { #expect(probe.cancels == 0) }
+    }
+    @Test("Post-press effect, protected-state and original-source loss remain uncertain; no guessed inverse",
+        arguments:["no_effect", "level", "mode", "source_retired", "control_retired", "strip_invalid", "unreadable_label"])
+    func occupiedSendOutputPostPressUncertainty(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = fault
+        let body = try #require(sharedJSONObject(await probe.write().message))
+        #expect(body["state"] as? String == "B", "\(body)")
+        let writeAttempted = try #require(body["write_attempted"] as? Bool)
+        #expect(writeAttempted)
+        #expect(probe.pressed == ["Output 3-4"])
+        if fault == "control_retired" {
+            let identity = try #require(body["post_press_control_identity"] as? [String: Bool])
+            #expect(identity == ["observed": false])
+        }
+        if fault == "strip_invalid" {
+            let statuses = try #require(body["post_press_source_read_status"] as? [String: Int])
+            #expect(statuses["strip_role"] == -25202)
+            #expect(statuses["strip_children"] == -25202)
+        }
+    }
+    @Test("Revoked writer focus/foreground permits neither destination nor popup inverse",
+        arguments:["late_foreground", "late_background", "late_foreign_editor", "post_open_foreground"])
+    func occupiedSendCleanupCannotUseReaderOnlyCustody(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = fault
+        let body = try #require(sharedJSONObject(await probe.write().message))
+        #expect(body["state"] as? String == (fault == "post_open_foreground" ? "B" : "C"))
+        #expect(probe.pressed == (fault == "post_open_foreground" ? ["Output 3-4"] : []))
+        #expect(probe.cancels == 0)
+        #expect(probe.open)
+    }
+    @Test("Registered occupied-send writer uses only a physical reference and the real mutation gate")
+    func registeredOccupiedSendOutputWriter() async throws {
+        let command = "set_send_output_verified"
+        let spec = try #require(OperationRegistry.spec(tool:"logic_mixer",command:command))
+        #expect(spec.mutability == .mutating)
+        #expect(spec.indexBinding == .refRequired)
+        #expect(spec.allowedParams == Set(["target_ref","project_ref","ordinal","destination","expected_current","replace_existing"]))
+        let handler = try #require(OperationHandlerRegistry.handler(tool:"logic_mixer",command:command))
+        let p = try prepare(), probe = SendWriterProbe(p)
+        let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter()
+        let channel = p.f.channel(logicOverride:probe.runtime)
+        await router.register(channel)
+        let poller = StatePoller(axChannel:channel,cache:cache,
+            runtime:.init(hasVisibleWindow: { true },dialogPresent: { false },blockingDialogInfo: { nil },
+                projectFileReader:.unavailable,keyboardFocus: { .notTextEditing }))
+        #expect(await poller.refreshNow())
+        let resource = try await ResourceHandlers.read(uri:"logic://mixer",cache:cache,router:router,
+            targetRegistry:registry,fileReader:.unavailable)
+        let rows = try #require(sharedJSONObject(sharedResourceText(resource))?["strips"] as? [[String:Any]])
+        var matching: [String] = []
+        for reference in rows.compactMap({ $0["mixer_strip_ref"] as? String }) {
+            if let physical = await registry.resolve(.init(rawValue:reference))?.physicalMixerStrip,
+               CFEqual(physical.strip,p.f.strips[0]) { matching.append(reference) }
+        }
+        #expect(matching.count == 1)
+        let reference = try #require(matching.first)
+        let dependencies = HandlerDependencies(router:router,cache:cache,targetRegistry:registry,poller:poller,
+            dialogPresent: { false },supportBundleExporter:nil,mutationGate:LogicMutationGate(),
+            liveTrackNames: { [0:"A",1:"B"] },projectFileReader:.unavailable)
+        let params: [String:Value] = ["target_ref":.string(reference),"ordinal":.int(1),
+            "destination":.object(["kind":.string("physical"),"ports":.array([.int(3),.int(4)])]),
+            "expected_current":.object(["kind":.string("stereo_output")]),"replace_existing":.bool(true)]
+        func call(_ inputs: [String:Value]) async -> CallTool.Result {
+            await LogicProServer.runWithDeadline(tool:"logic_mixer",command:command,
+                commandParams:inputs,mutationGate:dependencies.mutationGate) {
+                await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies,inputs) }
+            }
+        }
+        for extra in ["track","index","value","bypassed"] {
+            var invalid = params; invalid[extra] = .int(0)
+            let body = try #require(sharedJSONObject(sharedToolText(await call(invalid))))
+            #expect(body["state"] as? String == "C")
+            #expect(probe.pressed.isEmpty)
+        }
+        for invalidReference in ["mix_unissued","trk_unissued"] {
+            var invalid = params; invalid["target_ref"] = .string(invalidReference)
+            let body = try #require(sharedJSONObject(sharedToolText(await call(invalid))))
+            #expect(body["state"] as? String == "C")
+            #expect(probe.pressed.isEmpty)
+        }
+        var wrongProject = params; wrongProject["project_ref"] = .string("prj_unissued")
+        #expect(sharedJSONObject(sharedToolText(await call(wrongProject)))?["state"] as? String == "C")
+        #expect(probe.pressed.isEmpty)
+        let forward = try #require(sharedJSONObject(sharedToolText(await call(params))))
+        #expect(forward["state"] as? String == "A", "\(forward)")
+        #expect(probe.pressed == ["Output 3-4"])
+        var inverse = params
+        inverse["destination"] = params["expected_current"]
+        inverse["expected_current"] = params["destination"]
+        let restored = try #require(sharedJSONObject(sharedToolText(await call(inverse))))
+        #expect(restored["state"] as? String == "A", "\(restored)")
+        #expect(probe.pressed == ["Output 3-4","Stereo Output"])
+        #expect(!probe.open)
+        #expect(dependencies.mutationGate?.currentOperation() == nil)
+    }
+    @Test("Routing actions reuse the exact occupied census control, never an empty anchor or a lookalike",
+          arguments: ["held", "negative", "empty", "missing_list", "duplicate_list", "foreign_parent"])
+    func sharedAssignedSendControlRequiresOriginalCensus(fault: String) throws {
+        let p = try prepare(), f = p.f
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        switch fault {
+        case "missing_list": f.b.setChildren(p.group, [p.bypass])
+        case "duplicate_list": f.b.setChildren(p.group, [p.bypass, f.outputs[0], f.outputs[0]])
+        case "foreign_parent": f.b.setAttribute(p.group, kAXParentAttribute as String, f.strips[1])
+        default: break
+        }
+        let control = AXLogicProElements.assignedSendMenuControl(in: f.strips[0],
+            ordinal: fault == "negative" ? -1 : (fault == "empty" ? 0 : 1), runtime: f.logic.ax)
+        if fault == "held" {
+            let held = try #require(control)
+            #expect(held.ordinal == 1)
+            #expect(CFEqual(held.group, p.group))
+            #expect(CFEqual(held.list, f.outputs[0]))
+            #expect(CFEqual(held.bypass, p.bypass))
+        } else { #expect(control == nil) }
+        #expect(f.mutations.isEmpty)
     }
     @Test("Routing/association population reads inserts only when the strip footprint is requested",
           arguments: [SessionPopulationObservation.Domain.routing, .associations], [false, true])
