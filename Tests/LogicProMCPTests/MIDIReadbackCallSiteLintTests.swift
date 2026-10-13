@@ -57,6 +57,47 @@ import Testing
         return counter.count
     }
 
+    private static func scan(
+        _ source: String,
+        parse: (String) -> SourceFileSyntax = { Parser.parse(source: $0) }
+    ) -> (proofMints: Int, assessmentReferences: Int, probeReferences: Int) {
+        let tree = parse(source)
+        let counter = CompleteProofMintCounter(viewMode: .sourceAccurate)
+        counter.walk(tree)
+        var assessmentReferences = 0
+        var probeReferences = 0
+        for token in tree.tokens(viewMode: .sourceAccurate) {
+            if isIdentifierRef(token, "assessReadback") { assessmentReferences += 1 }
+            if isIdentifierRef(token, "observeNoteTable") { probeReferences += 1 }
+        }
+        return (counter.count, assessmentReferences, probeReferences)
+    }
+
+    @Test func combinedScanParsesOnceAndRetainsSyntaxBoundaries() {
+        let source = ##"""
+        // assessReadback observeNoteTable CompleteProof()
+        /* /* nested */ assessReadback observeNoteTable */
+        let text = "assessReadback observeNoteTable CompleteProof()"
+        let raw = #"assessReadback observeNoteTable CompleteProof()"#
+        let assessment = `assessReadback`
+        let probe = observeNoteTable
+        let interpolation = "\(assessReadback(evidence)) \(observeNoteTable())"
+        let rawInterpolation = #"\#(assessReadback(evidence)) \#(observeNoteTable())"#
+        let proof = CompleteProof(contentBinding: binding)
+        let contextual = .complete(.init(contentBinding: binding))
+        let unrelated = .init(other: binding)
+        """##
+        var parserCalls = 0
+        let result = Self.scan(source) { text in
+            parserCalls += 1
+            return Parser.parse(source: text)
+        }
+        #expect(parserCalls == 1)
+        #expect(result.assessmentReferences == 3)
+        #expect(result.probeReferences == 3)
+        #expect(result.proofMints == 2)
+    }
+
     @Test func onlyEventListProviderMayAssessReadbackAndProofMintIsExact() throws {
         let thisFile = URL(fileURLWithPath: #filePath)
         let repoRoot = thisFile
@@ -92,19 +133,20 @@ import Testing
                 continue
             }
             let isAssessment = url.standardizedFileURL.path == assessmentPath
-            let proofMints = Self.completeProofMintCount(text)
+            let scan = Self.scan(text)
+            let proofMints = scan.proofMints
             if isAssessment {
                 sawAssessmentFile = true
                 proofMintInAssessment = proofMints
                 continue
             }
-            let assessmentReferences = Self.identifierCount(text, "assessReadback")
+            let assessmentReferences = scan.assessmentReferences
             if url.lastPathComponent == Self.providerFile {
                 assessmentReferencesInProvider = assessmentReferences
             } else if assessmentReferences > 0 {
                 offenders.append("\(url.lastPathComponent): references assessReadback")
             }
-            let probeReferences = Self.identifierCount(text, "observeNoteTable")
+            let probeReferences = scan.probeReferences
             if url.lastPathComponent == Self.probeEntryFile {
                 probeReferencesInEntrypoint = probeReferences
             } else if probeReferences > 0, url.lastPathComponent != Self.collectorFile {

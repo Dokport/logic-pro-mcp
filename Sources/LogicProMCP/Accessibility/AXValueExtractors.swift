@@ -909,7 +909,7 @@ enum AXValueExtractors {
         return ("Untitled", false)
     }
 
-    private static func extractTrackButtonState(
+    static func extractTrackButtonState(
         from header: AXUIElement,
         prefix: String,
         runtime: AXHelpers.Runtime,
@@ -921,13 +921,16 @@ enum AXValueExtractors {
             "Input Monitoring": AXLocalePolicy.trackInputMonitoringButton,
         ]
         let labels = localizedKeywords[prefix]
+        var checkboxes: [AXUIElement] = []
+        func observeRole(_ element: AXUIElement, _ role: String?) {
+            observingExposure?.observeRole(element: element, role: role)
+            if role == kAXCheckBoxRole as String { checkboxes.append(element) }
+        }
         let controls = AXHelpers.findAllDescendants(of: header, role: kAXButtonRole, maxDepth: 4, runtime: runtime,
-            observingRole: { observingExposure?.observeRole(element: $0, role: $1) },
+            observingRole: observeRole,
             observingChildren: { observingExposure?.observeChildren(element: $0, children: $1) })
-            + AXHelpers.findAllDescendants(of: header, role: kAXCheckBoxRole, maxDepth: 4, runtime: runtime,
-                observingRole: { observingExposure?.observeRole(element: $0, role: $1) },
-                observingChildren: { observingExposure?.observeChildren(element: $0, children: $1) })
-        for control in controls {
+        // One fresh census for this field; retain the legacy Button-before-Checkbox choice.
+        for control in controls + checkboxes {
             let desc = (
                 AXHelpers.getDescription(control, runtime: runtime)
                     ?? AXHelpers.getTitle(control, runtime: runtime)

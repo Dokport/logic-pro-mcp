@@ -47,6 +47,7 @@ struct OperationCatalogTests {
         .pluginsGetInventory: ["index", "track"],
         .pluginsGetParamVerified: ["track"],
         .pluginsGetChannelEQStateVerified: ["track"],
+        .pluginsPlanParameterChanges: ["track"],
         .pluginsSetParamVerified: ["track"],
         .pluginsSetEQBandVerified: ["track"],
         .pluginsInsertVerified: ["track"],
@@ -55,6 +56,7 @@ struct OperationCatalogTests {
         .pluginsGetInventory: "AX inventory must expose the selected strip identity after ChannelRouter forwarding",
         .pluginsGetParamVerified: "AX parameter read must expose the occupied insert identity; track only corroborates its issued target_ref",
         .pluginsGetChannelEQStateVerified: "AX whole-EQ read must expose the occupied Channel EQ insert identity; track only corroborates its issued target_ref",
+        .pluginsPlanParameterChanges: "B1 reuses the occupied-insert AX B0 reader; track only corroborates its issued reference",
         .pluginsSetParamVerified: "AX apply-back must expose target_identity after verified preflight",
         .pluginsSetEQBandVerified: "AX named-band apply-back must expose target_identity after verified preflight",
         .pluginsInsertVerified: "AX insert readback must expose target_identity after verified preflight",
@@ -169,6 +171,7 @@ struct OperationCatalogTests {
         .pluginsGetInventory: ["track_index", "reveal_mixer"],
         .pluginsGetParamVerified: ["insert", "param", "plugin", "plugin_id", "plugin_name", "unit"],
         .pluginsGetChannelEQStateVerified: ["insert", "plugin", "plugin_id", "plugin_name", "project_expected_path"],
+        .pluginsPlanParameterChanges: ["changes", "insert", "plugin", "plugin_id", "plugin_name"],
         .pluginsSetParamVerified: [
             "insert", "mode", "param", "plugin", "plugin_id", "plugin_name",
             "project_expected_path", "unit", "value",

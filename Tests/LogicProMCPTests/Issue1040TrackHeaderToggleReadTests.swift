@@ -110,6 +110,90 @@ struct Issue1040TrackHeaderToggleReadTests {
             #expect(on ? read : !read, "\(toggle.rawValue) on=\(on)")
         }
     }
+
+    private final class TraversalReads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func record() { lock.withLock { count += 1 } }
+        var value: Int { lock.withLock { count } }
+    }
+
+    @Test(arguments: ["Mute", "Solo", "Input Monitoring"])
+    func oneToggleQueryTraversesOnceAndKeepsButtonPriority(_ prefix: String) throws {
+        let builder = FakeAXRuntimeBuilder()
+        let header = builder.element(1040_501)
+        let checkbox = builder.element(1040_502), button = builder.element(1040_503)
+        builder.setRole(checkbox, kAXCheckBoxRole as String)
+        builder.setRole(button, kAXButtonRole as String)
+        for control in [checkbox, button] {
+            builder.setAttribute(control, kAXDescriptionAttribute as String, prefix)
+            builder.setChildren(control, [])
+        }
+        builder.setAttribute(checkbox, kAXValueAttribute as String, 0)
+        builder.setAttribute(button, kAXValueAttribute as String, 1)
+        // A checkbox earlier in tree order must not displace the Button choice.
+        builder.setChildren(header, [checkbox, button])
+        let reads = TraversalReads()
+        let headerID = builder.elementID(header)
+        let runtime = builder.makeAXRuntime(childrenHandler: { element in
+            if builder.elementID(element) == headerID { reads.record() }
+            return nil
+        }, setAttributeHandler: nil, performActionHandler: nil)
+        let value = try #require(AXValueExtractors.extractTrackButtonState(
+            from: header, prefix: prefix, runtime: runtime))
+        #expect(value)
+        #expect(reads.value == 1)
+        #expect(builder.actionCalls.isEmpty && builder.setCalls.isEmpty)
+    }
+
+    @Test(arguments: ["role", "children", "value"])
+    func anotherToggleQueryDoesNotReuseEarlierControlEvidence(_ loss: String) throws {
+        let h = makeHeader(on: true)
+        let control = try #require(h.controls[.mute])
+        let runtime = h.builder.makeAXRuntime()
+        let initial = try #require(AXValueExtractors.extractTrackButtonState(
+            from: h.header, prefix: "Mute", runtime: runtime))
+        #expect(initial)
+        switch loss {
+        case "role": h.builder.setRole(control, kAXSliderRole as String)
+        case "children": h.builder.setChildren(h.header, [])
+        default: h.builder.removeAttribute(control, kAXValueAttribute as String)
+        }
+        #expect(isUnread(AXValueExtractors.extractTrackButtonState(
+            from: h.header, prefix: "Mute", runtime: runtime)))
+        #expect(h.builder.actionCalls.isEmpty && h.builder.setCalls.isEmpty)
+    }
+
+    @Test(arguments: ["role", "children"])
+    func toggleCensusRetainsSampledExposureLoss(_ loss: String) throws {
+        let h = makeHeader(on: true)
+        let disclosure = h.builder.element(1040_504)
+        h.builder.setRole(disclosure, kAXDisclosureTriangleRole as String)
+        h.builder.setAttribute(disclosure, kAXValueAttribute as String, 1)
+        h.builder.setChildren(disclosure, [])
+        let children = Toggle.allCases.compactMap { h.controls[$0] } + [disclosure]
+        h.builder.setChildren(h.header, children)
+        let logic = h.builder.makeLogicRuntime()
+        let exposure = AXTrackBinding.Exposure(header: h.header, disclosure: disclosure, runtime: logic)
+        let initial = try #require(AXValueExtractors.extractTrackButtonState(
+            from: h.header, prefix: "Mute", runtime: logic.ax, observingExposure: exposure))
+        #expect(initial)
+        #expect(!exposure.hasObservedLoss)
+        if loss == "role" {
+            h.builder.setRole(disclosure, kAXGroupRole as String)
+        } else {
+            h.builder.setChildren(h.header, Toggle.allCases.compactMap { h.controls[$0] })
+        }
+        _ = AXValueExtractors.extractTrackButtonState(
+            from: h.header, prefix: "Mute", runtime: logic.ax, observingExposure: exposure)
+        #expect(exposure.hasObservedLoss)
+        h.builder.setRole(disclosure, kAXDisclosureTriangleRole as String)
+        h.builder.setChildren(h.header, children)
+        _ = AXValueExtractors.extractTrackButtonState(
+            from: h.header, prefix: "Mute", runtime: logic.ax, observingExposure: exposure)
+        #expect(exposure.hasObservedLoss && exposure.hasEnded)
+        #expect(h.builder.actionCalls.isEmpty && h.builder.setCalls.isEmpty)
+    }
 }
 
 /// The project audit over `tracks`, with every other section read and fresh, so a finding comes from

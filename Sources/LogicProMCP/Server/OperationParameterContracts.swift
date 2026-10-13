@@ -427,6 +427,14 @@ extension OperationRegistry {
                 "track": .enforced(.integer, .int(0)), "insert": .enforced(.integer, .int(0)),
                 "project_expected_path": .enforced(.string, .string("/tmp/lpm-301.logicx")),
             ], required: [["target_ref"]]),
+            "plugins.plan_parameter_changes": .init(params: [
+                "target_ref": .enforced(.string, .string("ins_lpm_contract_955")), "project_ref": projectRef,
+                "changes": .enforced(.array, .array([.object(["param": "threshold", "value": .int(38), "unit": "normalized"])])),
+                "plugin": .enforced(.string, .string("Compressor")),
+                "plugin_id": .enforced(.string, .string("logic.stock.effect.compressor")),
+                "plugin_name": .enforced(.string, .string("Compressor")),
+                "track": .enforced(.integer, .int(0)), "insert": .enforced(.integer, .int(6)),
+            ], required: [["target_ref"], ["changes"]]),
             "plugins.insert_verified": .init(params: pluginWriteRules(["insert", "slot", "plugin", "plugin_id", "plugin_name", "mode", "project_expected_path", "track"])
                 .merging([
                     "expected_name": .unconstrained("corroborates a bare track index, which is refused without it "
