@@ -253,7 +253,7 @@ struct OperationRegistryTests {
             let isMutating = LogicProServer.isMutatingCommand(tool: "logic_mixer", command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified"].contains(command) { #expect(!isMutating) }
             else { #expect(isMutating) }
-            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == 25)
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (command == "set_input_bus_verified" ? 90.0 : 25.0))
         }
         #expect(!LogicProServer.isMutatingCommand(tool: "logic_mixer", command: "play"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: "play") == 25)
@@ -265,7 +265,7 @@ struct OperationRegistryTests {
             let isMutating = LogicProServer.isMutatingCommand(tool: "logic_mixer", command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified"].contains(command) { #expect(!isMutating) }
             else { #expect(isMutating) }
-            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == 25)
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (command == "set_input_bus_verified" ? 90.0 : 25.0))
         }
         #expect(!LogicProServer.isMutatingCommand(tool: "logic_mixer", command: "play"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: "import_file") == 25)
