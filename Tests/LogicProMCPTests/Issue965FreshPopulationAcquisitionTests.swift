@@ -3702,11 +3702,30 @@ struct Issue965FreshPopulationAcquisitionTests {
                              "restore_geometry", "restore_visible", "before_menu_document", "before_leaf_document", "inverse_deciding_document",
                              "restore_selected_focus", "restore_focus_false", "restore_focus_ack_only",
                              "restore_focus_foreign", "restore_focus_unselected", "restore_focus_document",
-                             "restore_focus_selection_drift"])
+                             "restore_focus_selection_drift", "full_population_restore_focus",
+                             "full_population_foreign_focus", "full_population_document"])
     func registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: Int, fault: String) async throws {
         let fixture = hiddenViewFixture(shown: fault != "hidden_off")
         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/MixerPopulation.logicx")
         fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, true)
+        let fullPopulation = fault.hasPrefix("full_population_")
+        let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-mixer-selection-\(UUID().uuidString).logicx")
+        if fullPopulation {
+            try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
+            fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, bundle.absoluteString)
+        }
+        defer { if fullPopulation { try? FileManager.default.removeItem(at: bundle) } }
+        let otherHeader = fixture.builder.element(966_070)
+        if fullPopulation {
+            fixture.builder.setRole(otherHeader, kAXLayoutItemRole as String)
+            fixture.builder.setAttribute(otherHeader, kAXTitleAttribute as String, "Other track")
+            fixture.builder.setAttribute(otherHeader, kAXSelectedAttribute as String, false)
+            fixture.builder.setChildren(otherHeader, [])
+            fixture.builder.setChildren(fixture.rail, [fixture.header, otherHeader])
+            fixture.builder.setAttribute(fixture.rail, kAXSelectedChildrenAttribute as String, [fixture.header])
+            fixture.builder.setAttributeSettable(fixture.rail, kAXSelectedChildrenAttribute as String, true)
+            fixture.builder.setAttribute(fixture.app, kAXWindowsAttribute as String, [fixture.window])
+        }
         let owner = fixture.builder.element(966_000), mixer = fixture.builder.element(966_001)
         let toolbar = fixture.builder.element(966_002), filters = fixture.builder.element(966_003)
         let strips = (0..<4).map { fixture.builder.element(966_010 + $0) }
@@ -3807,8 +3826,10 @@ struct Issue965FreshPopulationAcquisitionTests {
         fixture.builder.setChildren(fixture.window, roots + [owner, transport])
         let selectionReads = Reads()
         let nativeRead = passiveMixerAttributeRead(strips[0])
-        let selectionReturnsFocus = fault == "restore_selected_focus" || fault.hasPrefix("restore_focus_")
-        let result = try await inspect(fixture: fixture, domains: ["tracks", "strips"], navigation: fault != "no_navigation",
+        let selectionReturnsFocus = fault == "restore_selected_focus" || fault.hasPrefix("restore_focus_") || fullPopulation
+        let result = try await inspect(fixture: fixture,
+            domains: fullPopulation ? ["tracks", "hierarchy", "strips", "associations"] : ["tracks", "strips"], navigation: fault != "no_navigation",
+            targetReferences: fullPopulation,
             keyboardFocus: { selectionReturnsFocus
                 ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing },
             observationAction: { element, action in
@@ -3832,6 +3853,18 @@ struct Issue965FreshPopulationAcquisitionTests {
                 }
                 return nil
             }, focusSetter: { element, attribute, value in
+                if fullPopulation, CFEqual(element, fixture.rail), attribute == kAXSelectedChildrenAttribute as String,
+                   CFGetTypeID(value) == CFArrayGetTypeID(),
+                   let selected = AXHelpers.decodeChildrenArray(value).first {
+                    fixture.events.record("association_select")
+                    let initial = CFEqual(selected, fixture.header)
+                    fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, initial)
+                    fixture.builder.setAttribute(otherHeader, kAXSelectedAttribute as String, !initial)
+                    fixture.builder.setAttribute(fixture.rail, attribute, value)
+                    fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, initial ? original : [strips[1]])
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initial ? strips[0] : strips[1])
+                    return true
+                }
                 if CFEqual(element, strips[0]), attribute == kAXFocusedAttribute as String {
                     fixture.events.record("restore_captured_focus")
                     if fault != "restore_focus_ack_only" {
@@ -3846,10 +3879,10 @@ struct Issue965FreshPopulationAcquisitionTests {
                 fixture.events.record("restore_mixer_selection")
                 if fault != "restore_ack_only" { fixture.builder.setAttribute(mixer, attribute, value) }
                 if selectionReturnsFocus {
-                    let returned = fault == "restore_focus_foreign" ? fixture.header
+                    let returned = ["restore_focus_foreign", "full_population_foreign_focus"].contains(fault) ? fixture.header
                         : fault == "restore_focus_unselected" ? strips[1] : original[0]
                     fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, returned)
-                    if fault == "restore_focus_document" {
+                    if ["restore_focus_document", "full_population_document"].contains(fault) {
                         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     }
                 }
@@ -3879,14 +3912,19 @@ struct Issue965FreshPopulationAcquisitionTests {
                 return nativeRead(element, attribute)
             })
         let body = try #require(sharedJSONObject(sharedToolText(result)))
-        let section = try #require(body["strips"] as? [String: Any])
+        let section: [String: Any]
+        if fullPopulation && (fault != "full_population_restore_focus" || originalCount != 1) {
+            #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
+            section = body["strips"] as? [String: Any] ?? [:]
+        } else { section = try #require(body["strips"] as? [String: Any]) }
         let completeExpected = ["healthy", "restore_selected_focus"].contains(fault)
+            || (fault == "full_population_restore_focus" && originalCount == 1)
             || (originalCount == strips.count && ["noop_selection", "restore_ack_only", "restore_focus_false",
                 "restore_focus_ack_only", "restore_focus_unselected", "restore_focus_selection_drift"].contains(fault))
         if completeExpected {
             #expect(section["coverage"] as? String == "complete")
             let focusInverse = fault == "restore_focus_unselected" || (selectionReturnsFocus && !CFEqual(original[0], strips[0]))
-            #expect(fixture.events.recorded == ["open_edit", "select_all", "restore_mixer_selection"]
+            #expect(fixture.events.recorded.filter { $0 != "association_select" } == ["open_edit", "select_all", "restore_mixer_selection"]
                 + (focusInverse ? ["restore_captured_focus"] : []))
             #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
             if originalCount == strips.count {
@@ -3897,6 +3935,15 @@ struct Issue965FreshPopulationAcquisitionTests {
         if fault == "before_menu_document" { #expect(!fixture.events.recorded.contains("open_edit")) }
         if fault == "before_leaf_document" { #expect(!fixture.events.recorded.contains("select_all")) }
         if fault == "inverse_deciding_document" { #expect(!fixture.events.recorded.contains("restore_mixer_selection")) }
+        if fullPopulation && originalCount == 1 {
+            #expect(fixture.events.recorded.filter { $0 == "association_select" }.count == 2)
+            #expect(fixture.events.recorded.contains("restore_mixer_selection"))
+            if fault == "full_population_restore_focus" {
+                #expect(fixture.events.recorded.contains("restore_captured_focus"))
+                let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+                #expect(rows.count == 2)
+            } else { #expect(!fixture.events.recorded.contains("restore_captured_focus")) }
+        }
         if ["restore_focus_foreign", "restore_focus_document"].contains(fault)
             || (fault == "restore_focus_unselected" && originalCount != strips.count) {
             #expect(!fixture.events.recorded.contains("restore_captured_focus"))
@@ -4166,6 +4213,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         domains: [String] = ["tracks", "strips"],
         scope: String = "whole_project",
         navigation: Bool = false,
+        targetReferences: Bool = false,
         stopBeforeRead: Bool? = nil,
         keyboardFocus: @escaping @Sendable () -> AccessibilityChannel.LogicKeyboardFocus = { .notTextEditing },
         fileReader: LogicProjectFileReader.Runtime = .unavailable,
@@ -4205,6 +4253,9 @@ struct Issue965FreshPopulationAcquisitionTests {
             mutationGate: gate
         ) {
             if cancelBeforeRead { withUnsafeCurrentTask { $0?.cancel() } }
+            if targetReferences {
+                return await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
+            }
             return await handler(dependencies, params)
         }
     }
