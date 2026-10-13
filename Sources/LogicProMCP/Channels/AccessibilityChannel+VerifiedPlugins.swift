@@ -975,7 +975,8 @@ extension AccessibilityChannel {
                       let currentActivity = try? AXLogicProElements.observedTransportActivity(in: window, runtime: runtime,
                         checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
                       CFEqual(currentActivity.controlBar, activity.controlBar), CFEqual(currentActivity.play, activity.play),
-                      CFEqual(currentActivity.record, activity.record), !currentActivity.isPlaying, !currentActivity.isRecording
+                      CFEqual(currentActivity.record, activity.record), !currentActivity.isPlaying, !currentActivity.isRecording,
+                      await stillOwned(stoppingWhen: stop)
                 else { return false }
                 return true
             }
