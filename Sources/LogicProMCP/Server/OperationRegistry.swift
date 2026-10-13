@@ -615,7 +615,8 @@ enum OperationRegistry {
             target: entry.3,
             verification: .readbackRequired,
             retry: .neverAutomatic,
-            deadline: .short,
+            // Checked input replacement includes source renewal and multiple owned popup acquisitions.
+            deadline: entry.0 == .mixerSetInputBusVerified ? .medium : .short,
             availability: .defaultInstall,
             allowedParams: allowedParams(
                 for: entry.0,
