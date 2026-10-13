@@ -1204,6 +1204,73 @@ struct Issue966ApprovedRoutingDiffTests {
         #expect(digest == calculated)
     }
 
+    @Test func verifiedNoOutputToExistingBusHasOneProposedAdditionAndCanonicalDigest() throws {
+        let before = graph(nodes: nodes(output: .noOutput),
+            edges: edges().filter { !($0.kind == .mainOutput && $0.source == "source_opaque") })
+        var body = try plan(before)
+        let delta = try proposal(body)
+        #expect(delta["status"]?.stringValue == "proposed")
+        #expect(delta["basis"]?.stringValue == "approved_policy")
+        #expect(delta["observation"]?.stringValue == "proposed_not_observed")
+        let changes = try #require(delta["output_changes"]?.arrayValue)
+        #expect(changes.count == 1)
+        let change = try #require(changes.first?.objectValue)
+        #expect(change["before"] == .null)
+        let desired = try decodeEdge(#require(change["after"]))
+        #expect(desired == RoutingEdge(kind: .mainOutput, source: "source_opaque",
+            destination: "destination_opaque", send: nil, provenance: .other))
+        for field in ["added_sends", "removed_sends", "changed_sends", "input_changes"] {
+            #expect(delta[field]?.arrayValue == [])
+        }
+        let proposedEdges = before.edges + [desired]
+        #expect(proposedEdges.filter { $0.kind == .mainOutput && $0.source == "source_opaque" } == [desired])
+        #expect(proposedEdges.filter { $0 != desired } == before.edges)
+        #expect(before.edges.filter { $0.kind == .inputAssignment }.count == 2)
+        #expect(body["steps"] == body["preview"])
+        #expect(body["digest"] == (try plan(graph(nodes: before.nodes.reversed(), edges: before.edges.reversed())))["digest"])
+        #expect(body["digest"] != (try plan(graph()))["digest"])
+        let step = try #require(body["steps"]?.arrayValue?.first?.objectValue)
+        #expect(step["target_ref"]?.stringValue == source.rawValue)
+        let blocked = try #require(step["blocked_reasons"]?.arrayValue)
+        #expect(blocked.contains(.string("exact_target_routing_adapter_unavailable")))
+        let executable = try #require(body["executable"]?.boolValue as Bool?)
+        #expect(!executable)
+        let digest = try #require(body.removeValue(forKey: "digest")?.stringValue)
+        body.removeValue(forKey: "plan_id")
+        let bytes = try encodeJSONStrict(Value.object(body), compact: true)
+        #expect(digest == SHA256.hash(data: Data(bytes.utf8)).map { String(format: "%02x", $0) }.joined())
+    }
+
+    @Test(arguments: ["contradictory_output", "duplicate_output", "duplicate_source", "missing_receiver",
+        "partial_outputs", "partial_inputs", "stale_snapshot", "foreign_snapshot", "foreign_project", "foreign_epoch"])
+    func noOutputAdditionRetainsObservedOwnershipAndCoverageRefusals(_ fault: String) throws {
+        var ns = nodes(output: .noOutput)
+        var es = edges().filter { !($0.kind == .mainOutput && $0.source == "source_opaque") }
+        switch fault {
+        case "contradictory_output": es.append(edge(.mainOutput, "source_opaque", "previous_opaque"))
+        case "duplicate_output": es += [edge(.mainOutput, "source_opaque", "previous_opaque"), edge(.mainOutput, "source_opaque", "destination_opaque")]
+        case "duplicate_source": ns.append(RoutingNode(id: "source_again", kind: .track, displayName: "Same", busNumber: nil,
+            targetRef: source, outputClassification: .noOutput))
+        case "missing_receiver": ns.removeAll { $0.id == "receiver_one" }
+        default: break
+        }
+        let partial = RoutingDomainCoverage(state: .partial, reasons: ["not completely observed"])
+        let coverage = RoutingCoverage(population: complete, stripTrackAssociation: complete,
+            mainOutput: fault == "partial_outputs" ? partial : complete, physicalOutput: complete,
+            busToAuxInput: fault == "partial_inputs" ? partial : complete, sends: complete)
+        let candidate = graph(nodes: ns, edges: es, coverage: coverage, epoch: fault == "foreign_epoch" ? 4 : 3,
+            snapshot: fault == "foreign_snapshot" ? "foreign_capture" : "proposal_fixture",
+            project: fault == "foreign_project" ? TargetReference(rawValue: "prj_foreign") : project)
+        let body = try plan(candidate, snapshotCurrent: fault != "stale_snapshot")
+        let delta = try proposal(body)
+        #expect(delta["status"]?.stringValue == "unverified")
+        #expect(delta["output_changes"] == nil)
+        let reasons = try #require(delta["reasons"]?.arrayValue)
+        #expect(!reasons.isEmpty)
+        let executable = try #require(body["executable"]?.boolValue as Bool?)
+        #expect(!executable)
+    }
+
     @Test func wrongBusFourToThreeHasOneMinimalProposedReplacementAndNoObservationClaim() throws {
         let body = try plan(graph())
         let delta = try proposal(body)

@@ -1030,11 +1030,13 @@ enum AXHelpers {
         role: String? = nil,
         maxDepth: Int = 5,
         runtime: Runtime = .production,
+        batchingRoleAndChildren: Bool = false,
         observingRole: (AXUIElement, String?) -> Void = { _, _ in },
         observingChildren: (AXUIElement, [AXUIElement]) -> Void = { _, _ in }
     ) -> [AXUIElement] {
         var results: [AXUIElement] = []
         collectDescendants(of: element, role: role, maxDepth: maxDepth, runtime: runtime,
+            batchingRoleAndChildren: batchingRoleAndChildren,
             observingRole: observingRole, observingChildren: observingChildren, into: &results)
         return results
     }
@@ -1044,17 +1046,30 @@ enum AXHelpers {
         role: String?,
         maxDepth: Int,
         runtime: Runtime,
+        batchingRoleAndChildren: Bool,
+        sampledChildren: [AXUIElement]? = nil,
         observingRole: (AXUIElement, String?) -> Void,
         observingChildren: (AXUIElement, [AXUIElement]) -> Void,
         into results: inout [AXUIElement]
     ) {
         guard maxDepth > 0 else { return }
-        let children = getChildren(element, runtime: runtime)
+        let children = sampledChildren ?? getChildren(element, runtime: runtime)
         observingChildren(element, children)
         for child in children {
             let matches: Bool
+            var childChildren: [AXUIElement]?
             if let role {
-                let observedRole = getRole(child, runtime: runtime)
+                let observedRole: String?
+                if batchingRoleAndChildren, maxDepth > 1, runtime.attributeValuesResult != nil {
+                    // One fresh node sample within this traversal, never another
+                    // field's inventory. Last-depth nodes retain their role-only read.
+                    let pair = getNonHelpAttributes(child, [kAXRoleAttribute, kAXChildrenAttribute] as [String], runtime: runtime)
+                    if case .success(.some(let raw)) = pair[0] { observedRole = raw as? String }
+                    else { observedRole = nil }
+                    if case .success(.some(let raw)) = pair[1], CFGetTypeID(raw) == CFArrayGetTypeID() {
+                        childChildren = decodeChildrenArray(raw)
+                    } else { childChildren = [] }
+                } else { observedRole = getRole(child, runtime: runtime) }
                 observingRole(child, observedRole)
                 matches = observedRole == role
             } else { matches = true }
@@ -1062,6 +1077,7 @@ enum AXHelpers {
                 results.append(child)
             }
             collectDescendants(of: child, role: role, maxDepth: maxDepth - 1, runtime: runtime,
+                batchingRoleAndChildren: batchingRoleAndChildren, sampledChildren: childChildren,
                 observingRole: observingRole, observingChildren: observingChildren, into: &results)
         }
     }

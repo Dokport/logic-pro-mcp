@@ -140,11 +140,15 @@ extension AccessibilityChannel {
             private var passiveRoutingHeader: (PassiveRoutingReadFocus, AXLogicProElements.Runtime)?
             private var association: HeldSelectionAssociation?
             private var routingPopupFocus: (@Sendable () -> Bool)?
+            private var mixerInverseFocus: PassiveMixerReadFocus?
             func retain(_ navigation: OwnedTrackStackObservationNavigation?) {
-                lock.withLock { self.navigation = navigation; passiveMixer = nil; passiveHeader = nil; passiveRoutingHeader = nil; association = nil; routingPopupFocus = nil }
+                lock.withLock { self.navigation = navigation; passiveMixer = nil; passiveHeader = nil; passiveRoutingHeader = nil; association = nil; routingPopupFocus = nil; mixerInverseFocus = nil }
             }
             func retainRoutingPopupFocus(_ proof: (@Sendable () -> Bool)?) {
                 lock.withLock { routingPopupFocus = proof }
+            }
+            func retainMixerInverseFocus(_ proof: PassiveMixerReadFocus?) {
+                lock.withLock { mixerInverseFocus = proof }
             }
             func retainAssociation(_ observation: HeldSelectionAssociation) {
                 lock.withLock { association = observation }
@@ -163,17 +167,19 @@ extension AccessibilityChannel {
                 lock.withLock { passiveMixer = candidate; passiveHeader = nil; passiveRoutingHeader = header.map { ($0, logic) } }
             }
             func permits() -> Bool {
-                let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader) }
-                // A currently owned popup deliberately holds search focus. Do not
-                // revoke the original header witness during that proven excursion.
-                return held.4?() == true || held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
+                let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader, mixerInverseFocus) }
+                // An owned popup or selection inverse deliberately holds temporary
+                // focus. Corroborate it before touching irreversible original witnesses.
+                return held.4?() == true || held.6?.permits() == true
+                    || held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
                     || held.2?.permitsPassiveFocusRead() == true || held.3?.permits() == true
                     || held.5.map { $0.0.permits(runtime: $0.1) } == true
             }
 
             /// An original immutable numeric name label is not a rename editor.
-            /// Held only for navigation-disabled, Help-free track acquisition;
-            /// this witness never reaches keyboard, selection or musical setters.
+            /// Corroborates Help-free read custody, including an already-owned
+            /// disclosure's exposed-header association. The label supplies no
+            /// keyboard, selection or musical-write authority by itself.
             final class PassiveHeaderReadFocus: @unchecked Sendable {
                 let logic: AXLogicProElements.Runtime
                 let pid: pid_t
@@ -222,6 +228,19 @@ extension AccessibilityChannel {
                 }
 
                 func permits() -> Bool {
+                    corroborates(focusedOn: focus)
+                }
+
+                /// Only an independently current passive Mixer source can
+                /// bracket the inverse of our own focus excursion. The retained
+                /// label's metadata and reciprocal CF ancestry stay unchanged.
+                func permitsOwnedMixerInverseMetadata(from source: PassiveMixerReadFocus) -> Bool {
+                    guard source.pid == pid, CFEqual(source.app, app), CFEqual(source.window, window),
+                          source.document.utf8.elementsEqual(document.utf8), source.permits() else { return false }
+                    return corroborates(focusedOn: source.focus)
+                }
+
+                private func corroborates(focusedOn expectedFocus: AXUIElement) -> Bool {
                     var permitted = false
                     defer { if !permitted { lost = true } }
                     guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
@@ -234,7 +253,7 @@ extension AccessibilityChannel {
                           case .success(.some(let doc)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                           doc.utf8.elementsEqual(document.utf8),
                           let currentFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                          CFEqual(currentFocus, focus),
+                          CFEqual(currentFocus, expectedFocus),
                           AXHelpers.getRole(focus, runtime: logic.ax) == kAXTextFieldRole as String,
                           AXHelpers.isAttributeSettable(focus, kAXValueAttribute as String, runtime: logic.ax) == false,
                           case .success(.some(let raw)) = AXHelpers.getAttributeResult(focus, kAXValueAttribute as String,
@@ -262,7 +281,7 @@ extension AccessibilityChannel {
                               CFEqual(actualParent, parent) else { return false }
                     }
                     guard let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                          CFEqual(finalFocus, focus),
+                          CFEqual(finalFocus, expectedFocus),
                           case .success(.some(let finalDoc)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                           finalDoc.utf8.elementsEqual(document.utf8),
                           (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
@@ -796,10 +815,13 @@ extension AccessibilityChannel {
             // Native ownership reads can move focus between the exact controls
             // held before our completed click. Revalidate that same passive
             // custody, not a new role/name/index match or arbitrary workspace.
-            guard completedClickFocus != nil, passiveClickFocus(matching: focus) != nil,
+            guard completedClickFocus != nil, let accepted = passiveClickFocus(matching: focus),
                   permitsHeldPassiveHeaderFocus(),
                   let current: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(current, focus) else { return false }
+            // Preserve this independently validated tuple before another click
+            // replaces completedClickFocus with its own target's controls.
+            acceptedPassiveClickFocus = accepted
             observedFocus = focus
             if !effects.changed.contains("keyboard_focus") { effects.changed.append("keyboard_focus") }
             return true
@@ -1239,16 +1261,18 @@ extension AccessibilityChannel {
 
         private func permitsHeldFocusRestoration() -> Bool {
             if permitsHeldPassiveHeaderFocus() { return true }
-            // The final paired inverse can leave focus on its exact disclosure,
-            // not a label. Admit only that completed, accepted, collapsed target
+            // The final paired inverse can leave focus on its exact disclosure
+            // or original header. Admit only that completed, accepted, collapsed target
             // for restoring the original workspace; owned() and the final action
             // boundary still verify the full scope before the focus setter.
             if !releaseUnverified, restorationStarted, acquired.isEmpty, hiddenControl == nil,
                let completed = completedClickFocus,
                CFEqual(completed.target.header, header), CFEqual(completed.target.disclosure, disclosure),
                let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-               CFEqual(focus, observedFocus), CFEqual(focus, disclosure),
-               AXHelpers.getRole(focus, runtime: logic.ax) == kAXDisclosureTriangleRole as String,
+               CFEqual(focus, observedFocus),
+               (CFEqual(focus, disclosure)
+                && AXHelpers.getRole(focus, runtime: logic.ax) == kAXDisclosureTriangleRole as String)
+                    || isHeldHeaderRestorationOrigin(focus),
                AXLogicProElements.heldTrackDisclosureValue(header: header, disclosure: disclosure, runtime: logic) == 0,
                let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                CFEqual(finalFocus, focus) { return true }
@@ -1256,6 +1280,20 @@ extension AccessibilityChannel {
                   let current: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax)
             else { return false }
             return CFEqual(current, hiddenControl) && CFEqual(observedFocus, hiddenControl)
+        }
+
+        private func isHeldHeaderRestorationOrigin(_ focus: AXUIElement) -> Bool {
+            guard CFEqual(focus, header),
+                  AXHelpers.getRole(focus, runtime: logic.ax) == kAXLayoutItemRole as String,
+                  let parent: AXUIElement = AXHelpers.getAttribute(header, kAXParentAttribute as String, runtime: logic.ax),
+                  CFEqual(parent, rail),
+                  let owner: AXUIElement = AXHelpers.getAttribute(header, kAXWindowAttribute as String, runtime: logic.ax),
+                  CFEqual(owner, window),
+                  case .success(let rows) = AXHelpers.childrenResult(rail, runtime: logic.ax),
+                  rows.filter({ CFEqual($0, header) }).count == 1,
+                  noEditingAttribute(header, kAXInsertionPointLineNumberAttribute as String),
+                  noEditingAttribute(header, kAXSelectedTextRangeAttribute as String) else { return false }
+            return true
         }
 
         /// A completed click may focus its held target. Corroborate that limited

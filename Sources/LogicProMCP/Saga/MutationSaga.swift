@@ -89,6 +89,8 @@ struct SagaReadEvidence: Codable, Equatable, Sendable {
     let field: String
     let observed: Value
     let sampledAt: String
+    /// Actual host rendering, separately retained from the raw owned scalar.
+    var hostDisplay: String? = nil
 
     /// Human summary, e.g. `ax_live tracks[3].volume (header_fader)`.
     var summary: String {
@@ -104,6 +106,7 @@ struct SagaReadEvidence: Codable, Equatable, Sendable {
         case field
         case observed
         case sampledAt = "sampled_at"
+        case hostDisplay = "host_display"
     }
 }
 
@@ -325,7 +328,7 @@ actor MutationSaga {
                 ))
             }
             if let spec = registeredSpec {
-                worstCaseSeconds += step.operationID == .pluginsSetParamVerified
+                worstCaseSeconds += step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified
                     ? CompressorParameterSaga.stepSeconds : spec.deadline.seconds
                 if spec.confirmation != .none {
                     issues.append(.confirmationRequired(
@@ -349,7 +352,10 @@ actor MutationSaga {
                 valueParameter: "visible", tolerance: .exact)
                 : (step.operationID == .pluginsSetParamVerified && (try? CompressorParameterSaga.validate(plan)) != nil
                     ? ReversibleDefinition(tool: .logicPlugins, command: "set_param_verified",
-                        valueParameter: "value", tolerance: .exact) : Self.reversibleDefinitions[step.operationID])
+                        valueParameter: "value", tolerance: .exact)
+                    : (step.operationID == .pluginsSetEQBandVerified && (try? SelectedEQParameterSaga.validate(plan)) != nil
+                        ? ReversibleDefinition(tool: .logicPlugins, command: "set_eq_band_verified",
+                            valueParameter: "value", tolerance: .exact) : Self.reversibleDefinitions[step.operationID]))
             if let definition {
                 let spec = OperationRegistry.spec(
                     tool: definition.tool.rawValue,
@@ -392,6 +398,12 @@ actor MutationSaga {
             if step.operationID == .pluginsSetParamVerified {
                 let pluginBinding = await CompressorParameterSaga.binding(step, registry: targetRegistry)
                 if (try? CompressorParameterSaga.validate(plan)) == nil || pluginBinding == nil {
+                    issues.append(.staleTarget(stepIndex: index))
+                }
+            }
+            if step.operationID == .pluginsSetEQBandVerified {
+                let binding = await SelectedEQParameterSaga.binding(step, registry: targetRegistry)
+                if (try? SelectedEQParameterSaga.validate(plan)) == nil || binding == nil {
                     issues.append(.staleTarget(stepIndex: index))
                 }
             }
@@ -478,6 +490,7 @@ actor MutationSaga {
             }
             guard let beforeState = await executor.readState(step),
                   step.operationID != .pluginsSetParamVerified || CompressorParameterSaga.beforeMatches(beforeState, step),
+                  step.operationID != .pluginsSetEQBandVerified || SelectedEQParameterSaga.beforeMatches(beforeState, step),
                   let desiredValue = step.params[step.expectedInverse.valueParameter] else {
                 outcome.journal.append(CompensationJournalRecord(
                     stepIndex: index,
@@ -503,6 +516,7 @@ actor MutationSaga {
 
             var inverseParams = step.params
             inverseParams[step.expectedInverse.valueParameter] = beforeState.value
+            if step.operationID == .pluginsSetEQBandVerified { inverseParams["unit"] = .string("raw_ax_value") }
             let inverse = SagaStep(
                 operationID: step.expectedInverse.operationID,
                 targetRef: step.targetRef,
@@ -541,7 +555,7 @@ actor MutationSaga {
                     disposition: disposition,
                     readback: readback,
                     comparison: SagaValueComparator.evidence(
-                        observed: readback?.value,
+                        observedState: readback,
                         desired: desiredValue,
                         step: step
                     )
@@ -587,7 +601,7 @@ actor MutationSaga {
                     disposition: disposition,
                     readback: readback,
                     comparison: SagaValueComparator.evidence(
-                        observed: readback?.value,
+                        observedState: readback,
                         desired: desiredValue,
                         step: step
                     )
@@ -623,7 +637,7 @@ actor MutationSaga {
                         disposition: disposition,
                         readback: readback,
                         comparison: SagaValueComparator.evidence(
-                            observed: readback?.value,
+                            observedState: readback,
                             desired: desiredValue,
                             step: step
                         )
@@ -794,7 +808,7 @@ actor MutationSaga {
             }
 
             var ownedInverse = inverse
-            if inverse.operationID == .pluginsSetParamVerified, let currentState {
+            if inverse.operationID == .pluginsSetParamVerified || inverse.operationID == .pluginsSetEQBandVerified, let currentState {
                 var params = inverse.params
                 params["expected_before"] = currentState.value
                 ownedInverse = SagaStep(operationID: inverse.operationID, targetRef: inverse.targetRef,
@@ -870,6 +884,11 @@ actor MutationSaga {
         step: SagaStep
     ) -> VerificationDisposition {
         guard let readback else { return .unknown }
+        if step.operationID == .pluginsSetEQBandVerified {
+            let desired = SelectedEQParameterSaga.comparison(readback, desired: desiredValue, step: step).equal
+            let before = SagaValueComparator.ownershipEvidence(observed: readback.value, desired: beforeState.value).equal
+            return desired ? (before ? .unknown : .applied) : (before ? .notApplied : .unknown)
+        }
         let matchesDesired = SagaValueComparator.equals(
             observed: readback.value,
             expected: desiredValue,
@@ -899,7 +918,10 @@ actor MutationSaga {
         desiredValue: Value,
         step: SagaStep
     ) -> VerificationDisposition {
-        guard let readback else { return step.operationID == .pluginsSetParamVerified ? .unknown : .applied }
+        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified ? .unknown : .applied }
+        if step.operationID == .pluginsSetEQBandVerified {
+            return SelectedEQParameterSaga.comparison(readback, desired: desiredValue, step: step).equal ? .applied : .unknown
+        }
         return SagaValueComparator.equals(
             observed: readback.value,
             expected: desiredValue,

@@ -142,7 +142,7 @@ enum CompressorParameterSaga {
             let timer = OperationTraceContext.current
             let child = OperationTraceContext(parentTraceID: parent?.traceID,
                 mutationGateAcquired: parent?.mutationGateAcquired ?? false,
-                ownsGate: { parent?.ownsGate() ?? (command == "get_param_verified") }, deadline: deadline,
+                ownsGate: { parent?.ownsGate() ?? (command == "get_param_verified" || command == "get_channel_eq_state_verified") }, deadline: deadline,
                 cancellationRequested: { Task.isCancelled || parent?.cancellationRequested() == true
                     || timer?.cancellationRequested() == true })
             guard child.ownsGate(), !child.cancellationRequested(), ContinuousClock.now < deadline else {
@@ -170,10 +170,17 @@ struct PluginSagaExpectedBefore: Sendable {
     let projectPath: String
     let param: String
     let observed: Value
+    let pluginID: String
+
+    init(track: Int, insert: Int, projectPath: String, param: String, observed: Value,
+         pluginID: String = CompressorParameterSaga.pluginID) {
+        self.track = track; self.insert = insert; self.projectPath = projectPath
+        self.param = param; self.observed = observed; self.pluginID = pluginID
+    }
 
     func matches(track: Int, insert: Int, pluginID: String, param: String,
                  projectPath: String, observed: Value) -> Bool {
-        self.track == track && self.insert == insert && pluginID == CompressorParameterSaga.pluginID
+        self.track == track && self.insert == insert && pluginID == self.pluginID
             && self.param == param && self.projectPath.utf8.elementsEqual(projectPath.utf8)
             && SagaValueComparator.ownershipEvidence(observed: observed, desired: self.observed).equal
     }

@@ -287,8 +287,15 @@ struct SystemDispatcher: OperationTraceDispatching {
             saga_preflight/saga_execute -> { steps: [step], idempotency_key: String }; \
             Selected Compressor Saga: exactly threshold and limiter_on on one occupied ins_ref; \
             step params are {param,unit,value,expected_before}, inverse value_parameter is value. \
-            Preflight returns plan_hash; execute additionally requires confirmed_plan_hash for this subset. \
+            Preflight returns plan_hash; execute additionally requires confirmed_plan_hash for the selected subsets. \
             Threshold is raw 0..100 percent and limiter_on is literal boolean; ADR004 opt-in is required. \
+            Selected Channel EQ Saga: exactly two plugins.set_eq_band_verified steps on one occupied EQ ins_ref, \
+            band "Peak 1", parameter "frequency"/"gain", units Hz/dB. Params are \
+            {band,parameter,unit,value,expected_before,recommendation}; expected_before is actual raw_ax_value. \
+            The same recommendation {artifact_fingerprint,center_hz,gain_db,q} is retained on both steps, \
+            separate from approved value targets and bound into plan_hash. Host display verifies forward \
+            engineering targets; fresh raw state owns the raw_ax_value inverse. Q is not applied, \
+            no raw/engineering conversion or automatic recommendation mapping is inferred. \
             saga_status/saga_cancel -> { idempotency_key: String }; \
             setup_arm_key -> { consent: "true" } (one-time consent-gated Key Commands GUI \
             drive that assigns the coordinate-free record-arm chord; no mouse); \
@@ -890,9 +897,11 @@ struct SystemDispatcher: OperationTraceDispatching {
                 return await finalizeTrace(SagaWire.invalidParams(error), traceID: traceID)
             }
             let compressorPlan = CompressorParameterSaga.containsPluginSteps(plan)
-            if compressorPlan, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+            let selectedEQPlan = SelectedEQParameterSaga.contains(plan)
+            let pluginPlan = compressorPlan || selectedEQPlan
+            if pluginPlan, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
-                    hint: "Confirm this exact canonical plan_hash before applying the two Compressor parameters",
+                    hint: "Confirm this exact canonical plan_hash before applying the selected two plug-in parameters",
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             switch await sagaJournal.begin(plan) {
@@ -997,7 +1006,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     ?? ContinuousClock.now.advanced(by: .seconds(lifecycleBudgetSeconds))
                 let inherited = OperationTraceContext.current
                 let compressorCancellation = SagaAbandonFlag()
-                let approvedContext = (approvedSessionRepair != nil || compressorPlan) ?
+                let approvedContext = (approvedSessionRepair != nil || pluginPlan) ?
                     OperationTraceContext(parentTraceID: inherited?.traceID,
                         mutationGateAcquired: mutationClaim != nil,
                         ownsGate: {
@@ -1005,7 +1014,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                             return mutationGate.stillOwns(mutationClaim) && (inherited?.ownsGate() ?? true)
                         }, deadline: lifecycleDeadline,
                         cancellationRequested: { Task.isCancelled || inherited?.cancellationRequested() == true
-                            || (compressorPlan && compressorCancellation.value) }) : nil
+                            || (pluginPlan && compressorCancellation.value) }) : nil
                 // ADR-004 / issue #287 — qualification-only fault seam. #399 (CEO
                 // audit P0): the seam and its wiring are compiled solely in debug
                 // via `FAULT_TEST_SEAM`. The release executor is
@@ -1023,7 +1032,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                     faultSeam: SagaPartialStateFaultSeam.resolve(
                         environment: ProcessInfo.processInfo.environment,
                         stepCount: plan.steps.count
-                    ), approvedSessionRepair: approvedSessionRepair, confirmedCompressorPlan: compressorPlan
+                    ), approvedSessionRepair: approvedSessionRepair, confirmedCompressorPlan: compressorPlan,
+                    confirmedSelectedEQPlan: selectedEQPlan
                 )
                 #else
                 let executor = ProductionSagaStepExecutor(
@@ -1034,7 +1044,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     liveReadback: sagaLiveReadback ?? .unavailable,
                     liveTrackName: liveTrackName,
                     liveTrackNames: liveTrackNames, approvedSessionRepair: approvedSessionRepair,
-                    confirmedCompressorPlan: compressorPlan
+                    confirmedCompressorPlan: compressorPlan, confirmedSelectedEQPlan: selectedEQPlan
                 )
                 #endif
                 let saga = MutationSaga(
@@ -1101,8 +1111,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                     let workTask = Task(priority: .userInitiated) {
                         // Retain one actual UI lease until the work child finishes,
                         // even if a lifecycle timeout returns before a wedged read.
-                        let lease = compressorPlan ? VerifiedPluginSagaLease(gate: .shared) : nil
-                        if compressorPlan, lease == nil {
+                        let lease = pluginPlan ? VerifiedPluginSagaLease(gate: .shared) : nil
+                        if pluginPlan, lease == nil {
                             let refused = SagaWire.scopedStateC(.verifiedOpInProgress,
                                 hint: "A verified plug-in operation is already active", extras: ["write_attempted": false])
                             let (winner, _) = await sagaJournal.finalizeReturningWinner(journalClaim,
@@ -1180,7 +1190,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                                     executor: surfaceExecutor,
                                     cancellationRequested: {
                                         if deadlineReached() { return true }
-                                        if compressorPlan, outerTraceContext?.cancellationRequested() == true { return true }
+                                        if pluginPlan, outerTraceContext?.cancellationRequested() == true { return true }
                                         return await sagaJournal.record(for: plan.idempotencyKey)
                                             == .cancellationRequested
                                     },
@@ -1281,7 +1291,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     )
                   }
                 } onCancel: {
-                    if compressorPlan { compressorCancellation.set(true) }
+                    if pluginPlan { compressorCancellation.set(true) }
                 }
                 return await finalizeTrace(raceResult, traceID: traceID)
             }
@@ -2218,6 +2228,13 @@ struct SystemDispatcher: OperationTraceDispatching {
                                       Selected Compressor subset: threshold + limiter_on, same occupied ins_ref,
                                       params {param,unit,value,expected_before}; preflight plan_hash must be explicitly confirmed.
                                       Raw threshold 0..100 percent; limiter_on literal boolean. Existing ADR004 opt-in required.
+                                      Selected EQ subset: two plugins.set_eq_band_verified steps on one occupied EQ ins_ref,
+                                      band "Peak 1", parameter "frequency"/"gain", units Hz/dB; params
+                                      {band,parameter,unit,value,expected_before,recommendation}. expected_before is raw_ax_value.
+                                      Same recommendation {artifact_fingerprint,center_hz,gain_db,q} on both steps,
+                                      distinct from approved targets and bound into the explicitly confirmed plan_hash.
+                                      Forward verification uses actual host display; owned inverse uses raw_ax_value. Q is not applied.
+                                      No automatic recommendation mapping, guessed conversion or all-EQ application.
                   saga_status       -> { idempotency_key: String } — Read the session journal
                   saga_cancel       -> { idempotency_key: String } — Request cancellation; State B until unwind is journaled, then terminal status carries its outcome
                   help              -> { category: String } — Param docs per category

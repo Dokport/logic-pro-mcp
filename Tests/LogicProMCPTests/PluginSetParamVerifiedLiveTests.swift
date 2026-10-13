@@ -1112,6 +1112,30 @@ func testForwardWriteDoesNotOverwriteItsChangedBeforeValue(_ fault: String) asyn
     #expect(!attempted)
 }
 
+@Test(arguments: ["frequency", "gain"])
+func testSelectedEQApprovedRawBeforeIsCheckedByTheActualWriter(_ parameter: String) async throws {
+    let label = parameter == "frequency" ? "Frequency" : "Gain"
+    for (approved, state, count) in [(1.0, "C", 0), (0.0, "A", 3)] {
+        let fixture = LiveFixture(thresholdDescription: "Peak 1 \(label)", pluginSlotName: "Channel EQ",
+            beforeValue: 0, sliderWriteBehavior: .oneStepTowardRequest)
+        let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+            param: "peak_1_\(parameter)", observed: .double(approved), pluginID: "logic.stock.effect.channel_eq")
+        let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+            await AccessibilityChannel.defaultSetEQBandVerified(params: namedEQBandParams(parameter: label),
+                runtime: fixture.runtime, frontDocumentPath: { expectedPath },
+                pluginPopupMenuCleaner: { _ in .noPopupObserved })
+        }
+        #expect(fixture.sliderWriteCount.value == count)
+        #expect(fixture.currentSliderValue == Double(count))
+        let body = try #require(decodedJSONObject(result.message))
+        #expect(body["state"] as? String == state)
+        if state == "C" {
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!attempted)
+        }
+    }
+}
+
 @Test func testSagaApprovedLimiterBeforeIsCheckedBeforeTheActualCheckboxPress() async throws {
     let fixture = LiveFixture(controlsViewRowLabel: "Limiter On", controlsCheckboxBefore: true,
         controlsViewInitiallySelected: true)

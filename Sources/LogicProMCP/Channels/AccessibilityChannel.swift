@@ -340,7 +340,8 @@ actor AccessibilityChannel: Channel {
         var reusesAssociationPresentation = false
         var association: HeldSelectionAssociation?
         var routingEffects = SessionPopulationObservation.UIEffects()
-        if request.allowUINavigation, request.domains.contains(.routing),
+        var exposedMixerEndEffects = SessionPopulationObservation.UIEffects()
+        if request.allowUINavigation, (request.domains.contains(.routing) || request.domains.contains(.strips)),
            !request.domains.contains(.associations),
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
             // Reuse this routing reader's exact existing focus witnesses, not
@@ -416,12 +417,83 @@ actor AccessibilityChannel: Channel {
             return effects
         }
         do {
+            var sharedAcquisitionPerformed = false
+            var sharedPairs: [HeldSelectionAssociation.Pair] = []
+            var sharedSelected: [AXMixerStripBinding.Binding]?
             let populationReadStarted = ContinuousClock.now
-            var population = try await readExposedSessionPopulation(
+            var finishBookend: ((Bool) throws -> SessionPopulationObservation.FreshPopulation)?
+            var firstReadDuration = Duration.zero
+            let prepare: (Duration, @escaping (Bool) throws -> SessionPopulationObservation.FreshPopulation) -> Void = { duration, finish in
+                firstReadDuration = duration; finishBookend = finish
+            }
+            let canPrepare = request.allowUINavigation && request.scope == .wholeProject
+                && Set(request.domains) == Set([.tracks, .hierarchy, .strips, .associations])
+                && association != nil && navigation != nil
+                && stackNavigation?.effects.navigationPerformed != true && navigation?.effects.navigationPerformed != true
+            var population: SessionPopulationObservation.FreshPopulation = try await readExposedSessionPopulation(
                 request: request, fileReader: fileReader,
                 exposure: stackNavigation?.effects.navigationPerformed == true ? stackNavigation?.exposure : nil,
+                preparingBookend: canPrepare ? prepare : nil,
                 stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop
             )
+            if let finishBookend {
+                if let association, let navigation,
+                   population.hiddenTracksShown == true,
+                   population.mixerPresentation?.mode == "all", population.mixerPresentation?.typeFilters.count == 8,
+                   population.mixerPresentation?.typeFilters.values.allSatisfy({ $0 == true }) == true,
+                   let tracks = population.tracks, !tracks.isEmpty, tracks.allSatisfy({ $0.isStackHeader == false }),
+                   let strips = population.strips, !strips.isEmpty,
+                   CFEqual(association.window, navigation.window),
+                   association.document.utf8.elementsEqual(navigation.document.utf8),
+                   population.project?.filePath == URL(string: association.document)?.path,
+                   population.project?.name.utf8.elementsEqual(Self.projectName(fromWindowTitle: association.title).utf8) == true,
+                   tracks.count == association.headers.count,
+                   zip(tracks, association.headers).allSatisfy({ state, header in
+                       guard let owner = state.physicalBinding else { return false }
+                       return CFEqual(owner.window, association.window) && CFEqual(owner.header, header)
+                           && owner.document.utf8.elementsEqual(association.document.utf8)
+                   }), strips.count == association.strips.count,
+                   zip(strips, association.strips).allSatisfy({ state, strip in
+                       guard let owner = state.physicalBinding else { return false }
+                       return CFEqual(owner.window, association.window) && CFEqual(owner.mixer, association.mixer)
+                           && CFEqual(owner.strip, strip) && owner.document.utf8.elementsEqual(association.document.utf8)
+                   }), association.permitsRead(), await navigationReferenceIsCurrent(), !stop() {
+                    // This first sample is not accepted data. The same complete
+                    // reader bookends the excursion before any rows are published.
+                    sharedAcquisitionPerformed = true
+                    sharedPairs = await association.observe(referenceIsCurrent: navigationReferenceIsCurrent,
+                        stoppingWhen: stop, allHeldHeaders: true, populationReadDuration: firstReadDuration)
+                    if association.effects.reason == nil {
+                        sharedSelected = await navigation.observeWholeStripSelection(readFocusScope: readFocusScope, stoppingWhen: stop)
+                    }
+                }
+                population = try finishBookend(sharedAcquisitionPerformed)
+            }
+            if sharedAcquisitionPerformed {
+                population.uiEffects = association?.effects ?? .init()
+                if let effects = navigation?.effects, effects.navigationPerformed {
+                    population.uiEffects = mergedEffects(population.uiEffects, effects)
+                }
+                if population.uiEffects.reason != nil || (population.uiEffects.navigationPerformed && population.uiEffects.restoration != "restored") {
+                    population.stable = false
+                }
+                if population.stable {
+                    let pairs = sharedPairs.filter { pair in
+                        population.tracks?.filter({ $0.physicalBinding?.matches(pair.track) == true }).count == 1
+                            && population.strips?.filter({ $0.physicalBinding?.matches(pair.strip) == true }).count == 1
+                    }
+                    let selectedMatch = sharedSelected.map { selected in
+                        population.strips?.count == selected.count
+                            && zip(population.strips ?? [], selected).allSatisfy({ $0.physicalBinding?.matches($1) == true })
+                    } ?? true
+                    if pairs.count == sharedPairs.count, selectedMatch, association?.permitsRead() == true,
+                       await navigationReferenceIsCurrent(), !stop() {
+                        population.selectionAssociations = pairs
+                        population.ownedMixerSelectedPopulation = sharedSelected
+                        if !pairs.isEmpty { population.associationReadbackBoundary = await associationReadbackBoundary() }
+                    } else { population.stable = false }
+                }
+            }
             let populationReadDuration = populationReadStarted.duration(to: .now)
             if association != nil, originalPresentation == nil {
                 // These fresh independent bookends precede every association
@@ -431,6 +503,36 @@ actor AccessibilityChannel: Channel {
             }
             let mixerNavigationPerformed = navigation?.effects.navigationPerformed == true
             let stackNavigationPerformed = stackNavigation?.effects.navigationPerformed == true
+            var associationCapturedAfterStackExposure = false
+            var exposedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus?
+            if association == nil, request.allowUINavigation, request.domains.contains(.associations),
+               population.stable, stackNavigationPerformed, !mixerNavigationPerformed,
+               let stack = stackNavigation, stack.effects.reason == nil,
+               !stack.capturedDisclosureExposures(in: population.tracks).isEmpty,
+               stack.permitsHeldPassiveHeaderFocus(),
+               let heldFocus = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus(
+                    window: stack.window, logic: runtime.logicRuntime),
+               CFEqual(heldFocus.focus, stack.originalFocus),
+               let candidate = HeldSelectionAssociation(window: stack.window, logic: runtime.logicRuntime,
+                    expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
+                    allowsSelectedChildRailEntry: true, retainedHeaderFocus: heldFocus,
+                    retainedTrackBindings: population.tracks?.compactMap(\.physicalBinding)),
+               let tracks = population.tracks, tracks.count == candidate.headers.count,
+               zip(tracks, candidate.headers).allSatisfy({ row, header in
+                    row.physicalBinding.map { CFEqual($0.window, candidate.window) && CFEqual($0.header, header)
+                        && $0.document.utf8.elementsEqual(candidate.document.utf8) } == true
+               }), let strips = population.strips, strips.count == candidate.strips.count,
+               zip(strips, candidate.strips).allSatisfy({ row, strip in
+                    row.physicalBinding.map { CFEqual($0.window, candidate.window) && CFEqual($0.mixer, candidate.mixer)
+                        && CFEqual($0.strip, strip) && $0.document.utf8.elementsEqual(candidate.document.utf8) } == true
+               }), candidate.permitsRead(), await navigationReferenceIsCurrent(), !stop() {
+                // The collapsed baseline could not hold descendants. Acquire
+                // only their actual exposed CFs, never a name/count/index join.
+                association = candidate
+                associationCapturedAfterStackExposure = true
+                exposedHeaderFocus = heldFocus
+                readFocusScope?.retainAssociation(candidate)
+            }
             func collectRouting(_ original: SessionPopulationObservation.FreshPopulation) async throws -> SessionPopulationObservation.FreshPopulation {
                 var population = original
                 guard request.allowUINavigation, request.domains.contains(.routing), population.stable,
@@ -616,7 +718,8 @@ actor AccessibilityChannel: Channel {
                 }
                 return population
             }
-            if let association, stackNavigation?.effects.navigationPerformed != true,
+            if !sharedAcquisitionPerformed, let association,
+               !stackNavigationPerformed || associationCapturedAfterStackExposure,
                navigation?.effects.navigationPerformed != true, population.stable {
                 population.selectionAssociations = await association.observe(
                     referenceIsCurrent: navigationReferenceIsCurrent, stoppingWhen: stop,
@@ -632,6 +735,7 @@ actor AccessibilityChannel: Channel {
                     let boundary = association.effects.restoration == "restored" && association.effects.reason == nil
                         ? await associationReadbackBoundary() : nil
                     let current = try? await readExposedSessionPopulation(request: request, fileReader: fileReader,
+                        exposure: associationCapturedAfterStackExposure ? stackNavigation?.exposure : nil,
                         stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                     func sameValues<T: Encodable>(_ lhs: T?, _ rhs: T?) -> Bool {
                         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -664,6 +768,62 @@ actor AccessibilityChannel: Channel {
             }
             // Compose only after the original selection observation has restored
             // and reconciled its rows. No pair is inferred for an unobserved strip.
+            var selectedMixerPopulation: [AXMixerStripBinding.Binding]?
+            if !sharedAcquisitionPerformed, request.allowUINavigation, request.scope == .wholeProject,
+               request.needsTracks, request.domains.contains(.strips), population.stable {
+                if associationCapturedAfterStackExposure, let heldFocus = exposedHeaderFocus, let association,
+                   association.effects.restoration == "restored", association.effects.reason == nil,
+                   let owner = OwnedMixerObservationNavigation(window: heldFocus.window, runtime: runtime.logicRuntime,
+                        expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
+                        referenceIsCurrent: navigationReferenceIsCurrent),
+                   CFEqual(owner.focus, heldFocus.focus),
+                   let tracks = population.tracks, tracks.count == owner.headers.count,
+                   zip(tracks, owner.headers).allSatisfy({ row, header in
+                       row.physicalBinding.map { CFEqual($0.header, header) && CFEqual($0.window, owner.window)
+                           && $0.document.utf8.elementsEqual(owner.document.utf8) } == true
+                   }) {
+                    let pairs = population.selectionAssociations.filter { CFEqual($0.track.header, heldFocus.header) }
+                    if pairs.count == 1, let pair = pairs.first {
+                        // The original navigation baseline remains bound to the
+                        // collapsed rail. This distinct exposed owner completes
+                        // and inverses its focus excursion before stack cleanup.
+                        selectedMixerPopulation = await owner.observeWholeStripSelectionFromRetainedHeader(
+                            headerFocus: heldFocus, association: association, pair: pair,
+                            readFocusScope: readFocusScope,
+                            mouse: runtime.canPostEvents() ? runtime.observationMouseRuntime : nil, stoppingWhen: stop)
+                        exposedMixerEndEffects = owner.effects
+                        population.uiEffects = mergedEffects(population.uiEffects, owner.effects)
+                        if owner.effects.reason != nil
+                            || (owner.effects.navigationPerformed && owner.effects.restoration != "restored") {
+                            population.stable = false
+                        }
+                    }
+                } else if let navigation {
+                    selectedMixerPopulation = await navigation.observeWholeStripSelection(
+                        readFocusScope: readFocusScope, stoppingWhen: stop)
+                }
+            }
+            if population.stable, let selected = selectedMixerPopulation {
+                let refreshed = try await readExposedSessionPopulation(request: request, fileReader: fileReader,
+                    exposure: stackNavigationPerformed ? stackNavigation?.exposure : nil,
+                    stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
+                if refreshed.stable, let states = refreshed.strips, states.count == selected.count,
+                   zip(states, selected).allSatisfy({ $0.physicalBinding?.matches($1) == true }) {
+                    let pairs = population.selectionAssociations
+                    let effects = population.uiEffects
+                    population = refreshed
+                    population.uiEffects = effects
+                    population.selectionAssociations = pairs.filter { pair in
+                        refreshed.tracks?.filter({ $0.physicalBinding?.matches(pair.track) == true }).count == 1
+                            && states.filter({ $0.physicalBinding?.matches(pair.strip) == true }).count == 1
+                    }
+                    if population.selectionAssociations.count != pairs.count { population.stable = false }
+                    if !population.selectionAssociations.isEmpty {
+                        population.associationReadbackBoundary = await associationReadbackBoundary()
+                    }
+                    population.ownedMixerSelectedPopulation = selected
+                } else { population.stable = false }
+            }
             population = try await collectRouting(population)
             let disclosureExposures = request.domains.contains(.hierarchy) && population.stable
                 ? stackNavigation?.capturedDisclosureExposures(in: population.tracks) ?? [] : []
@@ -720,28 +880,31 @@ actor AccessibilityChannel: Channel {
             let stack = await stackNavigation?.restoreAfterInterruptedRead(stoppingWhen: stop) ?? .init()
             let mixer = await navigation?.restore(stoppingWhen: stop) ?? .init()
             let effects = mergedEffects(routingEffects,
-                mergedEffects(association?.effects ?? .init(), mergedEffects(stack, mixer)))
+                mergedEffects(exposedMixerEndEffects,
+                    mergedEffects(association?.effects ?? .init(), mergedEffects(stack, mixer))))
             throw SessionPopulationObservation.NavigationAcquisitionError(cause: error, effects: effects)
         }
     }
 
-    /// Locale is captured only beside the same held project's window/app. It does not
-    /// qualify population or a sort leaf, and unknown locale does not poison view reads.
-    private func readObservedUILocale(in window: AXUIElement, checking check: () throws -> Void) throws -> String? {
+    /// Host metadata is captured beside the same held project's window/app. It does not
+    /// qualify population or a sort leaf; unknown metadata does not poison view reads.
+    private func readObservedHost(in window: AXUIElement, checking check: () throws -> Void) throws
+        -> (locale: String?, version: ProcessUtils.LogicHostObservation?) {
         try check()
         let logic = runtime.logicRuntime
         guard let pid = logic.logicProPID(), let app = AXLogicProElements.appRoot(runtime: logic),
               let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-              CFEqual(main, window) else { return nil }
+              CFEqual(main, window) else { return (nil, nil) }
         try check()
         let reading = AXLogicProElements.logicUILocaleIdentifierRead(runtime: logic)
+        let version = logic.observeHost(pid)
         try check()
         guard logic.logicProPID() == pid, let currentApp = AXLogicProElements.appRoot(runtime: logic), CFEqual(app, currentApp),
               let current: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-              CFEqual(current, window) else { return nil }
+              CFEqual(current, window) else { return (nil, nil) }
         try check()
-        if case .locale(let locale) = reading { return locale }
-        return nil
+        if case .locale(let locale) = reading { return (locale, version) }
+        return (nil, version)
     }
 
     private func readPresentationBaseline(stoppingWhen stop: @Sendable () -> Bool) throws -> SessionPopulationObservation.FreshPopulation? {
@@ -754,7 +917,7 @@ actor AccessibilityChannel: Channel {
         guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: logic),
               let title = AXHelpers.getTitle(window, runtime: logic.ax),
               case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic) else { return nil }
-        let localeBefore = try readObservedUILocale(in: window, checking: check)
+        let hostBefore = try readObservedHost(in: window, checking: check)
         let lookup = try AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: logic,
             requiresCompleteAbsence: true, checking: check)
         let transport = try AXLogicProElements.observedTransportActivity(in: window, runtime: logic, checking: check)
@@ -763,8 +926,8 @@ actor AccessibilityChannel: Channel {
               AXHelpers.getTitle(window, runtime: logic.ax)?.utf8.elementsEqual(title.utf8) == true,
               case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
               currentDocument.utf8.elementsEqual(document.utf8) else { return nil }
-        let localeAfter = try readObservedUILocale(in: window, checking: check)
-        let locale = localeBefore == localeAfter ? localeBefore : nil
+        let hostAfter = try readObservedHost(in: window, checking: check)
+        let locale = hostBefore.locale == hostAfter.locale ? hostBefore.locale : nil
         try check()
         let visible: Bool?
         switch lookup.lookup {
@@ -776,6 +939,7 @@ actor AccessibilityChannel: Channel {
         return .init(project: nil, tracks: nil, strips: nil, fileTrackCount: nil, beganAt: now, endedAt: now, stable: true,
             presentationObservation: .init(mixerVisible: visible, isPlaying: transport?.isPlaying, isRecording: transport?.isRecording,
                 uiLocale: locale),
+            hostObservation: hostBefore.version == hostAfter.version ? hostBefore.version : nil,
             presentationBinding: .init(window: window, title: title, document: document,
                 mixer: lookup.binding?.mixer, transport: transport, runtime: logic, uiLocale: locale,
                 mixerOwners: lookup.binding?.owners ?? []))
@@ -785,6 +949,7 @@ actor AccessibilityChannel: Channel {
         request: SessionPopulationObservation.Request,
         fileReader: LogicProjectFileReader.Runtime,
         exposure: AXTrackBinding.Exposure? = nil,
+        preparingBookend: ((Duration, @escaping (Bool) throws -> SessionPopulationObservation.FreshPopulation) -> Void)? = nil,
         stoppingBeforeAXRead stopBeforeAXRead: @escaping @Sendable () -> Bool,
         stoppingWhen stop: @escaping @Sendable () -> Bool
     ) async throws -> SessionPopulationObservation.FreshPopulation {
@@ -964,6 +1129,7 @@ actor AccessibilityChannel: Channel {
             let documentReadable: Bool
             let headers: [AXUIElement]?
             let mixer: AXUIElement?
+            let mixerBinding: AXLogicProElements.MixerAreaBinding?
             let mixerOwners: [AXUIElement]
             let stripElements: [AXUIElement]?
             let tracks: [TrackState]?
@@ -972,6 +1138,7 @@ actor AccessibilityChannel: Channel {
             let mixerVisible: Bool?
             let transport: AXLogicProElements.ObservedTransportActivity?
             let uiLocale: String?
+            let hostObservation: ProcessUtils.LogicHostObservation?
             let hiddenView: HiddenView?
             let singlePageEnd: SinglePageEnd?
             let selectedTracks: SelectedTrackRead?
@@ -1041,15 +1208,16 @@ actor AccessibilityChannel: Channel {
             }
             let transport = try AXLogicProElements.observedTransportActivity(in: window, runtime: logic,
                 observingExposure: exposure, checking: checkAXRead)
-            let locale = try readObservedUILocale(in: window, checking: checkAXRead)
+            let host = try readObservedHost(in: window, checking: checkAXRead)
             let hiddenView = wantsTracks ? readHiddenView(headers, in: window) : nil
             let singlePageEnd = wantsTracks ? try readSinglePageEnd(headers, tracks: tracks, hiddenView: hiddenView, in: window) : nil
             let selectedTracks = wantsTracks ? try readSelectedTracks(headers, states: tracks, in: window) : nil
             try check()
             return Read(title: title, document: document, documentReadable: documentReadable,
-                        headers: headers, mixer: mixer, mixerOwners: lookup.binding?.owners ?? [],
+                        headers: headers, mixer: mixer, mixerBinding: lookup.binding, mixerOwners: lookup.binding?.owners ?? [],
                         stripElements: stripElements, tracks: tracks, strips: strips,
-                        presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: locale,
+                        presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: host.locale,
+                        hostObservation: host.version,
                         hiddenView: hiddenView, singlePageEnd: singlePageEnd, selectedTracks: selectedTracks)
         }
         func sameElements(_ lhs: [AXUIElement]?, _ rhs: [AXUIElement]?) -> Bool {
@@ -1130,6 +1298,7 @@ actor AccessibilityChannel: Channel {
                 return .init(project: nil, tracks: nil, strips: nil, fileTrackCount: nil,
                              beganAt: beganAt, endedAt: Date(), stable: true)
             }
+            let firstReadStarted = ContinuousClock.now
             let before = try read(in: window)
             var path: String?
             if let document = before.document, let url = URL(string: document), url.isFileURL,
@@ -1141,114 +1310,138 @@ actor AccessibilityChannel: Channel {
             if let path { metadata = await LogicProjectFileReader.readPath(path, runtime: fileReader) }
             else { metadata = nil }
             try check()
-            let after = try read(in: window)
-            observeInputContinuity(before.strips, after.strips)
-            let beforeStrips = inputSafeStates(before.strips)
-            let afterStrips = inputSafeStates(after.strips)
-            let sameWindow: Bool
-            if case .found(let current) = AXLogicProElements.arrangeWindowRead(runtime: logic) {
-                sameWindow = CFEqual(window, current)
-            } else { sameWindow = false }
-            // The retained arrays precede the row reads. A disclosure can close during
-            // the last row's deciding read while both copied arrays still look equal.
-            var currentHeaders: [AXUIElement]?
-            var sameStackExposure = true
-            if wantsTracks, after.tracks != nil {
+            let first = SessionPopulationObservation.FreshPopulation(
+                project: before.title.map { .init(name: Self.projectName(fromWindowTitle: $0), filePath: path, source: "ax_request_read") },
+                tracks: before.tracks, strips: before.strips, fileTrackCount: metadata?.trackCount,
+                beganAt: beganAt, endedAt: Date(), stable: false,
+                mixerPresentation: before.presentation?.presentation, hiddenTracksShown: before.hiddenView?.shown)
+            func finishBookend(_ sharedRead: Bool) throws -> SessionPopulationObservation.FreshPopulation {
                 try check()
-                if case .read(let observed) = AXLogicProElements.allTrackHeadersRead(in: window, runtime: logic,
-                    observingExposure: exposure) {
-                    currentHeaders = observed
-                    exposure?.observeHeaders(observed)
-                    if let states = after.tracks, states.count == observed.count {
-                        for (header, state) in zip(observed, states) {
-                            try check()
-                            let stack = AXValueExtractors.extractTrackStackState(from: header, runtime: logic.ax,
-                                observingChildren: { exposure?.observeDisclosureChildren(header: header, children: $0, selected: $1) })
-                            exposure?.observeStackState(header: header, isStackHeader: stack.isStackHeader, collapsed: stack.collapsed)
-                            if stack.isStackHeader != state.isStackHeader || stack.collapsed != state.stackCollapsed {
-                                sameStackExposure = false
+                let after = try read(in: window)
+                observeInputContinuity(before.strips, after.strips)
+                let beforeStrips = inputSafeStates(before.strips)
+                let afterStrips = inputSafeStates(after.strips)
+                let sameWindow: Bool
+                if case .found(let current) = AXLogicProElements.arrangeWindowRead(runtime: logic) {
+                    sameWindow = CFEqual(window, current)
+                } else { sameWindow = false }
+                // The retained arrays precede the row reads. A disclosure can close during
+                // the last row's deciding read while both copied arrays still look equal.
+                var currentHeaders: [AXUIElement]?
+                var sameStackExposure = true
+                if wantsTracks, after.tracks != nil {
+                    try check()
+                    if case .read(let observed) = AXLogicProElements.allTrackHeadersRead(in: window, runtime: logic,
+                        observingExposure: exposure) {
+                        currentHeaders = observed
+                        exposure?.observeHeaders(observed)
+                        if let states = after.tracks, states.count == observed.count {
+                            for (header, state) in zip(observed, states) {
+                                try check()
+                                let stack = AXValueExtractors.extractTrackStackState(from: header, runtime: logic.ax,
+                                    observingChildren: { exposure?.observeDisclosureChildren(header: header, children: $0, selected: $1) })
+                                exposure?.observeStackState(header: header, isStackHeader: stack.isStackHeader, collapsed: stack.collapsed)
+                                if stack.isStackHeader != state.isStackHeader || stack.collapsed != state.stackCollapsed {
+                                    sameStackExposure = false
+                                }
+                                if Self.readTrackHideButton(header, in: window, runtime: logic, exposure: exposure) != state.hideButtonReadback {
+                                    sameStackExposure = false
+                                }
                             }
-                            if Self.readTrackHideButton(header, in: window, runtime: logic, exposure: exposure) != state.hideButtonReadback {
-                                sameStackExposure = false
-                            }
-                        }
+                        } else { sameStackExposure = false }
                     } else { sameStackExposure = false }
-                } else { sameStackExposure = false }
-                try check()
-            }
-            // Both passes copy identity before reading their rows. Corroborate it
-            // after the final census, so a same-window project switch during a
-            // deciding value read cannot certify the earlier document's rows.
-            try check()
-            let finalTitle = AXHelpers.getTitle(window, runtime: logic.ax)
-            let finalHiddenView = wantsTracks ? readHiddenView(currentHeaders, in: window) : nil
-            let finalSinglePageEnd = wantsTracks ? try readSinglePageEnd(currentHeaders, tracks: after.tracks,
-                hiddenView: finalHiddenView, in: window) : nil
-            let decidingHiddenView = wantsTracks ? readHiddenView(currentHeaders, in: window) : nil
-            let finalSelectedTracks = wantsTracks ? try readSelectedTracks(currentHeaders, states: after.tracks, in: window) : nil
-            let finalDocument: String?
-            let finalDocumentReadable: Bool
-            switch AXLogicProElements.projectPickerDocumentRead(window, runtime: logic) {
-            case .success(let value): finalDocument = value; finalDocumentReadable = true
-            case .failure: finalDocument = nil; finalDocumentReadable = false
-            }
-            try check()
-            // A terminated acquisition cannot regain row authority merely because
-            // its two later censuses agree. View-only cleanup is independent.
-            let stable = exposure?.hasEnded != true
-                && sameWindow && before.title != nil && before.documentReadable && after.documentReadable && finalDocumentReadable
-                && sameBytes(before.title, after.title) && sameBytes(before.document, after.document)
-                && sameBytes(after.title, finalTitle) && sameBytes(after.document, finalDocument)
-                && sameElements(before.headers, after.headers)
-                && sameHiddenView(before.hiddenView, after.hiddenView) && sameHiddenView(after.hiddenView, finalHiddenView)
-                && sameHiddenView(finalHiddenView, decidingHiddenView)
-                && sameSelectedTracks(before.selectedTracks, after.selectedTracks)
-                && sameSelectedTracks(after.selectedTracks, finalSelectedTracks)
-                && (!wantsTracks || after.tracks == nil || (sameElements(after.headers, currentHeaders) && sameStackExposure))
-                && (!wantsStrips || sameElements(before.mixer.map { [$0] }, after.mixer.map { [$0] }))
-                && sameElements(before.stripElements, after.stripElements)
-                && sameElements(before.presentation?.elements, after.presentation?.elements)
-                && before.presentation?.presentation == after.presentation?.presentation
-                && before.tracks?.map(\.liveIdentityBacked) == after.tracks?.map(\.liveIdentityBacked)
-                && before.tracks?.map(\.selectionReadback) == after.tracks?.map(\.selectionReadback)
-                && before.tracks?.map(\.hideButtonReadback) == after.tracks?.map(\.hideButtonReadback)
-                && zip(before.strips ?? [], after.strips ?? []).allSatisfy {
-                    switch ($0.physicalBinding, $1.physicalBinding) {
-                    case (nil, nil): return true
-                    case (.some(let a), .some(let b)): return a.matches(b)
-                    default: return false
-                    }
+                    try check()
                 }
-                && sameValues(before.tracks, after.tracks) && sameValues(beforeStrips, afterStrips)
-            let project = before.title.map {
-                ProjectInfo(name: Self.projectName(fromWindowTitle: $0), filePath: path, source: "ax_request_read")
+                // Both passes copy identity before reading their rows. Corroborate it
+                // after the final census, so a same-window project switch during a
+                // deciding value read cannot certify the earlier document's rows.
+                try check()
+                let finalTitle = AXHelpers.getTitle(window, runtime: logic.ax)
+                let finalHiddenView = wantsTracks ? readHiddenView(currentHeaders, in: window) : nil
+                let finalSinglePageEnd = wantsTracks ? try readSinglePageEnd(currentHeaders, tracks: after.tracks,
+                    hiddenView: finalHiddenView, in: window) : nil
+                let decidingHiddenView = wantsTracks ? readHiddenView(currentHeaders, in: window) : nil
+                let finalSelectedTracks = wantsTracks ? try readSelectedTracks(currentHeaders, states: after.tracks, in: window) : nil
+                let finalPresentation = sharedRead && after.mixerBinding != nil
+                    ? try AXLogicProElements.mixerPresentationRead(binding: after.mixerBinding!, runtime: logic.ax, checking: checkAXRead) : nil
+                let finalDocument: String?
+                let finalDocumentReadable: Bool
+                switch AXLogicProElements.projectPickerDocumentRead(window, runtime: logic) {
+                case .success(let value): finalDocument = value; finalDocumentReadable = true
+                case .failure: finalDocument = nil; finalDocumentReadable = false
+                }
+                try check()
+                // A terminated acquisition cannot regain row authority merely because
+                // its two later censuses agree. View-only cleanup is independent.
+                let stable = exposure?.hasEnded != true
+                    && sameWindow && before.title != nil && before.documentReadable && after.documentReadable && finalDocumentReadable
+                    && sameBytes(before.title, after.title) && sameBytes(before.document, after.document)
+                    && sameBytes(after.title, finalTitle) && sameBytes(after.document, finalDocument)
+                    && sameElements(before.headers, after.headers)
+                    && sameHiddenView(before.hiddenView, after.hiddenView) && sameHiddenView(after.hiddenView, finalHiddenView)
+                    && sameHiddenView(finalHiddenView, decidingHiddenView)
+                    && sameSelectedTracks(before.selectedTracks, after.selectedTracks)
+                    && sameSelectedTracks(after.selectedTracks, finalSelectedTracks)
+                    && (!wantsTracks || after.tracks == nil || (sameElements(after.headers, currentHeaders) && sameStackExposure))
+                    && (!wantsStrips || sameElements(before.mixer.map { [$0] }, after.mixer.map { [$0] }))
+                    && sameElements(before.stripElements, after.stripElements)
+                    && sameElements(before.presentation?.elements, after.presentation?.elements)
+                    && before.presentation?.presentation == after.presentation?.presentation
+                    && (!sharedRead || (sameElements(after.presentation?.elements, finalPresentation?.elements)
+                        && after.presentation?.presentation == finalPresentation?.presentation))
+                    && before.tracks?.map(\.liveIdentityBacked) == after.tracks?.map(\.liveIdentityBacked)
+                    && before.tracks?.map(\.selectionReadback) == after.tracks?.map(\.selectionReadback)
+                    && before.tracks?.map(\.hideButtonReadback) == after.tracks?.map(\.hideButtonReadback)
+                    && zip(before.strips ?? [], after.strips ?? []).allSatisfy {
+                        switch ($0.physicalBinding, $1.physicalBinding) {
+                        case (nil, nil): return true
+                        case (.some(let a), .some(let b)): return a.matches(b)
+                        default: return false
+                        }
+                    }
+                    && sameValues(before.tracks, after.tracks) && sameValues(beforeStrips, afterStrips)
+                let project = before.title.map {
+                    ProjectInfo(name: Self.projectName(fromWindowTitle: $0), filePath: path, source: "ax_request_read")
+                }
+                let mixerStable = before.mixerVisible == after.mixerVisible
+                    && sameElements(before.mixer.map { [$0] }, after.mixer.map { [$0] })
+                    && sameElements(before.mixerOwners, after.mixerOwners)
+                let transportStable = sameElements(before.transport.map { [$0.controlBar, $0.play, $0.record] },
+                    after.transport.map { [$0.controlBar, $0.play, $0.record] })
+                    && before.transport?.isPlaying == after.transport?.isPlaying
+                    && before.transport?.isRecording == after.transport?.isRecording
+                let candidate = SessionPopulationObservation.FreshPopulation(
+                    project: project, tracks: sharedRead ? after.tracks : before.tracks, strips: sharedRead ? afterStrips : beforeStrips,
+                    fileTrackCount: metadata?.trackCount, beganAt: beganAt, endedAt: Date(), stable: stable,
+                    mixerPresentation: before.presentation?.presentation,
+                    presentationObservation: .init(mixerVisible: mixerStable ? before.mixerVisible : nil,
+                        isPlaying: transportStable ? before.transport?.isPlaying : nil,
+                        isRecording: transportStable ? before.transport?.isRecording : nil,
+                        uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil),
+                    hostObservation: stable && before.hostObservation == after.hostObservation ? before.hostObservation : nil,
+                    presentationBinding: stable && mixerStable && transportStable && path != nil && before.title != nil && before.document != nil
+                        ? .init(window: window, title: before.title!, document: before.document!,
+                            mixer: before.mixer, transport: before.transport, runtime: logic,
+                            uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil,
+                            mixerOwners: before.mixerOwners) : nil,
+                    hiddenTracksShown: stable ? before.hiddenView?.shown : nil,
+                    populationEndSource: stable && before.singlePageEnd?.matches(after.singlePageEnd) == true
+                        && after.singlePageEnd?.matches(finalSinglePageEnd) == true ? "ax_all_shown_single_page" : nil,
+                    selectedTrackMembershipObserved: stable && before.selectedTracks != nil
+                )
+                return candidate
             }
-            let mixerStable = before.mixerVisible == after.mixerVisible
-                && sameElements(before.mixer.map { [$0] }, after.mixer.map { [$0] })
-                && sameElements(before.mixerOwners, after.mixerOwners)
-            let transportStable = sameElements(before.transport.map { [$0.controlBar, $0.play, $0.record] },
-                after.transport.map { [$0.controlBar, $0.play, $0.record] })
-                && before.transport?.isPlaying == after.transport?.isPlaying
-                && before.transport?.isRecording == after.transport?.isRecording
-            let candidate = SessionPopulationObservation.FreshPopulation(
-                project: project, tracks: before.tracks, strips: beforeStrips,
-                fileTrackCount: metadata?.trackCount, beganAt: beganAt, endedAt: Date(), stable: stable,
-                mixerPresentation: before.presentation?.presentation,
-                presentationObservation: .init(mixerVisible: mixerStable ? before.mixerVisible : nil,
-                    isPlaying: transportStable ? before.transport?.isPlaying : nil,
-                    isRecording: transportStable ? before.transport?.isRecording : nil,
-                    uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil),
-                presentationBinding: stable && mixerStable && transportStable && path != nil && before.title != nil && before.document != nil
-                    ? .init(window: window, title: before.title!, document: before.document!,
-                        mixer: before.mixer, transport: before.transport, runtime: logic,
-                        uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil,
-                        mixerOwners: before.mixerOwners) : nil,
-                hiddenTracksShown: stable ? before.hiddenView?.shown : nil,
-                populationEndSource: stable && before.singlePageEnd?.matches(after.singlePageEnd) == true
-                    && after.singlePageEnd?.matches(finalSinglePageEnd) == true ? "ax_all_shown_single_page" : nil,
-                selectedTrackMembershipObserved: stable && before.selectedTracks != nil
-            )
-            if stable { return candidate }
+            if let preparingBookend, first.hiddenTracksShown == true,
+               first.mixerPresentation?.mode == "all", first.mixerPresentation?.typeFilters.count == 8,
+               first.mixerPresentation?.typeFilters.values.allSatisfy({ $0 == true }) == true,
+               let tracks = first.tracks, !tracks.isEmpty, tracks.allSatisfy({ $0.isStackHeader == false }),
+               let strips = first.strips, !strips.isEmpty, strips.allSatisfy({ $0.physicalBinding != nil }),
+               tracks.allSatisfy({ $0.physicalBinding != nil }) {
+                preparingBookend(firstReadStarted.duration(to: .now), finishBookend)
+                return first
+            }
+            let candidate = try finishBookend(false)
+            if candidate.stable { return candidate }
             last = candidate
         }
         try check()
