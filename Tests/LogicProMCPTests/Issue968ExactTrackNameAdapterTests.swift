@@ -117,6 +117,13 @@ private final class ExactNameFixture: @unchecked Sendable {
                        attribute == kAXDescriptionAttribute as String { return .some(nil) }
                     return nil
                 },
+                attributeValueResultHandler: { [self] element, attribute in
+                    guard passiveHeaderNameLabel, CFEqual(element, field),
+                          attribute == kAXValueAttribute as String else { return nil }
+                    // Preserve the actual stored CFNumber: the generic fixture bridge
+                    // can cast NSNumber(0) through Bool, which is not this native label.
+                    return .success(builder.attributeValue(element, attribute) as AnyObject?)
+                },
                 setAttributeHandler: { [self] element, attribute, value in
                     if let menuFocusedEditor, CFEqual(element, menuFocusedEditor),
                        attribute == kAXValueAttribute as String, let name = value as? String {
@@ -485,7 +492,7 @@ struct Issue968ExactTrackNameAdapterTests {
         }
     }
 
-    @Test(arguments: ["healthy", "refuse_second", "cancel_second", "newer_first", "selection_ack_only", "peer_after_first", "editing_after_first", "project_after_first"])
+    @Test(arguments: ["healthy", "passive_name", "refuse_second", "cancel_second", "newer_first", "selection_ack_only", "peer_after_first", "editing_after_first", "project_after_first"])
     func canonicalDistinctNamesShareOrderedReceiptsAndOwnedCompensation(_ change: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -529,6 +536,41 @@ struct Issue968ExactTrackNameAdapterTests {
                     f.builder.setAttribute(otherMirror, kAXValueAttribute as String,
                         f.builder.attributeValue(otherName, kAXDescriptionAttribute as String))
                 }
+                if change == "passive_name" {
+                    f.passiveHeaderNameLabel = true
+                    f.builder.setAttribute(f.field, kAXValueAttribute as String, NSNumber(value: 0))
+                    f.builder.setAttributeSettable(f.field, kAXValueAttribute as String, false)
+                    f.builder.setAttribute(f.field, kAXWindowAttribute as String, f.window)
+                    f.builder.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+                    f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.window)
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.field)
+                    let numeric: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                        f.field, kAXValueAttribute as String, runtime: f.runtime.ax)
+                    let raw = try #require(try numeric.get())
+                    #expect(CFGetTypeID(raw) == CFNumberGetTypeID())
+                    let bar = f.builder.element(968_330), trackMenu = f.builder.element(968_331)
+                    let menu = f.builder.element(968_332), rename = f.builder.element(968_333)
+                    let editor = f.builder.element(968_334)
+                    f.renameMenuItem = rename; f.menuFocusedEditor = editor
+                    f.builder.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+                    for (element, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                        (menu, kAXMenuRole), (rename, kAXMenuItemRole), (editor, kAXTextFieldRole)] {
+                        f.builder.setRole(element, role as String)
+                    }
+                    f.builder.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+                    f.builder.setAttribute(rename, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+                    f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+                    f.builder.setAttribute(editor, kAXValueAttribute as String, "A")
+                    f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+                    f.builder.setChildren(bar, [trackMenu]); f.builder.setChildren(trackMenu, [menu])
+                    f.builder.setChildren(menu, [rename])
+                    f.onMenuEditorValueSet = {
+                        let name = f.builder.attributeValue(editor, kAXValueAttribute as String) as? String
+                        f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, name as Any)
+                        f.builder.setAttribute(mirror, kAXValueAttribute as String, name as Any)
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                    }
+                }
                 f.onPress = {
                     let secondPress = f.actedNameFields.last.map { CFEqual($0, otherName) } == true
                     f.pressReportsFailure = secondPress && ["refuse_second", "newer_first"].contains(change)
@@ -568,11 +610,12 @@ struct Issue968ExactTrackNameAdapterTests {
                         sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let body = try #require(sharedJSONObject(sharedToolText(await run())))
-                if change == "healthy" {
+                if ["healthy", "passive_name"].contains(change) {
                     #expect(body["saga_state"] as? String == "completed")
                     let verified = try #require(body["verified"] as? Bool)
                     #expect(verified)
-                    #expect(f.writes == ["C", "D"])
+                    #expect(f.writes == (change == "passive_name" ? ["D"] : ["C", "D"]))
+                    #expect(f.menuEditorValueWrites == (change == "passive_name" ? ["C"] : []))
                     #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == "C")
                     #expect(f.builder.attributeValue(otherMirror, kAXValueAttribute as String) as? String == "D")
                 } else if ["newer_first", "peer_after_first"].contains(change) {

@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import MCP
 
@@ -320,10 +321,26 @@ enum ExactTrackNameAdapter {
             return binding.currentIndex() == index
         }
         var allowWrittenName = false
+        var passiveFocusProofs: [AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus] = []
         func focusPermitted() -> Bool {
             guard let pid = source.runtime.logicProPID(),
-                  source.runtime.focusedApplicationPID() == pid,
-                  case .notTextEditing = AccessibilityChannel.readLogicKeyboardFocus(runtime: source.runtime) else { return false }
+                  source.runtime.focusedApplicationPID() == pid else { return false }
+            switch AccessibilityChannel.readLogicKeyboardFocus(runtime: source.runtime) {
+            case .notTextEditing: break
+            case .textEditing:
+                guard let app = AXLogicProElements.appRoot(runtime: source.runtime),
+                      let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
+                        runtime: source.runtime.ax) else { return false }
+                if let proof = passiveFocusProofs.first(where: { CFEqual($0.focus, focus) }) {
+                    guard proof.permits() else { return false }
+                } else {
+                    guard let proof = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus(
+                        window: source.window, logic: source.runtime),
+                        CFEqual(proof.header, origin.header) || CFEqual(proof.header, source.header) else { return false }
+                    passiveFocusProofs.append(proof)
+                }
+            case .unreadable: return false
+            }
             return source.runtime.logicProPID() == pid && source.runtime.focusedApplicationPID() == pid
         }
         func held() -> Bool {
