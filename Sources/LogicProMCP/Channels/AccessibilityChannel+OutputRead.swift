@@ -99,6 +99,8 @@ extension AccessibilityChannel {
         /// Raw checked non-routing root entries: preservation witness only,
         /// never a typed mode, destination or endpoint identity.
         var sendNonRoutingChecks: [String]? = nil
+        /// Request-local native proof only; never decoded from the wire receipt.
+        var removedSend: RemovedSendObservation? = nil
     }
 
     static func setAssignedSendOutputVerified(params: [String: String],
@@ -109,7 +111,7 @@ extension AccessibilityChannel {
         }
         guard params.keys.allSatisfy({ ["destination", "expected_current", "replace_existing", "send_ordinal"].contains($0) }),
               params["replace_existing"] == "true", let ordinal = params["send_ordinal"].flatMap(Int.init), ordinal >= 0,
-              let destination = params["destination"].flatMap(OutputAssignment.init(token:)), isSink(destination),
+              params["destination"] == "no_send" || params["destination"].flatMap(OutputAssignment.init(token:)).map(isSink) == true,
               let expected = params["expected_current"].flatMap(OutputAssignment.init(token:)), isSink(expected),
               (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
             return .error(HonestContract.encodeStateC(error: .invalidParams,
@@ -117,12 +119,43 @@ extension AccessibilityChannel {
                 extras: ["operation": "mixer.set_send_output_verified", "write_attempted": false]))
         }
         return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal,
-            runtime: runtime, timing: timing, sendReplacement: .init(expected: expected, destination: destination)).result
+            runtime: runtime, timing: timing, sendReplacement: .init(expected: expected,
+                destination: params["destination"].flatMap(OutputAssignment.init(token:)))).result
     }
 
     private struct SendReplacement: Sendable {
         let expected: OutputAssignment
-        let destination: OutputAssignment
+        /// nil is the explicitly scoped No Send action, never a No Output routing endpoint.
+        let destination: OutputAssignment?
+        var restoration: RemovedSendObservation? = nil
+    }
+
+    static func restoreAssignedSendThroughRetainedEmpty(_ removed: RemovedSendObservation,
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming) async -> CheckedOutputReading {
+        guard removed.permits(runtime: runtime) else {
+            return .init(result: .error(HonestContract.encodeStateC(error: .staleTargetReference,
+                hint: "The original request's removed-send empty binding is no longer current.",
+                extras: ["write_attempted": false])), assignment: nil)
+        }
+        return await AXMixerStripBinding.$current.withValue(removed.source.pair.strip) {
+            await AXMixerStripBinding.$outputAssociation.withValue(removed.source.pair) {
+                await getCheckedRoutingDestination(params: [:], sendOrdinal: 0,
+                    runtime: runtime, timing: timing, sendReplacement: .init(expected: removed.checkedDestination,
+                        destination: removed.checkedDestination, restoration: removed))
+            }
+        }
+    }
+
+    static func removeAssignedSendObservation(ordinal: Int, expected: OutputAssignment,
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming = .live) async -> CheckedOutputReading {
+        guard ordinal >= 0, expected != .noOutput,
+              (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+            return .init(result: .error(HonestContract.encodeStateC(error: .invalidParams,
+                hint: "Owned acquisition and an occupied checked send are required.",
+                extras: ["write_attempted": false])), assignment: nil)
+        }
+        return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal,
+            runtime: runtime, timing: timing, sendReplacement: .init(expected: expected, destination: nil))
     }
 
     /// A bijection between two singleton occupied sets is not an ordinal/name
@@ -203,10 +236,16 @@ extension AccessibilityChannel {
                 ordinal: sendOrdinal, runtime: runtime.ax)
         }
         let assigned = assignedControl()
-        guard sendOrdinal == nil || assigned != nil else {
+        let restoringEmpty = sendReplacement?.restoration?.empty
+        guard sendOrdinal == nil || assigned != nil || restoringEmpty != nil else {
             return refuse(.readbackUnavailable, "The requested ordinal has no uniquely qualified assigned-send list control; nothing was pressed.")
         }
         @Sendable func selectedControl() -> AXUIElement? {
+            if let restoration = sendReplacement?.restoration {
+                guard let current = soleEmptySend(in: physical.strip, runtime: runtime.ax),
+                      restoration.empty.matches(current) else { return nil }
+                return current.control
+            }
             if inputBusOnly {
                 let read = AXLogicProElements.inputSlotRead(in: physical.strip, runtime: runtime.ax)
                 guard case .source = read.reading else { return nil }
@@ -429,7 +468,23 @@ extension AccessibilityChannel {
         let second = menuOwned() ? checkedChoice() : nil
         let sendChecks = sendOrdinal == nil ? nil : sendMenuNonRoutingChecks(in: root, runtime: runtime.ax)
         let dataOwned = menuOwned()
-        if let request = sendReplacement, let sendOrdinal, let assigned {
+        if let request = sendReplacement, let sendOrdinal {
+            func sameOriginalSendControl() -> Bool {
+                if let assigned {
+                    return assignedControl().map { assigned.matches($0) } == true
+                }
+                if let restoringEmpty {
+                    return soleEmptySend(in: physical.strip, runtime: runtime.ax).map { restoringEmpty.matches($0) } == true
+                }
+                return false
+            }
+            func expectedCheckedBefore(fresh: Bool = false) -> Bool {
+                if let restoration = request.restoration {
+                    return checkedRemovedSendMenu(in: root, nonRoutingChecks: restoration.nonRoutingChecks,
+                        runtime: runtime.ax)
+                }
+                return first == request.expected && second == first && (!fresh || checkedChoice() == request.expected)
+            }
             func normalized(_ slots: [SendSlotObservation]) -> [SendSlotObservation] {
                 slots.map { slot in
                     var result = slot
@@ -487,7 +542,9 @@ extension AccessibilityChannel {
                       let fresh = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips,
                       fresh.count == population.count, zip(fresh, population).allSatisfy({ CFEqual($0, $1) }),
                       AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax) == protectedSends,
-                      let current = assignedControl(), assigned.matches(current) else { return false }
+                      sameOriginalSendControl() else { return false }
+                if let restoration = request.restoration,
+                   !restoration.source.permits(runtime: runtime, ownedPopup: root) { return false }
                 return writerMenuOwned()
             }
             func closeBeforeRefusal(_ error: HonestContract.FailureError, _ hint: String) -> CheckedOutputReading {
@@ -498,17 +555,19 @@ extension AccessibilityChannel {
                     && runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true ? "closed" : "not_restored"
                 return refuse(error, hint)
             }
-            guard dataOwned, first == request.expected, second == first else {
+            guard dataOwned, expectedCheckedBefore() else {
                 return closeBeforeRefusal(.staleSnapshot, "Checked current send did not agree with expected_current; no destination was pressed.")
             }
-            guard let population, let protectedSends, let slotState = protectedSends.first(where: { $0.ordinal == sendOrdinal }),
+            guard let population, let protectedSends,
+                  let slotState = request.restoration?.before ?? protectedSends.first(where: { $0.ordinal == sendOrdinal }),
                   slotState.bypassed != nil, slotState.levelRaw?.isFinite == true,
                   let sendChecks, !sendChecks.isEmpty, writeBoundary() else {
                 return closeBeforeRefusal(.readbackUnavailable, "The exact occupied send, protected level/bypass/checkmarks or write boundary did not remain observed; nothing was selected.")
             }
-            extras["before"] = request.expected.json; extras["destination"] = request.destination.json
+            extras["before"] = request.expected.json
+            extras["destination"] = request.destination?.json ?? ["kind": "no_send"]
             extras["strip_count_before"] = population.count
-            if request.expected == request.destination {
+            if request.restoration == nil, let assigned, request.expected == request.destination {
                 // Reapplying an already checked destination can retire Logic's
                 // controls. A no-op closes only its owned popup; it never presses
                 // a destination or borrows mutation-time label-change authority.
@@ -559,8 +618,9 @@ extension AccessibilityChannel {
             // a repeated identifier nor its absence changes CF/action authority.
             var identifiers: [String: Any] = [:]
             var identifierStatuses: [String: Int32] = [:]
-            for (key, original) in [("strip", physical.strip), ("send_group", assigned.group),
-                                    ("send_list", assigned.list), ("send_bypass", assigned.bypass)] {
+            let originals = assigned.map { [("strip", physical.strip), ("send_group", $0.group),
+                ("send_list", $0.list), ("send_bypass", $0.bypass)] } ?? [("strip", physical.strip), ("empty_send", slot)]
+            for (key, original) in originals {
                 let reading: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
                     original, kAXIdentifierAttribute as String, runtime: runtime.ax)
                 switch reading {
@@ -574,13 +634,17 @@ extension AccessibilityChannel {
             }
             extras["pre_press_source_identifiers"] = identifiers
             extras["pre_press_identifier_read_status"] = identifierStatuses
-            let choice = sendMenuChoice(for: request.destination, in: root, runtime: runtime.ax)
+            func destinationChoice() -> OutputMenuChoice {
+                request.destination.map { sendMenuChoice(for: $0, in: root, runtime: runtime.ax) }
+                    ?? sendRemovalMenuChoice(in: root, runtime: runtime.ax)
+            }
+            let choice = destinationChoice()
             guard case .item(let item, let path) = choice,
                   AXHelpers.getAttribute(item, kAXEnabledAttribute as String, runtime: runtime.ax) as Bool? == true,
                   case .success(let actions) = AXHelpers.getActionNamesResult(item, runtime: runtime.ax),
                   actions.contains(kAXPressAction as String), writeBoundary(),
-                  checkedChoice() == request.expected, sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == sendChecks,
-                  case .item(let finalItem, let finalPath) = sendMenuChoice(for: request.destination, in: root, runtime: runtime.ax),
+                  expectedCheckedBefore(fresh: true), sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == sendChecks,
+                  case .item(let finalItem, let finalPath) = destinationChoice(),
                   CFEqual(item, finalItem), path == finalPath, writeBoundary() else {
                 extras["destination_choice_failure"] = choice.failureLabel
                 return closeBeforeRefusal(.staleTargetReference, "No unique offered send destination survived the final source/menu/action checks; nothing was selected.")
@@ -620,8 +684,8 @@ extension AccessibilityChannel {
             }
             let contextAfterPress = writerContextCurrent(preservingOriginalLabel: false)
             let observedControl = assignedControl()
-            let controlAfterPress = observedControl.map { assigned.matches($0) } == true
-            if let current = observedControl {
+            let controlAfterPress = assigned.flatMap { original in observedControl.map { original.matches($0) } } == true
+            if let assigned, let current = observedControl {
                 extras["post_press_control_identity"] = ["observed": true,
                     "ordinal": assigned.ordinal == current.ordinal,
                     "group": CFEqual(assigned.group, current.group),
@@ -638,6 +702,23 @@ extension AccessibilityChannel {
             extras["post_press_custody"] = ["context_current": contextAfterPress,
                 "original_send_control_current": controlAfterPress,
                 "ax_popup_absent": axPopupAbsent, "cg_popup_absent": cgPopupAbsent]
+            if let restoration = request.restoration {
+                guard axPopupAbsent, cgPopupAbsent else {
+                    return uncertain("The explicit inverse did not close its owned popup; no further action was attempted.")
+                }
+                return await finishSendRestoration(restoration, original: physical, population: population,
+                    extras: extras, runtime: runtime, timing: timing)
+            }
+            if request.destination == nil {
+                guard axPopupAbsent, cgPopupAbsent, let assigned, let singleton,
+                      singleton.control.matches(assigned), singleton.slots == protectedSends else {
+                    return uncertain("Send removal lost popup absence or its complete original singleton census.")
+                }
+                return await finishSendRemoval(original: physical, before: protectedSends,
+                    checkedBefore: request.expected, nonRoutingChecks: sendChecks,
+                    population: population, extras: extras, runtime: runtime)
+            }
+            guard let assigned else { return uncertain("The original occupied-send control is unavailable.") }
             guard contextAfterPress, controlAfterPress, axPopupAbsent, cgPopupAbsent else {
                 // Diagnostic reads of the retained originals only; a readable
                 // replacement or a zero AX status never restores action authority.
@@ -720,11 +801,11 @@ extension AccessibilityChannel {
                   normalized(slotsAfter) == normalized(protectedSends),
                   let populationAfter = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips,
                   populationAfter.count == population.count, zip(populationAfter, population).allSatisfy({ CFEqual($0, $1) }),
-                  let finalControl = assignedControl(), assigned.matches(finalControl),
+                  sameOriginalSendControl(),
                   writerContextCurrent(preservingOriginalLabel: false) else {
                 return uncertain("Checked destination, protected send state or original population did not survive the press and fresh read; no automatic inverse was attempted.")
             }
-            extras["after"] = request.destination.json; extras["strip_count_after"] = population.count
+            extras["after"] = request.destination?.json; extras["strip_count_after"] = population.count
             extras["changed"] = request.expected != request.destination
             extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
             return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: request.destination,
