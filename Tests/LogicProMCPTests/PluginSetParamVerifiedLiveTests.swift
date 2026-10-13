@@ -43,8 +43,8 @@ private enum ControlsCheckboxWriteBehavior: Sendable, Equatable {
     /// AXPress reports status 0/accepted but the checkbox AXValue is inert.
     /// This is the exact observation that prevents a status-only success.
     case statusZeroUnchanged
-    /// The first post-press value is mixed, so compensation is warranted; the
-    /// compensating press lands on `true` rather than the original `false`.
+    /// The first post-press value is mixed; a blind second press would land on
+    /// `true` rather than the original `false`.
     case mixedThenChanged
 }
 
@@ -92,9 +92,11 @@ private final class LiveFixture: @unchecked Sendable {
         slotPressReturnsFalse: Bool = false,
         sliderWriteBehavior: SliderWriteBehavior = .direct,
         rejectSliderWrites: Bool = false,
+        rejectSliderInverseAcknowledgement: Bool = false,
         sliderDisplayUnit: String = "%",
         sliderDisplayRoundsDown: Bool = false,
         sliderUsesSignedPositiveDisplay: Bool = false,
+        onSliderDisplayAfterWrite: (@Sendable (FakeAXRuntimeBuilder, AXUIElement) -> Void)? = nil,
         pluginWindowStaticTextValues: [String]? = nil,
         pluginWindowTitleReadFails: Bool = false,
         pluginWindowsReadStatusBeforeTargetOpen: AXHelpers.AXStatusError? = nil,
@@ -402,6 +404,13 @@ private final class LiveFixture: @unchecked Sendable {
         let pendingPluginWindowChildren = MutableBox<(children: [AXUIElement], settlesAt: Date)?>(nil)
         let runtime = b.makeLogicRuntime(
             appElement: app,
+            attributeValueHandler: { element, attribute in
+                if CFEqual(element, slider), attribute == (kAXValueDescriptionAttribute as String),
+                   sliderWriteCount.value > 0 {
+                    onSliderDisplayAfterWrite?(b, slider)
+                }
+                return nil
+            },
             attributeValueResultHandler: { element, attribute in
                 if let status = pluginWindowsReadStatusBeforeTargetOpen,
                    CFEqual(element, app),
@@ -525,6 +534,7 @@ private final class LiveFixture: @unchecked Sendable {
                 if let landed {
                     b.setAttribute(el, kAXValueDescriptionAttribute as String, formatSliderDisplay(landed))
                 }
+                if rejectSliderInverseAcknowledgement, writeIndex > 0 { return false }
                 return true
             },
             performActionHandler: { [b, axActions] el, action in
@@ -1532,7 +1542,7 @@ private func namedEQBandParams(
     #expect(noCheckboxPress)
 }
 
-@Test func testFailedCompensatingCheckboxPressReportsTheChangedParameter() async throws {
+@Test func testUnknownCheckboxReadbackDoesNotClaimAChangedOrRestoredParameter() async throws {
     let fixture = LiveFixture(
         controlsViewRowLabel: "Limiter On",
         controlsCheckboxBefore: false,
@@ -1541,17 +1551,16 @@ private func namedEQBandParams(
     let result = await runLive(fixture: fixture, params: controlsBooleanParams())
 
     let state = try #require(result["state"] as? String)
-    let leftChanged = try #require(result["parameter_left_changed"] as? Bool)
-    let restorationObserved = try #require(result["restore_observed"] as? Bool)
-    let restoredValue = try #require(result["restore_observed_boolean"] as? Bool)
+    let restoreAttempted = try #require(result["restore_attempted"] as? Bool)
     let safeToRetry = try #require(result["safe_to_retry"] as? Bool)
-    let compensationWasAttempted = fixture.controlsCheckboxPressCount.value == 2
+    let onlyTheInitialPressWasSent = fixture.controlsCheckboxPressCount.value == 1
     #expect(state == "C")
-    #expect(leftChanged)
-    #expect(!restorationObserved)
-    #expect(restoredValue)
+    #expect(result["parameter_left_changed"] is NSNull)
+    #expect(result["restore_observed"] is NSNull)
+    #expect(result["restore_observed_boolean"] is NSNull)
+    #expect(!restoreAttempted)
     #expect(!safeToRetry)
-    #expect(compensationWasAttempted)
+    #expect(onlyTheInitialPressWasSent)
 }
 
 @Test func testCompressorControlsViewMixedNSNumberReadbackRefusesInsteadOfStateA() async throws {
@@ -1567,11 +1576,11 @@ private func namedEQBandParams(
     let writeAttempted = try #require(result["write_attempted"] as? Bool)
     let stateIsC = state == "C"
     let mixedReadbackWasNotVerified = error == "readback_lost_after_write"
-    let compensatingPressWasAttempted = fixture.controlsCheckboxPressCount.value == 2
+    let noBlindInverseWasSent = fixture.controlsCheckboxPressCount.value == 1
     #expect(stateIsC)
     #expect(mixedReadbackWasNotVerified)
     #expect(writeAttempted)
-    #expect(compensatingPressWasAttempted)
+    #expect(noBlindInverseWasSent)
 }
 
 @Test func testControlsLookupRefusalReportsFailedRestoreThatLeavesControlsSelected() async throws {
@@ -1698,15 +1707,15 @@ private func namedEQBandParams(
     let error = try #require(result["error"] as? String)
     let restorationFailureWasVisible = reportsFailedPluginViewRestoration(result)
     let rollbackAttempted = try #require(result["rollback_attempted"] as? Bool)
-    let parameterMayBeChanged = try #require(result["parameter_left_changed"] as? Bool)
     let reportedAXWriteFailure = error == "ax_write_failed"
     #expect(reportedAXWriteFailure)
     #expect(restorationFailureWasVisible)
-    #expect(rollbackAttempted)
-    #expect(parameterMayBeChanged)
+    #expect(!rollbackAttempted)
+    #expect(result["parameter_left_changed"] is NSNull)
+    #expect(fixture.sliderWriteCount.value == 1)
 }
 
-@Test func testDirectReadbackLossRollsBackAndReportsFailedViewRestore() async throws {
+@Test func testDirectReadbackLossWithholdsInverseAndReportsFailedViewRestore() async throws {
     let fixture = LiveFixture(
         sliderWriteBehavior: .scripted([nil, 51]),
         controlsViewInitiallySelected: true,
@@ -1717,25 +1726,21 @@ private func namedEQBandParams(
     let error = try #require(result["error"] as? String)
     let rollbackAttempted = try #require(result["rollback_attempted"] as? Bool)
     let rolledBack = try #require(result["rolled_back"] as? Bool)
-    let rollbackObserved = try #require(result["rollback_observed"] as? Double)
     let safeToRetry = try #require(result["safe_to_retry"] as? Bool)
-    let parameterLeftChanged = try #require(result["parameter_left_changed"] as? Bool)
     let restorationFailureWasVisible = reportsFailedPluginViewRestoration(result)
-    let rollbackWasWritten = fixture.sliderWriteCount.value == 2
+    let onlyTheInitialWriteWasSent = fixture.sliderWriteCount.value == 1
     let reportedReadbackLoss = error == "readback_lost_after_write"
-    let rollbackObservedOriginalValue = rollbackObserved == 51
-    let parameterWasNotLeftChanged = !parameterLeftChanged
     #expect(reportedReadbackLoss)
-    #expect(rollbackAttempted)
-    #expect(rolledBack)
-    #expect(rollbackObservedOriginalValue)
-    #expect(safeToRetry)
-    #expect(parameterWasNotLeftChanged)
+    #expect(!rollbackAttempted)
+    #expect(!rolledBack)
+    #expect(result["rollback_observed"] is NSNull)
+    #expect(!safeToRetry)
+    #expect(result["parameter_left_changed"] is NSNull)
     #expect(restorationFailureWasVisible)
-    #expect(rollbackWasWritten)
+    #expect(onlyTheInitialWriteWasSent)
 }
 
-@Test func testDirectReadbackLossWithFailedRollbackReportsParameterLeftChanged() async throws {
+@Test func testDirectReadbackLossWithWithheldRollbackReportsUnknownParameter() async throws {
     let fixture = LiveFixture(
         sliderWriteBehavior: .scripted([nil, nil]),
         controlsViewInitiallySelected: true,
@@ -1745,14 +1750,14 @@ private func namedEQBandParams(
 
     let rollbackAttempted = try #require(result["rollback_attempted"] as? Bool)
     let rolledBack = try #require(result["rolled_back"] as? Bool)
-    let parameterLeftChanged = try #require(result["parameter_left_changed"] as? Bool)
     let safeToRetry = try #require(result["safe_to_retry"] as? Bool)
     let restorationFailureWasVisible = reportsFailedPluginViewRestoration(result)
     let rollbackWasNotObserved = !rolledBack
     let retryIsNotSafe = !safeToRetry
-    #expect(rollbackAttempted)
+    #expect(!rollbackAttempted)
     #expect(rollbackWasNotObserved)
-    #expect(parameterLeftChanged)
+    #expect(result["parameter_left_changed"] is NSNull)
+    #expect(fixture.sliderWriteCount.value == 1)
     #expect(retryIsNotSafe)
     #expect(restorationFailureWasVisible)
 }
@@ -1762,9 +1767,9 @@ private func namedEQBandParams(
         thresholdDescription: channelEQFixtureAXDescription,
         pluginSlotName: "Channel EQ",
         beforeValue: 51,
-        // The write's readback is lost; compensation reaches 51.4 rather than
+        // The readable mismatch is owned; compensation reaches 51.4 rather than
         // the pre-write 51. This fixture declares tolerance 0 below.
-        sliderWriteBehavior: .scripted([nil, 51.4])
+        sliderWriteBehavior: .scripted([40, 51.4])
     )
     let result = try await runChannelEQFixture(
         fixture: fixture,
@@ -2958,6 +2963,137 @@ private func assertExpectedNameAcquisitionRefusal(eq: Bool, occupiedInsertRefere
     #expect((obj["rollback_attempted"] as? Bool)!)
     #expect((obj["rollback_succeeded"] as? Bool)!, "the rollback write to 51 lands and is confirmed")
     #expect(fixture.currentSliderValue == 51)
+}
+
+@Test func testUnknownCheckboxAfterPressDoesNotSendBlindInverse() async throws {
+    let fixture = LiveFixture(
+        controlsViewRowLabel: "Limiter On", controlsCheckboxBefore: false,
+        controlsCheckboxWriteBehavior: .mixedThenChanged,
+        controlsViewInitiallySelected: true, viewSettleDelay: 0
+    )
+    let result = await runLive(fixture: fixture, params: controlsBooleanParams())
+    #expect(fixture.controlsCheckboxPressCount.value == 1)
+    let raw = try #require(fixture.builder.attributeValue(
+        fixture.builder.element(100_908), kAXValueAttribute as String) as? NSNumber)
+    #expect(raw.intValue == 2)
+    #expect(result["state"] as? String == "C")
+    #expect(result["error"] as? String == "readback_lost_after_write")
+    let attempted = try #require(result["restore_attempted"] as? Bool)
+    let safe = try #require(result["safe_to_retry"] as? Bool)
+    #expect(!attempted)
+    #expect(!safe)
+    #expect(result["observed_boolean"] is NSNull)
+}
+
+@Test func testUnknownSliderAfterWriteDoesNotSendBlindInverse() async throws {
+    let fixture = LiveFixture(sliderWriteBehavior: .scripted([nil, 51]))
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == nil)
+    #expect(result["error"] as? String == "readback_lost_after_write")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    let safe = try #require(result["safe_to_retry"] as? Bool)
+    #expect(!attempted)
+    #expect(!safe)
+}
+
+@Test func testSliderRollbackDoesNotOverwriteNewerUserValue() async throws {
+    let edits = MutableBox(0)
+    let fixture = LiveFixture(
+        sliderWriteBehavior: .scripted([40, 51]),
+        onSliderDisplayAfterWrite: { builder, slider in
+            if edits.value == 0 {
+                // The write's independent numeric readback already observed 40.
+                // A later user edit lands while its display is being read.
+                edits.value += 1
+                builder.setAttribute(slider, kAXValueAttribute as String, 75.0)
+            }
+        }
+    )
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(edits.value == 1)
+    #expect(result["observed_normalized"] as? Double == 40)
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 75)
+    #expect(result["error"] as? String == "readback_mismatch")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    let safe = try #require(result["safe_to_retry"] as? Bool)
+    #expect(!attempted)
+    #expect(!safe)
+}
+
+@Test(arguments: ["slot", "control", "gate", "cancellation"])
+func testSliderRollbackRequiresItsStillOwnedTarget(_ loss: String) async throws {
+    let injected = MutableBox(false)
+    let fixture = LiveFixture(
+        sliderWriteBehavior: .scripted([40, 51]),
+        onSliderDisplayAfterWrite: { builder, _ in
+            guard !injected.value else { return }
+            injected.value = true
+            if loss == "slot" {
+                builder.setAttribute(builder.element(1306), kAXDescriptionAttribute as String, "Noise Gate")
+            } else if loss == "control" {
+                let replacement = builder.element(100_999)
+                builder.setRole(replacement, kAXSliderRole as String)
+                builder.setAttribute(replacement, kAXDescriptionAttribute as String, "Threshold")
+                builder.setAttribute(replacement, kAXValueAttribute as String, 40.0)
+                let window = builder.element(1004)
+                let children = builder.makeAXRuntime().children(window)
+                builder.setChildren(window, children.map { CFEqual($0, builder.element(1005)) ? replacement : $0 })
+            }
+        }
+    )
+    let context = OperationTraceContext(mutationGateAcquired: true,
+        ownsGate: { loss != "gate" || !injected.value },
+        cancellationRequested: { loss == "cancellation" && injected.value })
+    let result = await OperationTraceContext.$current.withValue(context) {
+        await runLive(fixture: fixture, params: thresholdParams())
+    }
+    #expect(injected.value)
+    #expect(result["observed_normalized"] as? Double == 40)
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 40)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test func testSliderAlreadyAtBeforeDoesNotClaimAnInverse() async throws {
+    let fixture = LiveFixture(beforeValue: 51, forcedAfterValue: 51)
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 51)
+    #expect(result["error"] as? String == "readback_mismatch")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    let rolledBack = try #require(result["rolled_back"] as? Bool)
+    let leftChanged = try #require(result["parameter_left_changed"] as? Bool)
+    #expect(!attempted)
+    #expect(!rolledBack)
+    #expect(!leftChanged)
+}
+
+@Test(arguments: ["unknown", "before_despite_failed_ack"])
+func testSliderInverseReceiptUsesIndependentStateNotAttemptStatus(_ state: String) async throws {
+    let fixture = LiveFixture(
+        sliderWriteBehavior: .scripted([40, state == "unknown" ? nil : 51]),
+        rejectSliderInverseAcknowledgement: state != "unknown"
+    )
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(fixture.sliderWriteCount.value == 2)
+    #expect(result["observed_normalized"] as? Double == 40)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    #expect(attempted)
+    if state == "unknown" {
+        #expect(fixture.currentSliderValue == nil)
+        #expect(result["rollback_observed"] is NSNull)
+        #expect(result["parameter_left_changed"] is NSNull)
+    } else {
+        #expect(fixture.currentSliderValue == 51)
+        #expect(result["rollback_observed"] as? Double == 51)
+        let changed = try #require(result["parameter_left_changed"] as? Bool)
+        #expect(!changed)
+    }
 }
 
 // MARK: - State C: window not found → window_open_failed
