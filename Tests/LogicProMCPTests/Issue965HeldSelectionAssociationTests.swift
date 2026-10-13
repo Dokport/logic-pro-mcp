@@ -254,6 +254,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingRemovedSend: AccessibilityChannel.RemovedSendObservation?
         var routingRemovalPermittedAtPublication: Bool?
         var routingIndependentSendReads = 0
+        var routingOpenedOutputIndex: Int?
+        var routingScalarControls: [AXUIElement] = []
         var routingClassifierHelpReads = 0
         var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
@@ -363,6 +365,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, window), attribute == kAXHelpAttribute as String { presentationCensusReads += 1 }
                     routingRead?(element, attribute)
+                    if routingScalarControls.contains(where: { CFEqual($0, element) }),
+                       [kAXValueAttribute as String, kAXMinValueAttribute as String, kAXMaxValueAttribute as String].contains(attribute) {
+                        return .some(builder.attributeValue(element, attribute) as AnyObject?)
+                    }
                     if CFEqual(element, scroll), selections.count == 1 {
                         if attribute == kAXRoleAttribute as String {
                             zoomRoleReadsAfterSelection += 1
@@ -645,6 +651,296 @@ struct Issue965HeldSelectionAssociationTests {
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
         return try #require(sharedJSONObject(sharedToolText(result)))
+    }
+
+    @Test("A checked physical output intent keeps the actual opposite-ordinal association in its canonical task",
+          arguments: ["forward", "cancel", "late_peer", "unread_scalar", "unread_range", "boolean_scalar", "stereo", "no_op", "ack_only", "newer", "retired", "late_project", "absent_pan", "occupied_peer", "late_peer_send", "known_plugin", "unread_plugin", "unread_plugin_bypass"])
+    func canonicalPhysicalOutputUsesTheCapturedPair(mode: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = try Fixture(), cache = StateCache(), registry = TargetRegistry()
+                let outer = f.builder.element(1_973_090)
+                f.builder.setNamedContainer(f.mixer, role: kAXLayoutAreaRole as String, description: "Mixer",
+                    x: 0, y: 0, width: 400, height: 400)
+                f.builder.setRole(outer, kAXGroupRole as String)
+                f.builder.setAttribute(outer, kAXDescriptionAttribute as String, "Mixer")
+                f.builder.setChildren(outer, [f.mixer])
+                f.builder.setChildren(f.window, [f.rail, outer, f.builder.element(1_965_720)])
+                f.routingReadResult = { element, attribute in
+                    if mode == "unread_scalar", CFEqual(element, f.builder.element(1_973_121)),
+                       attribute == kAXValueAttribute as String {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                    if f.strips.contains(where: { CFEqual($0, element) }) || f.routingReplacement.map({ CFEqual($0, element) }) == true,
+                       [kAXNumberOfCharactersAttribute as String, kAXInsertionPointLineNumberAttribute as String].contains(attribute) {
+                        return .success(NSNumber(value: 0))
+                    }
+                    return nil
+                }
+                let outputs = f.strips.indices.map { f.builder.element(1_973_100 + $0) }
+                let root = f.builder.element(1_973_110), parent = f.builder.element(1_973_111)
+                let submenu = f.builder.element(1_973_112), stereo = f.builder.element(1_973_113)
+                let physical = f.builder.element(1_973_114)
+                let echo = f.builder.element(1_973_115)
+                f.builder.setRole(echo, kAXMenuItemRole as String)
+                f.builder.setAttribute(echo, "AXMenuItemMarkChar", "✓")
+                f.builder.setChildren(echo, [])
+                f.routingRead = { element, attribute in
+                    if outputs.contains(where: { CFEqual($0, element) }), attribute == kAXHelpAttribute as String {
+                        f.routingClassifierHelpReads += 1
+                    }
+                    if mode == "late_peer", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                        f.routingLateScopeInjected = true
+                        f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                    }
+                    if mode == "late_project", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                        f.routingLateScopeInjected = true
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    if mode == "late_peer_send", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                        f.routingLateScopeInjected = true
+                        f.builder.setAttribute(f.builder.element(1_973_151), kAXDescriptionAttribute as String, "Bus 1")
+                    }
+                }
+                for index in outputs.indices {
+                    f.builder.setButton(outputs[index], description: (index == 0) != (mode == "stereo") ? "Output 3-4" : "Stereo Output",
+                        help: "Output slot. Choose the channel strip output.", x: 0, y: 0, width: 1, height: 1)
+                    f.builder.setChildren(outputs[index], [])
+                    f.builder.setActionNames(outputs[index], [kAXPressAction as String])
+                    let volume = f.builder.element(1_973_120 + index * 2), pan = f.builder.element(1_973_121 + index * 2)
+                    for (control, description, value, minimum, maximum) in [
+                        (volume, "Volume", 100.0, 0.0, 233.0), (pan, "Pan", 0.2, -1.0, 1.0)
+                    ] {
+                        f.builder.setRole(control, kAXSliderRole as String)
+                        f.builder.setAttribute(control, kAXDescriptionAttribute as String, description)
+                        f.builder.setAttribute(control, kAXValueAttribute as String, NSNumber(value: value))
+                        f.builder.setAttribute(control, kAXMinValueAttribute as String, NSNumber(value: minimum))
+                        f.builder.setAttribute(control, kAXMaxValueAttribute as String, NSNumber(value: maximum))
+                        f.builder.setChildren(control, [])
+                        f.routingScalarControls.append(control)
+                    }
+                    f.builder.setChildren(f.strips[index], f.builder.makeAXRuntime().children(f.strips[index]) + [outputs[index], volume, pan])
+                }
+                if mode == "unread_scalar" {
+                    f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNull())
+                }
+                if mode == "unread_range" {
+                    f.builder.setAttribute(f.builder.element(1_973_120), kAXMinValueAttribute as String, NSNull())
+                }
+                if mode == "boolean_scalar" {
+                    f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: false))
+                }
+                if mode == "absent_pan" {
+                    f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]).filter {
+                        !CFEqual($0, f.builder.element(1_973_121))
+                    })
+                }
+                if mode == "occupied_peer" || mode == "late_peer_send" {
+                    let anchor = f.builder.element(1_973_150), group = f.builder.element(1_973_151)
+                    let bypass = f.builder.element(1_973_152), list = f.builder.element(1_973_153)
+                    let knob = f.builder.element(1_973_154)
+                    f.builder.setButton(anchor, description: "send button", help: "Send slot. Route signal.", x: 0, y: 0, width: 1, height: 1)
+                    f.builder.setChildren(anchor, [])
+                    f.builder.setRole(group, kAXGroupRole as String)
+                    f.builder.setAttribute(group, kAXDescriptionAttribute as String, "Stereo Output")
+                    f.builder.setRole(bypass, kAXCheckBoxRole as String)
+                    f.builder.setAttribute(bypass, kAXValueAttribute as String, 0)
+                    f.builder.setChildren(bypass, [])
+                    f.builder.setRole(list, kAXButtonRole as String)
+                    f.builder.setAttribute(list, kAXDescriptionAttribute as String, "list")
+                    f.builder.setChildren(list, []); f.builder.setChildren(group, [bypass, list])
+                    f.builder.setRole(knob, kAXSliderRole as String)
+                    f.builder.setAttribute(knob, kAXHelpAttribute as String, "Send Level knob. Set level.")
+                    f.builder.setAttribute(knob, kAXValueAttribute as String, NSNumber(value: 0))
+                    f.builder.setChildren(knob, []); f.routingScalarControls.append(knob)
+                    f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [anchor, group, knob])
+                }
+                if ["known_plugin", "unread_plugin", "unread_plugin_bypass"].contains(mode) {
+                    let plugin = Issue982UnreadChildrenTests.occupiedSlot(f.builder, 1_973_160, name: "Compressor")
+                    if mode == "unread_plugin" { f.builder.setAttribute(plugin, kAXDescriptionAttribute as String, NSNull()) }
+                    if mode == "unread_plugin_bypass" {
+                        f.builder.setAttribute(f.builder.element(19_731_601), kAXValueAttribute as String, NSNull())
+                    }
+                    f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [plugin])
+                }
+                for (element, role) in [(root, kAXMenuRole), (parent, kAXMenuItemRole),
+                    (submenu, kAXMenuRole), (stereo, kAXMenuItemRole), (physical, kAXMenuItemRole)] {
+                    f.builder.setRole(element, role as String)
+                }
+                f.builder.setAttribute(parent, kAXTitleAttribute as String, "Output")
+                f.builder.setAttribute(stereo, kAXTitleAttribute as String, "Stereo Output")
+                f.builder.setAttribute(physical, kAXTitleAttribute as String, "Output 3-4")
+                f.builder.setAttribute(stereo, kAXEnabledAttribute as String, true)
+                f.builder.setAttribute(physical, kAXEnabledAttribute as String, true)
+                f.builder.setChildren(stereo, []); f.builder.setChildren(physical, [])
+                f.builder.setChildren(submenu, [stereo, physical]); f.builder.setChildren(parent, [submenu])
+                f.builder.setChildren(root, [echo, parent]); f.builder.setActionNames(root, [kAXCancelAction as String])
+                f.routingAction = { element, action in
+                    if action == kAXPressAction as String,
+                       let index = outputs.firstIndex(where: { CFEqual($0, element) }) {
+                        let label = f.builder.attributeValue(outputs[index], kAXDescriptionAttribute as String) as? String
+                        f.builder.setAttribute(echo, kAXTitleAttribute as String, label)
+                        f.routingOpenedOutputIndex = index
+                        f.builder.setAttribute(stereo, "AXMenuItemMarkChar", label == "Stereo Output" ? "✓" : "")
+                        f.builder.setAttribute(physical, "AXMenuItemMarkChar", label == "Output 3-4" ? "✓" : "")
+                        f.builder.setChildren(f.mixer, [f.strips[0], f.routingReplacement ?? f.strips[1], root])
+                        f.inputMenuPresses += 1
+                        return true
+                    }
+                    if CFEqual(element, root), action == kAXCancelAction as String {
+                        f.routingOpenedOutputIndex = nil
+                        f.builder.setChildren(f.mixer, [f.strips[0], f.routingReplacement ?? f.strips[1]])
+                        f.inputMenuCancels += 1; return true
+                    }
+                    if action == kAXPressAction as String, CFEqual(element, physical) || CFEqual(element, stereo),
+                       let index = f.routingOpenedOutputIndex {
+                        f.routingDestinationPresses += 1
+                        if mode != "ack_only" {
+                            f.builder.setAttribute(outputs[index], kAXDescriptionAttribute as String,
+                                CFEqual(element, physical) ? "Output 3-4" : "Stereo Output")
+                        }
+                        f.routingOpenedOutputIndex = nil
+                        if mode == "retired", f.routingReplacement == nil {
+                            let replacement = f.builder.element(1_973_140)
+                            f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                            f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                            f.builder.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                            f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[1]))
+                            f.routingReplacement = replacement
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                        }
+                        f.builder.setChildren(f.mixer, [f.strips[0], f.routingReplacement ?? f.strips[1]])
+                        return true
+                    }
+                    f.routingDestinationPresses += 1
+                    Issue.record("Capture must never press an output destination"); return false
+                }
+                let domains = ["tracks", "strips", "associations", "routing"]
+                let inspected = try await inspect(f, cache: cache, registry: registry, domains: domains, scope: "selection")
+                let id = try #require(inspected["snapshot_id"] as? String)
+                let retained = try #require(await cache.retainedInspection(id: id))
+                let capture = retained.capture
+                let stable = try #require(capture.freshPopulation?.stable)
+                #expect(stable)
+                if ["known_plugin", "unread_plugin", "unread_plugin_bypass"].contains(mode) {
+                    let slots = try #require(AXLogicProElements.audioPluginInsertSlots(in: f.strips[0], runtime: f.logic().ax))
+                    #expect(slots.count == 1 && slots[0].occupied)
+                    #expect(slots[0].readStatus == (mode == "unread_plugin" ? .occupiedUnreadable : .occupiedReadable))
+                    #expect([slots[0].isBypassed] == [mode == "unread_plugin_bypass" ? nil : false])
+                }
+                if mode == "occupied_peer" || mode == "late_peer_send" {
+                    let occupied = try #require(capture.channelStrips[0].sendSlots?.first { $0.state == .occupiedUnknownDestination })
+                    #expect(occupied.levelRaw == 0 && occupied.destinationDisplay == "Stereo Output")
+                    let bypassed = try #require(occupied.bypassed)
+                    #expect(!bypassed)
+                }
+                for (index, row) in capture.channelStrips.enumerated() where mode != "unread_scalar" {
+                    let volume = try #require(AXLogicProElements.findVolumeFader(in: f.strips[index], runtime: f.logic().ax, requireUnique: true))
+                    #expect(row.volume == AXValueExtractors.extractLogicMixerFaderValue(volume, runtime: f.logic().ax))
+                    if mode == "absent_pan", index == 0 {
+                        #expect(row.pan == 0)
+                    } else {
+                        let pan = try #require(AXLogicProElements.findPanControl(in: f.strips[index], runtime: f.logic().ax, requireUnique: true))
+                        #expect(row.pan == AXValueExtractors.extractCenteredSliderValue(pan, runtime: f.logic().ax))
+                    }
+                }
+                let pair = try #require(capture.freshPopulation?.selectionAssociations.first {
+                    CFEqual($0.track.header, f.headers[0])
+                })
+                #expect(CFEqual(pair.strip.strip, f.strips[1]), "The captured pair is not an ordinal join")
+                #expect(capture.freshPopulation?.checkedOutputs.filter {
+                    $0.source.matches(pair.strip) && $0.assignment == (mode == "stereo" ? .physical(3, 4) : .stereoOutput) && $0.sendOrdinal == nil
+                }.count == 1, "Actual outputs=\(capture.channelStrips.map(\.output)), Help reads=\(f.routingClassifierHelpReads), presses=\(f.inputMenuPresses), stable=\(capture.freshPopulation?.stable)")
+                #expect(f.inputMenuPresses == 2 && f.inputMenuCancels == 2 && f.routingDestinationPresses == 0)
+                let target = try #require(capture.issued?.byRow[0])
+                guard case .issued(let project)? = capture.projectIssuance else {
+                    Issue.record("Actual capture must issue the project"); return
+                }
+                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue),
+                    "targets": .array([.object(["handle": .string("source"), "track_ref": .string(target.rawValue)])]),
+                    "outputs": .array([.object(["target": .string("source"),
+                        "output": mode == "stereo" || mode == "no_op" ? .object(["kind": .string("stereo_output")])
+                            : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])])])]
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                    Issue.record("The explicit typed physical output must parse"); return
+                }
+                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: [], capture: capture, request: retained.request, snapshotCurrent: true)
+                let body = try #require(sharedJSONObject(plan.json))
+                let executable = try #require(body["executable"] as? Bool)
+                if ["unread_scalar", "unread_range", "boolean_scalar", "unread_plugin", "unread_plugin_bypass"].contains(mode) {
+                    if mode == "unread_scalar" || mode == "boolean_scalar" { #expect(capture.channelStrips[0].pan == 0, "The legacy fallback is not an observed protected baseline") }
+                    #expect(!executable)
+                    #expect(f.routingDestinationPresses == 0)
+                    return
+                }
+                #expect(executable)
+                if ["absent_pan", "occupied_peer", "late_peer_send"].contains(mode), body["executable"] as? Bool != true { return }
+                let steps = try #require(body["steps"] as? [[String: Any]])
+                #expect(steps.count == 1 && steps[0]["target_ref"] as? String == target.rawValue)
+                #expect((steps[0]["before"] as? [String: Any])?["kind"] as? String == (mode == "stereo" ? "physical" : "stereo_output"))
+                #expect((steps[0]["after"] as? [String: Any])?["kind"] as? String == (mode == "stereo" || mode == "no_op" ? "stereo_output" : "physical"))
+                #expect(await cache.retainRepairPlan(plan, snapshotID: id))
+                let journal = SagaJournal(), key = "captured-physical-output-" + mode
+                let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
+                    key: key, cache: cache, registry: registry, journal: journal))
+                #expect(approval.plan.steps.count == 1 && approval.plan.steps[0].operationID == .mixerSetOutputVerified)
+                #expect(approval.plan.steps[0].targetRef == target)
+                let router = ChannelRouter()
+                await router.register(f.channel())
+                func run() async -> CallTool.Result {
+                    await SystemDispatcher.handle(command: "saga_execute", params: [:], router: router,
+                        cache: cache, targetRegistry: registry, dialogPresent: { false }, sagaJournal: journal,
+                        mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {
+                            if mode == "newer" {
+                                f.builder.setAttribute(outputs[1], kAXDescriptionAttribute as String, "Output 5-6")
+                            }
+                            if ["cancel", "newer", "ack_only"].contains(mode) { _ = await journal.cancel(idempotencyKey: key) }
+                        }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
+                }
+                let result = try #require(sharedJSONObject(sharedToolText(await run())))
+                if mode == "late_peer" || mode == "late_project" || mode == "late_peer_send" {
+                    #expect(f.routingLateScopeInjected, "Reach the protected peer mutation during this source's popup")
+                    if mode == "late_peer" { #expect(f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String == f.bundle.absoluteString) }
+                    #expect(pair.strip.currentIndex(runtime: f.logic()) == (mode == "late_project" ? nil : 1))
+                    #expect(f.routingDestinationPresses == 0, "Unchanged source and document alone cannot authorize the changed footprint")
+                    #expect(result["saga_state"] as? String != "completed")
+                } else if mode == "newer" || mode == "ack_only" {
+                    #expect(f.routingDestinationPresses == 1, "An unverified or newer value cannot authorize compensation")
+                    #expect(result["saga_state"] as? String != "completed")
+                } else {
+                    #expect(result["saga_state"] as? String == (mode == "cancel" ? "fullyCompensated" : "completed"))
+                    let verified = try #require(result["verified"] as? Bool)
+                    if mode == "cancel" { #expect(!verified) } else { #expect(verified) }
+                    #expect(f.routingDestinationPresses == (mode == "cancel" ? 2 : mode == "no_op" ? 0 : 1))
+                }
+                #expect(f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String
+                    == (mode == "newer" ? "Output 5-6" : ["forward", "retired", "absent_pan", "occupied_peer", "known_plugin"].contains(mode) ? "Output 3-4" : "Stereo Output"))
+                #expect(f.builder.attributeValue(outputs[0], kAXDescriptionAttribute as String) as? String == (mode == "stereo" ? "Stereo Output" : "Output 3-4"))
+                if mode == "retired" {
+                    #expect(pair.strip.currentIndex(runtime: f.logic()) == nil)
+                    #expect(f.routingReplacement != nil && !f.selections.isEmpty, "Renewal must re-observe the original header's actual pair")
+                }
+                let selected = try #require(AXValueExtractors.extractSelectedState(f.headers[0], runtime: f.logic().ax))
+                #expect(selected)
+                let request = try #require(ApprovedSessionRepair.ApplyRequest.parse([
+                    "plan_id": .string(plan.id), "digest": .string(plan.digest), "confirmed": .bool(true),
+                    "idempotency_key": .string(key)]))
+                let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                    poller: StatePoller(axChannel: f.channel(), cache: cache, runtime: .init(hasVisibleWindow: { false })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                    mutationGate: LogicMutationGate(), liveTrackNames: { [:] }, projectFileReader: .unavailable)
+                let presses = f.routingDestinationPresses
+                let replay = try #require(sharedJSONObject(sharedToolText(await ApprovedSessionRepair.apply(request: request, dependencies: dependencies))))
+                let duplicate = try #require(replay["duplicate"] as? Bool)
+                #expect(duplicate)
+                #expect(f.routingDestinationPresses == presses)
+            }
+        }
     }
 
     @Test("Association-only acquisition omits unrequested routing classification without replacing observed scalars",

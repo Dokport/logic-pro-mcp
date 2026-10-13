@@ -173,6 +173,11 @@ extension TrackState {
 
 /// Mixer channel strip state (extends track with routing info).
 struct ChannelStripState: Sendable, Codable {
+    enum ScalarReadback: Sendable, Equatable {
+        case observed(raw: Double, minimum: Double, maximum: Double)
+        /// The complete owned slider census proved no such scalar control.
+        case noControl
+    }
     var trackIndex: Int
     /// Retained by typed AX producers/cache only; JSON fallback has no physical write authority.
     var physicalBinding: AXMixerStripBinding.Binding? = nil
@@ -184,6 +189,10 @@ struct ChannelStripState: Sendable, Codable {
     var nameReadError: String?
     var volume: Double = 0.0
     var pan: Double = 0.0
+    /// Typed extraction results, never the legacy zero fallback. Retained only in process;
+    /// decoded or unread scalar values cannot protect an approved routing footprint.
+    var volumeReadback: ScalarReadback? = nil
+    var panReadback: ScalarReadback? = nil
     /// The strip's sends, when they have been READ (#291).
     ///
     /// This was `[SendState] = []`, so every strip of every project serialised `"sends": []` — and
@@ -221,6 +230,9 @@ struct ChannelStripState: Sendable, Codable {
     /// Why the chain was not read when a read was attempted, for example a strip whose children
     /// did not read (#982). `plugins` is then empty because nobody saw it, not because it is.
     var pluginsReadError: String?
+    /// The same typed insert census read every occupied name and bypass. Nil is not read;
+    /// false must not become a protected empty/default-false plug-in baseline. Not Codable.
+    var pluginsFullyObserved: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case trackIndex, name, volume, pan, sends, input, output, eqEnabled, plugins

@@ -118,18 +118,20 @@ extension ProjectSessionAudit {
         // receiving-aux branches are reachable only through a graph that carries one.
         let graph = graphOverride ?? SessionPopulationObservation.routingGraph(capture: capture)
         let assessment = assessIntent(policy: policy, capture: capture, graph: graph)
+        let localOutputStep = ApprovedSessionRepair.capturedOutputStep(policy: policy, names: names,
+            source: capture, request: request)
         let viewOnly = policy.mixerVisible != nil && policy.trackSort == nil && policy.targets.isEmpty && policy.roles.isEmpty
             && policy.outputs.isEmpty && policy.sends.isEmpty && policy.receivers.isEmpty && names.isEmpty && policy.protectedPaths.isEmpty
         var reasons = Set<String>()
         reasons.formUnion(naming.reasons.values)
         if !snapshotCurrent { reasons.insert("snapshot_changed") }
-        if !viewOnly && request.scope != .wholeProject { reasons.insert("whole_project_scope_required") }
+        if !viewOnly && localOutputStep == nil && request.scope != .wholeProject { reasons.insert("whole_project_scope_required") }
         let gate = assessmentGate(policy: policy, capture: capture, graph: graph)
-        if !viewOnly, let gate { reasons.insert(gate.reason.rawValue) }
+        if !viewOnly && localOutputStep == nil, let gate { reasons.insert(gate.reason.rawValue) }
         // The whole binding the assessor applies: the gate, and the registry epoch it checks per
         // finding (#1090 review R2, R1090-002). Receiver evidence is read only from a graph both pass.
         let epochMismatch = graphEpochMismatch(graph, capture: capture)
-        if !viewOnly, let epochMismatch { reasons.insert(epochMismatch.rawValue) }
+        if !viewOnly && localOutputStep == nil, let epochMismatch { reasons.insert(epochMismatch.rawValue) }
         let graphBound = gate == nil && epochMismatch == nil
         var proposalReadReasons = reasons
         if !request.domains.contains(.routing) { proposalReadReasons.insert("routing_not_requested") }
@@ -307,6 +309,12 @@ extension ProjectSessionAudit {
             if let id = aux.objectValue?["id"]?.stringValue { recordRoutingPrefix(id, after: nil) }
         }
         for finding in assessment.findings {
+            if let localOutputStep {
+                // The direct physical/Stereo task has its own checked local footprint.
+                // It neither consumes nor promotes the partial graph's classifications.
+                steps.append(localOutputStep)
+                continue
+            }
             if finding.status == .compliant, proposalReadReasons.isEmpty {
                 unchanged.append(.string(finding.id))
                 continue
@@ -549,7 +557,7 @@ extension ProjectSessionAudit {
             "steps": .array(steps), "preview": .array(steps),
             "unchanged_tasks": .array(unchanged), "questions": try repairPlanValue(assessment.questions),
             "receiver_questions": .array(receiverQuestions.keys.sorted().compactMap { receiverQuestions[$0] }),
-            "findings": .array(try assessment.findings.map { try repairPlanValue($0) }
+            "findings": .array(try (localOutputStep == nil ? assessment.findings : []).map { try repairPlanValue($0) }
                 + (assessment.sendFindings ?? []).map { try repairPlanValue($0) }),
             "new_object_inventory": .array(inventory),
             "planning_options": options.wire,

@@ -12,10 +12,12 @@ extension AXLogicProElements {
     /// listed a software instrument's instrument slot as an insert.
     static func pluginSlots(
         in strip: AXUIElement,
-        runtime: AXHelpers.Runtime = .production
+        runtime: AXHelpers.Runtime = .production,
+        observingSlots: ([PluginInsertSlot]) -> Void = { _ in }
     ) -> [PluginSlotState]? {
         guard let children = childrenIfRead(strip, runtime: runtime) else { return nil }
         let slots = audioPluginInsertSlots(children: children, runtime: runtime)
+        observingSlots(slots)
         guard !slots.contains(where: { $0.readStatus == .unclassified }) else { return nil }
         return slots.compactMap { slot in
             guard slot.readStatus == .occupiedReadable, let name = slot.name else { return nil }

@@ -30,6 +30,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     @TaskLocal static var current: ApprovedSessionRepair?
+    @TaskLocal static var outputLeafPermission: (@Sendable (AXUIElement) -> Bool)?
     private struct MixerTask: Sendable {
         let before: Bool
         let desired: Bool
@@ -49,6 +50,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let binding: SessionPopulationObservation.PresentationBinding
         let snapshot: TargetRegistrySnapshot
     }
+    private struct OutputTask: Sendable {
+        let reference: TargetReference
+        let mixerRef: TargetReference
+        let pair: AccessibilityChannel.HeldSelectionAssociation.Pair
+        let before: OutputAssignment
+        let desired: OutputAssignment
+        let capture: SessionPopulationObservation.Capture
+        let handle: String
+    }
     private struct CapturedGoals: Sendable {
         let projectRef: TargetReference
         let document: String
@@ -57,6 +67,98 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let renameCapture: SessionPopulationObservation.Capture?
         var selectionOrigin: AXTrackBinding.Binding? = nil
         var sort: SortTask? = nil
+        var output: OutputTask? = nil
+    }
+
+    private static func localAssignment(_ destination: ProjectSessionAudit.IntentMainOutput) -> OutputAssignment? {
+        switch destination {
+        case .physical(let first, let second): return .physical(first, second)
+        case .stereoOutput: return .stereoOutput
+        default: return nil
+        }
+    }
+
+    private static func assignmentValue(_ assignment: OutputAssignment) -> Value {
+        switch assignment {
+        case .physical(let first, let second): return .object(["kind": .string("physical"), "ports": .array([.int(first), .int(second)])])
+        case .stereoOutput: return .object(["kind": .string("stereo_output")])
+        case .bus(let number): return .object(["kind": .string("bus"), "number": .int(number)])
+        case .noOutput: return .object(["kind": .string("no_output")])
+        }
+    }
+
+    /// A local direct-output contract, not a complete routing-graph claim. All observations
+    /// are immutable facts from the same request; execution still renews their physical custody.
+    private static func capturedOutput(policy: ProjectSessionAudit.IntentPolicy, names: [ProjectSessionAudit.ApprovedName],
+                                       source: SessionPopulationObservation.Capture,
+                                       request: SessionPopulationObservation.Request) -> OutputTask? {
+        guard FeatureFlags.adr002TargetRef, FeatureFlags.adr004MutationSaga,
+              names.isEmpty, policy.targets.count == 1, policy.outputs.count == 1,
+              policy.roles.isEmpty, policy.sends.isEmpty, policy.receivers.isEmpty, policy.protectedPaths.isEmpty,
+              policy.trackSort == nil, policy.mixerVisible == nil,
+              let target = policy.targets.first, target.mixerRef == nil,
+              let output = policy.outputs.first, output.subject == .target(target.handle),
+              let desired = localAssignment(output.destination), request.allowUINavigation,
+              Set([SessionPopulationObservation.Domain.tracks, .strips, .associations, .routing]).isSubset(of: request.domains),
+              source.before == source.after, source.referencesEnabled, !source.referencesStale,
+              source.requestedProjectMatches != false, !source.before.axOccluded,
+              case .issued(let project)? = source.projectIssuance, policy.projectRef == project,
+              let fresh = source.freshPopulation, fresh.stable, fresh.uiEffects.restoration == "restored",
+              let refs = source.issued, case .located(let index) = ProjectSessionAudit.locate(target.trackRef, in: refs),
+              source.tracks.allSatisfy({ $0.selectionReadback != nil }),
+              source.tracks.filter({ $0.selectionReadback == true }).count == 1 else { return nil }
+        let rows = source.tracks.filter { $0.id == index }
+        guard rows.count == 1, let row = rows.first, row.selectionReadback == true,
+              let track = row.physicalBinding, track.exposure?.hasEnded != true,
+              let path = source.project.filePath, track.projectPath?.utf8.elementsEqual(path.utf8) == true else { return nil }
+        let pairs = fresh.selectionAssociations.filter { $0.track.matches(track) }
+        guard pairs.count == 1, let pair = pairs.first,
+              fresh.selectionAssociations.filter({ $0.strip.matches(pair.strip) }).count == 1,
+              CFEqual(pair.track.window, pair.strip.window),
+              pair.track.document.utf8.elementsEqual(pair.strip.document.utf8) else { return nil }
+        let strips = source.channelStrips.indices.filter { source.channelStrips[$0].physicalBinding?.matches(pair.strip) == true }
+        let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == nil }
+        guard strips.count == 1, let stripIndex = strips.first, let mixerRef = source.mixerReference(at: stripIndex),
+              checked.count == 1, let before = checked.first?.assignment,
+              localAssignmentForBefore(before) != nil,
+              source.channelStrips.allSatisfy({ strip in
+                  guard let binding = strip.physicalBinding, strip.name != nil, strip.nameReadError == nil,
+                        strip.volumeReadback != nil, strip.panReadback != nil,
+                        strip.pluginsSource == "ax", strip.pluginsReadError == nil, strip.pluginsFullyObserved == true,
+                        let input = strip.inputObservation, input.state != .unreadable,
+                        let sends = strip.sendSlots else { return false }
+                  if binding.matches(pair.strip) {
+                      guard sends.allSatisfy({ $0.state == .observedEmpty }) else { return false }
+                  } else {
+                      // Peers are preserved observations, not destinations or writer targets.
+                      // Unknown endpoint identity is honest; an unread level/display/bypass is
+                      // not a complete peer baseline, nor is an ambiguous multi-knob run.
+                      guard sends.allSatisfy({ send in
+                          send.state == .observedEmpty || (send.state == .occupiedUnknownDestination
+                              && send.levelRaw?.isFinite == true && send.bypassed != nil
+                              && send.destinationDisplay?.isEmpty == false)
+                      }) else { return false }
+                  }
+                  return source.channelStrips.filter { $0.physicalBinding?.matches(binding) == true }.count == 1
+              }), fresh.checkedOutputs.contains(where: { $0.sendOrdinal == nil && $0.assignment == desired }) else { return nil }
+        return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair, before: before, desired: desired,
+            capture: source, handle: target.handle)
+    }
+
+    private static func localAssignmentForBefore(_ assignment: OutputAssignment) -> OutputAssignment? {
+        switch assignment { case .physical, .stereoOutput: return assignment; default: return nil }
+    }
+
+    static func capturedOutputStep(policy: ProjectSessionAudit.IntentPolicy, names: [ProjectSessionAudit.ApprovedName],
+                                   source: SessionPopulationObservation.Capture,
+                                   request: SessionPopulationObservation.Request) -> Value? {
+        guard let task = capturedOutput(policy: policy, names: names, source: source, request: request) else { return nil }
+        return .object(["id": .string("output_" + task.handle), "kind": .string("local_output"),
+            "target_ref": .string(task.reference.rawValue), "mixer_ref": .string(task.mixerRef.rawValue),
+            "before": assignmentValue(task.before), "after": assignmentValue(task.desired),
+            "dependencies": .array([]), "blocked_reasons": .array([]),
+            "required_invariants": .array(["captured_track_strip_pair", "local_strip_footprint",
+                "checked_output_readback", "conditional_original_header_inverse"].map(Value.string))])
     }
 
     /// The existing adapter's finite scope and captured footprint, shared with planning.
@@ -78,6 +180,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             capture: source, request: request)
         guard naming.reasons.isEmpty else { return nil }
         let policy = naming.policy
+        if let output = capturedOutput(policy: policy, names: names, source: source, request: request),
+           case .issued(let project)? = source.projectIssuance {
+            return .init(projectRef: project, document: output.pair.track.document, mixer: nil,
+                names: [], renameCapture: nil, output: output)
+        }
         if let sort = capturedSort(policy: policy, names: names, source: source, request: request),
            case .issued(let project)? = source.projectIssuance {
             var mixer: MixerTask?
@@ -195,6 +302,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private let renameCapture: SessionPopulationObservation.Capture?
     private let selectionOrigin: AXTrackBinding.Binding?
     private let sortTask: SortTask?
+    private let outputTask: OutputTask?
+    private var outputPair: AccessibilityChannel.HeldSelectionAssociation.Pair?
+    private var outputProof: AccessibilityChannel.HeldSelectionAssociation?
+    private var outputAttempted = false
+    private var outputApplied = false
+    private var outputInverseConsumed = false
     private var sortSnapshot: TargetRegistrySnapshot?
     private var sortProject: TargetReference?
     private var sortApplied = false
@@ -223,6 +336,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                  renameCapture: SessionPopulationObservation.Capture? = nil,
                  selectionOrigin: AXTrackBinding.Binding? = nil, cacheProjectEpoch: UInt64,
                  sortTask: SortTask? = nil,
+                 outputTask: OutputTask? = nil,
                  registryProjectEpoch: UInt64,
                  cache: StateCache, registry: TargetRegistry, journal: SagaJournal) {
         self.plan = plan; self.projectRef = projectRef; self.document = document
@@ -230,6 +344,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         self.renameCapture = renameCapture
         self.selectionOrigin = selectionOrigin
         self.sortTask = sortTask
+        self.outputTask = outputTask
         self.cacheProjectEpoch = cacheProjectEpoch; self.registryProjectEpoch = registryProjectEpoch
         self.cache = cache; self.registry = registry; self.journal = journal
     }
@@ -285,6 +400,20 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   current.physicalTrack?.matches(goal.binding) == true else { return nil }
         }
         let changed = goals.filter { !$0.before.utf8.elementsEqual($0.name.utf8) }
+        if let output = captured.output {
+            guard steps == [capturedOutputStep(policy: policy, names: names, source: source.capture, request: source.request)],
+                  let current = await registry.resolve(output.reference), current.kind == .track,
+                  current.physicalTrack?.matches(output.pair.track) == true,
+                  let mixer = await registry.resolve(output.mixerRef), mixer.kind == .mixerStrip,
+                  mixer.physicalMixerStrip?.matches(output.pair.strip) == true else { return nil }
+            let saga = SagaPlan(steps: [.init(operationID: .mixerSetOutputVerified, targetRef: output.reference,
+                params: ["destination": .string(output.desired.token)],
+                expectedInverse: .init(operationID: .mixerSetOutputVerified, valueParameter: "destination"))],
+                idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
+            return .init(plan: saga, projectRef: issued, document: captured.document,
+                cacheProjectEpoch: source.capture.projectEpoch, outputTask: output, registryProjectEpoch: targetSnapshot.projectEpoch,
+                cache: cache, registry: registry, journal: journal)
+        }
         if let sort = captured.sort {
             guard steps.count == (captured.mixer == nil ? 1 : 2), let step = steps[0].objectValue,
                   step["kind"] == .string("track_sort"), step["target_ref"] == .string(issued.rawValue),
@@ -370,6 +499,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     func supports(_ step: SagaStep) -> Bool {
+        if let task = outputTask {
+            return step.operationID == .mixerSetOutputVerified && step.targetRef == task.reference
+                && Set(step.params.keys) == ["destination"]
+                && [task.before.token, task.desired.token].contains(step.params["destination"]?.stringValue ?? "")
+                && step.expectedInverse.operationID == .mixerSetOutputVerified
+                && step.expectedInverse.valueParameter == "destination"
+        }
         if let sort = sortTask, step.operationID == .tracksSortVerified {
             return step.operationID == .tracksSortVerified && step.targetRef == projectRef
                 && Set(step.params.keys) == ["criterion", "expected_order"]
@@ -635,6 +771,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     func readState(_ step: SagaStep) async -> ObservedState? {
+        if step.operationID == .mixerSetOutputVerified, outputTask != nil { return await readOutputState(step) }
         if step.operationID == .tracksSortVerified, sortTask != nil { return await readSortState(step) }
         if let goal = changedNameGoals.first(where: { $0.reference == step.targetRef }), let capture = renameCapture {
             guard supports(step), await projectIsCurrent(allowPendingCancellation: true),
@@ -663,6 +800,140 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             trackIndex: nil, projectReference: (sortProject ?? projectRef).rawValue, field: "mixer_visible",
             observed: .bool(value), sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
         return .init(value: .bool(value), evidence: evidence.summary, read: evidence)
+    }
+
+    private func heldOutputProof(_ pair: AccessibilityChannel.HeldSelectionAssociation.Pair) -> AccessibilityChannel.HeldSelectionAssociation? {
+        guard let task = outputTask,
+              pair.track.matches(task.pair.track), pair.track.currentIndex() != nil,
+              let proof = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
+                logic: pair.track.runtime, expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: true),
+              CFEqual(proof.headers[proof.originalIndex], pair.track.header),
+              CFEqual(proof.mixer, pair.strip.mixer),
+              proof.document.utf8.elementsEqual(document.utf8),
+              proof.strips.filter({ CFEqual($0, pair.strip.strip) }).count == 1,
+              proof.permitsRead() else { return nil }
+        return proof
+    }
+
+    /// Preserve every captured field and peer owner. Only this task's independently checked
+    /// output may differ; neither a fresh row nor a displayed label becomes a new baseline.
+    private func outputFootprintHeld(pair: AccessibilityChannel.HeldSelectionAssociation.Pair,
+                                     assignment: OutputAssignment, popup: AXUIElement? = nil) -> Bool {
+        guard let task = outputTask, let proof = outputProof else { return false }
+        let runtime = pair.track.runtime
+        @Sendable func permitted() -> Bool {
+            guard let proof = self.outputProof else { return false }
+            return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+                && (popup.map { proof.permitsOwnedPopupRead($0) } ?? proof.permitsRead())
+        }
+        guard permitted(), pair.track.matches(task.pair.track),
+              proof.headers.count == task.capture.tracks.count,
+              zip(proof.headers, task.capture.tracks).allSatisfy({ header, row in
+                  row.physicalBinding.map { CFEqual($0.header, header) } == true
+              }) else { return false }
+        let fields = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
+            let tracks = AccessibilityChannel.readTrackStates(from: proof.headers, in: pair.track.window,
+                runtime: runtime, readingTypeHelp: false, stoppingWhen: { !permitted() }).states
+            let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer, runtime: runtime.ax)
+                .flatMap { AccessibilityChannel.readChannelStrips(from: $0.strips, runtime: runtime,
+                    window: pair.strip.window, mixer: pair.strip.mixer, readingScalarHelp: false,
+                    stoppingWhen: { !permitted() }) }
+            return (tracks, strips)
+        }
+        guard let tracks = fields.0, let strips = fields.1, permitted(),
+              strips.count == task.capture.channelStrips.count,
+              let index = task.capture.channelStrips.firstIndex(where: { $0.physicalBinding?.matches(task.pair.strip) == true }),
+              strips[index].physicalBinding?.matches(pair.strip) == true,
+              strips[index].output.flatMap(OutputAssignment.observed(slotLabel:)) == assignment else { return false }
+        for row in strips.indices {
+            if row != index, strips[row].physicalBinding?.matches(task.capture.channelStrips[row].physicalBinding ?? pair.strip) != true { return false }
+            guard strips[row].volumeReadback == task.capture.channelStrips[row].volumeReadback,
+                  strips[row].panReadback == task.capture.channelStrips[row].panReadback,
+                  strips[row].volumeReadback != nil, strips[row].panReadback != nil,
+                  strips[row].pluginsFullyObserved == true else { return false }
+        }
+        var expected = task.capture.channelStrips
+        if assignment != task.before { expected[index].output = strips[index].output }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard let expectedTracks = try? encoder.encode(task.capture.tracks),
+              let currentTracks = try? encoder.encode(tracks), expectedTracks == currentTracks,
+              let expectedStrips = try? encoder.encode(expected), let currentStrips = try? encoder.encode(strips),
+              expectedStrips == currentStrips, permitted(),
+              pair.strip.currentIndex(runtime: runtime) == index,
+              case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(pair.strip.window, runtime: runtime),
+              finalDocument.utf8.elementsEqual(document.utf8) else { return false }
+        return true
+    }
+
+    private func outputReading() async -> OutputAssignment? {
+        guard let task = outputTask, await projectIsCurrent(allowPendingCancellation: true),
+              let target = await registry.resolve(task.reference), target.kind == .track,
+              target.physicalTrack?.matches(task.pair.track) == true else { return nil }
+        let pair = outputPair ?? task.pair, runtime = pair.track.runtime
+        guard let proof = heldOutputProof(pair) else { return nil }
+        outputProof = proof
+        let reading = await AXMixerStripBinding.$current.withValue(pair.strip) {
+            await AccessibilityChannel.getOutputObservation(runtime: runtime)
+        }
+        guard let assignment = reading.assignment,
+              assignment == task.before || (outputAttempted && assignment == task.desired),
+              outputFootprintHeld(pair: pair, assignment: assignment),
+              await projectIsCurrent(allowPendingCancellation: true) else { return nil }
+        return assignment
+    }
+
+    private func readOutputState(_ step: SagaStep) async -> ObservedState? {
+        guard supports(step), let task = outputTask, let assignment = await outputReading() else { return nil }
+        let evidence = SagaReadEvidence(readSource: .axOutputMenuCheckmark, provenance: .liveIndependent,
+            trackIndex: task.pair.track.currentIndex(), projectReference: projectRef.rawValue, field: "output",
+            observed: .string(assignment.token), sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
+        return .init(read: evidence)
+    }
+
+    func performOutput(_ step: SagaStep, router: ChannelRouter) async -> CallTool.Result {
+        guard let task = outputTask, supports(step) else { return toolStateCResult(.unsupportedState, extras: ["write_attempted": false]) }
+        let inverse = outputAttempted
+        let expected = inverse ? task.desired : task.before
+        let desired = inverse ? task.before : task.desired
+        guard (!inverse || (outputApplied && !outputInverseConsumed)),
+              step.params["destination"] == .string(desired.token),
+              let before = await outputReading(), before == expected,
+              await projectIsCurrent(allowPendingCancellation: inverse) else {
+            return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+        }
+        let pair = outputPair ?? task.pair, runtime = pair.track.runtime
+        guard let index = pair.strip.currentIndex(runtime: runtime) else { return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false]) }
+        if inverse { outputInverseConsumed = true }
+        let response = await Self.$outputLeafPermission.withValue({ [self] popup in
+            outputFootprintHeld(pair: pair, assignment: expected, popup: popup)
+        }) {
+            await AXMixerStripBinding.$current.withValue(pair.strip) {
+                await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                    await OperationTraceWriteBoundaryArm.armed(OperationTraceContext.current?.traceID) {
+                        await routedTextResult(router, operation: "mixer.set_output_verified",
+                            params: ["index": String(index), "destination": desired.token, "expected_current": expected.token])
+                    }
+                }
+            }
+        }
+        let text = sharedOutputText(response)
+        guard let body = decodedJSONObject(text), body["write_attempted"] as? Bool == true else { return response }
+        outputAttempted = true
+        if pair.strip.currentIndex(runtime: runtime) == nil {
+            let renewal = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip, runtime: runtime)
+            guard let owned = renewal.source, owned.permits(runtime: runtime) else {
+                return toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: ["write_attempted": true]), isError: true)
+            }
+            outputPair = owned.pair
+        }
+        if let after = await outputReading(), after == desired { outputApplied = !inverse }
+        return response
+    }
+
+    private func sharedOutputText(_ response: CallTool.Result) -> String {
+        if case .text(let text, _, _) = response.content.first { return text }
+        return ""
     }
 
     var verifiesMatchingNamesOnly: Bool { !nameGoals.isEmpty && mixerTask == nil && plan.steps.isEmpty }

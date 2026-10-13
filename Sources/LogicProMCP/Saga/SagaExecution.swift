@@ -385,6 +385,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
             response = await approvedSessionRepair!.performName(step, router: router)
         case .tracksSortVerified where approvedSessionRepair?.supports(step) == true:
             response = await approvedSessionRepair!.performSort(step, router: router)
+        case .mixerSetOutputVerified where approvedSessionRepair?.supports(step) == true:
+            response = await approvedSessionRepair!.performOutput(step, router: router)
         case .tracksRename:
             response = await TrackDispatcher.handle(
                 command: "rename",
