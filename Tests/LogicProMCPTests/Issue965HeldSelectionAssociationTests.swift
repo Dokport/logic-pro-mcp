@@ -1333,6 +1333,115 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("A failed final input renewal cannot inherit an earlier restored writer receipt")
+    func inputWriterFinalRenewalFailureOverridesEarlierRestoration() async throws {
+        let f = try Fixture(), b = f.builder
+        let input = b.element(1_291_100), output = b.element(1_291_101)
+        let renewed = b.element(1_291_102), finalRetired = b.element(1_291_103)
+        let inputRoot = b.element(1_291_104), inputEcho = b.element(1_291_105)
+        let busParent = b.element(1_291_106), busMenu = b.element(1_291_107)
+        let busOne = b.element(1_291_108), busTwo = b.element(1_291_109)
+        let outputRoot = b.element(1_291_110), outputParent = b.element(1_291_111)
+        let outputMenu = b.element(1_291_112), outputEcho = b.element(1_291_113), outputLeaf = b.element(1_291_114)
+        b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
+        let mixerOwner = b.element(1_291_115)
+        b.setRole(mixerOwner, kAXGroupRole as String); b.setAttribute(mixerOwner, kAXDescriptionAttribute as String, "Mixer")
+        b.setChildren(mixerOwner, [f.mixer])
+        b.setChildren(f.window, [f.rail, mixerOwner, b.element(1_965_720)])
+        b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+        b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output destination.", x: 0, y: 30, width: 60, height: 20)
+        for control in [input, output] { b.setChildren(control, []); b.setActionNames(control, [kAXPressAction as String]) }
+        let name = try #require(b.makeAXRuntime().children(f.strips[1]).first)
+        b.setChildren(f.strips[1], [name, input, output])
+        for strip in [renewed, finalRetired] {
+            b.setRole(strip, kAXLayoutItemRole as String)
+            b.setAttribute(strip, kAXNumberOfCharactersAttribute as String, 0)
+            b.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+        }
+        for menu in [inputRoot, busMenu, outputRoot, outputMenu] { b.setRole(menu, kAXMenuRole as String) }
+        for root in [inputRoot, outputRoot] { b.setActionNames(root, [kAXCancelAction as String]) }
+        for (node, title) in [(inputEcho, "Bus 1"), (busParent, "Bus"), (busOne, "Bus 1"), (busTwo, "Bus 2"),
+                              (outputParent, "Output"), (outputEcho, "Stereo Output"), (outputLeaf, "Stereo Output")] {
+            b.setRole(node, kAXMenuItemRole as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+            b.setAttribute(node, kAXEnabledAttribute as String, true); b.setChildren(node, [])
+        }
+        b.setActionNames(busTwo, [kAXPressAction as String])
+        b.setAttribute(inputEcho, "AXMenuItemMarkChar", "✓"); b.setAttribute(busOne, "AXMenuItemMarkChar", "✓")
+        for node in [outputEcho, outputLeaf] { b.setAttribute(node, "AXMenuItemMarkChar", "✓") }
+        b.setChildren(busMenu, [busOne, busTwo]); b.setChildren(busParent, [busMenu]); b.setChildren(inputRoot, [inputEcho, busParent])
+        b.setChildren(outputMenu, [outputLeaf]); b.setChildren(outputParent, [outputMenu]); b.setChildren(outputRoot, [outputEcho, outputParent])
+        f.routingAction = { element, action in
+            let source = f.routingReplacement ?? f.strips[1]
+            if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, output) {
+                if CFEqual(element, input) { f.inputMenuPresses += 1 }
+                b.setChildren(f.mixer, [f.strips[0], source, CFEqual(element, input) ? inputRoot : outputRoot])
+                return true
+            }
+            if action == kAXPressAction as String, CFEqual(element, busTwo) {
+                f.routingDestinationPresses += 1
+                b.setAttribute(input, kAXDescriptionAttribute as String, "Bus 2")
+                b.setAttribute(inputEcho, kAXTitleAttribute as String, "Bus 2")
+                b.setAttribute(busOne, "AXMenuItemMarkChar", ""); b.setAttribute(busTwo, "AXMenuItemMarkChar", "✓")
+                b.setChildren(renewed, [name, input, output]); f.routingReplacement = renewed
+                b.setChildren(f.mixer, [f.strips[0], renewed]); b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, renewed)
+                return true
+            }
+            if action == kAXCancelAction as String, CFEqual(element, inputRoot) || CFEqual(element, outputRoot) {
+                if CFEqual(element, inputRoot) {
+                    f.inputMenuCancels += 1
+                    if f.inputMenuPresses == 3 {
+                        b.setChildren(finalRetired, [name, input, output]); f.routingReplacement = finalRetired
+                    }
+                }
+                let current = f.routingReplacement ?? f.strips[1]
+                b.setChildren(f.mixer, [f.strips[0], current])
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement == nil ? f.window : current)
+                return true
+            }
+            Issue.record("Only owned input/output popups, Cancel and the exact Bus 2 leaf are allowed"); return false
+        }
+        f.routingSelection = { _ in
+            if f.inputMenuPresses == 3 {
+                f.routingLateScopeInjected = true
+                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+            }
+        }
+        let gate = LogicMutationGate()
+        let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_input_bus_verified", mutationGate: gate) {
+            let runtime = f.logic()
+            guard let observation = AccessibilityChannel.HeldSelectionAssociation(window: f.window, logic: runtime,
+                expectedProject: nil, requiresProjectReference: false) else {
+                Issue.record("The original pair must be actually acquired"); return toolTextResult(.error("fixture"))
+            }
+            let pairs = await observation.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            guard let pair = pairs.first(where: { CFEqual($0.track.header, f.headers[0]) }), observation.effects.restoration == "restored" else {
+                Issue.record("The original selected header must have its actual restored physical pair"); return toolTextResult(.error("fixture"))
+            }
+            // Stable-source writer entry uses the same nonediting window focus
+            // as the existing input-writer fixture; later retirement uses actual HSA focus.
+            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.window)
+            return await AXMixerStripBinding.$current.withValue(pair.strip) {
+                await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                    toolTextResult(await AccessibilityChannel.setInputBusVerified(params: ["destination": "bus:2", "expected_current": "bus:1", "replace_existing": "true"], runtime: runtime, timing: .immediate))
+                }
+            }
+        }
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(f.routingDestinationPresses == 1 && f.inputMenuPresses == 3 && f.inputMenuCancels == 2)
+        #expect(f.routingLateScopeInjected)
+        #expect(body["state"] as? String == "B", "Input writer reached receipt: \(body)")
+        let verified = try #require(body["verified"] as? Bool); #expect(!verified)
+        let attempted = try #require(body["write_attempted"] as? Bool); #expect(attempted)
+        let after = try #require(body["after_acquisition"] as? [String: Any])
+        #expect(after["output_checkmark_reads_observed"] as? Int == 2)
+        let afterEffects = try #require(after["ui_effects"] as? [String: Any])
+        #expect(afterEffects["restoration"] as? String == "not_restored")
+        #expect(afterEffects["reason"] as? String == "association_restoration_unverified")
+        let effects = try #require(body["ui_effects"] as? [String: Any])
+        #expect(effects["restoration"] as? String == "not_restored")
+        #expect(effects["reason"] as? String == "association_restoration_unverified")
+    }
+
     @Test(arguments: [1, 256], ["paired", "selected_child"])
     func inputBusRenewsRetiredSourceThroughOriginalCapturedHeader(number: Int, condition: String) async throws {
         try await assertInputBusRenewal(number: number, condition: condition)
