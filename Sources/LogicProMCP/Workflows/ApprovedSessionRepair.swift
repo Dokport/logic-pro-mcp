@@ -37,6 +37,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
     private struct NameGoal: Sendable {
         let reference: TargetReference
+        let mixerRef: TargetReference?
         let before: String
         let name: String
         let binding: AXTrackBinding.Binding
@@ -60,10 +61,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             names: names, source: source, request: request) != nil
     }
 
-    private static func capturedGoals(policy: ProjectSessionAudit.IntentPolicy, policyValue: Value,
+    private static func capturedGoals(policy originalPolicy: ProjectSessionAudit.IntentPolicy, policyValue: Value,
                                       names: [ProjectSessionAudit.ApprovedName],
                                       source: SessionPopulationObservation.Capture,
                                       request: SessionPopulationObservation.Request) -> CapturedGoals? {
+        let naming = ProjectSessionAudit.normalizedMixerNaming(policy: originalPolicy, names: names,
+            capture: source, request: request)
+        guard naming.reasons.isEmpty else { return nil }
+        let policy = naming.policy
         guard policy.trackSort == nil, policy.roles.isEmpty, policy.outputs.isEmpty,
               policy.sends.isEmpty, policy.receivers.isEmpty, policy.protectedPaths.isEmpty,
               names.count == policy.targets.count,
@@ -84,7 +89,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                       binding.exposure?.hasEnded != true,
                       binding.projectPath?.utf8.elementsEqual(projectPath.utf8) == true,
                       goals.allSatisfy({ !CFEqual($0.binding.header, binding.header) }) else { return nil }
-                goals.append(.init(reference: target.trackRef, before: row.name, name: name.name, binding: binding))
+                goals.append(.init(reference: target.trackRef, mixerRef: target.mixerRef,
+                    before: row.name, name: name.name, binding: binding))
             }
             guard let document = goals.first?.binding.document,
                   goals.allSatisfy({ $0.binding.document.utf8.elementsEqual(document.utf8)
@@ -105,7 +111,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             guard policyValue.objectValue?["presentation"] == nil,
                   let document = goals.first?.binding.document else { return nil }
             return .init(projectRef: issued, document: document, mixer: nil, names: goals,
-                renameCapture: changed.isEmpty ? nil : source)
+                renameCapture: changed.isEmpty && !goals.contains(where: { $0.mixerRef != nil }) ? nil : source)
         }
         guard policyValue.objectValue?["presentation"]?.objectValue.map({ Set($0.keys) == ["mixer_visible"] }) == true,
               let fresh = source.freshPopulation, fresh.stable,
@@ -168,14 +174,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard let encoded = try? encodeJSONStrict(Value.object(object), compact: true),
               SHA256.hash(data: Data(encoded.utf8)).map({ String(format: "%02x", $0) }).joined() == digest else { return nil }
         guard let policyObject = object["approved_policy"]?.objectValue,
-              case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(policyObject),
-              let names = ProjectSessionAudit.parseApprovedNames(object["approved_names"], policy: policy),
+              case .accepted(let originalPolicy) = ProjectSessionAudit.parseIntentPolicy(policyObject),
+              let names = ProjectSessionAudit.parseApprovedNames(object["approved_names"], policy: originalPolicy),
               ["reasons", "questions", "receiver_questions", "findings", "new_object_inventory"].allSatisfy({
                   object[$0]?.arrayValue?.isEmpty == true
               }),
               let unchanged = object["unchanged_tasks"]?.arrayValue,
-              let captured = capturedGoals(policy: policy, policyValue: .object(policyObject), names: names,
+              let captured = capturedGoals(policy: originalPolicy, policyValue: .object(policyObject), names: names,
                   source: source.capture, request: source.request) else { return nil }
+        let policy = ProjectSessionAudit.normalizedMixerNaming(policy: originalPolicy, names: names,
+            capture: source.capture, request: source.request).policy
         let unchangedNames = names.filter { name in
             captured.names.contains { goal in
                 policy.targets.first(where: { $0.handle == name.target })?.trackRef == goal.reference
@@ -208,6 +216,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   step["after"]?.objectValue?["name"] == .string(goal.name),
                   step["blocked_reasons"]?.arrayValue?.isEmpty == true,
                   step["dependencies"]?.arrayValue?.isEmpty == true else { return nil }
+            if let origin = policy.targets.first(where: { $0.trackRef == goal.reference })?.mixerRef {
+                guard step["requested_mixer_ref"] == .string(origin.rawValue),
+                      step["coupled_after"] == .array([goal.reference, origin].map {
+                          .object(["target_ref": .string($0.rawValue), "name": .string(goal.name)])
+                      }) else { return nil }
+            }
             let saga = SagaPlan(steps: [.init(operationID: .tracksRename, targetRef: goal.reference,
                 params: ["name": .string(goal.name)],
                 expectedInverse: .init(operationID: .tracksRename, valueParameter: "name"))],
@@ -220,6 +234,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             guard captured.mixer == nil else { return nil }
             return .init(plan: .init(steps: [], idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest),
                 projectRef: issued, document: captured.document, nameGoals: goals,
+                renameCapture: captured.renameCapture,
                 cacheProjectEpoch: source.capture.projectEpoch, registryProjectEpoch: targetSnapshot.projectEpoch,
                 cache: cache, registry: registry, journal: journal)
         }
@@ -374,10 +389,21 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   await projectIsCurrent() else {
                 return nil
             }
-            if let capture = renameCapture, let changed = changedNameGoal, goal.reference == changed.reference {
+            if let capture = renameCapture,
+               goal.mixerRef != nil || goal.reference == changedNameGoal?.reference {
+                let changed = changedNameGoal
+                let currentPeers = afterExecution && ranName && changed != nil && goal.reference != changed?.reference
                 guard let coupled = await ExactTrackNameAdapter.readCapturedCoupledName(nameAction(goal),
-                    capture: capture, registry: registry), coupled.utf8.elementsEqual(expected.utf8),
+                    capture: capture, registry: registry, preserveCurrentPeers: currentPeers),
+                    coupled.utf8.elementsEqual(expected.utf8),
                     await projectIsCurrent() else { return nil }
+                if currentPeers, let changed {
+                    // Only the approved changed peer may differ from its capture.
+                    // Its original footprint still decides every unrelated peer.
+                    guard let verified = await ExactTrackNameAdapter.readCapturedCoupledName(nameAction(changed),
+                        capture: capture, registry: registry), verified.utf8.elementsEqual(changed.name.utf8),
+                        await projectIsCurrent() else { return nil }
+                }
             }
             return SagaReadEvidence(readSource: .axTrackName, provenance: .liveIndependent,
                 trackIndex: index, projectReference: projectRef.rawValue, field: "name",

@@ -105,13 +105,15 @@ extension ProjectSessionAudit {
     /// A canonical draft accounts for approved tasks even when their observation or adapter
     /// footprint is unavailable. It never turns a logical track index into a physical strip.
     static func buildCanonicalRepairPlan(
-        policy: IntentPolicy, policyValue: Value, names: [ApprovedName],
+        policy originalPolicy: IntentPolicy, policyValue: Value, names: [ApprovedName],
         capture: SessionPopulationObservation.Capture,
         request: SessionPopulationObservation.Request,
         snapshotCurrent: Bool,
         options: PlanningOptions = PlanningOptions(),
         graphOverride: RoutingGraph? = nil
     ) throws -> CanonicalRepairPlan {
+        let naming = normalizedMixerNaming(policy: originalPolicy, names: names, capture: capture, request: request)
+        let policy = naming.policy
         // `graphOverride` is a test seam: today's capture publishes no bus-to-aux reading, so the
         // receiving-aux branches are reachable only through a graph that carries one.
         let graph = graphOverride ?? SessionPopulationObservation.routingGraph(capture: capture)
@@ -119,6 +121,7 @@ extension ProjectSessionAudit {
         let viewOnly = policy.mixerVisible != nil && policy.trackSort == nil && policy.targets.isEmpty && policy.roles.isEmpty
             && policy.outputs.isEmpty && policy.sends.isEmpty && policy.receivers.isEmpty && names.isEmpty && policy.protectedPaths.isEmpty
         var reasons = Set<String>()
+        reasons.formUnion(naming.reasons.values)
         if !snapshotCurrent { reasons.insert("snapshot_changed") }
         if !viewOnly && request.scope != .wholeProject { reasons.insert("whole_project_scope_required") }
         let gate = assessmentGate(policy: policy, capture: capture, graph: graph)
@@ -395,6 +398,7 @@ extension ProjectSessionAudit {
                 throw CocoaError(.coderInvalidValue)
             }
             var blocked = Set<String>()
+            if let reason = naming.reasons[target.handle] { blocked.insert(reason) }
             if !snapshotCurrent { blocked.insert("snapshot_changed") }
             if !request.domains.contains(.tracks) { blocked.insert("tracks_not_requested") }
             blocked.formUnion(SessionPopulationObservation.trackRowReadbackReasons(capture: capture).map(\.rawValue))
@@ -423,7 +427,7 @@ extension ProjectSessionAudit {
                 blocked.insert("naming_operation_unregistered")
             }
             reasons.formUnion(blocked)
-            steps.append(.object([
+            var nameStep: [String: Value] = [
                 "id": .string("name_" + desired.target), "kind": .string("name"),
                 "target_ref": .string(target.trackRef.rawValue),
                 "before": .object(before), "after": .object(["name": .string(desired.name)]),
@@ -434,7 +438,16 @@ extension ProjectSessionAudit {
                 "required_invariants": .array([
                     "exact_track_identity", "coupled_name_preservation", "inverse_name"
                 ].map(Value.string))
-            ]))
+            ]
+            if let mixerRef = target.mixerRef {
+                nameStep["requested_mixer_ref"] = .string(mixerRef.rawValue)
+                if naming.reasons[target.handle] == nil {
+                    nameStep["coupled_after"] = .array([target.trackRef, mixerRef].map {
+                        .object(["target_ref": .string($0.rawValue), "name": .string(desired.name)])
+                    })
+                }
+            }
+            steps.append(.object(nameStep))
         }
         let approvedNames: [Value] = names.map { .object([
             "target": .string($0.target), "name": .string($0.name)
