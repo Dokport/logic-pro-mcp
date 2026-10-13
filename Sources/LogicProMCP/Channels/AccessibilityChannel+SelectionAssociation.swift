@@ -537,9 +537,14 @@ extension AccessibilityChannel {
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
                     runtime: logic.ax), CFEqual(focus, expectedFocus), passiveAssociationFocusMatches(focus),
-                  railMetadataRetainsStripCustody(),
-                  let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
+                  railMetadataRetainsStripCustody() else { lost = true; return false }
+            // One fresh same-app window decision; retain the preceding rail
+            // renewal and the following document/PID bookends independently.
+            let windows = AXHelpers.getNonHelpAttributes(app,
+                [kAXMainWindowAttribute, kAXFocusedWindowAttribute] as [String], runtime: logic.ax,
+                permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+            guard case .success(.some(let main)) = windows[0], CFGetTypeID(main) == AXUIElementGetTypeID(),
+                  case .success(.some(let focusedWindow)) = windows[1], CFGetTypeID(focusedWindow) == AXUIElementGetTypeID(),
                   CFEqual(main, window), CFEqual(focusedWindow, window), currentWindowScopeMatches(),
                   logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {

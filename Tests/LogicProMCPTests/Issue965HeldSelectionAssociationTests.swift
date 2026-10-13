@@ -226,6 +226,10 @@ struct Issue965HeldSelectionAssociationTests {
         var pathBatchFault: String?
         var windowScopeBatchCalls = 0
         var windowScopeBatchFault: String?
+        var windowCustodyBatchCalls = 0
+        var windowCustodySingleReads = 0
+        var windowCustodyFault: String?
+        var activeBulkAttributes: [String]?
         var fault: String?
         var transientEditorRead = false
         var transientForeignRead = false
@@ -338,6 +342,19 @@ struct Issue965HeldSelectionAssociationTests {
         func logic() -> AXLogicProElements.Runtime {
             let base = builder.makeLogicRuntime(appElement: app,
                 attributeValueHandler: { [self] element, attribute in
+                    if CFEqual(element, app), [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String].contains(attribute) {
+                        if activeBulkAttributes == nil { windowCustodySingleReads += 1 }
+                        if activeBulkAttributes == nil || activeBulkAttributes == [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String] {
+                            if windowCustodyFault == "absent" { return .some(nil) }
+                            if windowCustodyFault == "main_type", attribute == kAXMainWindowAttribute as String { return .some(NSNumber(value: 0)) }
+                            if windowCustodyFault == "focused_type", attribute == kAXFocusedWindowAttribute as String { return .some(NSNumber(value: 0)) }
+                            if windowCustodyFault == "foreign_main", attribute == kAXMainWindowAttribute as String { return .some(builder.element(1_965_999)) }
+                            if windowCustodyFault == "foreign_focused", attribute == kAXFocusedWindowAttribute as String { return .some(builder.element(1_965_999)) }
+                            if windowCustodyFault == "late_document", attribute == kAXFocusedWindowAttribute as String {
+                                builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
+                        }
+                    }
                     if CFEqual(element, window), attribute == kAXHelpAttribute as String { presentationCensusReads += 1 }
                     routingRead?(element, attribute)
                     if CFEqual(element, scroll), selections.count == 1 {
@@ -532,6 +549,13 @@ struct Issue965HeldSelectionAssociationTests {
                     performActionResult: base.ax.performActionResult, elementAtPosition: base.ax.elementAtPosition,
                     attributeValuesResult: { [self] element, attributes in
                         batchReadCalls += 1
+                        activeBulkAttributes = attributes
+                        defer { activeBulkAttributes = nil }
+                        if CFEqual(element, app), attributes == [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String] {
+                            windowCustodyBatchCalls += 1
+                            if windowCustodyFault == "failure" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                            if windowCustodyFault == "short" { return .success([window]) }
+                        }
                         let scopeBatch = CFEqual(element, window)
                             && attributes == [kAXTitleAttribute as String, kAXDocumentAttribute as String]
                         if scopeBatch {
@@ -1300,6 +1324,66 @@ struct Issue965HeldSelectionAssociationTests {
         let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
         #expect(rows.count == 2 && f.selections == [1, 0])
         #expect(bulk ? f.windowScopeBatchCalls > 0 : f.windowScopeBatchCalls == 0)
+    }
+
+    @Test("One selected-child custody decision coalesces only its two app-window reads",
+          arguments: [false, true])
+    func selectedChildWindowCustodyUsesOneFreshBatch(bulk: Bool) async throws {
+        let f = try Fixture(withViewport: true)
+        f.useBulkReads = bulk
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: true))
+            f.windowCustodyBatchCalls = 0; f.windowCustodySingleReads = 0
+            #expect(association.permitsRead())
+            #expect(f.windowCustodyBatchCalls == (bulk ? 1 : 0))
+            #expect(f.windowCustodySingleReads == (bulk ? 0 : 4))
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
+    @Test("Selected-child app-window custody refuses bad values and a later document change",
+          arguments: ["absent", "main_type", "focused_type", "foreign_main", "foreign_focused", "late_document", "failure", "short"])
+    func selectedChildWindowCustodyRetainsRefusals(fault: String) async throws {
+        let f = try Fixture(withViewport: true)
+        f.useBulkReads = true
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: true))
+            f.windowCustodyBatchCalls = 0
+            f.windowCustodyFault = fault
+            #expect(!association.permitsRead())
+            #expect(f.windowCustodyBatchCalls > 0)
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
     }
 
     @Test(arguments: ["failure", "short", "title_type", "document_type",
