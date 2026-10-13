@@ -168,12 +168,12 @@ extension AccessibilityChannel {
             }
             func permits() -> Bool {
                 let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader, mixerInverseFocus) }
-                // A currently owned popup deliberately holds search focus. Do not
-                // revoke the original header witness during that proven excursion.
-                return held.4?() == true || held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
+                // An owned popup or selection inverse deliberately holds temporary
+                // focus. Corroborate it before touching irreversible original witnesses.
+                return held.4?() == true || held.6?.permits() == true
+                    || held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
                     || held.2?.permitsPassiveFocusRead() == true || held.3?.permits() == true
                     || held.5.map { $0.0.permits(runtime: $0.1) } == true
-                    || held.6?.permits() == true
             }
 
             /// An original immutable numeric name label is not a rename editor.
