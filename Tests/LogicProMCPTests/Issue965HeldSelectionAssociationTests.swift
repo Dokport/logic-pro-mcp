@@ -1023,6 +1023,17 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(removing: true, restoring: true)
     }
 
+    @Test func typedRemovedSendInverseReadsDisabledEmptyMenuModesBeforeRestoring() async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true,
+            survivingSource: true, emptyModeMenu: true)
+    }
+
+    @Test(arguments: ["empty_mode_mark_unreadable", "empty_mode_still_enabled", "empty_mode_enabled_unreadable", "after_mode"])
+    func typedRemovedSendInverseRefusesUnknownOrEnabledEmptyModes(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, inverseFault: fault,
+            survivingSource: true, emptyModeMenu: true)
+    }
+
     @Test(arguments: ["empty_replaced", "another_occupied", "foreign_project", "after_level", "after_bypass", "after_mode",
                       "conflicting_echo", "unreadable_echo_mark"])
     func typedRemovedSendInverseRefusesNewerOrUnknownState(fault: String) async throws {
@@ -1047,7 +1058,8 @@ struct Issue965HeldSelectionAssociationTests {
 
     private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
                                                removing: Bool = false, restoring: Bool = false,
-                                               inverseFault: String? = nil, survivingSource: Bool = false) async throws {
+                                               inverseFault: String? = nil, survivingSource: Bool = false,
+                                               emptyModeMenu: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1101,7 +1113,7 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(restoredSource, [name] + extraSend)
             b.setActionNames(renewedSend[0], [kAXPressAction as String])
             for container in [root, menu] { b.setRole(container, kAXMenuRole as String) }
-            for (item, title) in [(echo, "Stereo Output"), (mode, "Post Pan"), (parent, "Output"),
+            for (item, title) in [(echo, "Stereo Output"), (mode, emptyModeMenu ? "Post Fader" : "Post Pan"), (parent, "Output"),
                                   (stereo, "Stereo Output"), (destination, "Output 3-4")] {
                 b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
                 b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
@@ -1153,6 +1165,10 @@ struct Issue965HeldSelectionAssociationTests {
                     if removing {
                         b.setChildren(replacement, [name, renewedSend[0]])
                         b.setAttribute(echo, "AXMenuItemMarkChar", "")
+                        if emptyModeMenu {
+                            b.setAttribute(mode, kAXEnabledAttribute as String, false)
+                            b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                        }
                     }
                     if fault == "multiple_occupied" { b.setChildren(replacement, [name] + renewedSend + extraSend) }
                     if fault == "footprint" { b.setChildren(replacement, [name] + renewedSend + [extraSend[0]]) }
@@ -1189,6 +1205,10 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
                     b.setAttribute(destination, "AXMenuItemMarkChar", "")
+                    if emptyModeMenu {
+                        b.setAttribute(mode, kAXEnabledAttribute as String, true)
+                        b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
+                    }
                     b.setChildren(f.mixer, [f.strips[0], restoredSource])
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, restoredSource)
                     if let inverseFault, inverseFault.hasPrefix("after_") {
@@ -1202,6 +1222,20 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
             f.routingReadResult = { element, attribute in
+                if emptyModeMenu, f.routingDestinationPresses == 1, CFEqual(element, mode) {
+                    if attribute == "AXMenuItemMarkChar" {
+                        f.routingClassifierHelpReads += 1
+                        if inverseFault == "empty_mode_mark_unreadable" {
+                            f.routingLateScopeInjected = true
+                            return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                        }
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    if attribute == kAXEnabledAttribute as String, inverseFault == "empty_mode_enabled_unreadable" {
+                        f.routingLateScopeInjected = true
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                }
                 if survivingSource, f.routingDestinationPresses == 1 {
                     if fault == "healthy_header_retired", CFEqual(element, f.headers[0]) {
                         return .failure(.init(raw: AXError.invalidUIElement.rawValue))
@@ -1305,7 +1339,18 @@ struct Issue965HeldSelectionAssociationTests {
                                     return toolTextResult(removed.result)
                                 }
                                 #expect(proof.before.levelRaw == 0 && !beforeBypassed)
-                                #expect(proof.checkedDestination == .stereoOutput && proof.nonRoutingChecks == ["Post Pan"])
+                                #expect(proof.checkedDestination == .stereoOutput
+                                    && proof.nonRoutingChecks == [emptyModeMenu ? "Post Fader" : "Post Pan"])
+                                if survivingSource {
+                                    let originalRole: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                                        f.strips[1], kAXRoleAttribute as String, runtime: f.logic().ax)
+                                    if case .success(let role) = originalRole { #expect(role == kAXLayoutItemRole as String) }
+                                    else { Issue.record("The original physical source must survive before the explicit inverse") }
+                                    let deleted: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                                        originalList, kAXRoleAttribute as String, runtime: f.logic().ax)
+                                    if case .failure(let error) = deleted { #expect(error.raw == AXError.invalidUIElement.rawValue) }
+                                    else { Issue.record("The original occupied send control must retire at removal") }
+                                }
                                 if let inverseFault, !inverseFault.hasPrefix("after_") {
                                     f.routingLateScopeInjected = true
                                     switch inverseFault {
@@ -1314,6 +1359,9 @@ struct Issue965HeldSelectionAssociationTests {
                                     case "foreign_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                                     case "conflicting_echo": b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
                                     case "unreadable_echo_mark": break
+                                    case "empty_mode_mark_unreadable", "empty_mode_enabled_unreadable":
+                                        f.routingLateScopeInjected = false
+                                    case "empty_mode_still_enabled": b.setAttribute(mode, kAXEnabledAttribute as String, true)
                                     default: Issue.record("Unknown inverse fixture fault")
                                     }
                                 }
@@ -1339,7 +1387,7 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(f.routingDestinationPresses == (inverseReached ? 2 : 1), "Actual removal and explicit inverse leaves must be reached")
             let originalRole: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
                 f.strips[1], kAXRoleAttribute as String, runtime: f.logic().ax)
-            if survivingSource {
+            if survivingSource && !inverseReached {
                 if case .success(let role) = originalRole { #expect(role == kAXLayoutItemRole as String) }
                 else { Issue.record("The original physical source must actually survive this observed No Send shape") }
                 let deleted: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(originalList,
@@ -1351,6 +1399,7 @@ struct Issue965HeldSelectionAssociationTests {
                 else { Issue.record("The original source must actually be retired") }
             }
             if restoring {
+                if emptyModeMenu { #expect(f.routingClassifierHelpReads > 0, "The actual empty-menu absent mode check must be read") }
                 if let inverseFault {
                     #expect(f.routingLateScopeInjected, "The calibrated native state boundary must be reached")
                     #expect(body["state"] as? String == (inverseReached ? "B" : "C"), "Actual inverse refusal: \(sharedToolText(result))")
@@ -1365,6 +1414,7 @@ struct Issue965HeldSelectionAssociationTests {
                     return
                 }
                 #expect(body["state"] as? String == "A", "Actual inverse response: \(sharedToolText(result))")
+                #expect(body["before"] as? [String: String] == ["state": "observed_empty"])
                 let verified = try #require(body["verified"] as? Bool)
                 #expect(verified)
                 let slots = try #require(AXLogicProElements.sendSlotObservations(in: restoredSource, runtime: f.logic().ax))
@@ -1385,6 +1435,7 @@ struct Issue965HeldSelectionAssociationTests {
                 return
             }
             #expect(body["state"] as? String == "A", "Actual retired-send response: \(sharedToolText(result))")
+            #expect(body["before"] as? [String: String] == ["kind": "stereo_output"])
             let verified = try #require(body["verified"] as? Bool)
             #expect(verified)
             let reread = try #require(body["reference_reread_required"] as? Bool)
