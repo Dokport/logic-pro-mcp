@@ -80,7 +80,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let policy = naming.policy
         if let sort = capturedSort(policy: policy, names: names, source: source, request: request),
            case .issued(let project)? = source.projectIssuance {
-            return .init(projectRef: project, document: sort.binding.document, mixer: nil,
+            var mixer: MixerTask?
+            if let desired = policy.mixerVisible {
+                guard let before = source.freshPopulation?.presentationObservation?.mixerVisible,
+                      sort.binding.navigationBaseline != nil, sort.binding.focus != nil,
+                      !(before && !desired && sort.binding.mixerFocusWouldBeRetired) else { return nil }
+                mixer = .init(before: before, desired: desired, binding: sort.binding)
+            }
+            return .init(projectRef: project, document: sort.binding.document, mixer: mixer,
                 names: [], renameCapture: nil, sort: sort)
         }
         guard policy.trackSort == nil, policy.roles.isEmpty, policy.outputs.isEmpty,
@@ -158,7 +165,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard FeatureFlags.adr004MutationSaga, let sort = policy.trackSort,
               names.isEmpty, policy.targets.isEmpty, policy.roles.isEmpty, policy.outputs.isEmpty,
               policy.sends.isEmpty, policy.receivers.isEmpty, policy.protectedPaths.isEmpty,
-              policy.mixerVisible == nil, request.scope == .wholeProject, request.domains == [.tracks],
+              request.scope == .wholeProject, request.domains == [.tracks],
               source.before == source.after, source.referencesEnabled, !source.referencesStale,
               case .issued(let project)? = source.projectIssuance, policy.projectRef == project,
               let fresh = source.freshPopulation, fresh.stable, fresh.hiddenTracksShown == true,
@@ -279,7 +286,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         let changed = goals.filter { !$0.before.utf8.elementsEqual($0.name.utf8) }
         if let sort = captured.sort {
-            guard steps.count == 1, let step = steps[0].objectValue,
+            guard steps.count == (captured.mixer == nil ? 1 : 2), let step = steps[0].objectValue,
                   step["kind"] == .string("track_sort"), step["target_ref"] == .string(issued.rawValue),
                   step["before"]?.objectValue?["order"] == .array(sort.before.map(Value.string)),
                   step["after"]?.objectValue?["criterion"] == .string(sort.policy.criterion.rawValue),
@@ -289,13 +296,25 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   step["blocked_reasons"]?.arrayValue?.isEmpty == true,
                   step["dependencies"]?.arrayValue?.isEmpty == true,
                   let orderValue = sortOrderValue(sort.policy.expectedOrder) else { return nil }
-            let saga = SagaPlan(steps: [.init(operationID: .tracksSortVerified, targetRef: issued,
+            var sagaSteps: [SagaStep] = [.init(operationID: .tracksSortVerified, targetRef: issued,
                 params: ["criterion": .string(sort.policy.criterion.rawValue),
                          "expected_order": orderValue],
-                expectedInverse: .init(operationID: .tracksSortVerified, valueParameter: "expected_order"))],
+                expectedInverse: .init(operationID: .tracksSortVerified, valueParameter: "expected_order"))]
+            if let mixer = captured.mixer {
+                guard let view = steps[1].objectValue, view["kind"] == .string("mixer_visibility"),
+                      view["target_ref"] == .string(issued.rawValue),
+                      view["before"]?.objectValue?["visible"] == .bool(mixer.before),
+                      view["after"]?.objectValue?["visible"] == .bool(mixer.desired),
+                      view["dependencies"] == .array([.string("track_sort")]),
+                      view["blocked_reasons"]?.arrayValue?.isEmpty == true else { return nil }
+                sagaSteps.append(.init(operationID: .navigateToggleView, targetRef: issued,
+                    params: ["view": .string("mixer"), "visible": .bool(mixer.desired)],
+                    expectedInverse: .init(operationID: .navigateToggleView, valueParameter: "visible")))
+            }
+            let saga = SagaPlan(steps: sagaSteps,
                 idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
             return .init(plan: saga, projectRef: issued, document: captured.document,
-                cacheProjectEpoch: source.capture.projectEpoch, sortTask: sort,
+                mixerTask: captured.mixer, cacheProjectEpoch: source.capture.projectEpoch, sortTask: sort,
                 registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
         }
         if let renameCapture = captured.renameCapture, !changed.isEmpty {
@@ -351,7 +370,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     func supports(_ step: SagaStep) -> Bool {
-        if let sort = sortTask {
+        if let sort = sortTask, step.operationID == .tracksSortVerified {
             return step.operationID == .tracksSortVerified && step.targetRef == projectRef
                 && Set(step.params.keys) == ["criterion", "expected_order"]
                 && step.params["criterion"] == .string(sort.policy.criterion.rawValue)
@@ -397,7 +416,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         if !allowPendingCancellation, await journal.record(for: plan.idempotencyKey) == .cancellationRequested {
             return false
         }
-        guard let target = await registry.resolve(projectRef), target.kind == .project,
+        if sortTask != nil, !(await sortRegistryHeld()) { return false }
+        guard let target = await registry.resolve(sortProject ?? projectRef), target.kind == .project,
               target.projectEpoch == registryProjectEpoch,
               let url = URL(string: document), url.isFileURL,
               url.host == nil || url.host == "" || url.host == "localhost",
@@ -409,20 +429,28 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     private func navigation(runtime: AXLogicProElements.Runtime, allowPendingCancellation: Bool = false) async -> AccessibilityChannel.OwnedMixerObservationNavigation? {
+        let sortedRows: [TrackState]?
+        if sortTask != nil {
+            guard let read = sortReading(), read.order == currentSortOrder else { return nil }
+            // Only the owned sort's independently verified whole footprint
+            // permits the new physical order/selection, not a fresh baseline.
+            sortedRows = read.rows
+        } else { sortedRows = nil }
         guard let binding = mixerTask?.binding,
               await projectIsCurrent(allowPendingCancellation: allowPendingCancellation), let pid = binding.pid, runtime.logicProPID() == pid,
               let app = binding.app, let currentApp = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, currentApp),
               let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
               let originalFocus = binding.focus, CFEqual(focus, originalFocus),
-              let target = await registry.resolve(projectRef),
+              let target = await registry.resolve(sortProject ?? projectRef),
               let original = binding.navigationBaseline,
               let navigation = AccessibilityChannel.OwnedMixerObservationNavigation(window: binding.window, runtime: runtime,
                 expectedProject: target.descriptor, requiresProjectReference: true,
                 referenceIsCurrent: { [self] in await projectIsCurrent(allowPendingCancellation: allowPendingCancellation) }),
               navigation.title.utf8.elementsEqual(binding.title.utf8), navigation.document.utf8.elementsEqual(binding.document.utf8),
               navigation.headers.count == original.headers.count,
-              zip(navigation.headers, original.headers).allSatisfy({ CFEqual($0, $1) }),
-              navigation.selected == original.selected,
+              zip(navigation.headers, sortedRows?.compactMap { $0.physicalBinding?.header } ?? original.headers)
+                .allSatisfy({ CFEqual($0, $1) }),
+              navigation.selected == (sortedRows?.compactMap(\.selectionReadback) ?? original.selected),
               await projectIsCurrent(allowPendingCancellation: allowPendingCancellation) else { return nil }
         return navigation
     }
@@ -503,6 +531,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               project.descriptor.projectFilePath?.utf8.elementsEqual(url.path.utf8) == true,
               await cache.getProject().filePath?.utf8.elementsEqual(url.path.utf8) == true else { return false }
         return true
+    }
+
+    private var currentSortOrder: [String]? {
+        guard let sort = sortTask, !sortAttempted || sortApplied else { return nil }
+        return sortApplied && !sortInverseConsumed ? sort.policy.expectedOrder : sort.before
+    }
+
+    private func sortFootprintHeld() -> Bool {
+        guard let expected = currentSortOrder else { return false }
+        return sortReading()?.order == expected
     }
 
     /// The existing sort calls this immediately before its actual measured menu leaf.
@@ -588,12 +626,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         // Pending journal cancellation must not suppress the independent reads
         // needed to verify a forward effect or conditionally restore our own one.
         guard let navigation = await navigation(runtime: runtime, allowPendingCancellation: true) else { return nil }
-        return await navigation.approvedVisibility(expectedTransport: binding.transport,
+        let observed = await navigation.approvedVisibility(expectedTransport: binding.transport,
             stoppingWhen: { [self] in stop(runtime: runtime) })
+        if sortTask != nil {
+            guard sortFootprintHeld(), await sortRegistryHeld() else { return nil }
+        }
+        return observed
     }
 
     func readState(_ step: SagaStep) async -> ObservedState? {
-        if sortTask != nil { return await readSortState(step) }
+        if step.operationID == .tracksSortVerified, sortTask != nil { return await readSortState(step) }
         if let goal = changedNameGoals.first(where: { $0.reference == step.targetRef }), let capture = renameCapture {
             guard supports(step), await projectIsCurrent(allowPendingCancellation: true),
                   originalSelectionHeld() else { return nil }
@@ -618,7 +660,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         guard supports(step), let (value, _) = await reading() else { return nil }
         let evidence = SagaReadEvidence(readSource: .axProjectMixerVisibility, provenance: .liveIndependent,
-            trackIndex: nil, projectReference: projectRef.rawValue, field: "mixer_visible",
+            trackIndex: nil, projectReference: (sortProject ?? projectRef).rawValue, field: "mixer_visible",
             observed: .bool(value), sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
         return .init(value: .bool(value), evidence: evidence.summary, read: evidence)
     }
@@ -777,11 +819,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             expectedMixer: expectedMixer, permittingVisibilityChange: { [self] in
                 if !ownedInverse, hasMatchingNameGoals, await nameGoalEvidence() == nil { return false }
                 guard await projectIsCurrent(allowPendingCancellation: ownedInverse) else { return false }
+                if sortTask != nil, !sortFootprintHeld() { return false }
                 guard let observed = await navigation.approvedVisibility(expectedTransport: binding.transport,
                     stoppingWhen: { [self] in stop(runtime: runtime) }), observed.0 == expected else { return false }
                 if expected {
                     guard let mixer = observed.1, let expectedMixer,
                           CFEqual(mixer, expectedMixer) else { return false }
+                }
+                if sortTask != nil {
+                    guard sortFootprintHeld(),
+                          await projectIsCurrent(allowPendingCancellation: ownedInverse) else { return false }
                 }
                 return true
             }, stoppingWhen: { [self] in stop(runtime: runtime) })
