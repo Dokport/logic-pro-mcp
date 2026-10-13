@@ -43,7 +43,8 @@ struct Issue965StripHelpSampleTests {
             })
         let failures = AXPluginInstanceIdentity.FailedReads()
         let ax = noting ? AXPluginInstanceIdentity.noting(failures, over: raw) : raw
-        #expect((ax.attributeValuesResult == nil) == noting)
+        if noting { #expect(ax.attributeValuesResult == nil) }
+        else { #expect(ax.attributeValuesResult != nil) }
         let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax)
         let guardian = AXHelpers.HelpReadGuard(stop: { calls.helpGuardCalls += 1; return false })
         try OperationTraceContext.$current.withValue(OperationTraceContext(mutationGateAcquired: true)) {
@@ -53,7 +54,8 @@ struct Issue965StripHelpSampleTests {
                     readingRouting: false, readingScalarHelp: false, stoppingWhen: { guardian.stopped }))
                 #expect(states.first?.pluginsSource == "ax" && states.first?.plugins.first?.name == "Gain")
                 #expect(states.first?.physicalBinding != nil)
-                #expect((calls.metadataBatches > 0) == !noting)
+                if noting { #expect(calls.metadataBatches == 0) }
+                else { #expect(calls.metadataBatches > 0) }
                 #expect(calls.helpGuardCalls > 0 && !guardian.stopped && !failures.any)
             }
         }
@@ -109,7 +111,8 @@ struct Issue965StripHelpSampleTests {
             #expect(calls.batches == (kind == "legacy" ? 0 : 1))
             #expect(calls.singles == (["legacy", "null_fallback"].contains(kind) ? 3 : 0))
             #expect(calls.guardCalls == 1 && calls.help == (kind == "help_cutoff" ? 0 : 1))
-            #expect(guardian.stopped == (kind == "help_cutoff"))
+            if kind == "help_cutoff" { #expect(guardian.stopped) }
+            else { #expect(!guardian.stopped) }
             if kind == "next_sample" {
                 builder.setAttribute(element, kAXDescriptionAttribute as String, "Changed insert")
                 #expect(AXLogicProElements.elementSearchText(element, runtime: runtime) == "slot-id changed insert fx native help")

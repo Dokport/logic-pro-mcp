@@ -3993,7 +3993,8 @@ struct Issue965FreshPopulationAcquisitionTests {
             let effects = body["ui_effects"] as? [String: Any]
             #expect((effects?["attempted"] as? [String] ?? []).contains("mixer_focus_restoration"))
             let changed = effects?["changed"] as? [String] ?? []
-            #expect(changed.contains("mixer_focus_restoration") == (fault == "restore_focus_selection_drift"))
+            if fault == "restore_focus_selection_drift" { #expect(changed.contains("mixer_focus_restoration")) }
+            else { #expect(!changed.contains("mixer_focus_restoration")) }
             #expect(effects?["restoration"] as? String == "not_restored")
         }
         if completeExpected {
@@ -4008,7 +4009,8 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)
             #expect(fixture.events.recorded.filter { $0 == "restore_mixer_selection" }.count == 1)
         }
-        #expect(fixture.builder.attributeValue(fixture.header, kAXSelectedAttribute as String) as? Bool == true)
+        let headerSelected = try #require(fixture.builder.attributeValue(fixture.header, kAXSelectedAttribute as String) as? Bool)
+        #expect(headerSelected)
     }
 
     @Test("a noneditable physical Mixer strip's zero insertion sentinel does not block a no-navigation track read")
