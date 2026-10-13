@@ -8,6 +8,60 @@ import Testing
 
 @Suite("ADR-001 qualification runner", .serialized)
 struct QualificationRunnerTests {
+    @Test(arguments: [OperationID.mixerSetPan, .mixerSetVolume])
+    func mixerScalarRecipesUseTheirExactTrackReadback(operation: OperationID) throws {
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        #expect(QualificationTransport.valueRestoreReadbackField[operation] != nil)
+        #expect(QualificationTransport.readbackSource(for: spec) == "logic://tracks",
+            "the scalar recipe captures and restores this exact track, not a separately hidden Mixer")
+    }
+
+    @Test(arguments: [OperationID.mixerGetInputBusVerified, .mixerGetOutputVerified,
+                      .mixerGetSendDestinationVerified, .pluginsGetInventory])
+    func neighboringMixerAndPluginRecipesKeepTheirMixerReadback(operation: OperationID) throws {
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        #expect(QualificationTransport.readbackSource(for: spec) == "logic://mixer")
+    }
+
+    @Test(arguments: [OperationID.mixerSetPan, .mixerSetVolume],
+          ["live", "cache", "stale", "missing_age", "unreadable", "occluded"])
+    func scalarTrackReadbackStillRequiresActualFreshEvidence(operation: OperationID, shape: String) throws {
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let field = try #require(QualificationTransport.valueRestoreReadbackField[operation])
+        func reading(_ value: Double) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: [
+                "source": "ax_live", "cache_age_sec": 0,
+                "data": [["track_ref": "held-track", field: value]],
+            ] as [String: Any], options: [.sortedKeys]), as: UTF8.self)
+        }
+        let original = try reading(0.4)
+        let record = QualificationMutationRestoreRecord(operationID: operation.rawValue,
+            preState: original, mutation: #"{"state":"A","success":true}"#,
+            readback: try reading(0.5), restore: #"{"state":"A","success":true}"#,
+            restoreReadback: original)
+        #expect(record.verifiedCycleShape)
+        var finalRead = try #require(JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any])
+        switch shape {
+        case "cache": finalRead["source"] = "cache"
+        case "stale": finalRead["cache_age_sec"] = spec.deadline.seconds + 1
+        case "missing_age": finalRead.removeValue(forKey: "cache_age_sec")
+        case "unreadable": finalRead["readable"] = false
+        case "occluded": finalRead["ax_occluded"] = true
+        default: break
+        }
+        let result = QualificationOperationResult(operationID: operation.rawValue,
+            tool: spec.tool.rawValue, command: spec.command, mutability: spec.mutability,
+            requestID: "scalar-no-write-probe",
+            responseData: Data(#"{"state":"C","error":"invalid_params","write_attempted":false}"#.utf8),
+            isError: true, state: "C", error: "invalid_params", hint: nil, writeAttempted: false,
+            readbackSource: QualificationTransport.readbackSource(for: spec),
+            readbackRequestID: "independent-scalar-read",
+            readbackData: try JSONSerialization.data(withJSONObject: finalRead),
+            verification: spec.verification, deadline: spec.deadline, failureReason: nil,
+            mutationRestore: record)
+        #expect(result.status == (shape == "live" ? .passed : .notQualified))
+    }
+
     @Test(arguments: [false, true])
     func stoppedTransportMustBeObservedBeforeARecipeAcquiresChanges(cached: Bool) throws {
         let fixture = try SlowHandshakeFixture(transportNativePause: true, cachedTransport: cached)

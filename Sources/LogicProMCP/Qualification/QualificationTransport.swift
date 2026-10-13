@@ -4429,6 +4429,9 @@ struct QualificationTransport: Sendable {
     }
 
     static func readbackSource(for spec: OperationSpec) -> String {
+        // These existing recipes mutate and restore the exact track scalar. Their final
+        // independent read must use that same surface, not require a separately visible Mixer.
+        if valueRestoreReadbackField[spec.id] != nil { return "logic://tracks" }
         switch spec.tool {
         case .logicTransport:
             return "logic://transport/state"
