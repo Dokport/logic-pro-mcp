@@ -1524,6 +1524,9 @@ extension AccessibilityChannel {
                     return .menuReadFailed(stage: "AXMenuItem.AXEnabled", status: error.diagnosticLabel)
                 }
                 guard !Task.isCancelled else { return .cancelled }
+                if let approval = ApprovedSessionRepair.current, !approval.permitsSortLeaf() {
+                    return .menuReadFailed(stage: "approved_sort_scope", status: "unavailable")
+                }
                 // The menu leaf does not expose a persistent "selected sort"
                 // attribute. Its own title is therefore the only trustworthy
                 // criterion witness: we record the title and its measured mapping

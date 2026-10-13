@@ -42,6 +42,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let name: String
         let binding: AXTrackBinding.Binding
     }
+    private struct SortTask: Sendable {
+        let policy: ProjectSessionAudit.IntentSort
+        let before: [String]
+        let rows: [TrackState]
+        let binding: SessionPopulationObservation.PresentationBinding
+        let snapshot: TargetRegistrySnapshot
+    }
     private struct CapturedGoals: Sendable {
         let projectRef: TargetReference
         let document: String
@@ -49,6 +56,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let names: [NameGoal]
         let renameCapture: SessionPopulationObservation.Capture?
         var selectionOrigin: AXTrackBinding.Binding? = nil
+        var sort: SortTask? = nil
     }
 
     /// The existing adapter's finite scope and captured footprint, shared with planning.
@@ -70,6 +78,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             capture: source, request: request)
         guard naming.reasons.isEmpty else { return nil }
         let policy = naming.policy
+        if let sort = capturedSort(policy: policy, names: names, source: source, request: request),
+           case .issued(let project)? = source.projectIssuance {
+            return .init(projectRef: project, document: sort.binding.document, mixer: nil,
+                names: [], renameCapture: nil, sort: sort)
+        }
         guard policy.trackSort == nil, policy.roles.isEmpty, policy.outputs.isEmpty,
               policy.sends.isEmpty, policy.receivers.isEmpty, policy.protectedPaths.isEmpty,
               names.count == policy.targets.count,
@@ -137,12 +150,50 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return .init(projectRef: issued, document: binding.document,
             mixer: .init(before: before, desired: desired, binding: binding), names: goals, renameCapture: nil)
     }
+
+    private static func capturedSort(policy: ProjectSessionAudit.IntentPolicy,
+                                     names: [ProjectSessionAudit.ApprovedName],
+                                     source: SessionPopulationObservation.Capture,
+                                     request: SessionPopulationObservation.Request) -> SortTask? {
+        guard FeatureFlags.adr004MutationSaga, let sort = policy.trackSort,
+              names.isEmpty, policy.targets.isEmpty, policy.roles.isEmpty, policy.outputs.isEmpty,
+              policy.sends.isEmpty, policy.receivers.isEmpty, policy.protectedPaths.isEmpty,
+              policy.mixerVisible == nil, request.scope == .wholeProject, request.domains == [.tracks],
+              source.before == source.after, source.referencesEnabled, !source.referencesStale,
+              case .issued(let project)? = source.projectIssuance, policy.projectRef == project,
+              let fresh = source.freshPopulation, fresh.stable, fresh.hiddenTracksShown == true,
+              SessionPopulationObservation.build(request: request, capture: source).tracks.coverage == .complete,
+              !source.tracks.isEmpty, source.tracks.allSatisfy({ $0.isStackHeader == false && $0.physicalBinding != nil }),
+              Set(source.tracks.map(\.name)).count == source.tracks.count,
+              let issued = source.issued, let snapshot = source.targetSnapshot,
+              let binding = fresh.presentationBinding, let transport = binding.transport,
+              !transport.isPlaying, !transport.isRecording, binding.app != nil, binding.pid != nil,
+              fresh.presentationObservation?.isPlaying == false, fresh.presentationObservation?.isRecording == false,
+              fresh.presentationObservation?.uiLocale == binding.uiLocale,
+              sort.criterion.measuredLabel(for: binding.uiLocale) != nil,
+              sort.inverseCriterion.measuredLabel(for: binding.uiLocale) != nil else { return nil }
+        let before = issued.byRow.compactMap { $0?.rawValue }
+        guard before.count == source.tracks.count, Set(before).count == before.count,
+              sort.expectedOrder.count == before.count, Set(sort.expectedOrder) == Set(before),
+              source.tracks.allSatisfy({ row in row.physicalBinding.map {
+                  CFEqual($0.window, binding.window) && $0.document.utf8.elementsEqual(binding.document.utf8)
+                      && $0.exposure?.hasEnded != true
+              } == true }) else { return nil }
+        return .init(policy: sort, before: before, rows: source.tracks, binding: binding, snapshot: snapshot)
+    }
     let plan: SagaPlan
     let projectRef: TargetReference
     private let mixerTask: MixerTask?
     private let nameGoals: [NameGoal]
     private let renameCapture: SessionPopulationObservation.Capture?
     private let selectionOrigin: AXTrackBinding.Binding?
+    private let sortTask: SortTask?
+    private var sortSnapshot: TargetRegistrySnapshot?
+    private var sortProject: TargetReference?
+    private var sortApplied = false
+    private var sortInverseConsumed = false
+    private var sortAttempted = false
+    private var sortLeafOrder: [String]?
     private struct NameExecution {
         var ran = false
         var inverse: ExactTrackNameAdapter.OwnedInverse?
@@ -164,12 +215,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                  mixerTask: MixerTask? = nil, nameGoals: [NameGoal] = [],
                  renameCapture: SessionPopulationObservation.Capture? = nil,
                  selectionOrigin: AXTrackBinding.Binding? = nil, cacheProjectEpoch: UInt64,
+                 sortTask: SortTask? = nil,
                  registryProjectEpoch: UInt64,
                  cache: StateCache, registry: TargetRegistry, journal: SagaJournal) {
         self.plan = plan; self.projectRef = projectRef; self.document = document
         self.mixerTask = mixerTask; self.nameGoals = nameGoals
         self.renameCapture = renameCapture
         self.selectionOrigin = selectionOrigin
+        self.sortTask = sortTask
         self.cacheProjectEpoch = cacheProjectEpoch; self.registryProjectEpoch = registryProjectEpoch
         self.cache = cache; self.registry = registry; self.journal = journal
     }
@@ -225,6 +278,26 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   current.physicalTrack?.matches(goal.binding) == true else { return nil }
         }
         let changed = goals.filter { !$0.before.utf8.elementsEqual($0.name.utf8) }
+        if let sort = captured.sort {
+            guard steps.count == 1, let step = steps[0].objectValue,
+                  step["kind"] == .string("track_sort"), step["target_ref"] == .string(issued.rawValue),
+                  step["before"]?.objectValue?["order"] == .array(sort.before.map(Value.string)),
+                  step["after"]?.objectValue?["criterion"] == .string(sort.policy.criterion.rawValue),
+                  step["after"]?.objectValue?["order"] == .array(sort.policy.expectedOrder.map(Value.string)),
+                  step["inverse"]?.objectValue?["criterion"] == .string(sort.policy.inverseCriterion.rawValue),
+                  step["inverse"]?.objectValue?["expected_order"] == .array(sort.before.map(Value.string)),
+                  step["blocked_reasons"]?.arrayValue?.isEmpty == true,
+                  step["dependencies"]?.arrayValue?.isEmpty == true,
+                  let orderValue = sortOrderValue(sort.policy.expectedOrder) else { return nil }
+            let saga = SagaPlan(steps: [.init(operationID: .tracksSortVerified, targetRef: issued,
+                params: ["criterion": .string(sort.policy.criterion.rawValue),
+                         "expected_order": orderValue],
+                expectedInverse: .init(operationID: .tracksSortVerified, valueParameter: "expected_order"))],
+                idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
+            return .init(plan: saga, projectRef: issued, document: captured.document,
+                cacheProjectEpoch: source.capture.projectEpoch, sortTask: sort,
+                registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
+        }
         if let renameCapture = captured.renameCapture, !changed.isEmpty {
             guard steps.count == changed.count else { return nil }
             for (value, goal) in zip(steps, changed) {
@@ -278,6 +351,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     func supports(_ step: SagaStep) -> Bool {
+        if let sort = sortTask {
+            return step.operationID == .tracksSortVerified && step.targetRef == projectRef
+                && Set(step.params.keys) == ["criterion", "expected_order"]
+                && step.params["criterion"] == .string(sort.policy.criterion.rawValue)
+                && [Self.sortOrderValue(sort.before), Self.sortOrderValue(sort.policy.expectedOrder)].contains(step.params["expected_order"] ?? .null)
+                && step.expectedInverse.operationID == .tracksSortVerified
+                && step.expectedInverse.valueParameter == "expected_order"
+        }
         if let goal = changedNameGoals.first(where: { $0.reference == step.targetRef }) {
             return step.operationID == .tracksRename && step.targetRef == goal.reference
                 && Set(step.params.keys) == ["name"]
@@ -356,6 +437,151 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return StatePoller.backgroundTickYields(to: AccessibilityChannel.readLogicKeyboardFocus(of: focus, runtime: runtime))
     }
 
+    /// Sort's old reference strings annotate the observed permutation only.
+    /// They never become mutation authority after the scalar invalidates topology.
+    private static func sortOrderValue(_ order: [String]) -> Value? {
+        // Existing inverse ownership accepts exact scalars, not arrays. This
+        // JSON string is an annotation of an actual read, never a binding token.
+        guard let json = try? encodeJSONStrict(Value.array(order.map(Value.string)), compact: true) else { return nil }
+        return .string(json)
+    }
+
+    private func sortReading() -> (rows: [TrackState], order: [String])? {
+        guard let sort = sortTask, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+        let binding = sort.binding, runtime = binding.runtime
+        func scopeHeld() -> Bool {
+            guard runtime.logicProPID() == binding.pid, runtime.focusedApplicationPID() == binding.pid,
+                  let app = AXLogicProElements.appRoot(runtime: runtime), binding.app.map({ CFEqual($0, app) }) == true,
+                  let window = AXLogicProElements.mainWindow(runtime: runtime), CFEqual(window, binding.window),
+                  AXHelpers.getTitle(window, runtime: runtime.ax)?.utf8.elementsEqual(binding.title.utf8) == true,
+                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime)
+            else { return false }
+            return document.utf8.elementsEqual(binding.document.utf8)
+        }
+        guard scopeHeld(), case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: binding.window, runtime: runtime),
+              headers.count == sort.rows.count,
+              sort.rows.allSatisfy({ row in row.physicalBinding.map { original in
+                  headers.filter { CFEqual($0, original.header) }.count == 1
+              } == true }),
+              AXLogicProElements.hiddenTrackViewRead(headers: headers, in: binding.window, runtime: runtime)?.shown == true,
+              let rows = AccessibilityChannel.readTrackStates(from: headers, in: binding.window,
+                runtime: runtime, readingTypeHelp: false,
+                stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil }).states,
+              rows.count == sort.rows.count,
+              rows.allSatisfy({ $0.isStackHeader == false && $0.physicalBinding != nil }),
+              Set(rows.map(\.name)).count == rows.count,
+              let transport = try? AXLogicProElements.observedTransportActivity(in: binding.window, runtime: runtime,
+                checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+              !transport.isPlaying, !transport.isRecording,
+              let originalTransport = binding.transport,
+              CFEqual(transport.controlBar, originalTransport.controlBar), CFEqual(transport.play, originalTransport.play),
+              CFEqual(transport.record, originalTransport.record),
+              case .locale(let locale) = AXLogicProElements.logicUILocaleIdentifierRead(runtime: runtime),
+              locale == binding.uiLocale else { return nil }
+        func footprint(_ row: TrackState) -> Data? {
+            guard let data = try? JSONEncoder().encode(row),
+                  var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            object.removeValue(forKey: "id")
+            return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        }
+        var order: [String] = []
+        for row in rows {
+            let matches = sort.rows.indices.filter { sort.rows[$0].name.utf8.elementsEqual(row.name.utf8) }
+            guard matches.count == 1, let index = matches.first,
+                  let before = footprint(sort.rows[index]), let after = footprint(row), before == after else { return nil }
+            order.append(sort.before[index])
+        }
+        guard scopeHeld(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+        return (rows, order)
+    }
+
+    private func sortRegistryHeld() async -> Bool {
+        guard let sort = sortTask, await registry.currentSnapshot == (sortSnapshot ?? sort.snapshot),
+              await cache.currentProjectIdentity()?.epoch == cacheProjectEpoch,
+              let project = await registry.resolveCurrentProject(sortProject ?? projectRef),
+              let url = URL(string: document), url.isFileURL,
+              project.descriptor.projectFilePath?.utf8.elementsEqual(url.path.utf8) == true,
+              await cache.getProject().filePath?.utf8.elementsEqual(url.path.utf8) == true else { return false }
+        return true
+    }
+
+    /// The existing sort calls this immediately before its actual measured menu leaf.
+    /// It is inert for scalar callers and cannot authorize another sort/plan.
+    func permitsSortLeaf() -> Bool {
+        guard let expected = sortLeafOrder else { return false }
+        return sortReading()?.order == expected
+    }
+
+    private func readSortState(_ step: SagaStep) async -> ObservedState? {
+            guard supports(step), !sortAttempted || sortApplied, await sortRegistryHeld(),
+                  let reading = sortReading(), await sortRegistryHeld() else { return nil }
+            guard let value = Self.sortOrderValue(reading.order) else { return nil }
+            let evidence = SagaReadEvidence(readSource: .axTrackOrder, provenance: .liveIndependent,
+                trackIndex: nil, projectReference: (sortProject ?? projectRef).rawValue, field: "track_order_json",
+                observed: value, sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
+            return .init(read: evidence)
+    }
+
+    func performSort(_ step: SagaStep, router: ChannelRouter) async -> CallTool.Result {
+        let restoring = sortAttempted
+            guard let sort = sortTask, supports(step), await sortRegistryHeld(),
+                  (!restoring || (sortApplied && !sortInverseConsumed)),
+                  let before = sortReading(), before.order == (restoring ? sort.policy.expectedOrder : sort.before),
+                  step.params["expected_order"] == Self.sortOrderValue(restoring ? sort.before : sort.policy.expectedOrder),
+                  await sortRegistryHeld() else { return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false]) }
+            let snapshot = await registry.currentSnapshot
+            let project = ProjectInfo(name: AccessibilityChannel.projectName(fromWindowTitle: sort.binding.title),
+                filePath: URL(string: document)?.path)
+            guard case .issued(let currentProject) = await ProjectReferenceIssuance.issue(cached: project, registry: registry, snapshot: snapshot),
+                  let issued = await TrackReferenceIssuance.issue(for: before.rows, registry: registry, snapshot: snapshot) else {
+                return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+            }
+            let desired = restoring ? sort.before : sort.policy.expectedOrder
+            var freshReferences: [String] = []
+            for reference in desired {
+                guard let index = before.order.firstIndex(of: reference), let current = issued.byRow[index] else {
+                    return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+                }
+                freshReferences.append(current.rawValue)
+            }
+            guard await registry.currentSnapshot == snapshot, await sortRegistryHeld() else {
+                return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+            }
+            if restoring { sortInverseConsumed = true }
+            sortLeafOrder = before.order
+            defer { sortLeafOrder = nil }
+            let result = await AXHelpers.HelpReadGuard.$current.withValue(
+                .init(allowHelpReads: false, stop: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil })) {
+                await ApprovedSessionRepair.$current.withValue(self) {
+                    await TrackDispatcher.handle(command: "sort_verified", params: [
+                        "criterion": .string((restoring ? sort.policy.inverseCriterion : sort.policy.criterion).rawValue),
+                        "expected_order": .array(freshReferences.map(Value.string)), "confirmed": .bool(true)],
+                        router: router, cache: cache, targetRegistry: registry)
+                }
+            }
+            let text: String
+            if case .text(let value, _, _) = result.content.first { text = value } else { text = "" }
+            let body = decodedJSONObject(text)
+            let attempted = body?["write_attempted"] as? Bool == true
+            guard attempted else { return result }
+            sortAttempted = true
+            let afterSnapshot = await registry.currentSnapshot
+            guard afterSnapshot.projectEpoch == snapshot.projectEpoch,
+                  afterSnapshot.topologyGeneration == snapshot.topologyGeneration + 1,
+                  body?["state"] as? String == "A", let after = sortReading(), after.order == desired,
+                  case .issued(let renewedProject) = await ProjectReferenceIssuance.issue(cached: project,
+                    registry: registry, snapshot: afterSnapshot),
+                  await TrackReferenceIssuance.issue(for: after.rows, registry: registry, snapshot: afterSnapshot) != nil,
+                  await registry.currentSnapshot == afterSnapshot else {
+                sortApplied = false
+                return toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable,
+                    extras: ["write_attempted": true]), isError: true)
+            }
+            sortSnapshot = afterSnapshot; sortProject = renewedProject; sortApplied = true
+            _ = currentProject
+            return result
+    }
+
     private func reading() async -> (Bool, AXUIElement?)? {
         guard let binding = mixerTask?.binding else { return nil }
         let runtime = binding.runtime
@@ -367,6 +593,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     func readState(_ step: SagaStep) async -> ObservedState? {
+        if sortTask != nil { return await readSortState(step) }
         if let goal = changedNameGoals.first(where: { $0.reference == step.targetRef }), let capture = renameCapture {
             guard supports(step), await projectIsCurrent(allowPendingCancellation: true),
                   originalSelectionHeld() else { return nil }

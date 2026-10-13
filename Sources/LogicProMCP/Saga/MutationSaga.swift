@@ -55,6 +55,7 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
     case axTrackHeaderFader = "ax_track_header_fader"
     case axTrackHeaderPan = "ax_track_header_pan"
     case axTrackName = "ax_track_name"
+    case axTrackOrder = "ax_track_order"
     case axTrackToggle = "ax_track_toggle"
     case axProjectMixerVisibility = "ax_project_mixer_visibility"
     case axPluginParameter = "ax_plugin_parameter"
@@ -65,6 +66,7 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
         case .axTrackHeaderFader: "header_fader"
         case .axTrackHeaderPan: "header_pan"
         case .axTrackName: "track_name"
+        case .axTrackOrder: "track_order"
         case .axTrackToggle: "track_toggle"
         case .axProjectMixerVisibility: "mixer_visibility"
         case .axPluginParameter: "plugin_parameter"
@@ -320,6 +322,10 @@ actor MutationSaga {
         let projectEpoch = await targetRegistry.currentProjectEpoch
         var worstCaseSeconds: Double = 0
         for (index, step) in plan.steps.enumerated() {
+            let approvedSort = approvedSessionRepair?.supports(step) == true
+                && step.operationID == .tracksSortVerified
+                && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
+                && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
             let registeredSpec = OperationRegistry.specs.first { $0.id == step.operationID }
             if registeredSpec == nil {
                 issues.append(.operationNotRegistered(
@@ -330,7 +336,7 @@ actor MutationSaga {
             if let spec = registeredSpec {
                 worstCaseSeconds += step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified
                     ? CompressorParameterSaga.stepSeconds : spec.deadline.seconds
-                if spec.confirmation != .none {
+                if spec.confirmation != .none && !approvedSort {
                     issues.append(.confirmationRequired(
                         stepIndex: index,
                         operationID: step.operationID
@@ -348,7 +354,9 @@ actor MutationSaga {
                 && step.operationID == .navigateToggleView
                 && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
                 && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
-            let definition = approvedView ? ReversibleDefinition(tool: .logicNavigate, command: "toggle_view",
+            let definition = approvedSort ? ReversibleDefinition(tool: .logicTracks, command: "sort_verified",
+                valueParameter: "expected_order", tolerance: .exact)
+                : approvedView ? ReversibleDefinition(tool: .logicNavigate, command: "toggle_view",
                 valueParameter: "visible", tolerance: .exact)
                 : (step.operationID == .pluginsSetParamVerified && (try? CompressorParameterSaga.validate(plan)) != nil
                     ? ReversibleDefinition(tool: .logicPlugins, command: "set_param_verified",
