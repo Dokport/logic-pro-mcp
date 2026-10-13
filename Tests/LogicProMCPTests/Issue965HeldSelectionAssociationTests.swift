@@ -1301,7 +1301,10 @@ struct Issue965HeldSelectionAssociationTests {
                                 let proof = try? #require(removed.removedSend)
                                 guard let proof else { return toolTextResult(removed.result) }
                                 #expect(proof.permits(runtime: f.logic()))
-                                #expect(proof.before.levelRaw == 0 && proof.before.bypassed == false)
+                                guard let beforeBypassed = try? #require(proof.before.bypassed) else {
+                                    return toolTextResult(removed.result)
+                                }
+                                #expect(proof.before.levelRaw == 0 && !beforeBypassed)
                                 #expect(proof.checkedDestination == .stereoOutput && proof.nonRoutingChecks == ["Post Pan"])
                                 if let inverseFault, !inverseFault.hasPrefix("after_") {
                                     f.routingLateScopeInjected = true
@@ -1365,7 +1368,9 @@ struct Issue965HeldSelectionAssociationTests {
                 let verified = try #require(body["verified"] as? Bool)
                 #expect(verified)
                 let slots = try #require(AXLogicProElements.sendSlotObservations(in: restoredSource, runtime: f.logic().ax))
-                #expect(slots.count == 2 && slots[1].levelRaw == 0 && slots[1].bypassed == false)
+                #expect(slots.count == 2)
+                let restoredBypassed = try #require(slots[1].bypassed)
+                #expect(slots[1].levelRaw == 0 && !restoredBypassed)
                 #expect(Array(f.selections.dropFirst(initialSelections.count)) == [1, 0, 1, 0])
                 return
             }
