@@ -3381,7 +3381,8 @@ func testProjectDispatcherLaunchReconcilesTimeoutOnlyWithObservedRunningState(_ 
     )
     #expect(harness.scripts == [LogicProTarget.appleScriptTarget().activateByBundleID])
     let isError = result.isError ?? false
-    #expect(isError == (outcome == "absent"))
+    if outcome == "absent" { #expect(isError) }
+    else { #expect(!isError) }
     if outcome == "absent" {
         #expect(dispatcherText(result) == "Failed to launch Logic Pro: timed out after 5s")
     } else {
