@@ -49,7 +49,8 @@ extension AccessibilityChannel {
     static func readChannelStrips(
         from strips: [AXUIElement], runtime: AXLogicProElements.Runtime,
         window: AXUIElement? = nil, mixer: AXUIElement? = nil,
-        readingPlugins: Bool = true, readingScalarHelp: Bool = true, stoppingWhen stop: () -> Bool
+        readingPlugins: Bool = true, readingRouting: Bool = true,
+        readingScalarHelp: Bool = true, stoppingWhen stop: () -> Bool
     ) -> [ChannelStripState]? {
         var channelStrips: [ChannelStripState] = []
         let document: String?
@@ -98,11 +99,13 @@ extension AccessibilityChannel {
                 // #291: `output` has been on this model since it was written and nothing ever set it, so
                 // `logic://mixer` published a field that was always null. It is read now; `nil` still
                 // means "not identified", never "routed nowhere".
-                state.output = AXLogicProElements.outputSlotDestination(in: strip, runtime: runtime.ax)
-                readInputSource(of: strip, into: &state, runtime: runtime)
-                // #291: occupancy per send slot, from the send-level knob beside an assigned send's
-                // group. `nil` stays nil — an absent key is "nobody could look", never "no sends".
-                state.sendSlots = AXLogicProElements.sendSlotObservations(in: strip, runtime: runtime.ax)
+                if readingRouting {
+                    state.output = AXLogicProElements.outputSlotDestination(in: strip, runtime: runtime.ax)
+                    readInputSource(of: strip, into: &state, runtime: runtime)
+                    // #291: occupancy per send slot, from the send-level knob beside an assigned send's
+                    // group. `nil` stays nil — an absent key is "nobody could look", never "no sends".
+                    state.sendSlots = AXLogicProElements.sendSlotObservations(in: strip, runtime: runtime.ax)
+                }
                 return state
             }
             if samples != nil, stop() { return nil }

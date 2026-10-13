@@ -1279,7 +1279,8 @@ enum ControlsViewBooleanParameterWriter {
     static func pressAndVerify(
         _ checkbox: AXUIElement,
         requested: Bool,
-        runtime: AXHelpers.Runtime = .production
+        runtime: AXHelpers.Runtime = .production,
+        allowingPress: (Bool) -> Bool = { _ in true }
     ) -> ToggleResult {
         let before: Bool
         switch AXValueExtractors.extractButtonStateResult(checkbox, runtime: runtime) {
@@ -1307,6 +1308,12 @@ enum ControlsViewBooleanParameterWriter {
                 restoreObservedValue: nil,
                 refusal: "the Controls-view AXCheckBox AXValue read failed before AXPress (status \(error.diagnosticLabel))"
             )
+        }
+        guard allowingPress(before) else {
+            return ToggleResult(verified: false, pressAttempted: false, before: before,
+                observedAfterPress: before, restoreAttempted: false, restoreObserved: nil,
+                restoreObservedValue: nil,
+                refusal: "the approved before-state, target or operation ownership ended before AXPress")
         }
         guard before != requested else {
             return ToggleResult(

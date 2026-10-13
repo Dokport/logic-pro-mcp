@@ -49,6 +49,27 @@ struct SagaComparisonEvidence: Codable, Equatable, Sendable {
 /// inverse ownership instead compares actual observed states exactly. State-A
 /// dispatcher trust is handled by `MutationSaga.classifyVerifiedWrite`.
 enum SagaValueComparator {
+    static func equals(observed: Value, expected: Value, step: SagaStep) -> Bool {
+        guard step.operationID == .pluginsSetParamVerified else {
+            return equals(observed: observed, expected: expected, op: step.operationID)
+        }
+        if step.params["param"]?.stringValue == "threshold",
+           let epsilon = CompressorParameterSaga.tolerance(step).epsilon,
+           let left = numeric(observed), let right = numeric(expected), left.isFinite, right.isFinite {
+            return abs(left - right) <= epsilon
+        }
+        return ownershipEvidence(observed: observed, desired: expected).equal
+    }
+
+    static func evidence(observed: Value?, desired: Value?, step: SagaStep) -> SagaComparisonEvidence {
+        guard step.operationID == .pluginsSetParamVerified else {
+            return evidence(observed: observed, desired: desired, op: step.operationID)
+        }
+        let tolerance = CompressorParameterSaga.tolerance(step)
+        let equal = observed.flatMap { observed in desired.map { equals(observed: observed, expected: $0, step: step) } } ?? false
+        return SagaComparisonEvidence(comparator: tolerance.comparator, epsilon: tolerance.epsilon,
+            desired: desired, observed: observed, delta: delta(observed: observed, expected: desired), equal: equal)
+    }
     /// The declared tolerance for `op`. Unknown operations fall back to
     /// `exact` — fail-closed: an operation nobody declared a tolerance for
     /// must not silently inherit a permissive epsilon.

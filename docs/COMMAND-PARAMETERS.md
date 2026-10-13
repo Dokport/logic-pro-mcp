@@ -133,7 +133,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `permissions` | none | none | closed | read_only | none | none | none | never_automatic | default_install |
 | `refresh_cache` | none | none | closed | read_only | none | none | none | never_automatic | default_install |
 | `saga_cancel` | `idempotency_key`: string | `idempotency_key` | open | mutating | none | none | readback_required | never_automatic | default_install |
-| `saga_execute` | `idempotency_key`: string, `steps`: array | `idempotency_key`; `steps` | open | mutating | none | none | readback_required | never_automatic | default_install |
+| `saga_execute` | `confirmed_plan_hash`: string, `idempotency_key`: string, `steps`: array | `idempotency_key`; `steps` | open | mutating | none | none | readback_required | never_automatic | default_install |
 | `saga_preflight` | `idempotency_key`: string, `steps`: array | `idempotency_key`; `steps` | open | read_only | none | none | none | never_automatic | default_install |
 | `saga_status` | `idempotency_key`: string | `idempotency_key` | open | read_only | none | none | none | never_automatic | default_install |
 | `setup_arm_key` | `consent` | none | closed | mutating | none | none | readback_required | never_automatic | default_install |

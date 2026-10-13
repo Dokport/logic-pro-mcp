@@ -499,7 +499,7 @@ actor SagaJournal {
     /// per-call unique sentinel. That fails CLOSED: such a plan can never match
     /// a stored row, so it answers `.conflict` rather than aliasing another
     /// saga's record.
-    private static func planHash(_ plan: SagaPlan) -> String {
+    static func planHash(_ plan: SagaPlan) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(plan) else {
@@ -530,7 +530,10 @@ enum SagaWire {
     }
 
     static func plan(from params: [String: Value]) throws -> SagaPlan {
-        try requireExactKeys(params, allowed: ["steps", "idempotency_key"], context: "plan")
+        try requireExactKeys(params, allowed: ["steps", "idempotency_key", "confirmed_plan_hash"], context: "plan")
+        if let confirmed = params["confirmed_plan_hash"], confirmed.stringValue == nil {
+            throw SagaWireError.invalid("confirmed_plan_hash must be a string")
+        }
         guard let rawSteps = params["steps"]?.arrayValue else {
             throw SagaWireError.invalid("plan 'steps' must be an array")
         }
@@ -544,7 +547,12 @@ enum SagaWire {
             }
             return try step(from: object, index: index)
         }
-        return SagaPlan(steps: steps, idempotencyKey: idempotencyKey)
+        let plan = SagaPlan(steps: steps, idempotencyKey: idempotencyKey)
+        try CompressorParameterSaga.validate(plan)
+        if params["confirmed_plan_hash"] != nil && !CompressorParameterSaga.containsPluginSteps(plan) {
+            throw SagaWireError.invalid("confirmed_plan_hash belongs only to the selected Compressor workflow")
+        }
+        return plan
     }
 
     static func idempotencyKey(from params: [String: Value]) throws -> String {
@@ -741,6 +749,25 @@ enum SagaWire {
         ]) { _, new in new }
         if let id = plan.canonicalPlanID { extras["plan_id"] = id }
         if let digest = plan.canonicalDigest { extras["digest"] = digest }
+        if CompressorParameterSaga.containsPluginSteps(plan) {
+            extras["plan_hash"] = SagaJournal.planHash(plan)
+            extras["parameters"] = plan.steps.enumerated().map { index, step -> [String: Any] in
+                let record = outcome.journal.first { $0.stepIndex == index }
+                let status: String
+                if record?.executionResult?.state == .stateC, record?.writeBoundaryCrossed == false {
+                    status = "rejected"
+                } else if record?.verificationEvidence?.disposition == .applied {
+                    status = record?.writeBoundaryCrossed == false ? "unchanged" : "applied"
+                } else { status = "unknown" }
+                return ["param": step.params["param"]?.stringValue as Any? ?? NSNull(),
+                    "raw_unit": step.params["unit"]?.stringValue as Any? ?? NSNull(),
+                    "requested": step.params["value"].map(foundationValue) ?? NSNull(),
+                    "approved_before": step.params["expected_before"].map(foundationValue) ?? NSNull(),
+                    "observed_before": record?.beforeState.map { foundationValue($0.value) } ?? NSNull(),
+                    "observed_after": record?.verificationEvidence?.readback.map { foundationValue($0.value) } ?? NSNull(),
+                    "status": status, "write_attempted": record?.writeBoundaryCrossed ?? false]
+            }
+        }
 
         let body: String
         let isError: Bool
@@ -1108,6 +1135,8 @@ enum SagaWire {
     ) throws -> [String: Value] {
         let context = "steps[\(index)].params"
         switch operationID {
+        case .pluginsSetParamVerified:
+            return try CompressorParameterSaga.canonicalParams(params)
         case .tracksRename:
             try requireExactKeys(params, allowed: ["name"], context: context)
             guard let name = params["name"]?.stringValue, !name.isEmpty else {

@@ -692,7 +692,7 @@ enum OperationRegistry {
         (.systemExportSupportBundle, "export_support_bundle", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, ["dir"]),
         (.systemHelp, "help", Mutability.readOnly, DeadlineClass.short, VerificationPolicy.none, ["category"]),
         (.systemSagaPreflight, "saga_preflight", Mutability.readOnly, DeadlineClass.medium, VerificationPolicy.none, ["idempotency_key", "steps"]),
-        (.systemSagaExecute, "saga_execute", Mutability.`mutating`, DeadlineClass.long, VerificationPolicy.readbackRequired, ["idempotency_key", "steps"]),
+        (.systemSagaExecute, "saga_execute", Mutability.`mutating`, DeadlineClass.long, VerificationPolicy.readbackRequired, ["idempotency_key", "steps", "confirmed_plan_hash"]),
         (.systemSagaStatus, "saga_status", Mutability.readOnly, DeadlineClass.short, VerificationPolicy.none, ["idempotency_key"]),
         (.systemSagaCancel, "saga_cancel", Mutability.`mutating`, DeadlineClass.short, VerificationPolicy.readbackRequired, ["idempotency_key"]),
         // WHY: a consent-gated one-time Key Commands configuration write (#413); mutating with a long budget (drives the KC GUI + a functional arm-flip verify), consent is the only required param.
