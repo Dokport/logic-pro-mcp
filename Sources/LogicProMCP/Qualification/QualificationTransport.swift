@@ -4274,6 +4274,11 @@ struct QualificationTransport: Sendable {
             // as `analyze_file`. Reusing the measured system sound exercises the real analysis
             // path; omitting it merely tests that the dispatcher refuses missing input.
             return ["path": Self.qualificationAudioProbePath]
+        case .audioCompareSpectra:
+            // Same-file comparison exercises the shipped reader without editing either input.
+            // This supplies missing inputs; the shape-only oracle gains no numerical authority.
+            return ["before_path": Self.qualificationAudioProbePath,
+                    "after_path": Self.qualificationAudioProbePath]
         case .audioRecommendEQ:
             // Ping's measured level confidence is 0.538. Its default 0.6 recommendation threshold
             // correctly returns the safe `level_below_minimum` branch, but this probe needs to

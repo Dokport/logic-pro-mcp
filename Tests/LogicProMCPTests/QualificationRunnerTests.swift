@@ -2,6 +2,7 @@
 import Foundation
 import Darwin
 import CryptoKit
+import MCP
 import Testing
 @testable import LogicProMCP
 
@@ -3571,6 +3572,7 @@ struct QualificationRunnerTests {
     @Test func qualificationProbeSuppliesSpectralOperationPaths() throws {
         let spectrum = try #require(OperationRegistry.specs.first { $0.id == .audioAnalyzeSpectrum })
         let recommendEQ = try #require(OperationRegistry.specs.first { $0.id == .audioRecommendEQ })
+        let compare = try #require(OperationRegistry.specs.first { $0.id == .audioCompareSpectra })
 
         let spectrumPath = QualificationTransport.probeParams(
             for: spectrum,
@@ -3590,6 +3592,27 @@ struct QualificationRunnerTests {
             && recommendationMinimumLevel == 0.5
 
         #expect(suppliesRealPathToBothSpectralOperations)
+        let comparison = QualificationTransport.probeParams(for: compare, traceID: "trace")
+        #expect(comparison["before_path"] as? String == QualificationTransport.qualificationAudioProbePath)
+        #expect(comparison["after_path"] as? String == QualificationTransport.qualificationAudioProbePath)
+    }
+
+    @Test func comparisonProbeReachesAnalysisAndPreservesMissingFileRefusal() throws {
+        let compare = try #require(OperationRegistry.specs.first { $0.id == .audioCompareSpectra })
+        let params = QualificationTransport.probeParams(for: compare, traceID: "trace")
+            .compactMapValues { ($0 as? String).map(Value.string) }
+        var requestedPaths: [String] = []
+        let runtime = AudioAnalyzer.Runtime(
+            fileExists: { path, _ in requestedPaths.append(path); return false },
+            attributesOfItem: { _ in Issue.record("Missing input must not reach metadata reads"); return [:] },
+            resolveSymlinks: { $0 }
+        )
+        let result = AudioDispatcher.handle(command: compare.command, params: params, runtime: runtime)
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(requestedPaths == [QualificationTransport.qualificationAudioProbePath])
+        #expect(result.isError == true)
+        #expect(body["error"] as? String == "spectral_analysis_failed")
+        #expect(body["write_attempted"] as? Bool == false)
     }
 
     @Test func qualificationProbeConfirmsTraceClear() throws {
