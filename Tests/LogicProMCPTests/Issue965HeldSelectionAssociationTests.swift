@@ -1002,13 +1002,17 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal()
     }
 
+    @Test func occupiedExistingBusSendRenewsOnlyItsCapturedSingleSlot() async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true)
+    }
+
     @Test(arguments: ["multiple_occupied", "footprint", "level", "bypass", "mode", "foreign_project",
                       "foreign_focus", "unreadable", "missing_pair", "deciding_control", "deciding_level"])
     func retiredSingleSendCannotAdoptAmbiguityOrNewerState(fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(fault)
     }
 
-    private func assertOccupiedSingleSendRenewal(_ fault: String? = nil) async throws {
+    private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1061,6 +1065,18 @@ struct Issue965HeldSelectionAssociationTests {
             }
             for item in [echo, mode, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
             b.setChildren(menu, [stereo, destination]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, mode, parent])
+            if existingBus {
+                let input = b.element(1_965_2680), busParent = b.element(1_965_2681), busMenu = b.element(1_965_2682)
+                b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
+                    x: 0, y: 0, width: 1, height: 1)
+                b.setChildren(input, [])
+                b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]) + [input])
+                b.setRole(busParent, kAXMenuItemRole as String); b.setAttribute(busParent, kAXTitleAttribute as String, "Bus")
+                b.setRole(busMenu, kAXMenuRole as String)
+                b.setAttribute(destination, kAXTitleAttribute as String, "Bus 1 → Existing")
+                b.setChildren(menu, [stereo]); b.setChildren(busMenu, [destination]); b.setChildren(busParent, [busMenu])
+                b.setChildren(root, [echo, mode, parent, busParent])
+            }
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
                 let source = f.routingReplacement ?? f.strips[1]
@@ -1072,7 +1088,7 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if action == kAXPressAction as String, CFEqual(element, destination) {
                     f.routingDestinationPresses += 1; f.routingReplacement = replacement
-                    b.setAttribute(echo, kAXTitleAttribute as String, "Output 3-4")
+                    b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : "Output 3-4")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
                     if fault == "multiple_occupied" { b.setChildren(replacement, [name] + renewedSend + extraSend) }
                     if fault == "footprint" { b.setChildren(replacement, [name] + renewedSend + [extraSend[0]]) }
@@ -1131,7 +1147,8 @@ struct Issue965HeldSelectionAssociationTests {
                 dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate, liveTrackNames: { [:] })
             let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))
             let params: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
-                "destination": .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
+                "destination": existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
+                    : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
                 "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
             let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
                 commandParams: params, mutationGate: gate) {

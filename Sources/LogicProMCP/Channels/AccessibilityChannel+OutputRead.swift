@@ -105,7 +105,7 @@ extension AccessibilityChannel {
         runtime: AXLogicProElements.Runtime = .production,
         timing: OutputAssignmentTiming = .live) async -> ChannelResult {
         func isSink(_ assignment: OutputAssignment) -> Bool {
-            switch assignment { case .stereoOutput, .physical: true; default: false }
+            switch assignment { case .stereoOutput, .physical, .bus: true; default: false }
         }
         guard params.keys.allSatisfy({ ["destination", "expected_current", "replace_existing", "send_ordinal"].contains($0) }),
               params["replace_existing"] == "true", let ordinal = params["send_ordinal"].flatMap(Int.init), ordinal >= 0,
@@ -113,7 +113,7 @@ extension AccessibilityChannel {
               let expected = params["expected_current"].flatMap(OutputAssignment.init(token:)), isSink(expected),
               (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
             return .error(HonestContract.encodeStateC(error: .invalidParams,
-                hint: "An occupied physical send, explicit replacement, checked physical/stereo before and destination, and owned acquisition are required.",
+                hint: "An occupied physical send, explicit replacement, checked physical/stereo/bus before and destination, and owned acquisition are required.",
                 extras: ["operation": "mixer.set_send_output_verified", "write_attempted": false]))
         }
         return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal,
@@ -255,6 +255,20 @@ extension AccessibilityChannel {
         func sourceOwned() -> Bool {
             sourceFactsCurrent() && ownerBoundaryStillCurrent()
         }
+        func sendBusFailure() -> (HonestContract.FailureError, String, [String: Any])? {
+            guard let request = sendReplacement, case .bus(let number) = request.destination else { return nil }
+            guard let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax),
+                  census.strips.filter({ CFEqual($0, physical.strip) }).count == 1,
+                  let index = census.strips.firstIndex(where: { CFEqual($0, physical.strip) }) else {
+                return (.staleTargetReference, "The bus check lost its original physical source and complete population", [:])
+            }
+            switch busCheck(into: number, from: index, strips: census.strips, runtime: runtime.ax) {
+            case .receivers(let receivers):
+                extras["bus_receivers"] = receivers
+                return nil
+            case .refused(let error, let hint, let facts): return (error, hint, facts)
+            }
+        }
         let app = AXLogicProElements.appRoot(runtime: runtime)
         let originalFocus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
         guard sourceFactsCurrent() else { return refuse(.staleTargetReference, "Source custody changed before acquisition; nothing was pressed.") }
@@ -267,6 +281,10 @@ extension AccessibilityChannel {
         }
         // The last focus read can itself observe a project transition. Renew
         // original source/document custody afterward, before any menu action.
+        if let (error, hint, facts) = sendBusFailure() {
+            extras.merge(facts) { _, new in new }
+            return refuse(error, hint + "; nothing was pressed.")
+        }
         guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
             return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed.")
         }
@@ -566,6 +584,18 @@ extension AccessibilityChannel {
                   CFEqual(item, finalItem), path == finalPath, writeBoundary() else {
                 extras["destination_choice_failure"] = choice.failureLabel
                 return closeBeforeRefusal(.staleTargetReference, "No unique offered send destination survived the final source/menu/action checks; nothing was selected.")
+            }
+            // The offered-leaf/action lookup may have changed a bus receiver.
+            // Renew the existing loop/receiver proof after it, then the source
+            // and owned write boundary before the single destination action.
+            if case .bus = request.destination {
+                if let (error, hint, facts) = sendBusFailure() {
+                    extras.merge(facts) { _, new in new }
+                    return closeBeforeRefusal(error, hint + "; read with the popup open, nothing was selected.")
+                }
+                guard writeBoundary() else {
+                    return closeBeforeRefusal(.staleTargetReference, "Source or protected state changed after the final bus check; nothing was selected.")
+                }
             }
             extras["write_attempted"] = true; extras["menu_path"] = path
             _ = AXHelpers.performActionResult(item, kAXPressAction as String, runtime: runtime.ax)

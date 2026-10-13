@@ -73,18 +73,21 @@ struct Issue291AssignedSendMenuTests {
         let stereo: AXUIElement
         let pair: AXUIElement
         let mode: AXUIElement
+        let bus: AXUIElement
         var current = "Stereo Output"
         var open = false
         var pressed: [String] = []
         var cancels = 0
         var closeWindowReads = 0
         var foregroundLost = false
+        var busLookupFaultReached = false
         var fault: String?
-        init(_ p: Prepared) {
+        init(_ p: Prepared, withBus: Bool = false) {
             self.p = p
             let b = p.f.b
             stereo = b.element(291_970); pair = b.element(291_971)
             mode = b.element(291_972)
+            bus = b.element(291_980)
             let output = b.element(291_973), outputs = b.element(291_974)
             let stereoParent = b.element(291_975), stereoMenu = b.element(291_976)
             for (e, title) in [(stereo,"Stereo Output"),(pair,"Output 3-4"),(mode,"Post Pan"),
@@ -97,6 +100,21 @@ struct Issue291AssignedSendMenuTests {
             b.setChildren(stereoMenu,[stereo,pair]); b.setChildren(stereoParent,[stereoMenu])
             b.setChildren(outputs,[stereoParent]); b.setChildren(output,[outputs])
             b.setChildren(p.f.root,[p.checkedEcho,mode,output])
+            if withBus {
+                let busParent = b.element(291_981), busMenu = b.element(291_982)
+                b.setRole(busParent, kAXMenuItemRole as String); b.setAttribute(busParent, kAXTitleAttribute as String, "Bus")
+                b.setRole(busMenu, kAXMenuRole as String)
+                b.setRole(bus, kAXMenuItemRole as String); b.setAttribute(bus, kAXTitleAttribute as String, "Bus 1 → Aux 1")
+                b.setAttribute(bus, kAXEnabledAttribute as String, true); b.setChildren(bus, [])
+                b.setActionNames(bus, [kAXPressAction as String])
+                b.setChildren(busMenu, [bus]); b.setChildren(busParent, [busMenu])
+                b.setChildren(p.f.root, [p.checkedEcho, mode, output, busParent])
+                let input = b.element(291_983)
+                b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
+                    x: 80, y: 120, width: 60, height: 20)
+                b.setChildren(input, [])
+                b.setChildren(p.f.strips[1], AXHelpers.getChildren(p.f.strips[1], runtime: p.f.logic.ax) + [input])
+            }
             b.setAttribute(p.f.app,kAXFrontmostAttribute as String,true)
             refresh()
         }
@@ -106,6 +124,7 @@ struct Issue291AssignedSendMenuTests {
             b.setAttribute(p.checkedEcho,"AXMenuItemMarkChar","✓")
             b.setAttribute(stereo,"AXMenuItemMarkChar",current == "Stereo Output" ? "✓" : "")
             b.setAttribute(pair,"AXMenuItemMarkChar",current == "Output 3-4" ? "✓" : "")
+            b.setAttribute(bus,"AXMenuItemMarkChar",current == "Bus 1 → Aux 1" ? "✓" : "")
             b.setAttribute(mode,"AXMenuItemMarkChar","✓")
         }
         func action(_ node: AXUIElement, _ action: String) -> Bool {
@@ -121,8 +140,8 @@ struct Issue291AssignedSendMenuTests {
             if action == kAXPressAction as String, CFEqual(node,f.outputs[0]) {
                 open = true; refresh(); f.b.setChildren(f.mixer,f.strips + [f.root]); return true
             }
-            if action == kAXPressAction as String, open, CFEqual(node,pair) || CFEqual(node,stereo) {
-                let next = CFEqual(node,pair) ? "Output 3-4" : "Stereo Output"
+            if action == kAXPressAction as String, open, CFEqual(node,pair) || CFEqual(node,stereo) || CFEqual(node,bus) {
+                let next = CFEqual(node,bus) ? "Bus 1 → Aux 1" : CFEqual(node,pair) ? "Output 3-4" : "Stereo Output"
                 pressed.append(next)
                 if fault != "no_effect" { current = next }
                 if fault == "destination_label" {
@@ -147,6 +166,9 @@ struct Issue291AssignedSendMenuTests {
             let f = p.f, base = f.logic
             let ax = f.b.makeAXRuntime(appElement:f.app,
                 attributeValueResultHandler: { [self] node, _ in
+                    if fault == "late_unreadable_input", busLookupFaultReached, CFEqual(node, f.b.element(291_983)) {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
                     guard fault == "strip_invalid", !pressed.isEmpty, CFEqual(node, f.strips[0]) else { return nil }
                     return .failure(.init(raw: -25202))
                 },
@@ -155,6 +177,22 @@ struct Issue291AssignedSendMenuTests {
                     return .failure(.init(raw: -25202))
                 },
                 actionNamesHandler: { [self] node in
+                    if CFEqual(node, bus) {
+                        switch fault {
+                        case "late_receiver": f.b.setAttribute(f.b.element(291_983), kAXDescriptionAttribute as String, "Bus 2")
+                        case "late_retirement":
+                            let replacement = f.b.element(291_986)
+                            f.b.setRole(replacement, kAXLayoutItemRole as String)
+                            f.b.setChildren(replacement, AXHelpers.getChildren(f.strips[1], runtime: base.ax))
+                            f.b.setChildren(f.mixer, [f.strips[0], replacement] + (open ? [f.root] : []))
+                        case "late_dependency": f.b.removeAttribute(f.outputs[1], kAXDescriptionAttribute as String)
+                        case "late_loop": f.b.setAttribute(f.b.element(291_984), kAXDescriptionAttribute as String, "Bus 1")
+                        case "late_unreadable_input": break
+                        default: return nil
+                        }
+                        busLookupFaultReached = true
+                        return [kAXPressAction as String]
+                    }
                     guard CFEqual(node,pair) else { return nil }
                     switch fault {
                     case "late_wrong_project": f.b.setAttribute(f.window,kAXDocumentAttribute as String,"file:///wrong.logicx")
@@ -408,6 +446,85 @@ struct Issue291AssignedSendMenuTests {
         #expect(!probe.open)
         #expect(dependencies.mutationGate?.currentOperation() == nil)
     }
+    @Test func registeredOccupiedSendExistingBusRoundtrip() async throws {
+        let p = try prepare(), probe = SendWriterProbe(p, withBus: true)
+        let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter()
+        let channel = p.f.channel(logicOverride: probe.runtime)
+        await router.register(channel)
+        let poller = StatePoller(axChannel: channel, cache: cache,
+            runtime: .init(hasVisibleWindow: { true }, dialogPresent: { false }, blockingDialogInfo: { nil },
+                projectFileReader: .unavailable, keyboardFocus: { .notTextEditing }))
+        #expect(await poller.refreshNow())
+        let resource = try await ResourceHandlers.read(uri: "logic://mixer", cache: cache, router: router,
+            targetRegistry: registry, fileReader: .unavailable)
+        let rows = try #require(sharedJSONObject(sharedResourceText(resource))?["strips"] as? [[String: Any]])
+        var references: [String] = []
+        for value in rows.compactMap({ $0["mixer_strip_ref"] as? String }) {
+            if let binding = await registry.resolve(.init(rawValue: value))?.physicalMixerStrip,
+               CFEqual(binding.strip, p.f.strips[0]) { references.append(value) }
+        }
+        #expect(references.count == 1)
+        let reference = try #require(references.first)
+        let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+            poller: poller, dialogPresent: { false }, supportBundleExporter: nil, mutationGate: LogicMutationGate(),
+            liveTrackNames: { [:] }, projectFileReader: .unavailable)
+        let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))
+        let before = AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax)
+        let bus: Value = .object(["kind": .string("bus"), "number": .int(1)])
+        let stereo: Value = .object(["kind": .string("stereo_output")])
+        for (destination, expected) in [(bus, stereo), (stereo, bus)] {
+            let params: [String: Value] = ["target_ref": .string(reference), "ordinal": .int(1),
+                "destination": destination, "expected_current": expected, "replace_existing": .bool(true)]
+            let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
+                commandParams: params, mutationGate: dependencies.mutationGate) {
+                await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
+            }
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(body["state"] as? String == "A", "Actual registered Bus replacement: \(sharedToolText(result))")
+        }
+        #expect(probe.pressed == ["Bus 1 → Aux 1", "Stereo Output"])
+        #expect(AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax) == before)
+        #expect(!probe.open)
+        #expect(dependencies.mutationGate?.currentOperation() == nil)
+    }
+
+    @Test(arguments: ["no_receiver", "loop", "dependency", "ambiguous", "late_receiver",
+                      "late_retirement", "late_dependency", "late_loop", "late_unreadable_input"])
+    func occupiedBusSendRefusesMissingOrChangedReceiverAndLoop(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p, withBus: true), f = p.f
+        probe.fault = fault
+        if fault == "no_receiver" { f.b.setAttribute(f.b.element(291_983), kAXDescriptionAttribute as String, "Input 1") }
+        if ["loop", "dependency", "late_dependency", "late_loop", "late_unreadable_input"].contains(fault) {
+            let input = f.b.element(291_984)
+            f.b.setButton(input, description: fault == "loop" ? "Bus 1" : "Bus 2",
+                help: "Input slot. Choose the channel strip input source.", x: 0, y: 120, width: 60, height: 20)
+            f.b.setChildren(input, [])
+            f.b.setChildren(f.strips[0], AXHelpers.getChildren(f.strips[0], runtime: f.logic.ax) + [input])
+        }
+        if fault == "dependency" { f.b.removeAttribute(f.outputs[1], kAXDescriptionAttribute as String) }
+        if fault == "ambiguous" {
+            let duplicate = f.b.element(291_985)
+            f.b.setRole(duplicate, kAXMenuItemRole as String)
+            f.b.setAttribute(duplicate, kAXTitleAttribute as String, "Bus 1 → Aux 1")
+            f.b.setAttribute(duplicate, kAXEnabledAttribute as String, true); f.b.setChildren(duplicate, [])
+            f.b.setChildren(f.b.element(291_982), [probe.bus, duplicate])
+        }
+        let body = try #require(sharedJSONObject(await probe.write(destination: "bus:1").message))
+        #expect(body["state"] as? String == "C", "Actual Bus guard response: \(body)")
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(probe.pressed.isEmpty, "No destination or guessed inverse may create an Aux or override changed routing")
+        if fault.hasPrefix("late_") { #expect(probe.busLookupFaultReached, "The actual offered Bus leaf capability lookup must reach the fault") }
+        let expectedError: String
+        switch fault {
+        case "no_receiver", "late_receiver": expectedError = "bus_has_no_receiver"
+        case "loop", "late_loop": expectedError = "routing_cycle"
+        case "dependency", "late_dependency", "late_unreadable_input": expectedError = "routing_dependency_unknown"
+        default: expectedError = "stale_target_reference"
+        }
+        #expect(body["error"] as? String == expectedError)
+    }
+
     @Test("Routing actions reuse the exact occupied census control, never an empty anchor or a lookalike",
           arguments: ["held", "negative", "empty", "missing_list", "duplicate_list", "foreign_parent"])
     func sharedAssignedSendControlRequiresOriginalCensus(fault: String) throws {
