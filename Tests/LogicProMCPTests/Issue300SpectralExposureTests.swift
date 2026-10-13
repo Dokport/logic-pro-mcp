@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import Foundation
 import Testing
 @testable import LogicProMCP
@@ -82,6 +83,93 @@ struct Issue300SpectralExposureTests {
         let centerHz = try #require(firstBand["centerHz"] as? Double)
         #expect(centerHz > 0)
         #expect(firstBand["reason"] as? String == "resonance_cut")
+    }
+
+    @Test func recommendationPublishesTheContentBoundAnalysisThatProducedItsBands() throws {
+        try withRecommendationArtifact { url in
+            try writePureToneWAV(at: url, frequency: 5_001.953_125)
+            let original = try Data(contentsOf: url)
+            let body = try recommendation(at: url)
+            let bands = try #require(body["bands"] as? [[String: Any]])
+            #expect(!bands.isEmpty)
+            let analysis = try publishedAnalysis(body)
+            #expect(analysis.artifactFingerprint == fingerprint(original))
+            #expect(analysis.analysisRef == "audio.recommend_eq")
+            #expect(analysis.complete)
+            #expect(analysis.analysisPolicy != nil)
+            #expect(analysis.sampleRate == 48_000)
+            #expect(analysis.channelCount == 1)
+            try expectSameAdvice(body, analysis: analysis)
+            #expect(try Data(contentsOf: url) == original)
+            #expect(body["applied"] == nil)
+            #expect(body["target_ref"] == nil)
+        }
+    }
+
+    @Test func replacedArtifactAtTheSamePathCannotReuseOldRecommendationProvenance() throws {
+        try withRecommendationArtifact { url in
+            try writePureToneWAV(at: url, frequency: 5_001.953_125)
+            let firstBytes = try Data(contentsOf: url)
+            let first = try recommendation(at: url)
+            let firstBands = try #require(first["bands"] as? [[String: Any]])
+            #expect(!firstBands.isEmpty)
+            // Replace the same pathname, not just the caller's analysis label.
+            try FileManager.default.removeItem(at: url)
+            try writePureToneWAV(at: url, frequency: 1_001.953_125)
+            let secondBytes = try Data(contentsOf: url)
+            #expect(secondBytes != firstBytes)
+            let second = try recommendation(at: url)
+            let secondBands = try #require(second["bands"] as? [[String: Any]])
+            #expect(!secondBands.isEmpty)
+            let firstAnalysis = try publishedAnalysis(first)
+            let secondAnalysis = try publishedAnalysis(second)
+            #expect(firstAnalysis.artifactFingerprint == fingerprint(firstBytes))
+            #expect(secondAnalysis.artifactFingerprint == fingerprint(secondBytes))
+            #expect(secondAnalysis.artifactFingerprint != firstAnalysis.artifactFingerprint)
+            #expect(secondAnalysis.resonances != firstAnalysis.resonances)
+            try expectSameAdvice(first, analysis: firstAnalysis)
+            try expectSameAdvice(second, analysis: secondAnalysis)
+            #expect(try Data(contentsOf: url) == secondBytes)
+        }
+    }
+
+    private func withRecommendationArtifact(_ body: (URL) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("issue955-advice-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try body(directory.appendingPathComponent("resonance.wav"))
+    }
+
+    private func recommendation(at url: URL) throws -> [String: Any] {
+        let result = AudioDispatcher.handle(command: "recommend_eq", params: ["path": .string(url.path)])
+        let isError: Bool = try #require(result.isError)
+        #expect(!isError)
+        return try #require(sharedJSONObject(sharedToolText(result)))
+    }
+
+    private func publishedAnalysis(_ body: [String: Any]) throws -> SpectralAnalysisResult {
+        let object = try #require(body["analysis"] as? [String: Any])
+        return try JSONDecoder().decode(SpectralAnalysisResult.self,
+            from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func expectSameAdvice(_ body: [String: Any], analysis: SpectralAnalysisResult) throws {
+        let object = try #require(body["bands"])
+        let bands = try JSONDecoder().decode([EQBandRecommendation].self,
+            from: JSONSerialization.data(withJSONObject: object))
+        switch recommendEQ(analysis) {
+        case .recommendation(let expected):
+            #expect(bands == expected)
+            #expect(body["reason"] == nil)
+        case .noSafeRecommendation(let reason):
+            #expect(bands.isEmpty)
+            #expect(body["reason"] as? String == reason)
+        }
+    }
+
+    private func fingerprint(_ bytes: Data) -> String {
+        "sha256:" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
     private func writePureToneWAV(at url: URL, frequency: Double) throws {
