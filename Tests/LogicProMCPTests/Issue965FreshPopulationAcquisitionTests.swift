@@ -92,7 +92,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                      observingAttribute: (@Sendable (AXUIElement, String) -> Void)? = nil,
                      readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil,
                      observingChildren: (@Sendable (AXUIElement) -> Void)? = nil,
-                     observingLegacyChildren: (@Sendable (AXUIElement) -> Void)? = nil) -> AccessibilityChannel {
+                     observingLegacyChildren: (@Sendable (AXUIElement) -> Void)? = nil,
+                     observeHost: @escaping @Sendable (pid_t) -> ProcessUtils.LogicHostObservation? = { _ in nil }) -> AccessibilityChannel {
             let baseAX = builder.makeAXRuntime(
                     appElement: app,
                     attributeValueHandler: { element, attribute in
@@ -189,7 +190,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                 executeAppleScript: { _ in Issue.record("fixture forbids AppleScript"); return .error("forbidden") },
                 onScreenWindowList: { reads.record("window_server_bootstrap"); return [] },
                 postPopupMenuEscape: { Issue.record("fixture forbids Escape") },
-                focusedApplicationPID: { needsWindowServerBootstrap && !reads.recorded.contains("window_server_bootstrap") ? nil : focusedPID }, observeFrontmost: nil)
+                focusedApplicationPID: { needsWindowServerBootstrap && !reads.recorded.contains("window_server_bootstrap") ? nil : focusedPID },
+                observeFrontmost: nil, observeHost: observeHost)
             let mouse = AXMouseHelper.Runtime(
                 postMouseEvent: { _, _, _ in Issue.record("fixture has no approved mouse actuation yet"); return false },
                 postKeyEvent: { _ in Issue.record("fixture forbids keyboard events"); return false },
@@ -204,6 +206,34 @@ struct Issue965FreshPopulationAcquisitionTests {
                 confirmNewTrackDialog: { Issue.record("fixture forbids Return") }, canPostEvents: { observationMouse != nil },
                 runTempoFallback: { _ in Issue.record("fixture forbids fallback scripts"); return false }))
         }
+    }
+
+    @Test(arguments: ["observed", "unknown", "changed", "wrong_window"])
+    func registeredInspectionBindsHostMetadataToItsOwnBookends(mode: String) async throws {
+        let fixture = Fixture()
+        let hostReads = Reads()
+        let result = try await inspect(fixture: fixture, domains: ["tracks"], observeHost: { pid in
+            #expect(pid == 4242)
+            hostReads.record("host")
+            if mode == "unknown" { return nil }
+            if mode == "wrong_window" {
+                fixture.builder.setAttribute(fixture.app, kAXMainWindowAttribute as String,
+                                             fixture.builder.element(965_999))
+            }
+            return .init(logicVersion: "12.3", logicBuild: mode == "changed" ? "\(hostReads.recorded.count)" : "6674")
+        })
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        let host = try #require(body["host_observation"] as? [String: Any])
+        if mode == "observed" {
+            #expect(host["logic_version"] as? String == "12.3")
+            #expect(host["logic_build"] as? String == "6674")
+        } else {
+            #expect(host["logic_version"] is NSNull)
+            #expect(host["logic_build"] is NSNull)
+        }
+        #expect(!hostReads.recorded.isEmpty)
+        #expect(fixture.events.recorded.isEmpty)
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 
     @Test("fresh inspection reports the held hidden-track view without querying Help or actuating it",
@@ -4407,7 +4437,8 @@ struct Issue965FreshPopulationAcquisitionTests {
         frameReads: Reads? = nil, frameFault: String? = nil,
         observationAction: (@Sendable (AXUIElement, String) -> Bool?)? = nil,
         focusSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool)? = nil,
-        readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil
+        readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil,
+        observeHost: @escaping @Sendable (pid_t) -> ProcessUtils.LogicHostObservation? = { _ in nil }
     ) async throws -> CallTool.Result {
         let cache = StateCache()
         await cache.updateProject(ProjectInfo(name: "Session"))
@@ -4417,7 +4448,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         let poller = StatePoller(axChannel: fixture.channel(unreadableRail: unreadableRail,
                                                          observationAction: observationAction, focusSetter: focusSetter,
                                                          frameReads: frameReads, frameFault: frameFault,
-                                                         readingAttribute: readingAttribute), cache: cache,
+                                                         readingAttribute: readingAttribute, observeHost: observeHost), cache: cache,
                                  runtime: .init(hasVisibleWindow: { hasVisibleWindow }, projectFileReader: fileReader,
                                                 keyboardFocus: keyboardFocus))
         if let awaitStop = stopBeforeRead {
