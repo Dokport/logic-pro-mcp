@@ -3039,7 +3039,7 @@ extension AccessibilityChannel {
 
         // Step 10 — retain the before value for provenance and a possible owned
         // inverse. It does not authorize compensation if the after-state is lost.
-        guard let before = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax) else {
+        guard let before = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax), before.isFinite else {
             return .error(HonestContract.encodeV2StateC(
                 error: .readbackUnavailable,
                 extras: [
@@ -3119,11 +3119,30 @@ extension AccessibilityChannel {
             return pluginRollbackOperationIsCurrent()
         }
 
+        // Identity reads can outlive the numeric before-read even while every
+        // original CF survives. A later user value is not this write's baseline.
+        func beforeValueIsCurrent() -> Bool {
+            guard rollbackTargetIsCurrent(),
+                  let current = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax),
+                  current.isFinite, current == before else { return false }
+            return pluginRollbackOperationIsCurrent()
+        }
+        func beforeValueRefusal() -> ChannelResult {
+            .error(HonestContract.encodeV2StateC(error: .readbackUnavailable, extras: [
+                "operation": operation, "target_identity": identity, "param": paramAlias,
+                "before_normalized": before,
+                "what_was_attempted": "require the retained before-value and target immediately before the first parameter mutation",
+                "what_was_observed": "the current value was changed, unreadable or non-finite, or target/operation ownership ended; no parameter mutation or inverse was sent",
+                "write_attempted": false, "rollback_attempted": false, "safe_to_retry": false,
+            ]))
+        }
+
         // Step 11 — choose the declared AX write method. Compressor threshold
         // remains a single AXValue assignment; Channel EQ's measured controls
         // require readback-driven AXValue nudges.
         switch writeMethod {
         case "ax_slider_axvalue":
+            guard beforeValueIsCurrent() else { return beforeValueRefusal() }
             guard AXValueExtractors.setSliderValue(slider, requested, runtime: runtime.ax) else {
                 let rollback = rollbackSliderValue(
                     slider,
@@ -3260,6 +3279,8 @@ extension AccessibilityChannel {
             } else {
                 needsDisplay = false
             }
+            var nudgeAttempted = false
+            var firstNudgeRefused = false
             let outcome = SliderIncrementWalk.walk(
                 to: walkTarget,
                 read: {
@@ -3271,10 +3292,20 @@ extension AccessibilityChannel {
                     return SliderIncrementWalk.Reading(value: value, display: display ?? "")
                 },
                 nudge: { rawTarget in
-                    AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime.ax)
+                    if !nudgeAttempted, !beforeValueIsCurrent() {
+                        firstNudgeRefused = true
+                        return false
+                    }
+                    nudgeAttempted = true
+                    return AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime.ax)
                 },
                 budget: incrementWalkBudget
             )
+            if firstNudgeRefused { return beforeValueRefusal() }
+            if !nudgeAttempted {
+                if case .readbackLost = outcome { return beforeValueRefusal() }
+                guard beforeValueIsCurrent() else { return beforeValueRefusal() }
+            }
             switch outcome {
             case let .arrived(steps, final):
                 var extras: [String: Any] = [
