@@ -890,9 +890,11 @@ struct SystemDispatcher: OperationTraceDispatching {
                 return await finalizeTrace(SagaWire.invalidParams(error), traceID: traceID)
             }
             let compressorPlan = CompressorParameterSaga.containsPluginSteps(plan)
-            if compressorPlan, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+            let selectedEQPlan = SelectedEQParameterSaga.contains(plan)
+            let pluginPlan = compressorPlan || selectedEQPlan
+            if pluginPlan, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
-                    hint: "Confirm this exact canonical plan_hash before applying the two Compressor parameters",
+                    hint: "Confirm this exact canonical plan_hash before applying the selected two plug-in parameters",
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             switch await sagaJournal.begin(plan) {
@@ -997,7 +999,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     ?? ContinuousClock.now.advanced(by: .seconds(lifecycleBudgetSeconds))
                 let inherited = OperationTraceContext.current
                 let compressorCancellation = SagaAbandonFlag()
-                let approvedContext = (approvedSessionRepair != nil || compressorPlan) ?
+                let approvedContext = (approvedSessionRepair != nil || pluginPlan) ?
                     OperationTraceContext(parentTraceID: inherited?.traceID,
                         mutationGateAcquired: mutationClaim != nil,
                         ownsGate: {
@@ -1005,7 +1007,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                             return mutationGate.stillOwns(mutationClaim) && (inherited?.ownsGate() ?? true)
                         }, deadline: lifecycleDeadline,
                         cancellationRequested: { Task.isCancelled || inherited?.cancellationRequested() == true
-                            || (compressorPlan && compressorCancellation.value) }) : nil
+                            || (pluginPlan && compressorCancellation.value) }) : nil
                 // ADR-004 / issue #287 — qualification-only fault seam. #399 (CEO
                 // audit P0): the seam and its wiring are compiled solely in debug
                 // via `FAULT_TEST_SEAM`. The release executor is
@@ -1023,7 +1025,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                     faultSeam: SagaPartialStateFaultSeam.resolve(
                         environment: ProcessInfo.processInfo.environment,
                         stepCount: plan.steps.count
-                    ), approvedSessionRepair: approvedSessionRepair, confirmedCompressorPlan: compressorPlan
+                    ), approvedSessionRepair: approvedSessionRepair, confirmedCompressorPlan: compressorPlan,
+                    confirmedSelectedEQPlan: selectedEQPlan
                 )
                 #else
                 let executor = ProductionSagaStepExecutor(
@@ -1034,7 +1037,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     liveReadback: sagaLiveReadback ?? .unavailable,
                     liveTrackName: liveTrackName,
                     liveTrackNames: liveTrackNames, approvedSessionRepair: approvedSessionRepair,
-                    confirmedCompressorPlan: compressorPlan
+                    confirmedCompressorPlan: compressorPlan, confirmedSelectedEQPlan: selectedEQPlan
                 )
                 #endif
                 let saga = MutationSaga(
@@ -1101,8 +1104,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                     let workTask = Task(priority: .userInitiated) {
                         // Retain one actual UI lease until the work child finishes,
                         // even if a lifecycle timeout returns before a wedged read.
-                        let lease = compressorPlan ? VerifiedPluginSagaLease(gate: .shared) : nil
-                        if compressorPlan, lease == nil {
+                        let lease = pluginPlan ? VerifiedPluginSagaLease(gate: .shared) : nil
+                        if pluginPlan, lease == nil {
                             let refused = SagaWire.scopedStateC(.verifiedOpInProgress,
                                 hint: "A verified plug-in operation is already active", extras: ["write_attempted": false])
                             let (winner, _) = await sagaJournal.finalizeReturningWinner(journalClaim,
@@ -1180,7 +1183,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                                     executor: surfaceExecutor,
                                     cancellationRequested: {
                                         if deadlineReached() { return true }
-                                        if compressorPlan, outerTraceContext?.cancellationRequested() == true { return true }
+                                        if pluginPlan, outerTraceContext?.cancellationRequested() == true { return true }
                                         return await sagaJournal.record(for: plan.idempotencyKey)
                                             == .cancellationRequested
                                     },
@@ -1281,7 +1284,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     )
                   }
                 } onCancel: {
-                    if compressorPlan { compressorCancellation.set(true) }
+                    if pluginPlan { compressorCancellation.set(true) }
                 }
                 return await finalizeTrace(raceResult, traceID: traceID)
             }
