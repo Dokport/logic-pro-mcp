@@ -205,6 +205,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     /// a saga decision.
     private let now: @Sendable () -> Date
     private let approvedSessionRepair: ApprovedSessionRepair?
+    private let confirmedCompressorPlan: Bool
     /// ADR-004 / issue #287 — qualification-only fault seam. nil in all normal
     /// operation (env unset); non-nil ONLY when the operator explicitly set
     /// `LOGIC_PRO_MCP_FAULT_INJECT=partial_state` to qualify compensation. A
@@ -226,7 +227,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         liveTrackNames: (@Sendable () -> [Int: String]?)? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         faultSeam: SagaPartialStateFaultSeam? = nil,
-        approvedSessionRepair: ApprovedSessionRepair? = nil
+        approvedSessionRepair: ApprovedSessionRepair? = nil,
+        confirmedCompressorPlan: Bool = false
     ) {
         self.router = router
         self.cache = cache
@@ -238,6 +240,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         self.now = now
         self.faultSeam = faultSeam
         self.approvedSessionRepair = approvedSessionRepair
+        self.confirmedCompressorPlan = confirmedCompressorPlan
     }
     #else
     init(
@@ -249,7 +252,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         liveTrackName: (@Sendable (Int) -> String?)? = nil,
         liveTrackNames: (@Sendable () -> [Int: String]?)? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
-        approvedSessionRepair: ApprovedSessionRepair? = nil
+        approvedSessionRepair: ApprovedSessionRepair? = nil,
+        confirmedCompressorPlan: Bool = false
     ) {
         self.router = router
         self.cache = cache
@@ -260,6 +264,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         self.liveTrackNames = liveTrackNames
         self.now = now
         self.approvedSessionRepair = approvedSessionRepair
+        self.confirmedCompressorPlan = confirmedCompressorPlan
     }
     #endif
 
@@ -283,7 +288,9 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         let parentTraceID = OperationTraceContext.current?.traceID
         let parent = OperationTraceContext.current
         let child: OperationTraceContext
-        if approvedSessionRepair == nil { child = OperationTraceContext(parentTraceID: parentTraceID) }
+        if approvedSessionRepair == nil && step.operationID != .pluginsSetParamVerified {
+            child = OperationTraceContext(parentTraceID: parentTraceID)
+        }
         else {
             child = OperationTraceContext(parentTraceID: parentTraceID,
                 mutationGateAcquired: parent?.mutationGateAcquired ?? false,
@@ -296,7 +303,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     }
 
     private func runInChildTraceScope(_ step: SagaStep) async -> StepResult {
-        guard Self.allowlist.contains(step.operationID) || approvedSessionRepair?.supports(step) == true else {
+        guard Self.allowlist.contains(step.operationID) || approvedSessionRepair?.supports(step) == true
+            || (step.operationID == .pluginsSetParamVerified && confirmedCompressorPlan) else {
             return StepResult(
                 state: .stateC,
                 writeBoundaryCrossed: false,
@@ -319,6 +327,29 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
 
         let response: CallTool.Result
         switch step.operationID {
+        case .pluginsSetParamVerified:
+            guard confirmedCompressorPlan,
+                  let (binding, project) = await CompressorParameterSaga.binding(step, registry: targetRegistry),
+                  let param = step.params["param"]?.stringValue,
+                  let before = step.params["expected_before"], let path = project.projectFilePath,
+                  let insert = binding.pluginInsertIndex,
+                  (try? CompressorParameterSaga.canonicalParams(step.params)) != nil else {
+                return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Compressor binding/before-state unavailable")
+            }
+            params.removeValue(forKey: "expected_before")
+            if case .bool(let value) = params["value"] { params["value"] = .double(value ? 1 : 0) }
+            params["plugin"] = .string(CompressorParameterSaga.pluginID)
+            params["mode"] = .string("duplicate_applyback")
+            params["project_expected_path"] = .string(path)
+            let expected = PluginSagaExpectedBefore(track: binding.descriptor.trackIndex, insert: insert,
+                projectPath: path, param: param, observed: before)
+            let writeParams = params
+            response = await PluginSagaExpectedBefore.$current.withValue(expected) {
+                await CompressorParameterSaga.bounded(command: "set_param_verified") {
+                    await PluginsDispatcher.handle(command: "set_param_verified", params: writeParams,
+                        router: router, cache: cache, targetRegistry: targetRegistry)
+                }
+            }
         case .navigateToggleView where approvedSessionRepair?.supports(step) == true:
             response = await ApprovedSessionRepair.$current.withValue(approvedSessionRepair) {
                 await NavigateDispatcher.handle(command: "toggle_view", params: params, router: router, cache: cache)
@@ -398,7 +429,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         }
 
         let mapped = Self.mapResponse(response, operationID: step.operationID)
-        if approvedSessionRepair?.supports(step) == true,
+        if approvedSessionRepair?.supports(step) == true || step.operationID == .pluginsSetParamVerified,
            case .text(let text, _, _) = response.content.first,
            let body = decodedJSONObject(text), let attempted = body["write_attempted"] as? Bool {
             return .init(state: mapped.state, writeBoundaryCrossed: attempted, detail: mapped.detail)
@@ -411,6 +442,10 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     /// returns nil, which the engine treats as `unknown` (fail-closed), rather
     /// than a mirror value that could be stale by a poll interval.
     func readState(_ step: SagaStep) async -> ObservedState? {
+        if step.operationID == .pluginsSetParamVerified {
+            return await CompressorParameterSaga.read(step, router: router, cache: cache,
+                registry: targetRegistry, now: now())
+        }
         if let approvedSessionRepair, approvedSessionRepair.supports(step) {
             return await approvedSessionRepair.readState(step)
         }
@@ -576,6 +611,8 @@ extension SagaStepExecutor {
         var captured: [Int: ObservedState] = [:]
         for (index, step) in plan.steps.enumerated() {
             guard let state = await readState(step) else { return [:] }
+            if step.operationID == .pluginsSetParamVerified,
+               !CompressorParameterSaga.beforeMatches(state, step) { return [:] }
             captured[index] = state
         }
         return captured

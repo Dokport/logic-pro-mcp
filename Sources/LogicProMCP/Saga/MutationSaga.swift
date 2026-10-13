@@ -57,6 +57,7 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
     case axTrackName = "ax_track_name"
     case axTrackToggle = "ax_track_toggle"
     case axProjectMixerVisibility = "ax_project_mixer_visibility"
+    case axPluginParameter = "ax_plugin_parameter"
 
     /// Short label for the human summary string.
     var label: String {
@@ -66,6 +67,7 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
         case .axTrackName: "track_name"
         case .axTrackToggle: "track_toggle"
         case .axProjectMixerVisibility: "mixer_visibility"
+        case .axPluginParameter: "plugin_parameter"
         }
     }
 }
@@ -323,7 +325,8 @@ actor MutationSaga {
                 ))
             }
             if let spec = registeredSpec {
-                worstCaseSeconds += spec.deadline.seconds
+                worstCaseSeconds += step.operationID == .pluginsSetParamVerified
+                    ? CompressorParameterSaga.stepSeconds : spec.deadline.seconds
                 if spec.confirmation != .none {
                     issues.append(.confirmationRequired(
                         stepIndex: index,
@@ -343,7 +346,10 @@ actor MutationSaga {
                 && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
                 && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
             let definition = approvedView ? ReversibleDefinition(tool: .logicNavigate, command: "toggle_view",
-                valueParameter: "visible", tolerance: .exact) : Self.reversibleDefinitions[step.operationID]
+                valueParameter: "visible", tolerance: .exact)
+                : (step.operationID == .pluginsSetParamVerified && (try? CompressorParameterSaga.validate(plan)) != nil
+                    ? ReversibleDefinition(tool: .logicPlugins, command: "set_param_verified",
+                        valueParameter: "value", tolerance: .exact) : Self.reversibleDefinitions[step.operationID])
             if let definition {
                 let spec = OperationRegistry.spec(
                     tool: definition.tool.rawValue,
@@ -382,6 +388,12 @@ actor MutationSaga {
             }
             if binding.projectEpoch != projectEpoch {
                 issues.append(.projectEpochMismatch(stepIndex: index))
+            }
+            if step.operationID == .pluginsSetParamVerified {
+                let pluginBinding = await CompressorParameterSaga.binding(step, registry: targetRegistry)
+                if (try? CompressorParameterSaga.validate(plan)) == nil || pluginBinding == nil {
+                    issues.append(.staleTarget(stepIndex: index))
+                }
             }
         }
 
@@ -465,6 +477,7 @@ actor MutationSaga {
                 )
             }
             guard let beforeState = await executor.readState(step),
+                  step.operationID != .pluginsSetParamVerified || CompressorParameterSaga.beforeMatches(beforeState, step),
                   let desiredValue = step.params[step.expectedInverse.valueParameter] else {
                 outcome.journal.append(CompensationJournalRecord(
                     stepIndex: index,
@@ -522,7 +535,7 @@ actor MutationSaga {
                 let disposition = classifyVerifiedWrite(
                     readback,
                     desiredValue: desiredValue,
-                    operationID: step.operationID
+                    step: step
                 )
                 outcome.journal[index].verificationEvidence = VerificationEvidence(
                     disposition: disposition,
@@ -530,7 +543,7 @@ actor MutationSaga {
                     comparison: SagaValueComparator.evidence(
                         observed: readback?.value,
                         desired: desiredValue,
-                        op: step.operationID
+                        step: step
                     )
                 )
                 if disposition == .applied {
@@ -568,7 +581,7 @@ actor MutationSaga {
                     readback,
                     desiredValue: desiredValue,
                     beforeState: beforeState,
-                    operationID: step.operationID
+                    step: step
                 )
                 outcome.journal[index].verificationEvidence = VerificationEvidence(
                     disposition: disposition,
@@ -576,7 +589,7 @@ actor MutationSaga {
                     comparison: SagaValueComparator.evidence(
                         observed: readback?.value,
                         desired: desiredValue,
-                        op: step.operationID
+                        step: step
                     )
                 )
                 if disposition == .applied { appliedIndices.append(index) }
@@ -604,7 +617,7 @@ actor MutationSaga {
                         readback,
                         desiredValue: desiredValue,
                         beforeState: beforeState,
-                        operationID: step.operationID
+                        step: step
                     )
                     outcome.journal[index].verificationEvidence = VerificationEvidence(
                         disposition: disposition,
@@ -612,7 +625,7 @@ actor MutationSaga {
                         comparison: SagaValueComparator.evidence(
                             observed: readback?.value,
                             desired: desiredValue,
-                            op: step.operationID
+                            step: step
                         )
                     )
                     if disposition == .applied { appliedIndices.append(index) }
@@ -780,7 +793,14 @@ actor MutationSaga {
                 continue
             }
 
-            let compensationResult = await executor.run(inverse)
+            var ownedInverse = inverse
+            if inverse.operationID == .pluginsSetParamVerified, let currentState {
+                var params = inverse.params
+                params["expected_before"] = currentState.value
+                ownedInverse = SagaStep(operationID: inverse.operationID, targetRef: inverse.targetRef,
+                    params: params, expectedInverse: inverse.expectedInverse)
+            }
+            let compensationResult = await executor.run(ownedInverse)
             let readback = await executor.readState(inverse)
             // LPMCP-PRD-004: the restore target is the LIVE before-state
             // captured at step time, and the proof is an independent live
@@ -796,7 +816,7 @@ actor MutationSaga {
             let comparison = SagaValueComparator.evidence(
                 observed: readback?.value,
                 desired: beforeState.value,
-                op: inverse.operationID
+                step: inverse
             )
             let disposition: CompensationDisposition
             if comparison.equal {
@@ -847,18 +867,18 @@ actor MutationSaga {
         _ readback: ObservedState?,
         desiredValue: Value,
         beforeState: ObservedState,
-        operationID: OperationID
+        step: SagaStep
     ) -> VerificationDisposition {
         guard let readback else { return .unknown }
         let matchesDesired = SagaValueComparator.equals(
             observed: readback.value,
             expected: desiredValue,
-            op: operationID
+            step: step
         )
         let matchesBefore = SagaValueComparator.equals(
             observed: readback.value,
             expected: beforeState.value,
-            op: operationID
+            step: step
         )
         if matchesDesired {
             return matchesBefore ? .unknown : .applied
@@ -877,13 +897,13 @@ actor MutationSaga {
     private func classifyVerifiedWrite(
         _ readback: ObservedState?,
         desiredValue: Value,
-        operationID: OperationID
+        step: SagaStep
     ) -> VerificationDisposition {
-        guard let readback else { return .applied }
+        guard let readback else { return step.operationID == .pluginsSetParamVerified ? .unknown : .applied }
         return SagaValueComparator.equals(
             observed: readback.value,
             expected: desiredValue,
-            op: operationID
+            step: step
         ) ? .applied : .unknown
     }
 

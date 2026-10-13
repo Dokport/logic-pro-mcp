@@ -1098,6 +1098,57 @@ func testForwardWriteDoesNotOverwriteItsChangedBeforeValue(_ fault: String) asyn
     #expect(fixture.currentSliderValue == 38)
 }
 
+@Test func testSagaApprovedThresholdBeforeIsCheckedByTheActualWriter() async throws {
+    let fixture = LiveFixture(beforeValue: 75)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: "threshold", observed: .double(60))
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: thresholdParams(value: "38"))
+    }
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.currentSliderValue == 75)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test func testSagaApprovedLimiterBeforeIsCheckedBeforeTheActualCheckboxPress() async throws {
+    let fixture = LiveFixture(controlsViewRowLabel: "Limiter On", controlsCheckboxBefore: true,
+        controlsViewInitiallySelected: true)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: "limiter_on", observed: .bool(false))
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: controlsBooleanParams())
+    }
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+    let current = try #require(fixture.builder.attributeValue(fixture.builder.element(100_908), kAXValueAttribute as String) as? Bool)
+    #expect(current)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test(arguments: ["threshold", "limiter_on"])
+func testSagaMatchingApprovedBeforeReachesItsActualParameterMutation(_ param: String) async throws {
+    let fixture = param == "threshold" ? LiveFixture(beforeValue: 60)
+        : LiveFixture(controlsViewRowLabel: "Limiter On", controlsViewInitiallySelected: true)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: param, observed: param == "threshold" ? .double(60) : .bool(false))
+    let params = param == "threshold" ? thresholdParams(value: "38") : controlsBooleanParams()
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: params)
+    }
+    #expect(result["state"] as? String == "A")
+    if param == "threshold" {
+        #expect(fixture.sliderWriteCount.value == 1)
+        #expect(fixture.currentSliderValue == 38)
+    } else {
+        #expect(fixture.controlsCheckboxPressCount.value == 1)
+        let current = try #require(fixture.builder.attributeValue(fixture.builder.element(100_908), kAXValueAttribute as String) as? Bool)
+        #expect(current)
+    }
+}
+
 @Test func testFirstIncrementNudgeDoesNotOverwriteAChangedEntryReading() async throws {
     let reads = MutableBox(0)
     let injected = MutableBox(false)

@@ -1926,6 +1926,7 @@ extension AccessibilityChannel {
                 extras: ["operation": operation, "write_attempted": false]))
         }
         let contextIsCurrent: () -> Bool = {
+            if PluginsDispatcher.sagaLease != nil, !pluginRollbackOperationIsCurrent() { return false }
             guard !Task.isCancelled,
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime),
                   CFEqual(currentWindow, projectWindow),
@@ -2918,7 +2919,22 @@ extension AccessibilityChannel {
                 window: window,
                 runtime: runtime.ax,
                 verifiedWriteEnvelope: verifiedParameterEnvelope,
-                stateCWithPluginViewRestoration: stateCWithPluginViewRestoration
+                stateCWithPluginViewRestoration: stateCWithPluginViewRestoration,
+                allowingPress: { checkbox, before in
+                    guard let expected = PluginSagaExpectedBefore.current else { return true }
+                    guard expected.matches(track: track, insert: insert, pluginID: pluginID, param: paramKey,
+                        projectPath: referenceParams["project_expected_path"] ?? "", observed: .bool(before)),
+                        pluginRollbackOperationIsCurrent(),
+                        targetPluginIdentityIsStable(target: target, insert: insert, pluginID: pluginID,
+                            originalSlot: slots[insert].element, runtime: runtime),
+                        controlsViewAcquiredPluginWindowFailureStateC(acquiredWindow: window, operation: operation,
+                            identity: identity, pluginID: pluginID, trackName: trackName, runtime: runtime) == nil,
+                        case .found(.checkBox(let current)) = ControlsViewBooleanParameterWriter.locate(
+                            label: controlsViewRowLabel, in: window, runtime: runtime.ax), CFEqual(current, checkbox),
+                        case .success(.some(let latest)) = AXValueExtractors.extractButtonStateResult(checkbox, runtime: runtime.ax),
+                        latest == before else { return false }
+                    return pluginRollbackOperationIsCurrent()
+                }
             )
         }
 
@@ -3125,6 +3141,9 @@ extension AccessibilityChannel {
             guard rollbackTargetIsCurrent(),
                   let current = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax),
                   current.isFinite, current == before else { return false }
+            if let expected = PluginSagaExpectedBefore.current,
+               !expected.matches(track: track, insert: insert, pluginID: pluginID, param: paramKey,
+                    projectPath: referenceParams["project_expected_path"] ?? "", observed: .double(current)) { return false }
             return pluginRollbackOperationIsCurrent()
         }
         func beforeValueRefusal() -> ChannelResult {
@@ -3403,7 +3422,8 @@ extension AccessibilityChannel {
         window: AXUIElement,
         runtime: AXHelpers.Runtime,
         verifiedWriteEnvelope: ([String: Any]) -> String,
-        stateCWithPluginViewRestoration: (HonestContract.FailureError, [String: Any]) -> String
+        stateCWithPluginViewRestoration: (HonestContract.FailureError, [String: Any]) -> String,
+        allowingPress: (AXUIElement, Bool) -> Bool = { _, _ in true }
     ) -> ChannelResult {
         // The caller already selected and structurally confirmed Controls view.
         // Do not repeat the selection here: reopening its menu would make this
@@ -3453,7 +3473,8 @@ extension AccessibilityChannel {
         let toggle = ControlsViewBooleanParameterWriter.pressAndVerify(
             checkbox,
             requested: requestedState,
-            runtime: runtime
+            runtime: runtime,
+            allowingPress: { allowingPress(checkbox, $0) }
         )
         if toggle.verified, let observed = toggle.observedAfterPress {
             return .success(verifiedWriteEnvelope([
