@@ -564,7 +564,7 @@ extension AccessibilityChannel {
                   let sendChecks, !sendChecks.isEmpty, writeBoundary() else {
                 return closeBeforeRefusal(.readbackUnavailable, "The exact occupied send, protected level/bypass/checkmarks or write boundary did not remain observed; nothing was selected.")
             }
-            extras["before"] = request.expected.json
+            extras["before"] = request.restoration == nil ? request.expected.json : ["state": "observed_empty"]
             extras["destination"] = request.destination?.json ?? ["kind": "no_send"]
             extras["strip_count_before"] = population.count
             if request.restoration == nil, let assigned, request.expected == request.destination {
