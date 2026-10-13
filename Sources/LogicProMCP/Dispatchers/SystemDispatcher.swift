@@ -287,8 +287,15 @@ struct SystemDispatcher: OperationTraceDispatching {
             saga_preflight/saga_execute -> { steps: [step], idempotency_key: String }; \
             Selected Compressor Saga: exactly threshold and limiter_on on one occupied ins_ref; \
             step params are {param,unit,value,expected_before}, inverse value_parameter is value. \
-            Preflight returns plan_hash; execute additionally requires confirmed_plan_hash for this subset. \
+            Preflight returns plan_hash; execute additionally requires confirmed_plan_hash for the selected subsets. \
             Threshold is raw 0..100 percent and limiter_on is literal boolean; ADR004 opt-in is required. \
+            Selected Channel EQ Saga: exactly two plugins.set_eq_band_verified steps on one occupied EQ ins_ref, \
+            band "Peak 1", parameter "frequency"/"gain", units Hz/dB. Params are \
+            {band,parameter,unit,value,expected_before,recommendation}; expected_before is actual raw_ax_value. \
+            The same recommendation {artifact_fingerprint,center_hz,gain_db,q} is retained on both steps, \
+            separate from approved value targets and bound into plan_hash. Host display verifies forward \
+            engineering targets; fresh raw state owns the raw_ax_value inverse. Q is not applied, \
+            no raw/engineering conversion or automatic recommendation mapping is inferred. \
             saga_status/saga_cancel -> { idempotency_key: String }; \
             setup_arm_key -> { consent: "true" } (one-time consent-gated Key Commands GUI \
             drive that assigns the coordinate-free record-arm chord; no mouse); \
@@ -2221,6 +2228,13 @@ struct SystemDispatcher: OperationTraceDispatching {
                                       Selected Compressor subset: threshold + limiter_on, same occupied ins_ref,
                                       params {param,unit,value,expected_before}; preflight plan_hash must be explicitly confirmed.
                                       Raw threshold 0..100 percent; limiter_on literal boolean. Existing ADR004 opt-in required.
+                                      Selected EQ subset: two plugins.set_eq_band_verified steps on one occupied EQ ins_ref,
+                                      band "Peak 1", parameter "frequency"/"gain", units Hz/dB; params
+                                      {band,parameter,unit,value,expected_before,recommendation}. expected_before is raw_ax_value.
+                                      Same recommendation {artifact_fingerprint,center_hz,gain_db,q} on both steps,
+                                      distinct from approved targets and bound into the explicitly confirmed plan_hash.
+                                      Forward verification uses actual host display; owned inverse uses raw_ax_value. Q is not applied.
+                                      No automatic recommendation mapping, guessed conversion or all-EQ application.
                   saga_status       -> { idempotency_key: String } — Read the session journal
                   saga_cancel       -> { idempotency_key: String } — Request cancellation; State B until unwind is journaled, then terminal status carries its outcome
                   help              -> { category: String } — Param docs per category
