@@ -459,7 +459,13 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         if approvedSessionRepair?.supports(step) == true || step.operationID == .pluginsSetParamVerified,
            case .text(let text, _, _) = response.content.first,
            let body = decodedJSONObject(text), let attempted = body["write_attempted"] as? Bool {
-            return .init(state: mapped.state, writeBoundaryCrossed: attempted, detail: mapped.detail)
+            var detail = mapped.detail
+            if step.operationID == .tracksRename, approvedSessionRepair?.supports(step) == true,
+               let effects = body["track_selection_effects"] as? [String: Any],
+               let restoration = effects["restoration"] as? String {
+                detail += "; track_selection_restoration=\(restoration)"
+            }
+            return .init(state: mapped.state, writeBoundaryCrossed: attempted, detail: detail)
         }
         return mapped
     }
