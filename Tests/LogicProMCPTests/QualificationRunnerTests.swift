@@ -8,6 +8,120 @@ import Testing
 
 @Suite("ADR-001 qualification runner", .serialized)
 struct QualificationRunnerTests {
+    @Test(arguments: [false, true])
+    func stoppedTransportMustBeObservedBeforeARecipeAcquiresChanges(cached: Bool) throws {
+        let fixture = try SlowHandshakeFixture(transportNativePause: true, cachedTransport: cached)
+        defer { fixture.remove() }
+        let pause = try #require(OperationRegistry.specs.first { $0.id == .transportPause })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [pause]))
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.precondition", "phase_b.mutation", "phase_b.restore", "phase_b.cleanup"].contains($0.operationID) }
+        if cached {
+            #expect(effects.isEmpty, "cached/unverified false cannot authorize staging or a compensating write")
+            #expect(result.mutationRestoreRecords.isEmpty)
+        } else {
+            #expect(effects.count == 3)
+            #expect(result.operationResults[pause.id.rawValue]?.status == .passed)
+        }
+    }
+
+    @Test(arguments: ["slow_short_gap", "unreadable", "changed", "slow_full_gap"])
+    func motionGapUsesActualTempoRatherThanTheResourceDefault(shape: String) throws {
+        let state: [String: Any] = ["isPlaying": true, "tempo": 120,
+            "isCycleEnabled": false, "observedCycleEnabled": false, "position": "1.1",
+            "positionReadback": ["value": "1.1", "observedComponents": ["bar", "beat"]]]
+        var first: [String: Any] = ["source": "ax_live", "cache_age_sec": 0, "data": ["state": state]]
+        if shape != "unreadable" { first["observed_tempo"] = 20 }
+        var second = first
+        if shape == "changed" { second["observed_tempo"] = 25 }
+        var reading = second
+        reading["qualification_motion_samples"] = [first, second]
+        reading["qualification_motion_gap_ms"] = shape == "slow_full_gap" ? 3_750 : 1_000
+        let raw = String(decoding: try JSONSerialization.data(withJSONObject: reading), as: UTF8.self)
+        #expect(QualificationTransport.recordedTransportMotion(raw) == (shape == "slow_full_gap" ? .paused : nil))
+    }
+
+    @Test(arguments: ["on", "missing", "malformed", "off"])
+    func equalTransportPositionsNeedObservedCycleOff(cycle: String) throws {
+        var state: [String: Any] = ["isPlaying": true, "tempo": 120, "position": "1.1",
+            "positionReadback": ["value": "1.1", "observedComponents": ["bar", "beat"]]]
+        switch cycle {
+        case "on": state["isCycleEnabled"] = true; state["observedCycleEnabled"] = true
+        case "off": state["isCycleEnabled"] = false; state["observedCycleEnabled"] = false
+        case "malformed": state["isCycleEnabled"] = "unreadable"; state["observedCycleEnabled"] = "unreadable"
+        default: break
+        }
+        let sample: [String: Any] = ["source": "ax_live", "cache_age_sec": 0, "observed_tempo": 120, "data": ["state": state]]
+        var recordReading = sample
+        // At 120 BPM a two-beat loop can return to the same display position in one second.
+        recordReading["qualification_motion_samples"] = [sample, sample]
+        recordReading["qualification_motion_gap_ms"] = 1_000
+        let raw = String(decoding: try JSONSerialization.data(withJSONObject: recordReading), as: UTF8.self)
+        #expect(QualificationTransport.recordedTransportMotion(raw) == (cycle == "off" ? .paused : nil))
+    }
+
+    @Test(arguments: ["play", "stop", "pause"], ["stopped", "paused", "moving"])
+    func transportCyclesRestoreTheObservedOriginalMotion(command: String, original: String) throws {
+        let fixture = try SlowHandshakeFixture(transportNativePause: true, initialTransportMotion: original)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.tool == .logicTransport && $0.command == command })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        let observed = try #require(result.operationResults[spec.id.rawValue])
+        #expect(observed.status == .passed)
+        let record = try #require(result.mutationRestoreRecords.first)
+        let expected: QualificationTransport.TransportMotion = original == "stopped" ? .stopped : (original == "paused" ? .paused : .moving)
+        #expect(QualificationTransport.recordedTransportMotion(record.preState) == expected)
+        #expect(QualificationTransport.recordedTransportMotion(record.restoreReadback) == expected)
+        #expect(record.verifiedCycleShape)
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("playing"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == (original == "stopped" ? "false" : "true"))
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("moving"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == (original == "moving" ? "true" : "false"))
+    }
+
+    @Test func nativePauseCycleUsesMotionRatherThanClearingPlay() throws {
+        let fixture = try SlowHandshakeFixture(transportNativePause: true)
+        defer { fixture.remove() }
+        let pause = try #require(OperationRegistry.specs.first { $0.id == .transportPause })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [pause]))
+        let observed = try #require(result.operationResults[pause.id.rawValue])
+        #expect(observed.status == .passed)
+        let record = try #require(result.mutationRestoreRecords.first)
+        #expect(record.operationID == pause.id.rawValue)
+        #expect(record.verifiedCycleShape)
+        let readback = try #require(sharedJSONObject(record.readback))
+        let payload = try #require(readback["data"] as? [String: Any])
+        let state = try #require(payload["state"] as? [String: Any])
+        let playOn = try #require(state["isPlaying"] as? Bool)
+        #expect(playOn, "native Pause leaves Play on; stationary positions establish its effect")
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("playing"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "false")
+    }
+
+    @Test func failedTransportPreconditionDoesNotLeakPlayback() throws {
+        let fixture = try SlowHandshakeFixture(transportRefusal: true)
+        defer { fixture.remove() }
+        let pause = try #require(OperationRegistry.specs.first { $0.id == .transportPause })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [pause]))
+        let observed = try #require(result.operationResults[pause.id.rawValue])
+        #expect(observed.status != .passed, "a refused mutation never acquires write-cycle credit")
+        #expect(observed.mutationRestore == nil)
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("playing"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "false")
+        let requests = try String(contentsOf: fixture.directory.appendingPathComponent("requests"), encoding: .utf8)
+        #expect(requests.contains("\"command\":\"play\""), "the real recipe must stage playback")
+        #expect(requests.contains("\"command\":\"pause\""), "the refused mutation must actually run")
+        #expect(requests.contains("\"command\":\"stop\""), "the acquired precondition must be compensated")
+    }
+
     @Test("Only intentionally withheld mutations get a non-crediting not-run receipt",
           arguments: ["withheld", "opted_in_missing", "missing_readonly", "actual_failure"])
     func missingResultsDistinguishWithheldMutationFromFailedExecution(shape: String) async throws {
@@ -3610,9 +3724,11 @@ struct QualificationRunnerTests {
         let result = AudioDispatcher.handle(command: compare.command, params: params, runtime: runtime)
         let body = try #require(sharedJSONObject(sharedToolText(result)))
         #expect(requestedPaths == [QualificationTransport.qualificationAudioProbePath])
-        #expect(result.isError == true)
+        let isError = try #require(result.isError)
+        #expect(isError)
         #expect(body["error"] as? String == "spectral_analysis_failed")
-        #expect(body["write_attempted"] as? Bool == false)
+        let writeAttempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!writeAttempted)
     }
 
     @Test func qualificationProbeConfirmsTraceClear() throws {
@@ -6278,12 +6394,13 @@ struct QualificationRunnerTests {
         let directory: URL
         let executableURL: URL
 
-        init() throws {
+        init(transportRefusal: Bool = false, transportNativePause: Bool = false,
+             initialTransportMotion: String = "stopped", cachedTransport: Bool = false) throws {
             directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("qualification-slow-handshake-\(UUID().uuidString)", isDirectory: true)
             executableURL = directory.appendingPathComponent("server.sh")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let script = #"""
+            var script = #"""
             #!/bin/sh
             IFS= read -r request_line || exit 0
             sleep "$HANDSHAKE_DELAY"
@@ -6299,6 +6416,7 @@ struct QualificationRunnerTests {
             # runs. The double must simulate it, because the transport's request sequence is
             # pinned here BY ID — an unscripted step silently consumes the next response.
             /usr/bin/printf '%s\n' '{"jsonrpc":"2.0","id":9,"result":{"isError":true,"content":[{"type":"text","text":"{}"}]}}'
+            # AFTER SEED
             /usr/bin/printf '%s\n' '{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"{\"logic_pro_running\":true,\"logic_pro_version\":\"11.2\",\"logic_pro_bundle_id\":\"com.apple.logic10\",\"logic_pro_variant\":\"desktop\",\"logic_pro_ui_locale\":\"en-US\",\"logic_pro_variants\":[{\"variant\":\"desktop\",\"bundle_id\":\"com.apple.logic10\",\"installed\":true,\"running\":true},{\"variant\":\"creator_studio\",\"bundle_id\":\"com.apple.mobilelogic\",\"installed\":false,\"running\":false}],\"process_metadata_resolved\":true}"}]}}'
             /usr/bin/printf '%s\n' '{"jsonrpc":"2.0","id":11,"result":{"contents":[{"uri":"logic://system/operations","text":"{\"schema_version\":1,\"generated_at\":\"1970-01-01T00:00:00Z\",\"operation_count\":0,\"operations\":[]}"}]}}'
             exec 1>&-
@@ -6312,6 +6430,68 @@ struct QualificationRunnerTests {
             IFS= read -r request_line || exit 0
             IFS= read -r request_line || exit 0
             """#
+            if transportRefusal || transportNativePause {
+                script = try #require(script.components(separatedBy: "# AFTER SEED").first) + #"""
+                cd "$(dirname "$0")" || exit 1
+                initial_playing=false
+                initial_moving=false
+                playing=$initial_playing
+                native_pause=false
+                resource_source=ax_live
+                resource_unverified=false
+                moving=$initial_moving
+                position=1
+                printf '%s\n' "$playing" > playing
+                printf '%s\n' "$moving" > moving
+                while IFS= read -r request; do
+                    id=$(printf '%s' "$request" | /usr/bin/sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+                    [ -n "$id" ] || continue
+                    [ "$id" -ge 10 ] || continue
+                    request=$(printf '%s' "$request" | /usr/bin/sed 's#\\/#/#g')
+                    printf '%s\n' "$request" >> requests
+                    case "$request" in
+                      *'"uri":"logic://transport/state"'*)
+                        if [ "$moving" = true ]; then position=$((position + 1)); fi
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://transport/state","text":"{\\"source\\":\\"%s\\",\\"unverified\\":%s,\\"cache_age_sec\\":0,\\"observed_tempo\\":120,\\"data\\":{\\"state\\":{\\"isPlaying\\":%s,\\"isRecording\\":false,\\"isCycleEnabled\\":false,\\"observedCycleEnabled\\":false,\\"tempo\\":120,\\"position\\":\\"%s.1\\",\\"positionReadback\\":{\\"value\\":\\"%s.1\\",\\"observedComponents\\":[\\"bar\\",\\"beat\\"]}}}}"}]}}\n' "$id" "$resource_source" "$resource_unverified" "$playing" "$position" "$position" ;;
+                      *'"uri":"logic://system/operations"'*)
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://system/operations","text":"{\\"schema_version\\":1,\\"generated_at\\":\\"1970-01-01T00:00:00Z\\",\\"operation_count\\":0,\\"operations\\":[]}"}]}}\n' "$id" ;;
+                      *'"command":"health"'*)
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"logic_pro_running\\":true,\\"logic_pro_version\\":\\"11.2\\",\\"logic_pro_bundle_id\\":\\"com.apple.logic10\\",\\"logic_pro_variant\\":\\"desktop\\",\\"logic_pro_ui_locale\\":\\"en-US\\",\\"process_metadata_resolved\\":true,\\"logic_pro_variants\\":[{\\"variant\\":\\"desktop\\",\\"bundle_id\\":\\"com.apple.logic10\\",\\"installed\\":true,\\"running\\":true},{\\"variant\\":\\"creator_studio\\",\\"bundle_id\\":\\"com.apple.mobilelogic\\",\\"installed\\":false,\\"running\\":false}]}"}]}}\n' "$id" ;;
+                      *'__adr001b_no_write_probe'*)
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"error\\":\\"invalid_params\\",\\"write_attempted\\":false}"}]}}\n' "$id" ;;
+                      *'"command":"pause"'*)
+                        if [ "$native_pause" = true ]; then
+                            playing=true
+                            moving=false
+                            printf '%s\n' "$playing" > playing
+                            printf '%s\n' "$moving" > moving
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"A\\",\\"verified\\":true}"}]}}\n' "$id"
+                        else
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"error\\":\\"readback_unavailable\\",\\"write_attempted\\":false}"}]}}\n' "$id"
+                        fi ;;
+                      *)
+                        case "$request" in
+                          *'"command":"play"'*) playing=true; moving=true ;;
+                          *'"command":"stop"'*) playing=false; moving=false ;;
+                        esac
+                        printf '%s\n' "$playing" > playing
+                        printf '%s\n' "$moving" > moving
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"A\\",\\"verified\\":true}"}]}}\n' "$id" ;;
+                    esac
+                done
+                """#
+                if transportNativePause { script = script.replacingOccurrences(of: "native_pause=false", with: "native_pause=true") }
+                if cachedTransport {
+                    script = script.replacingOccurrences(of: "resource_source=ax_live", with: "resource_source=cache")
+                        .replacingOccurrences(of: "resource_unverified=false", with: "resource_unverified=true")
+                }
+                if initialTransportMotion != "stopped" {
+                    script = script.replacingOccurrences(of: "initial_playing=false", with: "initial_playing=true")
+                }
+                if initialTransportMotion == "moving" {
+                    script = script.replacingOccurrences(of: "initial_moving=false", with: "initial_moving=true")
+                }
+            }
             try Data(script.utf8).write(to: executableURL)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],

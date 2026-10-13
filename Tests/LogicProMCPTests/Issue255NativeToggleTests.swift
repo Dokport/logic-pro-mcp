@@ -31,6 +31,117 @@ private func issue255Channel(
     #expect(ChannelRouter.routingTable["edit.toggle_step_input"]?.first == .accessibility)
 }
 
+@Test(arguments: ["off", "on", "missing", "unreadable", "duplicate"])
+func transportCycleEvidenceIsObservedRatherThanTheFalseDefault(shape: String) async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_560)
+    let window = builder.element(25_561)
+    let bar = builder.element(25_562)
+    let play = builder.element(25_563)
+    let record = builder.element(25_564)
+    let cycle = builder.element(25_565)
+    let duplicate = builder.element(25_566)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setChildren(bar, [play, record] + (shape == "missing" ? [] : [cycle])
+        + (shape == "duplicate" ? [duplicate] : []))
+    for (element, title) in [(play, "Play"), (record, "Record"), (cycle, "Cycle"), (duplicate, "Cycle")] {
+        builder.setAttribute(element, kAXRoleAttribute as String, kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, title)
+        if element != cycle || shape != "unreadable" {
+            builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: element == cycle && shape == "on"))
+        }
+    }
+    let router = ChannelRouter()
+    await router.register(issue255Channel(logicRuntime: builder.makeLogicRuntime(appElement: app)))
+    let result = try await ResourceHandlers.read(uri: "logic://transport/state", cache: StateCache(), router: router)
+    let text = try #require(result.contents.first?.text)
+    let envelope = try #require(sharedJSONObject(text))
+    let data = try #require(envelope["data"] as? [String: Any])
+    let state = try #require(data["state"] as? [String: Any])
+    let legacy = try #require(state["isCycleEnabled"] as? Bool)
+    if shape == "on" { #expect(legacy) } else { #expect(!legacy) }
+    if shape == "off" || shape == "on" {
+        let observed = try #require(state["observedCycleEnabled"] as? Bool)
+        if shape == "on" { #expect(observed) } else { #expect(!observed) }
+    } else { #expect(!state.keys.contains("observedCycleEnabled")) }
+}
+
+@Test(arguments: ["slow", "unreadable", "missing"])
+func transportResourceCarriesActualTempoWithoutReplacingTheLegacyDefault(shape: String) async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_570)
+    let window = builder.element(25_571)
+    let bar = builder.element(25_572)
+    let play = builder.element(25_573)
+    let record = builder.element(25_574)
+    let groups = (0..<5).map { builder.element(25_575 + $0) }
+    let slider = builder.element(25_580)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setChildren(bar, [play, record, groups[0]])
+    for (element, title) in [(play, "Play"), (record, "Record")] {
+        builder.setAttribute(element, kAXRoleAttribute as String, kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, title)
+        builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: false))
+    }
+    for (index, group) in groups.enumerated() {
+        builder.setAttribute(group, kAXRoleAttribute as String, kAXGroupRole as String)
+        builder.setChildren(group, index < groups.count - 1 ? [groups[index + 1]] : (shape == "missing" ? [] : [slider]))
+    }
+    builder.setAttribute(slider, kAXRoleAttribute as String, kAXSliderRole as String)
+    builder.setAttribute(slider, kAXDescriptionAttribute as String, "Tempo")
+    if shape == "slow" { builder.setAttribute(slider, kAXValueAttribute as String, NSNumber(value: 20)) }
+    let router = ChannelRouter()
+    await router.register(issue255Channel(logicRuntime: builder.makeLogicRuntime(appElement: app)))
+    let result = try await ResourceHandlers.read(uri: "logic://transport/state", cache: StateCache(), router: router)
+    let text = try #require(result.contents.first?.text)
+    let envelope = try #require(sharedJSONObject(text))
+    let data = try #require(envelope["data"] as? [String: Any])
+    let state = try #require(data["state"] as? [String: Any])
+    #expect(state["tempo"] as? Double == (shape == "slow" ? 20 : 120),
+        "preserve actual tempo where read and the legacy default where it was not read")
+    if shape == "slow" { #expect(envelope["observed_tempo"] as? Double == 20) }
+    else { #expect(!envelope.keys.contains("observed_tempo")) }
+}
+
+@Test func measuredMetronomeClickCheckboxPublishesItsObservedState() async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_550)
+    let window = builder.element(25_551)
+    let bar = builder.element(25_552)
+    let play = builder.element(25_553)
+    let record = builder.element(25_554)
+    let metronome = builder.element(25_555)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setChildren(bar, [play, record, metronome])
+    // The compound is the actual own AXCheckBox description/title in the retained EN census,
+    // not an expectation generated from the policy bag being repaired.
+    for (element, title) in [(play, "Play"), (record, "Record"), (metronome, "Metronome Click")] {
+        builder.setAttribute(element, kAXRoleAttribute as String, kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, title)
+        builder.setAttribute(element, kAXDescriptionAttribute as String, title)
+        builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: 0))
+    }
+    let channel = issue255Channel(logicRuntime: builder.makeLogicRuntime(appElement: app))
+    let result = await channel.execute(operation: "transport.get_state", params: [:])
+    #expect(result.isSuccess)
+    let object = try #require(issue255Object(result.message))
+    let metronomeEnabled = try #require(object["isMetronomeEnabled"] as? Bool)
+    let playing = try #require(object["isPlaying"] as? Bool)
+    let recording = try #require(object["isRecording"] as? Bool)
+    #expect(!metronomeEnabled)
+    #expect(!playing)
+    #expect(!recording)
+}
+
 @Test func issue255CountInMatchesLogic123ControlBarTitle() async throws {
     let builder = FakeAXRuntimeBuilder()
     let app = builder.element(25_500)
