@@ -449,6 +449,185 @@ private actor ExactNameChannel: Channel {
 
 @Suite("#968 exact-local track naming adapter")
 struct Issue968ExactTrackNameAdapterTests {
+    @Test(arguments: ["swap", "collision", "multiple_selection", "unreadable_selection"])
+    func canonicalNameBatchKeepsUnsupportedCollisionsAndSelectionExplicit(_ kind: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = ExactNameFixture()
+                _ = f.appendTrack(name: "B", selected: kind == "multiple_selection")
+                if kind == "unreadable_selection" {
+                    f.builder.removeAttribute(f.header, kAXSelectedAttribute as String)
+                }
+                let (capture, project, first, _, _) = try await f.coupledCapture(
+                    peerStripName: "B", includePeerAssociation: true)
+                let second = try #require(capture.issued?.byRow[1])
+                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue), "targets": .array([
+                        .object(["handle": .string("first"), "track_ref": .string(first.rawValue)]),
+                        .object(["handle": .string("second"), "track_ref": .string(second.rawValue)])])]
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                    Issue.record("the explicit naming policy must parse"); return
+                }
+                let names: [ProjectSessionAudit.ApprovedName] = [
+                    .init(target: "first", name: kind == "swap" ? "B" : "C"),
+                    .init(target: "second", name: kind == "swap" ? "A" : kind == "collision" ? "C" : "D")]
+                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: names, capture: capture,
+                    request: .init(domains: [.tracks, .strips, .associations]), snapshotCurrent: true)
+                let body = try #require(sharedJSONObject(plan.json))
+                let executable = try #require(body["executable"] as? Bool)
+                #expect(!executable)
+                let steps = try #require(body["steps"] as? [[String: Any]])
+                #expect(steps.count == names.count)
+                #expect(steps.allSatisfy { ($0["blocked_reasons"] as? [String])?.contains("naming_preservation_adapter_unavailable") == true })
+                #expect(f.writes.isEmpty && f.selectionWrites.isEmpty)
+            }
+        }
+    }
+
+    @Test(arguments: ["healthy", "refuse_second", "cancel_second", "newer_first", "selection_ack_only", "peer_after_first", "editing_after_first", "project_after_first"])
+    func canonicalDistinctNamesShareOrderedReceiptsAndOwnedCompensation(_ change: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = ExactNameFixture()
+                let (other, otherName) = f.appendTrack(name: "B", selected: false)
+                f.permitsSelection = true
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.header)
+                let (capture, project, first, _, mirror) = try await f.coupledCapture(
+                    peerStripName: "B", includePeerAssociation: true)
+                let second = try #require(capture.issued?.byRow[1])
+                let otherMirror = try #require(f.coupledPeerNameField)
+                let request = SessionPopulationObservation.Request(domains: [.tracks, .strips, .associations])
+                let report = SessionPopulationObservation.build(request: request, capture: capture)
+                let retained = await f.cache.retainSessionReport(id: capture.captureID,
+                    json: String(decoding: try JSONEncoder().encode(report), as: UTF8.self),
+                    capturedEpoch: capture.projectEpoch, capturedPath: capture.project.filePath,
+                    capture: capture, request: request)
+                #expect(retained)
+                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue), "targets": .array([
+                        .object(["handle": .string("first"), "track_ref": .string(first.rawValue)]),
+                        .object(["handle": .string("second"), "track_ref": .string(second.rawValue)])])]
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                    Issue.record("the ordered distinct naming policy must parse"); return
+                }
+                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: [.init(target: "first", name: "C"), .init(target: "second", name: "D")],
+                    capture: capture, request: request, snapshotCurrent: true)
+                let executable = try #require(sharedJSONObject(plan.json)?["executable"] as? Bool)
+                #expect(executable)
+                let stored = await f.cache.retainRepairPlan(plan, snapshotID: capture.captureID)
+                #expect(stored)
+                let journal = SagaJournal()
+                let key = "ordered-distinct-canonical-names"
+                let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
+                    key: key, cache: f.cache, registry: f.registry, journal: journal))
+                #expect(approval.plan.steps.map(\.targetRef) == [first, second])
+                f.onConfirm = {
+                    f.builder.setAttribute(mirror, kAXValueAttribute as String,
+                        f.builder.attributeValue(f.field, kAXDescriptionAttribute as String))
+                    f.builder.setAttribute(otherMirror, kAXValueAttribute as String,
+                        f.builder.attributeValue(otherName, kAXDescriptionAttribute as String))
+                }
+                f.onPress = {
+                    let secondPress = f.actedNameFields.last.map { CFEqual($0, otherName) } == true
+                    f.pressReportsFailure = secondPress && ["refuse_second", "newer_first"].contains(change)
+                    if secondPress && change == "newer_first" {
+                        f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Human")
+                        f.builder.setAttribute(mirror, kAXValueAttribute as String, "Human")
+                    }
+                }
+                if change == "selection_ack_only" {
+                    f.onSelection = {
+                        f.builder.setAttribute(f.header, kAXSelectedAttribute as String, true)
+                        f.builder.setAttribute(other, kAXSelectedAttribute as String, false)
+                    }
+                }
+                let runtime = f.runtime
+                func run() async -> CallTool.Result {
+                    await SystemDispatcher.handle(command: "saga_execute", params: [:], router: f.router,
+                        cache: f.cache, targetRegistry: f.registry, dialogPresent: { false },
+                        sagaJournal: journal, mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {
+                            if change == "cancel_second", f.writes == ["C"] {
+                                #expect(await journal.cancel(idempotencyKey: key) == .requested)
+                            }
+                            if change == "peer_after_first", f.writes == ["C"] {
+                                f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Human")
+                                f.builder.setAttribute(mirror, kAXValueAttribute as String, "Human")
+                            }
+                            if change == "editing_after_first", f.writes == ["C"] {
+                                let editor = f.builder.element(968_299)
+                                f.builder.setRole(editor, kAXTextAreaRole as String)
+                                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                            }
+                            if change == "project_after_first", f.writes == ["C"] {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
+                        }, liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
+                        liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
+                        sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
+                }
+                let body = try #require(sharedJSONObject(sharedToolText(await run())))
+                if change == "healthy" {
+                    #expect(body["saga_state"] as? String == "completed")
+                    let verified = try #require(body["verified"] as? Bool)
+                    #expect(verified)
+                    #expect(f.writes == ["C", "D"])
+                    #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == "C")
+                    #expect(f.builder.attributeValue(otherMirror, kAXValueAttribute as String) as? String == "D")
+                } else if ["newer_first", "peer_after_first"].contains(change) {
+                    #expect(f.writes == ["C"])
+                    #expect(f.builder.attributeValue(f.field, kAXDescriptionAttribute as String) as? String == "Human")
+                    #expect(body["saga_state"] as? String != "fullyCompensated")
+                    if change == "newer_first" {
+                        let steps = try #require(body["steps"] as? [[String: Any]])
+                        let detail = try #require((steps[1]["result"] as? [String: Any])?["detail"] as? String)
+                        #expect(detail.contains("not_restored"))
+                    }
+                } else if ["editing_after_first", "project_after_first"].contains(change) {
+                    #expect(f.writes == ["C"])
+                    #expect(f.selectionWrites.isEmpty)
+                    #expect(body["saga_state"] as? String != "completed")
+                } else {
+                    #expect(body["saga_state"] as? String == "fullyCompensated")
+                    #expect(f.writes == ["C", "A"])
+                    #expect(f.builder.attributeValue(otherName, kAXDescriptionAttribute as String) as? String == "B")
+                }
+                if change != "newer_first" {
+                    let originalSelected = try #require(AXValueExtractors.extractSelectedState(f.header, runtime: runtime.ax))
+                    let otherSelected = try #require(AXValueExtractors.extractSelectedState(other, runtime: runtime.ax))
+                    #expect(originalSelected)
+                    #expect(!otherSelected)
+                }
+                let writes = f.writes
+                let selectionWrites = f.selectionWrites.count
+                let events = f.events
+                let routes = f.routedOperations
+                let planID = try #require(approval.plan.canonicalPlanID)
+                let digest = try #require(approval.plan.canonicalDigest)
+                let applyRequest = try #require(ApprovedSessionRepair.ApplyRequest.parse([
+                    "plan_id": .string(planID), "digest": .string(digest),
+                    "confirmed": .bool(true), "idempotency_key": .string(key)]))
+                let dependencies = HandlerDependencies(router: f.router, cache: f.cache,
+                    targetRegistry: f.registry,
+                    poller: StatePoller(axChannel: AccessibilityChannel(), cache: f.cache,
+                        runtime: .init(hasVisibleWindow: { false })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                    mutationGate: LogicMutationGate(),
+                    liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
+                    projectFileReader: .unavailable)
+                let replay = try #require(sharedJSONObject(sharedToolText(
+                    await ApprovedSessionRepair.apply(request: applyRequest, dependencies: dependencies))))
+                let duplicate = try #require(replay["duplicate"] as? Bool)
+                #expect(duplicate)
+                #expect(f.writes == writes)
+                #expect(f.selectionWrites.count == selectionWrites)
+                #expect(f.events == events)
+                #expect(f.routedOperations == routes)
+            }
+        }
+    }
+
     @Test(arguments: ["healthy", "mirror_edit_after_write"])
     func aMatchingMixerOriginRemainsVerifiedAlongsideAChangedTrackGoal(_ change: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {

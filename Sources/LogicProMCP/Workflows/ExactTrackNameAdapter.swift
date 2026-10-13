@@ -2,7 +2,7 @@ import Foundation
 import MCP
 
 /// #968: exact-local Arrange naming, including one producer-observed coupled
-/// pair. The canonical planner still rejects unqualified multi-change footprints.
+/// pair, with earlier canonical effects carried only by this adapter's owned receipts.
 enum ExactTrackNameAdapter {
     @TaskLocal private static var coupledWriteBoundary: (@Sendable (Bool) -> Bool)?
 
@@ -33,6 +33,7 @@ enum ExactTrackNameAdapter {
         fileprivate let registry: TargetRegistry
         fileprivate let cache: StateCache
         fileprivate let mirror: CoupledMirror?
+        fileprivate var selectionOrigin: AXTrackBinding.Binding? = nil
     }
 
     struct Receipt: Sendable {
@@ -69,7 +70,8 @@ enum ExactTrackNameAdapter {
         _ action: Action, capture: SessionPopulationObservation.Capture,
         router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
         liveTrackName: @escaping @Sendable (Int) -> String?,
-        liveTrackNames: @escaping @Sendable () -> [Int: String]?
+        liveTrackNames: @escaping @Sendable () -> [Int: String]?,
+        ownedPeerEffects: [OwnedInverse] = [], selectionOrigin: AXTrackBinding.Binding? = nil
     ) async -> Receipt {
         func reject() -> Receipt {
             .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
@@ -78,9 +80,12 @@ enum ExactTrackNameAdapter {
         guard let snapshot = capture.targetSnapshot, await registry.currentSnapshot == snapshot,
               let target = await registry.resolve(action.targetReference), let source = target.physicalTrack,
               target.kind == .track,
-              let mirror = capturedMirror(action, capture: capture, source: source) else { return reject() }
-        return await applyChecked(action, router: router, cache: cache, registry: registry,
-            liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror)
+              let captured = capturedMirror(action, capture: capture, source: source),
+              let mirror = captured.acknowledging(ownedPeerEffects, project: action.projectReference,
+                  target: action.targetReference, registry: registry) else { return reject() }
+        return await applySelecting(action, router: router, cache: cache, registry: registry,
+            liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror,
+            selectionOrigin: selectionOrigin)
     }
 
     /// Pure availability over the retained producer capture, not permission to
@@ -115,10 +120,13 @@ enum ExactTrackNameAdapter {
     }
 
     static func readCapturedCoupledName(_ action: Action, capture: SessionPopulationObservation.Capture,
-                                       registry: TargetRegistry, preserveCurrentPeers: Bool = false) async -> String? {
+                                       registry: TargetRegistry, preserveCurrentPeers: Bool = false,
+                                       ownedPeerEffects: [OwnedInverse] = []) async -> String? {
         guard let target = await registry.resolve(action.targetReference), target.kind == .track,
               let source = target.physicalTrack,
-              var mirror = capturedMirror(action, capture: capture, source: source) else { return nil }
+              let captured = capturedMirror(action, capture: capture, source: source),
+              var mirror = captured.acknowledging(ownedPeerEffects, project: action.projectReference,
+                  target: action.targetReference, registry: registry) else { return nil }
         if preserveCurrentPeers {
             guard let renewed = mirror.withCurrentPeerNames() else { return nil }
             mirror = renewed
@@ -159,6 +167,31 @@ enum ExactTrackNameAdapter {
         // population scan or a claim about hidden/unobserved host effects.
         var preservedTracks: [TrackState] = []
         var preservedStrips: [ChannelStripState] = []
+
+        /// Only adapter-issued earlier effects can revise this capture's peers.
+        /// The normal fresh pair/membership reads still corroborate these exact bytes.
+        func acknowledging(_ effects: [OwnedInverse], project: TargetReference,
+                           target: TargetReference, registry: TargetRegistry) -> CoupledMirror? {
+            var updated = self
+            guard Set(effects.map(\.target)).count == effects.count else { return nil }
+            for effect in effects where effect.target != target {
+                guard effect.project == project, effect.registry === registry,
+                      let peer = effect.mirror, peer.snapshot == snapshot else { return nil }
+                let tracks = updated.preservedTracks.indices.filter {
+                    updated.preservedTracks[$0].physicalBinding?.matches(peer.pair.track) == true
+                }
+                let strips = updated.preservedStrips.indices.filter {
+                    updated.preservedStrips[$0].physicalBinding?.matches(peer.pair.strip) == true
+                }
+                guard tracks.count == 1, strips.count == 1,
+                      let track = tracks.first, let strip = strips.first,
+                      updated.preservedTracks[track].name.utf8.elementsEqual(effect.before.utf8),
+                      updated.preservedStrips[strip].name?.utf8.elementsEqual(effect.before.utf8) == true else { return nil }
+                updated.preservedTracks[track].name = effect.written
+                updated.preservedStrips[strip].name = effect.written
+            }
+            return updated
+        }
 
         /// An inverse preserves peers' current names, never the old capture's
         /// names. Original physical sources still decide membership/ownership.
@@ -270,6 +303,94 @@ enum ExactTrackNameAdapter {
         }
     }
 
+    private static func applySelecting(
+        _ action: Action, router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
+        liveTrackName: @escaping @Sendable (Int) -> String?,
+        liveTrackNames: @escaping @Sendable () -> [Int: String]?, mirror: CoupledMirror?,
+        selectionOrigin: AXTrackBinding.Binding?
+    ) async -> Receipt {
+        guard let origin = selectionOrigin, let mirror else {
+            return await applyChecked(action, router: router, cache: cache, registry: registry,
+                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror)
+        }
+        let source = mirror.pair.track
+        func exclusive(_ binding: AXTrackBinding.Binding) -> Bool {
+            guard let index = binding.currentIndex(),
+                  AccessibilityChannel.selectionIsExclusive(index: index, runtime: binding.runtime) else { return false }
+            return binding.currentIndex() == index
+        }
+        var allowWrittenName = false
+        func focusPermitted() -> Bool {
+            guard let pid = source.runtime.logicProPID(),
+                  source.runtime.focusedApplicationPID() == pid,
+                  case .notTextEditing = AccessibilityChannel.readLogicKeyboardFocus(runtime: source.runtime) else { return false }
+            return source.runtime.logicProPID() == pid && source.runtime.focusedApplicationPID() == pid
+        }
+        func held() -> Bool {
+            origin.currentIndex() != nil && source.currentIndex() != nil
+                && focusPermitted()
+                && mirror.namesStillHeld(before: action.expectedBefore,
+                    after: allowWrittenName ? action.desiredAfter : nil)
+                && focusPermitted()
+        }
+        guard await mirror.isCurrent(name: action.expectedBefore, project: action.projectReference,
+                target: action.targetReference, registry: registry), held(), exclusive(origin), held() else {
+            return .init(status: .rejectedBeforeWrite, before: nil, after: nil,
+                survivingReference: nil, inverse: nil,
+                result: TargetRefResolver.staleTargetReferenceResult(action.targetReference.rawValue, operation: "track.rename"))
+        }
+        let needsSelection = !source.matches(origin)
+        var selectionAttempted = false
+        var selectionChanged = false
+        let acquired: Bool
+        if needsSelection, let index = source.currentIndex() {
+            acquired = AccessibilityChannel.confirmExclusiveSelection(index: index, runtime: source.runtime,
+                heldHeader: source.header, permittingWrite: {
+                    held() && (exclusive(origin) || exclusive(source)) && held()
+                }, willWrite: { selectionAttempted = true }) && exclusive(source) && held()
+            selectionChanged = exclusive(source)
+        } else { acquired = !needsSelection }
+        let receipt: Receipt
+        if acquired {
+            receipt = await applyChecked(action, router: router, cache: cache, registry: registry,
+                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror)
+        } else {
+            receipt = .init(status: .rejectedBeforeWrite, before: nil, after: nil,
+                survivingReference: nil, inverse: nil,
+                result: TargetRefResolver.staleTargetReferenceResult(action.targetReference.rawValue, operation: "track.rename"))
+        }
+        allowWrittenName = decodedJSONObject(sharedText(receipt.result))?["write_attempted"] as? Bool == true
+        var restored = exclusive(origin) && held()
+        var restorationAttempted = false
+        if !restored, selectionAttempted, exclusive(source), held(), let index = origin.currentIndex() {
+            restored = AccessibilityChannel.confirmExclusiveSelection(index: index, runtime: origin.runtime,
+                heldHeader: origin.header, permittingWrite: {
+                    held() && (exclusive(source) || exclusive(origin)) && held()
+                }, willWrite: { restorationAttempted = true }) && exclusive(origin) && held()
+        }
+        let effects: [String: Any] = [
+            "attempted": (selectionAttempted ? ["track_selection"] : [])
+                + (restorationAttempted ? ["track_selection_restoration"] : []),
+            "changed": (selectionChanged ? ["track_selection"] : [])
+                + (restorationAttempted && restored ? ["track_selection_restoration"] : []),
+            "restoration": restored ? "restored" : "not_restored"
+        ]
+        var body = decodedJSONObject(sharedText(receipt.result)) ?? [:]
+        body["track_selection_effects"] = effects
+        guard restored else {
+            body["hint"] = "The original physical track selection could not be verified restored."
+            for key in ["state", "verified", "error", "reason"] { body.removeValue(forKey: key) }
+            return .init(status: .attemptedUnverified, before: receipt.before, after: receipt.after,
+                survivingReference: nil, inverse: nil,
+                result: toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: body), isError: true))
+        }
+        var inverse = receipt.inverse
+        inverse?.selectionOrigin = origin
+        let result = toolTextResult(HonestContract.jsonString(body), isError: receipt.result.isError ?? false)
+        return .init(status: receipt.status, before: receipt.before, after: receipt.after,
+            survivingReference: receipt.survivingReference, inverse: inverse, result: result)
+    }
+
     private static func applyChecked(
         _ action: Action, router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
         liveTrackName: @escaping @Sendable (Int) -> String?,
@@ -366,10 +487,11 @@ enum ExactTrackNameAdapter {
             }
             mirror = current
         } else { mirror = nil }
-        return await applyChecked(Action(projectReference: proof.project, targetReference: proof.target,
+        return await applySelecting(Action(projectReference: proof.project, targetReference: proof.target,
                            expectedBefore: proof.written, desiredAfter: proof.before),
                     router: router, cache: proof.cache, registry: proof.registry,
-                    liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror)
+                    liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror,
+                    selectionOrigin: proof.selectionOrigin)
     }
 
     private static func sharedText(_ result: CallTool.Result) -> String {
