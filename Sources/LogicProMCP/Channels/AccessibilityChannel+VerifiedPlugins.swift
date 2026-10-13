@@ -879,7 +879,12 @@ extension AccessibilityChannel {
         }
 
         func reveal(stoppingWhen stop: @Sendable () -> Bool) async {
-            guard case .notFound = AXLogicProElements.mixerAreaLookup(in: window, runtime: runtime) else { return }
+            // Keep request-owned discovery's proved control-forest Help omission;
+            // ordinary discovery can move the retained pre-gesture header focus.
+            guard let lookup = try? AXLogicProElements.mixerPopulationAreaLookup(
+                in: window, runtime: runtime, requiresCompleteAbsence: true,
+                checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                  case .notFound = lookup.lookup else { return }
             // Showing the Mixer may move focus even when its leaf reports an AX error.
             // Never acquire that UI effect if the retained original cannot be restored.
             guard capturedFocusCanBeRestored() else { effects.reason = "mixer_reveal_focus_unrestorable"; return }

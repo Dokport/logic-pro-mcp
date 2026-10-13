@@ -177,8 +177,9 @@ extension AccessibilityChannel {
             }
 
             /// An original immutable numeric name label is not a rename editor.
-            /// Held only for navigation-disabled, Help-free track acquisition;
-            /// this witness never reaches keyboard, selection or musical setters.
+            /// Corroborates Help-free read custody, including an already-owned
+            /// disclosure's exposed-header association. The label supplies no
+            /// keyboard, selection or musical-write authority by itself.
             final class PassiveHeaderReadFocus: @unchecked Sendable {
                 let logic: AXLogicProElements.Runtime
                 let pid: pid_t
