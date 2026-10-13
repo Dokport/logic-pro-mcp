@@ -125,6 +125,21 @@ extension AccessibilityChannel {
         let destination: OutputAssignment
     }
 
+    /// A bijection between two singleton occupied sets is not an ordinal/name
+    /// lookup. The complete empty footprint and protected state still decide
+    /// whether this same logical slot survived an owned one-leaf replacement.
+    private static func soleAssignedSend(in strip: AXUIElement, runtime: AXHelpers.Runtime)
+        -> (slots: [SendSlotObservation], control: AXLogicProElements.AssignedSendMenuControl)? {
+        var controls: [AXLogicProElements.AssignedSendMenuControl] = []
+        guard let slots = AXLogicProElements.sendSlotObservations(in: strip, runtime: runtime,
+            observingAssignedGroup: { controls.append($0) }),
+              slots.allSatisfy({ $0.state == .observedEmpty || $0.state == .occupiedUnknownDestination }),
+              slots.filter({ $0.state == .occupiedUnknownDestination }).count == 1,
+              controls.count == 1, let control = controls.first,
+              slots.first(where: { $0.state == .occupiedUnknownDestination })?.ordinal == control.ordinal else { return nil }
+        return (slots, control)
+    }
+
     /// Typed input evidence from the same owned reader, never from a wire receipt.
     static func getInputBusObservation(runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming = .live,
@@ -406,6 +421,7 @@ extension AccessibilityChannel {
             }
             let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips
             let protectedSends = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax)
+            let singleton = soleAssignedSend(in: physical.strip, runtime: runtime.ax)
             @Sendable func writerContextCurrent(ownedPopup: AXUIElement? = nil,
                 preservingOriginalLabel: Bool = true) -> Bool {
                 guard sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel), ownerBoundaryStillCurrent(),
@@ -610,7 +626,60 @@ extension AccessibilityChannel {
                     "strip_children": childrenStatus(physical.strip), "send_group_role": roleStatus(assigned.group),
                     "send_group_children": childrenStatus(assigned.group), "send_list_role": roleStatus(assigned.list),
                     "send_bypass_role": roleStatus(assigned.bypass)]
-                return uncertain("The press lost original physical/send custody or popup closure; no guessed inverse was attempted.")
+                // Only the source's previously observed original-header pair
+                // can renew retirement. No old ref or send CF is rebound.
+                guard axPopupAbsent, cgPopupAbsent, let singleton,
+                      singleton.control.matches(assigned), singleton.slots == protectedSends,
+                      let originalPair = AXMixerStripBinding.outputAssociation,
+                      originalPair.strip.matches(physical),
+                      let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax),
+                      !census.strips.contains(where: { CFEqual($0, physical.strip) }),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                    return uncertain("The retired send has no unique complete occupied-slot correspondence and original-header renewal authority.")
+                }
+                let renewal = await renewSourceThroughOriginalHeader(originalPair, original: physical,
+                    runtime: runtime, selectedHeaderRequired: false)
+                extras["ui_effects"] = ["navigation_performed": renewal.effects.navigationPerformed,
+                    "attempted": renewal.effects.attempted, "changed": renewal.effects.changed,
+                    "restoration": renewal.effects.restoration, "reason": renewal.effects.reason as Any? ?? NSNull()]
+                guard let source = renewal.source, source.permits(runtime: runtime) else {
+                    return uncertain("The retired source did not renew through its exact original header with a verified inverse.")
+                }
+                let renewedOwner = source.pair.strip
+                func populationPreserved() -> Bool {
+                    guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer,
+                        runtime: runtime.ax)?.strips else { return false }
+                    let expected = population.map { CFEqual($0, physical.strip) ? renewedOwner.strip : $0 }
+                    return current.count == expected.count && zip(current, expected).allSatisfy { CFEqual($0, $1) }
+                }
+                guard let renewed = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax),
+                      normalized(renewed.slots) == normalized(singleton.slots), populationPreserved(),
+                      source.permits(runtime: runtime) else {
+                    return uncertain("Renewal changed the complete empty-slot footprint, protected send state or physical population.")
+                }
+                // The fresh checked reader observes this unique occupied group;
+                // its census ordinal is only the already proved footprint coordinate.
+                let after = await AXMixerStripBinding.$current.withValue(renewedOwner) {
+                    await getOutputObservation(runtime: runtime, sendOrdinal: renewed.control.ordinal, timing: timing)
+                }
+                if let data = after.result.message.data(using: .utf8), let receipt = try? JSONSerialization.jsonObject(with: data) {
+                    extras["after_acquisition"] = receipt
+                }
+                guard after.assignment == request.destination, after.sendNonRoutingChecks == sendChecks,
+                      let final = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax),
+                      renewed.control.matches(final.control), normalized(final.slots) == normalized(singleton.slots),
+                      populationPreserved(), source.permits(runtime: runtime) else {
+                    return uncertain("Fresh checked destination, unique occupied slot or protected source facts did not survive renewal and the deciding read.")
+                }
+                extras["source_renewal"] = source.pair.source
+                extras["reference_reread_required"] = true
+                extras["source_index_after"] = source.index
+                extras["after"] = after.assignment?.json
+                extras["strip_count_after"] = population.count
+                extras["changed"] = true
+                extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
+                return .init(result: .success(HonestContract.encodeStateA(extras: extras)),
+                    assignment: after.assignment, sendNonRoutingChecks: after.sendNonRoutingChecks)
             }
             let after = await getOutputObservation(runtime: runtime, sendOrdinal: sendOrdinal, timing: timing)
             if let data = after.result.message.data(using: .utf8), let receipt = try? JSONSerialization.jsonObject(with: data) {

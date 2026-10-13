@@ -72,14 +72,19 @@ struct MixerDispatcher: OperationTraceDispatching {
                 acceptedKinds: [.mixerStrip]) {
             case .failure(let result): return result
             case .success(let resolved):
-                guard let physical = resolved.binding?.physicalMixerStrip, let reference = resolved.reference else {
+                guard let physical = resolved.binding?.physicalMixerStrip, let reference = resolved.reference,
+                      let targetRegistry else {
                     return TargetRefResolver.staleTargetReferenceResult(params["target_ref"]?.stringValue, operation: operation)
                 }
+                let pair = await cache.retainedMixerAssociation(reference: reference, source: physical,
+                    snapshot: await targetRegistry.currentSnapshot)
                 let traceID = await startTraceIfEnabled(command: command)
                 let routed = await withWriteBoundaryArmed(traceID) {
                     await AXMixerStripBinding.$current.withValue(physical) {
-                        await routedTextResult(router, operation: operation, params: ["send_ordinal": String(ordinal),
-                            "destination": destination.token, "expected_current": expected.token, "replace_existing": "true"])
+                        await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                            await routedTextResult(router, operation: operation, params: ["send_ordinal": String(ordinal),
+                                "destination": destination.token, "expected_current": expected.token, "replace_existing": "true"])
+                        }
                     }
                 }
                 return await finalizeTrace(TargetRefResolver.addEvidence(reference,
