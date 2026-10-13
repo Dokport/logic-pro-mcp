@@ -711,7 +711,19 @@ extension AccessibilityChannel {
             return CFEqual(current, focus)
         }
 
-        private func capturedFocusCanBeRestored(stripMixer: AXUIElement? = nil) -> Bool {
+        private func capturedFocusCanBeRestored(stripMixer: AXUIElement? = nil,
+            headerFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus? = nil,
+            inverseSource: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus? = nil) -> Bool {
+            if let headerFocus {
+                guard CFEqual(headerFocus.focus, focus), CFEqual(headerFocus.window, window),
+                      headerFocus.document.utf8.elementsEqual(document.utf8),
+                      inverseSource.map({ headerFocus.permitsOwnedMixerInverseMetadata(from: $0) }) ?? headerFocus.permits(),
+                      let focusPath, let currentPath = Self.retainedPath(focus, in: window, runtime: runtime.ax),
+                      currentPath.count == focusPath.count, zip(currentPath, focusPath).allSatisfy({ CFEqual($0, $1) }),
+                      AXHelpers.isAttributeSettable(focus, kAXFocusedAttribute as String, runtime: runtime.ax) == true,
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                return true
+            }
             guard let role = AXHelpers.getRole(focus, runtime: runtime.ax),
                   [kAXGroupRole as String, kAXListRole as String, "AXLayoutArea"].contains(role)
                     || (role == kAXLayoutItemRole as String && stripMixer != nil),
@@ -908,6 +920,133 @@ extension AccessibilityChannel {
 
         /// An actual owned Select All relationship, not selection synthesized from our census.
         /// Limited to an already exposed All view; no filter or page navigation is inferred.
+        func observeWholeStripSelectionFromRetainedHeader(
+            headerFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus,
+            association: HeldSelectionAssociation, pair: HeldSelectionAssociation.Pair,
+            readFocusScope: OwnedTrackStackObservationNavigation.ReadFocusScope?,
+            mouse: AXMouseHelper.Runtime? = nil,
+            stoppingWhen stop: @escaping @Sendable () -> Bool
+        ) async -> [AXMixerStripBinding.Binding]? {
+            guard !effects.navigationPerformed, await stillOwned(stoppingWhen: stop), sameFocus(),
+                  CFEqual(headerFocus.focus, focus), CFEqual(headerFocus.header, pair.track.header),
+                  capturedFocusCanBeRestored(headerFocus: headerFocus),
+                  AXHelpers.isAttributeSettable(pair.strip.strip, kAXFocusedAttribute as String, runtime: runtime.ax) == true,
+                  let menuBar = AXLogicProElements.getMenuBar(runtime: runtime),
+                  case .success(let children) = AXHelpers.childrenResult(menuBar, runtime: runtime.ax),
+                  let edit = uniqueMenuTarget(children, role: kAXMenuBarItemRole as String, labels: AXLocalePolicy.editMenuBar),
+                  AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? == false,
+                  await referenceIsCurrent(), !stop(), association.permitsOriginalMixerFocusTarget(pair),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+            bar = edit
+            effects.navigationPerformed = true; effects.restoration = "not_restored"
+            effects.attempted.append("mixer_focus_acquisition")
+            let accepted = AXHelpers.setAttribute(pair.strip.strip, kAXFocusedAttribute as String, NSNumber(value: true), runtime: runtime.ax)
+            var focusAcquired = accepted
+            var completedFocusClick = false
+            var source: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus?
+            for attempt in 0..<3 {
+                guard await stillOwned(stoppingWhen: { false }),
+                      let current: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedUIElementAttribute as String, runtime: runtime.ax)
+                else { break }
+                if CFEqual(current, pair.strip.strip) {
+                    source = .init(window: window, logic: runtime)
+                    break
+                }
+                guard CFEqual(current, focus), attempt < 2 else { break }
+                if attempt == 0, let mouse {
+                    completedFocusClick = await clickOriginalPairBlankFocus(headerFocus: headerFocus,
+                        association: association, pair: pair, mouse: mouse, stoppingWhen: stop)
+                    if effects.attempted.contains("mixer_focus_click") {
+                        guard completedFocusClick else {
+                            effects.reason = "mixer_focus_click_unverified"; return nil
+                        }
+                        focusAcquired = true
+                    }
+                }
+                // Only wait for our completed paired click; it grants no Help,
+                // Select All or inverse authority until the actual source below
+                // independently observes its exact physical focus. No retry click.
+                guard completedFocusClick || headerFocus.permits() else { break }
+                do { try await Task.sleep(for: .milliseconds(25)) } catch { break }
+            }
+            guard let source, CFEqual(source.focus, pair.strip.strip),
+                  CFEqual(source.binding.mixer, pair.strip.mixer),
+                  source.permits(), capturedFocusCanBeRestored(headerFocus: headerFocus, inverseSource: source)
+            else { effects.reason = "mixer_focus_acquisition_unverified"; return nil }
+            effects.changed.append("keyboard_focus")
+            readFocusScope?.retainMixerInverseFocus(source)
+            defer { readFocusScope?.retainMixerInverseFocus(nil) }
+            let nested = OwnedMixerObservationNavigation(window: window, runtime: runtime,
+                expectedProject: nil, requiresProjectReference: false, referenceIsCurrent: referenceIsCurrent)
+            let selected: [AXMixerStripBinding.Binding]?
+            if focusAcquired, let nested, CFEqual(nested.focus, source.focus),
+               nested.document.utf8.elementsEqual(document.utf8),
+               nested.headers.count == headers.count, zip(nested.headers, headers).allSatisfy({ CFEqual($0, $1) }) {
+                selected = await nested.observeWholeStripSelection(readFocusScope: readFocusScope, stoppingWhen: stop)
+                effects.attempted += nested.effects.attempted.filter { !effects.attempted.contains($0) }
+                effects.changed += nested.effects.changed.filter { !effects.changed.contains($0) }
+                if nested.effects.navigationPerformed && nested.effects.restoration != "restored" {
+                    effects.reason = nested.effects.reason ?? "mixer_selection_restoration_unverified"
+                    return nil
+                }
+            } else { selected = nil }
+            guard await restoreCapturedFocusAfterReveal(stripMixer: pair.strip.mixer,
+                headerFocus: headerFocus, inverseSource: source, mouse: mouse,
+                selectionOrigin: { current in CFEqual(current, source.focus) && source.permits() },
+                stoppingWhen: stop), headerFocus.permits(), sameFocus() else {
+                if effects.reason == "header_focus_release_unverified" { readFocusScope?.retain(nil) }
+                effects.reason = effects.reason ?? "mixer_focus_restoration_unverified"; return nil
+            }
+            effects.changed.append("keyboard_focus_restoration")
+            effects.restoration = "restored"
+            return selected
+        }
+
+        /// One blank hit on the original observed pair, not a descendant/control
+        /// click or a search for another focus target. Native ACK alone is not focus.
+        private func clickOriginalPairBlankFocus(
+            headerFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus,
+            association: HeldSelectionAssociation, pair: HeldSelectionAssociation.Pair,
+            mouse: AXMouseHelper.Runtime, stoppingWhen stop: @escaping @Sendable () -> Bool
+        ) async -> Bool {
+            func frame() -> CGRect? {
+                let values = AXHelpers.getNonHelpAttributes(pair.strip.strip,
+                    [kAXPositionAttribute, kAXSizeAttribute] as [String], runtime: runtime.ax,
+                    permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+                guard case .success(.some(let p)) = values[0], case .success(.some(let s)) = values[1],
+                      let point = AXHelpers.point(fromRawAttribute: p), let size = AXHelpers.size(fromRawAttribute: s),
+                      point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
+                      size.width > 0, size.height > 0 else { return nil }
+                return CGRect(origin: point, size: size)
+            }
+            guard await stillOwned(stoppingWhen: stop), sameFocus(), headerFocus.permits(),
+                  capturedFocusCanBeRestored(headerFocus: headerFocus),
+                  association.permitsOriginalMixerFocusTarget(pair), let heldFrame = frame() else { return false }
+            // The center can contain a musical control. One fixed upper-quarter
+            // point is eligible only when AX independently hits the blank strip CF.
+            let point = CGPoint(x: heldFrame.midX, y: heldFrame.minY + heldFrame.height / 4)
+            guard point.x.isFinite, point.y.isFinite,
+                  let prepared = mouse.prepareMouseClick(point, 1), let hitTest = runtime.ax.elementAtPosition,
+                  case .success(.some(let hit)) = hitTest(acquiredApp, point), CFEqual(hit, pair.strip.strip),
+                  await stillOwned(stoppingWhen: stop), sameFocus(), headerFocus.permits(),
+                  capturedFocusCanBeRestored(headerFocus: headerFocus), association.permitsOriginalMixerFocusTarget(pair),
+                  await referenceIsCurrent(), !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  frame() == heldFrame,
+                  case .success(.some(let decidingHit)) = hitTest(acquiredApp, point), CFEqual(decidingHit, pair.strip.strip),
+                  let current: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+                  CFEqual(current, focus),
+                  let main: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXMainWindowAttribute as String, runtime: runtime.ax),
+                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedWindowAttribute as String, runtime: runtime.ax),
+                  CFEqual(main, window), CFEqual(focusedWindow, window),
+                  AXHelpers.getTitle(window, runtime: runtime.ax)?.utf8.elementsEqual(title.utf8) == true,
+                  case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime),
+                  currentDocument.utf8.elementsEqual(document.utf8),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            effects.attempted.append("mixer_focus_click")
+            guard prepared.postDown() else { return false }
+            return prepared.postUp()
+        }
+
         func observeWholeStripSelection(readFocusScope: OwnedTrackStackObservationNavigation.ReadFocusScope? = nil,
                                        stoppingWhen stop: @escaping @Sendable () -> Bool) async -> [AXMixerStripBinding.Binding]? {
             guard !effects.navigationPerformed, await stillOwned(stoppingWhen: stop), sameFocus(),
@@ -1024,6 +1163,33 @@ extension AccessibilityChannel {
             mixerSelectionRestorationPending = true
             let accepted = AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax)
             menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
+            if accepted {
+                // A successful dispatch can settle after its ACK. Observe at
+                // most three owned states before cancelling a still-open menu;
+                // never retry the leaf or manufacture its selected children.
+                for attempt in 0..<3 {
+                    guard await held() else {
+                        _ = await dismissOwnedMenu(stoppingWhen: stop)
+                        effects.reason = "mixer_global_selection_unverified"; return nil
+                    }
+                    if attempt > 0 {
+                        menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
+                    }
+                    if !menuOpen {
+                        guard sameFocus(), passive.permits(),
+                              let observed = elements(kAXSelectedChildrenAttribute as String), subset(observed, of: strips) else {
+                            effects.reason = "mixer_global_selection_unverified"; return nil
+                        }
+                        if sameSet(observed, strips) { break }
+                    }
+                    guard attempt < 2 else { break }
+                    do { try await Task.sleep(for: .milliseconds(25)) }
+                    catch {
+                        _ = await dismissOwnedMenu(stoppingWhen: stop)
+                        effects.reason = "navigation_cancelled"; return nil
+                    }
+                }
+            }
             guard await dismissOwnedMenu(stoppingWhen: stop), await held(), sameFocus(), passive.permits(),
                   let selected = elements(kAXSelectedChildrenAttribute as String), subset(selected, of: strips) else {
                 effects.reason = "mixer_global_selection_unverified"; return nil
@@ -1125,11 +1291,15 @@ extension AccessibilityChannel {
         /// inspection and final visibility reuse the same exact retained workspace
         /// proof; an ACK or the target's AXFocused value alone is not restoration.
         private func restoreCapturedFocusAfterReveal(afterHide: Bool = false, stripMixer: AXUIElement? = nil,
+                                                     headerFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus? = nil,
+                                                     inverseSource: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus? = nil,
+                                                     mouse: AXMouseHelper.Runtime? = nil,
                                                      selectionOrigin: ((AXUIElement) async -> Bool)? = nil,
                                                      stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
             let pid = acquiredPID
             let app = acquiredApp
-            guard (effects.attempted.contains("mixer_visibility") || (selectionOrigin != nil && mixerSelectionRestorationPending)),
+            guard (effects.attempted.contains("mixer_visibility") || (selectionOrigin != nil && mixerSelectionRestorationPending)
+                    || (selectionOrigin != nil && headerFocus != nil && effects.attempted.contains("mixer_focus_acquisition"))),
                   !focusRestoreAttempted,
                   runtime.logicProPID() == pid,
                   let acquiredCurrentApp = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, acquiredCurrentApp), let bar,
@@ -1140,7 +1310,8 @@ extension AccessibilityChannel {
                   !CFEqual(current, focus), !CFEqual(current, window),
                   await selectionOrigin?(current) ?? (AXHelpers.getRole(current, runtime: runtime.ax) == kAXGroupRole as String
                     && isOwnedVisibilityFocus(current, afterHide: afterHide)),
-                  selectionOrigin == nil || capturedFocusCanBeRestored(stripMixer: stripMixer),
+                  selectionOrigin == nil || capturedFocusCanBeRestored(stripMixer: stripMixer,
+                    headerFocus: headerFocus, inverseSource: inverseSource),
                   let focusPath, let currentPath = Self.retainedPath(focus, in: window, runtime: runtime.ax),
                   currentPath.count == focusPath.count, zip(currentPath, focusPath).allSatisfy({ CFEqual($0, $1) }),
                   AXHelpers.isAttributeSettable(focus, kAXFocusedAttribute as String, runtime: runtime.ax) == true,
@@ -1157,8 +1328,53 @@ extension AccessibilityChannel {
             // Positive closed-menu evidence ends the earlier acquired-menu flag.
             menuOpen = false
             focusRestoreAttempted = true
-            guard AXHelpers.setAttribute(focus, kAXFocusedAttribute as String, NSNumber(value: true), runtime: runtime.ax),
-                  await stillOwned(stoppingWhen: stop), ownedMenuFocus(), sameFocus(),
+            if let headerFocus {
+                guard let inverseSource, let mouse, let hitTest = runtime.ax.elementAtPosition else { return false }
+                func frame() -> CGRect? {
+                    let values = AXHelpers.getNonHelpAttributes(focus,
+                        [kAXPositionAttribute, kAXSizeAttribute] as [String], runtime: runtime.ax,
+                        permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+                    guard case .success(.some(let p)) = values[0], case .success(.some(let s)) = values[1],
+                          let point = AXHelpers.point(fromRawAttribute: p), let size = AXHelpers.size(fromRawAttribute: s),
+                          point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
+                          size.width > 0, size.height > 0 else { return nil }
+                    let result = CGRect(origin: point, size: size)
+                    return result.midX.isFinite && result.midY.isFinite ? result : nil
+                }
+                // One single click on the exact retained passive field, never a
+                // rename setter or another descendant. Its selection must already
+                // be exclusive: clicking cannot silently clear selected peers.
+                let expected = zip(headers, selected).filter { $0.1 }.map { $0.0 }
+                guard expected.count == 1, CFEqual(expected[0], headerFocus.header),
+                      headerFocus.permitsOwnedMixerInverseMetadata(from: inverseSource),
+                      case .success(.elements(let original)) = AXHelpers.getAXUIElementArrayRead(
+                        headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
+                      original.count == expected.count, zip(original, expected).allSatisfy({ CFEqual($0, $1) }),
+                      let heldFrame = frame(),
+                      let prepared = mouse.prepareMouseClick(CGPoint(x: heldFrame.midX, y: heldFrame.midY), 1),
+                      case .success(.some(let hit)) = hitTest(app, CGPoint(x: heldFrame.midX, y: heldFrame.midY)), CFEqual(hit, focus),
+                      await stillOwned(stoppingWhen: stop),
+                      case .success(.elements(let deciding)) = AXHelpers.getAXUIElementArrayRead(
+                        headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
+                      deciding.count == original.count, zip(deciding, original).allSatisfy({ CFEqual($0, $1) }),
+                      frame() == heldFrame,
+                      case .success(.some(let decidingHit)) = hitTest(app, CGPoint(x: heldFrame.midX, y: heldFrame.midY)), CFEqual(decidingHit, focus),
+                      headerFocus.permitsOwnedMixerInverseMetadata(from: inverseSource), !stop(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                effects.attempted.append("header_focus_click")
+                guard prepared.postDown() else { return false }
+                // Complete only this preconstructed pair: no AX/read/await between halves.
+                guard prepared.postUp() else {
+                    effects.reason = "header_focus_release_unverified"; return false
+                }
+                guard case .success(.elements(let after)) = AXHelpers.getAXUIElementArrayRead(
+                        headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
+                      after.count == original.count, zip(after, original).allSatisfy({ CFEqual($0, $1) }) else { return false }
+            } else {
+                guard AXHelpers.setAttribute(focus, kAXFocusedAttribute as String,
+                    NSNumber(value: true), runtime: runtime.ax) else { return false }
+            }
+            guard await stillOwned(stoppingWhen: stop), ownedMenuFocus(), sameFocus(),
                   runtime.logicProPID() == pid,
                   let restoredApp = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, restoredApp),
                   let restoredPath = Self.retainedPath(focus, in: window, runtime: runtime.ax),

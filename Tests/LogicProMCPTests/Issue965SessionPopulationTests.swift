@@ -78,6 +78,8 @@ private func makeCapture(
     fileTrackCount: Int? = nil,
     projectFileNotBound: Bool = false,
     referencesEnabled: Bool = false,
+    registryEpoch: UInt64 = 3,
+    topologyGeneration: UInt64 = 0,
     issued: IssuedTrackReferences? = nil,
     projectIssuance: ProjectIssuance? = nil
 ) -> Observation.Capture {
@@ -104,7 +106,7 @@ private func makeCapture(
         projectFileNotBound: projectFileNotBound,
         requestedProjectMatches: nil,
         referencesEnabled: referencesEnabled,
-        targetSnapshot: referencesEnabled ? TargetRegistrySnapshot(projectEpoch: 3, topologyGeneration: 0) : nil,
+        targetSnapshot: referencesEnabled ? TargetRegistrySnapshot(projectEpoch: registryEpoch, topologyGeneration: topologyGeneration) : nil,
         issued: issued,
         projectIssuance: projectIssuance,
         beganAt: fixedNow.addingTimeInterval(-0.01),
@@ -145,6 +147,24 @@ private func overallComplete(_ report: [String: Any]) throws -> Bool {
 
 @Suite("#965 session population: tracks coverage")
 struct Issue965TracksCoverageTests {
+    @Test func captureProvenanceRetainsTopologyAcrossIndependentEpochCounters() throws {
+        let report = try encodedReport(makeCapture(tracks: [], referencesEnabled: true,
+                                                   registryEpoch: 1, topologyGeneration: 7))
+        #expect(try section(report, "project")["project_epoch"] as? UInt64 == 3)
+        #expect(try section(report, "project")["topology_generation"] as? UInt64 == 7)
+    }
+
+    @Test func captureProvenanceDoesNotInventUnobservedHostOrTopology() throws {
+        let unbound = try encodedReport(makeCapture(tracks: []))
+        let host = try section(unbound, "host_observation")
+        #expect(host["logic_version"] is NSNull)
+        #expect(host["logic_build"] is NSNull)
+        #expect(try section(unbound, "project")["topology_generation"] is NSNull)
+
+        let bound = try encodedReport(makeCapture(tracks: [], referencesEnabled: true))
+        #expect(try section(bound, "project")["topology_generation"] as? UInt64 == 0)
+    }
+
     @Test func coldCacheIsUnavailableNotEmpty() throws {
         let report = try encodedReport(makeCapture(tracks: [], tracksFetchedAt: .distantPast))
         let tracks = try section(report, "tracks")

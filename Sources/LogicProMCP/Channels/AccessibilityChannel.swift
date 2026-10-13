@@ -340,6 +340,7 @@ actor AccessibilityChannel: Channel {
         var reusesAssociationPresentation = false
         var association: HeldSelectionAssociation?
         var routingEffects = SessionPopulationObservation.UIEffects()
+        var exposedMixerEndEffects = SessionPopulationObservation.UIEffects()
         if request.allowUINavigation, (request.domains.contains(.routing) || request.domains.contains(.strips)),
            !request.domains.contains(.associations),
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
@@ -503,6 +504,7 @@ actor AccessibilityChannel: Channel {
             let mixerNavigationPerformed = navigation?.effects.navigationPerformed == true
             let stackNavigationPerformed = stackNavigation?.effects.navigationPerformed == true
             var associationCapturedAfterStackExposure = false
+            var exposedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus?
             if association == nil, request.allowUINavigation, request.domains.contains(.associations),
                population.stable, stackNavigationPerformed, !mixerNavigationPerformed,
                let stack = stackNavigation, stack.effects.reason == nil,
@@ -528,6 +530,7 @@ actor AccessibilityChannel: Channel {
                 // only their actual exposed CFs, never a name/count/index join.
                 association = candidate
                 associationCapturedAfterStackExposure = true
+                exposedHeaderFocus = heldFocus
                 readFocusScope?.retainAssociation(candidate)
             }
             func collectRouting(_ original: SessionPopulationObservation.FreshPopulation) async throws -> SessionPopulationObservation.FreshPopulation {
@@ -765,9 +768,42 @@ actor AccessibilityChannel: Channel {
             }
             // Compose only after the original selection observation has restored
             // and reconciled its rows. No pair is inferred for an unobserved strip.
-            if !sharedAcquisitionPerformed, request.allowUINavigation, request.scope == .wholeProject, request.needsTracks, request.domains.contains(.strips),
-               population.stable, let navigation,
-               let selected = await navigation.observeWholeStripSelection(readFocusScope: readFocusScope, stoppingWhen: stop) {
+            var selectedMixerPopulation: [AXMixerStripBinding.Binding]?
+            if !sharedAcquisitionPerformed, request.allowUINavigation, request.scope == .wholeProject,
+               request.needsTracks, request.domains.contains(.strips), population.stable {
+                if associationCapturedAfterStackExposure, let heldFocus = exposedHeaderFocus, let association,
+                   association.effects.restoration == "restored", association.effects.reason == nil,
+                   let owner = OwnedMixerObservationNavigation(window: heldFocus.window, runtime: runtime.logicRuntime,
+                        expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
+                        referenceIsCurrent: navigationReferenceIsCurrent),
+                   CFEqual(owner.focus, heldFocus.focus),
+                   let tracks = population.tracks, tracks.count == owner.headers.count,
+                   zip(tracks, owner.headers).allSatisfy({ row, header in
+                       row.physicalBinding.map { CFEqual($0.header, header) && CFEqual($0.window, owner.window)
+                           && $0.document.utf8.elementsEqual(owner.document.utf8) } == true
+                   }) {
+                    let pairs = population.selectionAssociations.filter { CFEqual($0.track.header, heldFocus.header) }
+                    if pairs.count == 1, let pair = pairs.first {
+                        // The original navigation baseline remains bound to the
+                        // collapsed rail. This distinct exposed owner completes
+                        // and inverses its focus excursion before stack cleanup.
+                        selectedMixerPopulation = await owner.observeWholeStripSelectionFromRetainedHeader(
+                            headerFocus: heldFocus, association: association, pair: pair,
+                            readFocusScope: readFocusScope,
+                            mouse: runtime.canPostEvents() ? runtime.observationMouseRuntime : nil, stoppingWhen: stop)
+                        exposedMixerEndEffects = owner.effects
+                        population.uiEffects = mergedEffects(population.uiEffects, owner.effects)
+                        if owner.effects.reason != nil
+                            || (owner.effects.navigationPerformed && owner.effects.restoration != "restored") {
+                            population.stable = false
+                        }
+                    }
+                } else if let navigation {
+                    selectedMixerPopulation = await navigation.observeWholeStripSelection(
+                        readFocusScope: readFocusScope, stoppingWhen: stop)
+                }
+            }
+            if population.stable, let selected = selectedMixerPopulation {
                 let refreshed = try await readExposedSessionPopulation(request: request, fileReader: fileReader,
                     exposure: stackNavigationPerformed ? stackNavigation?.exposure : nil,
                     stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
@@ -844,28 +880,31 @@ actor AccessibilityChannel: Channel {
             let stack = await stackNavigation?.restoreAfterInterruptedRead(stoppingWhen: stop) ?? .init()
             let mixer = await navigation?.restore(stoppingWhen: stop) ?? .init()
             let effects = mergedEffects(routingEffects,
-                mergedEffects(association?.effects ?? .init(), mergedEffects(stack, mixer)))
+                mergedEffects(exposedMixerEndEffects,
+                    mergedEffects(association?.effects ?? .init(), mergedEffects(stack, mixer))))
             throw SessionPopulationObservation.NavigationAcquisitionError(cause: error, effects: effects)
         }
     }
 
-    /// Locale is captured only beside the same held project's window/app. It does not
-    /// qualify population or a sort leaf, and unknown locale does not poison view reads.
-    private func readObservedUILocale(in window: AXUIElement, checking check: () throws -> Void) throws -> String? {
+    /// Host metadata is captured beside the same held project's window/app. It does not
+    /// qualify population or a sort leaf; unknown metadata does not poison view reads.
+    private func readObservedHost(in window: AXUIElement, checking check: () throws -> Void) throws
+        -> (locale: String?, version: ProcessUtils.LogicHostObservation?) {
         try check()
         let logic = runtime.logicRuntime
         guard let pid = logic.logicProPID(), let app = AXLogicProElements.appRoot(runtime: logic),
               let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-              CFEqual(main, window) else { return nil }
+              CFEqual(main, window) else { return (nil, nil) }
         try check()
         let reading = AXLogicProElements.logicUILocaleIdentifierRead(runtime: logic)
+        let version = logic.observeHost(pid)
         try check()
         guard logic.logicProPID() == pid, let currentApp = AXLogicProElements.appRoot(runtime: logic), CFEqual(app, currentApp),
               let current: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-              CFEqual(current, window) else { return nil }
+              CFEqual(current, window) else { return (nil, nil) }
         try check()
-        if case .locale(let locale) = reading { return locale }
-        return nil
+        if case .locale(let locale) = reading { return (locale, version) }
+        return (nil, version)
     }
 
     private func readPresentationBaseline(stoppingWhen stop: @Sendable () -> Bool) throws -> SessionPopulationObservation.FreshPopulation? {
@@ -878,7 +917,7 @@ actor AccessibilityChannel: Channel {
         guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: logic),
               let title = AXHelpers.getTitle(window, runtime: logic.ax),
               case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic) else { return nil }
-        let localeBefore = try readObservedUILocale(in: window, checking: check)
+        let hostBefore = try readObservedHost(in: window, checking: check)
         let lookup = try AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: logic,
             requiresCompleteAbsence: true, checking: check)
         let transport = try AXLogicProElements.observedTransportActivity(in: window, runtime: logic, checking: check)
@@ -887,8 +926,8 @@ actor AccessibilityChannel: Channel {
               AXHelpers.getTitle(window, runtime: logic.ax)?.utf8.elementsEqual(title.utf8) == true,
               case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
               currentDocument.utf8.elementsEqual(document.utf8) else { return nil }
-        let localeAfter = try readObservedUILocale(in: window, checking: check)
-        let locale = localeBefore == localeAfter ? localeBefore : nil
+        let hostAfter = try readObservedHost(in: window, checking: check)
+        let locale = hostBefore.locale == hostAfter.locale ? hostBefore.locale : nil
         try check()
         let visible: Bool?
         switch lookup.lookup {
@@ -900,6 +939,7 @@ actor AccessibilityChannel: Channel {
         return .init(project: nil, tracks: nil, strips: nil, fileTrackCount: nil, beganAt: now, endedAt: now, stable: true,
             presentationObservation: .init(mixerVisible: visible, isPlaying: transport?.isPlaying, isRecording: transport?.isRecording,
                 uiLocale: locale),
+            hostObservation: hostBefore.version == hostAfter.version ? hostBefore.version : nil,
             presentationBinding: .init(window: window, title: title, document: document,
                 mixer: lookup.binding?.mixer, transport: transport, runtime: logic, uiLocale: locale,
                 mixerOwners: lookup.binding?.owners ?? []))
@@ -1098,6 +1138,7 @@ actor AccessibilityChannel: Channel {
             let mixerVisible: Bool?
             let transport: AXLogicProElements.ObservedTransportActivity?
             let uiLocale: String?
+            let hostObservation: ProcessUtils.LogicHostObservation?
             let hiddenView: HiddenView?
             let singlePageEnd: SinglePageEnd?
             let selectedTracks: SelectedTrackRead?
@@ -1167,7 +1208,7 @@ actor AccessibilityChannel: Channel {
             }
             let transport = try AXLogicProElements.observedTransportActivity(in: window, runtime: logic,
                 observingExposure: exposure, checking: checkAXRead)
-            let locale = try readObservedUILocale(in: window, checking: checkAXRead)
+            let host = try readObservedHost(in: window, checking: checkAXRead)
             let hiddenView = wantsTracks ? readHiddenView(headers, in: window) : nil
             let singlePageEnd = wantsTracks ? try readSinglePageEnd(headers, tracks: tracks, hiddenView: hiddenView, in: window) : nil
             let selectedTracks = wantsTracks ? try readSelectedTracks(headers, states: tracks, in: window) : nil
@@ -1175,7 +1216,8 @@ actor AccessibilityChannel: Channel {
             return Read(title: title, document: document, documentReadable: documentReadable,
                         headers: headers, mixer: mixer, mixerBinding: lookup.binding, mixerOwners: lookup.binding?.owners ?? [],
                         stripElements: stripElements, tracks: tracks, strips: strips,
-                        presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: locale,
+                        presentation: presentation, mixerVisible: mixerVisible, transport: transport, uiLocale: host.locale,
+                        hostObservation: host.version,
                         hiddenView: hiddenView, singlePageEnd: singlePageEnd, selectedTracks: selectedTracks)
         }
         func sameElements(_ lhs: [AXUIElement]?, _ rhs: [AXUIElement]?) -> Bool {
@@ -1376,6 +1418,7 @@ actor AccessibilityChannel: Channel {
                         isPlaying: transportStable ? before.transport?.isPlaying : nil,
                         isRecording: transportStable ? before.transport?.isRecording : nil,
                         uiLocale: sameBytes(before.uiLocale, after.uiLocale) ? before.uiLocale : nil),
+                    hostObservation: stable && before.hostObservation == after.hostObservation ? before.hostObservation : nil,
                     presentationBinding: stable && mixerStable && transportStable && path != nil && before.title != nil && before.document != nil
                         ? .init(window: window, title: before.title!, document: before.document!,
                             mixer: before.mixer, transport: before.transport, runtime: logic,

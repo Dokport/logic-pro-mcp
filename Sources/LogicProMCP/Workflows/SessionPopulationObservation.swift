@@ -25,6 +25,7 @@ enum SessionPopulationObservation {
         var uiEffects: UIEffects = .init()
         var mixerPresentation: MixerPresentation? = nil
         var presentationObservation: PresentationObservation? = nil
+        var hostObservation: ProcessUtils.LogicHostObservation? = nil
         var presentationBinding: PresentationBinding? = nil
         /// Temporary rows remain immutable request facts. Only an independent
         /// post-restoration reading may become the ordinary current cache.
@@ -637,6 +638,7 @@ enum SessionPopulationObservation {
         let overall: Overall
         let uiEffects: UIEffects
         var presentationObservation: PresentationObservation? = nil
+        var hostObservation: ProcessUtils.LogicHostObservation = .init()
 
         enum CodingKeys: String, CodingKey {
             case schema
@@ -657,6 +659,7 @@ enum SessionPopulationObservation {
             case overall
             case uiEffects = "ui_effects"
             case presentationObservation = "presentation_observation"
+            case hostObservation = "host_observation"
         }
     }
 
@@ -666,6 +669,7 @@ enum SessionPopulationObservation {
         let name: String
         let filePath: String?
         let projectEpoch: UInt64
+        var topologyGeneration: UInt64? = nil
 
         enum CodingKeys: String, CodingKey {
             case status
@@ -673,6 +677,17 @@ enum SessionPopulationObservation {
             case name
             case filePath = "file_path"
             case projectEpoch = "project_epoch"
+            case topologyGeneration = "topology_generation"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(status, forKey: .status)
+            try container.encodeIfPresent(projectRef, forKey: .projectRef)
+            try container.encode(name, forKey: .name)
+            try container.encodeIfPresent(filePath, forKey: .filePath)
+            try container.encode(projectEpoch, forKey: .projectEpoch)
+            try container.encode(topologyGeneration, forKey: .topologyGeneration)
         }
     }
 
@@ -1430,7 +1445,8 @@ enum SessionPopulationObservation {
                 projectRef: projectRef,
                 name: capture.project.name,
                 filePath: capture.project.filePath,
-                projectEpoch: capture.projectEpoch
+                projectEpoch: capture.projectEpoch,
+                topologyGeneration: capture.targetSnapshot?.topologyGeneration
             ),
             capture: CaptureWindow(
                 beganAt: ISO8601DateFormatter.cacheFormatter.string(from: capture.beganAt),
@@ -1453,7 +1469,8 @@ enum SessionPopulationObservation {
             color: color,
             overall: Overall(complete: incompleteDomains.isEmpty, incompleteDomains: incompleteDomains),
             uiEffects: capture.freshPopulation?.uiEffects ?? UIEffects(),
-            presentationObservation: capture.freshPopulation?.presentationObservation
+            presentationObservation: capture.freshPopulation?.presentationObservation,
+            hostObservation: capture.freshPopulation?.hostObservation ?? .init()
         )
     }
 

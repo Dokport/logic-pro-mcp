@@ -456,8 +456,8 @@ private actor ExactNameChannel: Channel {
 
 @Suite("#968 exact-local track naming adapter")
 struct Issue968ExactTrackNameAdapterTests {
-    @Test(arguments: ["swap", "collision", "multiple_selection", "unreadable_selection"])
-    func canonicalNameBatchKeepsUnsupportedCollisionsAndSelectionExplicit(_ kind: String) async throws {
+    @Test(arguments: ["multiple_selection", "unreadable_selection"])
+    func canonicalNameBatchKeepsUnsupportedSelectionExplicit(_ kind: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let f = ExactNameFixture()
@@ -476,8 +476,8 @@ struct Issue968ExactTrackNameAdapterTests {
                     Issue.record("the explicit naming policy must parse"); return
                 }
                 let names: [ProjectSessionAudit.ApprovedName] = [
-                    .init(target: "first", name: kind == "swap" ? "B" : "C"),
-                    .init(target: "second", name: kind == "swap" ? "A" : kind == "collision" ? "C" : "D")]
+                    .init(target: "first", name: "C"),
+                    .init(target: "second", name: "D")]
                 let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
                     names: names, capture: capture,
                     request: .init(domains: [.tracks, .strips, .associations]), snapshotCurrent: true)
@@ -492,10 +492,18 @@ struct Issue968ExactTrackNameAdapterTests {
         }
     }
 
-    @Test(arguments: ["healthy", "passive_name", "refuse_second", "cancel_second", "newer_first", "selection_ack_only", "peer_after_first", "editing_after_first", "project_after_first"])
-    func canonicalDistinctNamesShareOrderedReceiptsAndOwnedCompensation(_ change: String) async throws {
+    @Test(arguments: ["healthy", "passive_name", "refuse_second", "cancel_second", "newer_first", "selection_ack_only", "peer_after_first", "editing_after_first", "project_after_first",
+        "swap", "duplicate", "swap_refuse_second", "duplicate_cancel_second", "swap_cancel_after_both", "duplicate_cancel_after_both", "swap_newer_first", "duplicate_peer_after_first"])
+    func canonicalDistinctNamesShareOrderedReceiptsAndOwnedCompensation(_ scenario: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let swapping = scenario.hasPrefix("swap")
+                let duplicating = scenario.hasPrefix("duplicate")
+                let change = swapping ? String(scenario.dropFirst("swap".count)).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+                    : duplicating ? String(scenario.dropFirst("duplicate".count)).trimmingCharacters(in: CharacterSet(charactersIn: "_")) : scenario
+                let outcome = change.isEmpty ? "healthy" : change
+                let firstName = swapping ? "B" : "C"
+                let secondName = swapping ? "A" : duplicating ? "C" : "D"
                 let f = ExactNameFixture()
                 let (other, otherName) = f.appendTrack(name: "B", selected: false)
                 f.permitsSelection = true
@@ -519,7 +527,7 @@ struct Issue968ExactTrackNameAdapterTests {
                     Issue.record("the ordered distinct naming policy must parse"); return
                 }
                 let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
-                    names: [.init(target: "first", name: "C"), .init(target: "second", name: "D")],
+                    names: [.init(target: "first", name: firstName), .init(target: "second", name: secondName)],
                     capture: capture, request: request, snapshotCurrent: true)
                 let executable = try #require(sharedJSONObject(plan.json)?["executable"] as? Bool)
                 #expect(executable)
@@ -573,8 +581,8 @@ struct Issue968ExactTrackNameAdapterTests {
                 }
                 f.onPress = {
                     let secondPress = f.actedNameFields.last.map { CFEqual($0, otherName) } == true
-                    f.pressReportsFailure = secondPress && ["refuse_second", "newer_first"].contains(change)
-                    if secondPress && change == "newer_first" {
+                    f.pressReportsFailure = secondPress && ["refuse_second", "newer_first"].contains(outcome)
+                    if secondPress && outcome == "newer_first" {
                         f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Human")
                         f.builder.setAttribute(mirror, kAXValueAttribute as String, "Human")
                     }
@@ -590,19 +598,22 @@ struct Issue968ExactTrackNameAdapterTests {
                     await SystemDispatcher.handle(command: "saga_execute", params: [:], router: f.router,
                         cache: f.cache, targetRegistry: f.registry, dialogPresent: { false },
                         sagaJournal: journal, mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {
-                            if change == "cancel_second", f.writes == ["C"] {
+                            if outcome == "cancel_second", f.writes == [firstName] {
                                 #expect(await journal.cancel(idempotencyKey: key) == .requested)
                             }
-                            if change == "peer_after_first", f.writes == ["C"] {
+                            if outcome == "cancel_after_both", f.writes == [firstName, secondName] {
+                                #expect(await journal.cancel(idempotencyKey: key) == .requested)
+                            }
+                            if outcome == "peer_after_first", f.writes == [firstName] {
                                 f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Human")
                                 f.builder.setAttribute(mirror, kAXValueAttribute as String, "Human")
                             }
-                            if change == "editing_after_first", f.writes == ["C"] {
+                            if outcome == "editing_after_first", f.writes == [firstName] {
                                 let editor = f.builder.element(968_299)
                                 f.builder.setRole(editor, kAXTextAreaRole as String)
                                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
                             }
-                            if change == "project_after_first", f.writes == ["C"] {
+                            if outcome == "project_after_first", f.writes == [firstName] {
                                 f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                             }
                         }, liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
@@ -610,33 +621,33 @@ struct Issue968ExactTrackNameAdapterTests {
                         sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let body = try #require(sharedJSONObject(sharedToolText(await run())))
-                if ["healthy", "passive_name"].contains(change) {
+                if ["healthy", "passive_name"].contains(outcome) {
                     #expect(body["saga_state"] as? String == "completed")
                     let verified = try #require(body["verified"] as? Bool)
                     #expect(verified)
-                    #expect(f.writes == (change == "passive_name" ? ["D"] : ["C", "D"]))
+                    #expect(f.writes == (change == "passive_name" ? ["D"] : [firstName, secondName]))
                     #expect(f.menuEditorValueWrites == (change == "passive_name" ? ["C"] : []))
-                    #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == "C")
-                    #expect(f.builder.attributeValue(otherMirror, kAXValueAttribute as String) as? String == "D")
-                } else if ["newer_first", "peer_after_first"].contains(change) {
-                    #expect(f.writes == ["C"])
+                    #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == firstName)
+                    #expect(f.builder.attributeValue(otherMirror, kAXValueAttribute as String) as? String == secondName)
+                } else if ["newer_first", "peer_after_first"].contains(outcome) {
+                    #expect(f.writes == [firstName])
                     #expect(f.builder.attributeValue(f.field, kAXDescriptionAttribute as String) as? String == "Human")
                     #expect(body["saga_state"] as? String != "fullyCompensated")
-                    if change == "newer_first" {
+                    if outcome == "newer_first" {
                         let steps = try #require(body["steps"] as? [[String: Any]])
                         let detail = try #require((steps[1]["result"] as? [String: Any])?["detail"] as? String)
                         #expect(detail.contains("not_restored"))
                     }
-                } else if ["editing_after_first", "project_after_first"].contains(change) {
-                    #expect(f.writes == ["C"])
+                } else if ["editing_after_first", "project_after_first"].contains(outcome) {
+                    #expect(f.writes == [firstName])
                     #expect(f.selectionWrites.isEmpty)
                     #expect(body["saga_state"] as? String != "completed")
                 } else {
                     #expect(body["saga_state"] as? String == "fullyCompensated")
-                    #expect(f.writes == ["C", "A"])
+                    #expect(f.writes == (outcome == "cancel_after_both" ? [firstName, secondName, "B", "A"] : [firstName, "A"]))
                     #expect(f.builder.attributeValue(otherName, kAXDescriptionAttribute as String) as? String == "B")
                 }
-                if change != "newer_first" {
+                if outcome != "newer_first" {
                     let originalSelected = try #require(AXValueExtractors.extractSelectedState(f.header, runtime: runtime.ax))
                     let otherSelected = try #require(AXValueExtractors.extractSelectedState(other, runtime: runtime.ax))
                     #expect(originalSelected)

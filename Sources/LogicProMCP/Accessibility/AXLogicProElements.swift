@@ -29,6 +29,8 @@ enum AXLogicProElements {
         let focusedApplicationPID: @Sendable () -> pid_t?
         /// #1084: nil in ordinary fake runtimes; production explicitly supplies its live probe.
         let observeFrontmost: (@Sendable () -> ProcessUtils.KeyboardOwnershipObservation)?
+        /// Capture metadata for the exact observed PID; fake runtimes remain unknown by default.
+        let observeHost: @Sendable (pid_t) -> ProcessUtils.LogicHostObservation?
 
         init(
             logicProPID: @escaping @Sendable () -> pid_t?,
@@ -40,7 +42,8 @@ enum AXLogicProElements {
             onScreenWindowList: @escaping @Sendable () -> [[String: Any]]? = Runtime.liveOnScreenWindowList,
             postPopupMenuEscape: @escaping @Sendable () -> Void = Runtime.livePostPopupMenuEscape,
             focusedApplicationPID: @escaping @Sendable () -> pid_t? = { nil },
-            observeFrontmost: (@Sendable () -> ProcessUtils.KeyboardOwnershipObservation)? = nil
+            observeFrontmost: (@Sendable () -> ProcessUtils.KeyboardOwnershipObservation)? = nil,
+            observeHost: @escaping @Sendable (pid_t) -> ProcessUtils.LogicHostObservation? = { _ in nil }
         ) {
             self.logicProPID = logicProPID
             self.ax = ax
@@ -52,6 +55,7 @@ enum AXLogicProElements {
             self.postPopupMenuEscape = postPopupMenuEscape
             self.focusedApplicationPID = focusedApplicationPID
             self.observeFrontmost = observeFrontmost
+            self.observeHost = observeHost
         }
 
         static let liveOnScreenWindowList: @Sendable () -> [[String: Any]]? = {
@@ -76,7 +80,8 @@ enum AXLogicProElements {
                 await AppleScriptChannel.executeAppleScript(script, timeout: timeout)
             },
             focusedApplicationPID: { ProcessUtils.focusedApplicationPID() },
-            observeFrontmost: { ProcessUtils.keyboardOwnershipObservation() }
+            observeFrontmost: { ProcessUtils.keyboardOwnershipObservation() },
+            observeHost: { ProcessUtils.logicHostObservation(pid: $0) }
         )
     }
 

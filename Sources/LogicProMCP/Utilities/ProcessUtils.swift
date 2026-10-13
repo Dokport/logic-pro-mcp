@@ -354,6 +354,34 @@ enum ProcessUtils {
         logicProVersion(runtime: .production)
     }
 
+    struct LogicHostObservation: Encodable, Equatable, Sendable {
+        var logicVersion: String? = nil
+        var logicBuild: String? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case logicVersion = "logic_version"
+            case logicBuild = "logic_build"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(logicVersion, forKey: .logicVersion)
+            try container.encode(logicBuild, forKey: .logicBuild)
+        }
+    }
+
+    /// Metadata from the observed process's bundle, never an installed-app fallback.
+    static func logicHostObservation(pid: pid_t) -> LogicHostObservation? {
+        guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+              let identifier = app.bundleIdentifier, LogicProTarget.isKnownBundleID(identifier),
+              let url = app.bundleURL, let bundle = Bundle(url: url),
+              bundle.bundleIdentifier == identifier else { return nil }
+        let observation = LogicHostObservation(
+            logicVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            logicBuild: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+        return app.isTerminated ? nil : observation
+    }
+
     static func logicProVersion(runtime: Runtime) -> String? {
         let bundleURL = runtime.logicProBundleURL()
         guard let bundleURL, let bundle = Bundle(url: bundleURL) else {
