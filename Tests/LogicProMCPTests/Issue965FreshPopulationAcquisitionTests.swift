@@ -3705,7 +3705,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                              "restore_focus_selection_drift", "full_population_restore_focus",
                              "full_population_foreign_focus", "full_population_document",
                              "full_population_shared", "full_population_shared_final_value", "full_population_shared_final_owner",
-                             "full_population_shared_final_document", "full_population_shared_final_filter"])
+                             "full_population_shared_final_document", "full_population_shared_final_filter",
+                             "before_leaf_transport_document"])
     func registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: Int, fault: String) async throws {
         let fixture = hiddenViewFixture(shown: fault != "hidden_off")
         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/MixerPopulation.logicx")
@@ -3921,12 +3922,22 @@ struct Issue965FreshPopulationAcquisitionTests {
                     if fault == "unread_selection" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
                     let opened = fixture.events.recorded.contains("open_edit")
                     let selected = fixture.events.recorded.contains("select_all")
+                    if fault == "before_leaf_transport_document", opened, !selected {
+                        selectionReads.record("leaf_deciding")
+                    }
                     if (fault == "before_menu_document" && selectionReads.count == 2)
                         || (fault == "before_leaf_document" && opened && !selected)
                         || (fault == "inverse_deciding_document" && selected && selectionReads.recorded.filter({ $0 == "after_select_all" }).count == 1) {
                         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     }
                     if selected { selectionReads.record("after_select_all") }
+                }
+                if fault == "before_leaf_transport_document", CFEqual(element, controls[1]),
+                   attribute == kAXValueAttribute as String, selectionReads.recorded.contains("leaf_deciding") {
+                    // The final held transport read still returns stopped, but its
+                    // deciding native read changes the project before Select All.
+                    fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    selectionReads.record("transport_document_changed")
                 }
                 if strips.contains(where: { CFEqual($0, element) }),
                    [kAXValueAttribute as String, kAXSelectedTextAttribute as String].contains(attribute) {
@@ -3957,6 +3968,11 @@ struct Issue965FreshPopulationAcquisitionTests {
         } else { #expect(section["coverage"] as? String != "complete") }
         if fault == "before_menu_document" { #expect(!fixture.events.recorded.contains("open_edit")) }
         if fault == "before_leaf_document" { #expect(!fixture.events.recorded.contains("select_all")) }
+        if fault == "before_leaf_transport_document" {
+            #expect(selectionReads.recorded.contains("leaf_deciding"))
+            #expect(selectionReads.recorded.contains("transport_document_changed"))
+            #expect(!fixture.events.recorded.contains("select_all"))
+        }
         if fault == "inverse_deciding_document" { #expect(!fixture.events.recorded.contains("restore_mixer_selection")) }
         if fullPopulation && originalCount == 1 {
             #expect(fixture.events.recorded.filter { $0 == "association_select" }.count == 2)
