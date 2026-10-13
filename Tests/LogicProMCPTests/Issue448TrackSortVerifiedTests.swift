@@ -30,6 +30,9 @@ private actor TrackSortStateBChannel: Channel {
         if let runtime, operation == "track.sort_verified" {
             return AccessibilityChannel.defaultSortTracks(params: params, runtime: runtime)
         }
+        if let runtime, operation == "view.set_mixer_visibility" {
+            return await AccessibilityChannel.defaultSetMixerVisibility(params: params, runtime: runtime)
+        }
         return result
     }
 
@@ -44,6 +47,9 @@ private final class TrackSortActionProbe: @unchecked Sendable {
     private var postPressRailReadCount = 0
     private var enabledReadCallbacks = 0
     private var helpReads = 0
+    var viewEvents: [String] = []
+    var actionOrder: [String] = []
+    var mixerShowing = false
 
     func recordHelpRead() { lock.lock(); helpReads += 1; lock.unlock() }
     var helpReadCount: Int { lock.lock(); defer { lock.unlock() }; return helpReads }
@@ -112,7 +118,8 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         windowsReadStatus: AXHelpers.AXStatusError? = nil,
         railRoleReadStatus: AXHelpers.AXStatusError? = nil,
         menuEnabledReadStatus: AXHelpers.AXStatusError? = nil,
-        onMenuEnabledRead: (@Sendable () -> Void)? = nil
+        onMenuEnabledRead: (@Sendable () -> Void)? = nil,
+        includingMixerView: Bool = false
     ) {
         precondition(names.count == 3)
         let builder = FakeAXRuntimeBuilder()
@@ -131,8 +138,10 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         let sortBy = builder.element(448_007)
         let sortByName = builder.element(448_008)
         let sortByCreation = builder.element(448_009)
+        let view = builder.element(448_010), mixerToggle = builder.element(448_011), mixer = builder.element(448_012)
 
         builder.setAttribute(app, kAXMainWindowAttribute as String, arrange)
+        builder.setAttribute(app, kAXFocusedWindowAttribute as String, arrange)
         builder.setAttribute(app, kAXMenuBarAttribute as String, menuBar)
         builder.setChildren(arrange, [rail])
         builder.setAttribute(rail, kAXRoleAttribute as String, kAXGroupRole as String)
@@ -142,6 +151,7 @@ private struct TrackSortAXFixture: @unchecked Sendable {
             let header = builder.element(448_100 + offset)
             builder.setAttribute(header, kAXRoleAttribute as String, kAXLayoutItemRole as String)
             builder.setAttribute(header, kAXTitleAttribute as String, observedNames?[offset] ?? names[offset])
+            builder.setAttribute(header, kAXSelectedAttribute as String, false)
             if collapsedStackAt == offset {
                 let disclosure = builder.element(448_200 + offset)
                 builder.setAttribute(disclosure, kAXRoleAttribute as String, kAXDisclosureTriangleRole as String)
@@ -168,6 +178,24 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         builder.setChildren(menuBar, [file, edit, track])
         builder.setChildren(track, [sortBy])
         builder.setChildren(sortBy, [sortByName, sortByCreation])
+        if includingMixerView {
+            builder.setAttribute(app, kAXFrontmostAttribute as String, true)
+            builder.setRole(arrange, kAXWindowRole as String)
+            for item in [file, edit, track] { builder.setRole(item, kAXMenuBarItemRole as String) }
+            builder.setRole(view, kAXMenuBarItemRole as String)
+            builder.setAttribute(view, kAXTitleAttribute as String, "보기")
+            builder.setAttribute(view, kAXSelectedAttribute as String, false)
+            builder.setActionNames(view, [kAXPressAction as String, kAXCancelAction as String])
+            builder.setRole(mixerToggle, kAXMenuItemRole as String)
+            builder.setAttribute(mixerToggle, kAXTitleAttribute as String, "믹서 보기")
+            builder.setAttribute(mixerToggle, kAXEnabledAttribute as String, true)
+            builder.setActionNames(mixerToggle, [kAXPressAction as String])
+            builder.setChildren(view, [mixerToggle])
+            builder.setChildren(menuBar, [file, edit, track, view])
+            builder.setRole(mixer, kAXGroupRole as String)
+            builder.setAttribute(mixer, kAXIdentifierAttribute as String, "Mixer")
+            builder.setChildren(mixer, [])
+        }
 
         let ax = builder.makeAXRuntime(
             appElement: app,
@@ -221,11 +249,34 @@ private struct TrackSortAXFixture: @unchecked Sendable {
             },
             setAttributeHandler: nil,
             performActionHandler: { element, action in
+                if includingMixerView, CFEqual(element, view) {
+                    if action == kAXPressAction as String {
+                        probe.viewEvents.append("open_view")
+                        builder.setAttribute(view, kAXSelectedAttribute as String, true)
+                        return true
+                    }
+                    if action == kAXCancelAction as String {
+                        probe.viewEvents.append("cancel_view")
+                        builder.setAttribute(view, kAXSelectedAttribute as String, false)
+                        return true
+                    }
+                }
+                if includingMixerView, CFEqual(element, mixerToggle), action == kAXPressAction as String {
+                    probe.mixerShowing.toggle()
+                    probe.viewEvents.append(probe.mixerShowing ? "show_mixer" : "hide_mixer")
+                    probe.actionOrder.append(probe.mixerShowing ? "show_mixer" : "hide_mixer")
+                    let children = builder.makeAXRuntime(appElement: app).children(arrange)
+                    builder.setChildren(arrange, children.filter { !CFEqual($0, mixer) } + (probe.mixerShowing ? [mixer] : []))
+                    builder.setAttribute(mixerToggle, kAXTitleAttribute as String, probe.mixerShowing ? "믹서 가리기" : "믹서 보기")
+                    builder.setAttribute(view, kAXSelectedAttribute as String, false)
+                    return true
+                }
                 guard action == kAXPressAction as String,
                       [sortByName, sortByCreation].contains(where: { CFEqual($0, element) }) else {
                     return false
                 }
                 probe.recordPress()
+                probe.actionOrder.append(CFEqual(element, sortByCreation) ? "sort_inverse" : "sort_forward")
                 if let namesAfterPress {
                     let actualNames = CFEqual(element, sortByCreation) ? names : namesAfterPress
                     for (index, name) in actualNames.enumerated() {
@@ -261,12 +312,21 @@ private struct TrackSortAXFixture: @unchecked Sendable {
 struct Issue448TrackSortVerifiedTests {
     @Test(arguments: [false, true])
     func canonicalFlatNameSortUsesItsMeasuredLeafAndOwnedCreationDateInverse(cancelAfterSort: Bool) async throws {
+        try await canonicalSort(cancelAfterSort: cancelAfterSort)
+    }
+
+    @Test(arguments: ["forward", "cancel_sort", "cancel_view", "view_refuses", "foreign_project", "unowned_name"])
+    func canonicalFlatSortAndMixerFinalViewUseTheirOwnedSteps(mode: String) async throws {
+        try await canonicalSort(cancelAfterSort: mode == "cancel_sort", composedMode: mode)
+    }
+
+    private func canonicalSort(cancelAfterSort: Bool, composedMode: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 // Logic's physical header CFs can stay at their rail indexes
                 // while contents move. The existing unique-name tier must decide order.
                 let f = TrackSortAXFixture(orderAfterPress: [0, 1, 2], expectedReferenceOrder: [1, 0, 2],
-                    namesAfterPress: ["Bass", "Kick", "Piano"])
+                    namesAfterPress: ["Bass", "Kick", "Piano"], includingMixerView: composedMode != nil)
                 let project = ProjectInfo(name: "SortFixture", filePath: "/tmp/SortFixture.logicx")
                 f.builder.setAttribute(f.arrangeWindow, kAXTitleAttribute as String, "SortFixture")
                 f.builder.setAttribute(f.arrangeWindow, kAXDocumentAttribute as String, "file:///tmp/SortFixture.logicx")
@@ -331,11 +391,13 @@ struct Issue448TrackSortVerifiedTests {
                 #expect(await cache.retainSessionReport(id: capture.captureID,
                     json: String(decoding: try JSONEncoder().encode(report), as: UTF8.self),
                     capturedEpoch: capture.projectEpoch, capturedPath: project.filePath, capture: capture, request: request))
+                var presentation: [String: Value] = ["sort": .object(["criterion": .string("track_name"),
+                    "expected_order": .array([order[1], order[0], order[2]].map { .string($0.rawValue) }),
+                    "inverse_criterion": .string("creation_date")])]
+                if composedMode != nil { presentation["mixer_visible"] = .bool(true) }
                 let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
                     "project_ref": .string(projectRef.rawValue), "targets": .array([]),
-                    "presentation": .object(["sort": .object(["criterion": .string("track_name"),
-                        "expected_order": .array([order[1], order[0], order[2]].map { .string($0.rawValue) }),
-                        "inverse_criterion": .string("creation_date")])])]
+                    "presentation": .object(presentation)]
                 guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
                     Issue.record("the supported flat sort policy must parse"); return
                 }
@@ -356,15 +418,47 @@ struct Issue448TrackSortVerifiedTests {
                         if cancelAfterSort, f.actionProbe.pressCount == 1 {
                             #expect(await journal.cancel(idempotencyKey: key) == .requested)
                         }
+                        if composedMode == "cancel_view", f.actionProbe.mixerShowing {
+                            #expect(await journal.cancel(idempotencyKey: key) == .requested)
+                        }
+                        if composedMode == "foreign_project", f.actionProbe.pressCount == 1 {
+                            f.builder.setAttribute(f.arrangeWindow, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+                        }
+                        if composedMode == "unowned_name", f.actionProbe.pressCount == 1 {
+                            f.builder.setAttribute(f.initialHeaders[2], kAXTitleAttribute as String, "Human")
+                        }
+                        if composedMode == "view_refuses", f.actionProbe.pressCount == 1 {
+                            let menu = f.builder.element(448_003)
+                            f.builder.setChildren(menu, [f.builder.element(448_004), f.builder.element(448_005), f.builder.element(448_006)])
+                        }
                     }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
-                #expect(f.actionProbe.helpReadCount == helpReads, "The public no-Help population footprint must not acquire focus-moving Help during approved sort")
-                #expect(body["saga_state"] as? String == (cancelAfterSort ? "fullyCompensated" : "completed"))
-                #expect(f.actionProbe.pressCount == (cancelAfterSort ? 2 : 1))
+                if ["foreign_project", "unowned_name"].contains(composedMode) {
+                    let verified = try #require(body["verified"] as? Bool)
+                    #expect(!verified)
+                    #expect(!f.actionProbe.mixerShowing)
+                    #expect(f.actionProbe.viewEvents.isEmpty)
+                    #expect(f.actionProbe.pressCount == 1)
+                    return
+                }
+                let compensates = cancelAfterSort || composedMode == "cancel_view" || composedMode == "view_refuses"
+                if composedMode == nil {
+                    #expect(f.actionProbe.helpReadCount == helpReads, "The public no-Help population footprint must not acquire focus-moving Help during approved sort")
+                }
+                #expect(body["saga_state"] as? String == (compensates ? "fullyCompensated" : "completed"))
+                #expect(f.actionProbe.pressCount == (compensates ? 2 : 1))
+                if composedMode != nil {
+                    #expect(f.actionProbe.mixerShowing == !compensates)
+                    #expect(f.actionProbe.viewEvents.filter { $0 != "open_view" && $0 != "cancel_view" }
+                        == (cancelAfterSort || composedMode == "view_refuses" ? [] : compensates ? ["show_mixer", "hide_mixer"] : ["show_mixer"]))
+                    #expect(f.actionProbe.actionOrder == (cancelAfterSort || composedMode == "view_refuses"
+                        ? ["sort_forward", "sort_inverse"] : compensates
+                        ? ["sort_forward", "show_mixer", "hide_mixer", "sort_inverse"] : ["sort_forward", "show_mixer"]))
+                }
                 let afterRows = try #require(AXLogicProElements.trackNames(runtime: f.runtime))
                 let after = afterRows.keys.sorted().compactMap { afterRows[$0] }
-                #expect(after == (cancelAfterSort ? ["Kick", "Bass", "Piano"] : ["Bass", "Kick", "Piano"]))
-                #expect(await registry.currentTopologyGeneration == generation + (cancelAfterSort ? 2 : 1))
+                #expect(after == (compensates ? ["Kick", "Bass", "Piano"] : ["Bass", "Kick", "Piano"]))
+                #expect(await registry.currentTopologyGeneration == generation + (compensates ? 2 : 1))
                 #expect(await registry.resolve(order[0]) == nil, "Pre-sort references cannot authorize the inverse")
                 let params: [String: Value] = ["plan_id": .string(plan.id), "digest": .string(plan.digest),
                     "confirmed": .bool(true), "idempotency_key": .string(key)]
@@ -375,7 +469,7 @@ struct Issue448TrackSortVerifiedTests {
                 let replay = await ApprovedSessionRepair.apply(request: try #require(.parse(params)), dependencies: dependencies)
                 let duplicate = try #require(sharedJSONObject(sharedToolText(replay))?["duplicate"] as? Bool)
                 #expect(duplicate)
-                #expect(f.actionProbe.pressCount == (cancelAfterSort ? 2 : 1))
+                #expect(f.actionProbe.pressCount == (compensates ? 2 : 1))
             }
         }
     }
