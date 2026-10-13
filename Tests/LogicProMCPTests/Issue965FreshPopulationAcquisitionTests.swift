@@ -86,6 +86,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                      needsWindowServerBootstrap: Bool = false,
                      focusedPID: pid_t = 4242,
                      observationAction: (@Sendable (AXUIElement, String) -> Bool?)? = nil,
+                     observationHit: (@Sendable (CGPoint) -> AXUIElement?)? = nil,
                      wrongDisclosureHit: Bool = false,
                      focusSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool)? = nil,
                      frameReads: Reads? = nil, frameFault: String? = nil,
@@ -130,6 +131,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                     },
                     elementAtPosition: { element, point in
                         guard CFEqual(element, app) else { return .success(nil) }
+                        if let hit = observationHit?(point) { return .success(hit) }
                         if let hiddenControl, point == CGPoint(x: 16, y: 26) { return .success(hiddenControl) }
                         if let thirdDisclosure, point == CGPoint(x: 36, y: 46) { return .success(thirdDisclosure) }
                         if let additionalDisclosure, point == CGPoint(x: 26, y: 36) {
@@ -945,6 +947,27 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
             headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
             fullDomainAssociation: true, fullDomainMixerEnd: true)
+    }
+
+    @Test func registeredMixerEndFocusACKWithoutEffectUsesOnlyTheHeldBlankStrip() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
+            fullDomainAssociation: true, fullDomainMixerEnd: true, mixerFocusACKHasNoEffect: true)
+    }
+
+    @Test func registeredOwnedMixerFocusClickRequiresItsActualLandingBeforeReading() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
+            fullDomainAssociation: true, fullDomainMixerEnd: true, mixerFocusACKHasNoEffect: true,
+            mixerFocusClickDelayed: true)
+    }
+
+    @Test(arguments: ["wrong_hit", "changed_hit", "up_failed", "click_no_effect"])
+    func registeredMixerFocusFallbackRefusesUnownedHitsIncompleteReleaseAndNoLanding(_ fault: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: true,
+            headerFocus: "initial_passive", completeHierarchy: "complete", fullDomainMixerOpen: true,
+            fullDomainAssociation: true, fullDomainMixerEnd: true, mixerFocusACKHasNoEffect: true,
+            mixerFocusClickFault: fault)
     }
 
     @Test(arguments: ["unsettable_inverse", "edited_label", "foreign_focus", "declined_inverse"])
@@ -1955,7 +1978,9 @@ struct Issue965FreshPopulationAcquisitionTests {
                               sliderMetadataObservations: Reads? = nil, sliderMutationAt: Int? = nil,
                               completeHierarchy: String? = nil, fullDomainMixerOpen: Bool = false,
                               fullDomainAssociation: Bool = false, fullDomainAssociationFault: String? = nil,
-                              fullDomainMixerEnd: Bool = false, mixerEndFault: String? = nil) async throws {
+                              fullDomainMixerEnd: Bool = false, mixerEndFault: String? = nil,
+                              mixerFocusACKHasNoEffect: Bool = false, mixerFocusClickDelayed: Bool = false,
+                              mixerFocusClickFault: String? = nil) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -2175,6 +2200,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         let exposedMixer = fixture.builder.element(965_270)
         let exposedStrips = (0..<9).map { fixture.builder.element(965_271 + $0) }
         let associationStripIndices = [5, 1, 7, 3]
+        let endFocusPoint = CGPoint(x: CGFloat((associationStripIndices[0] + 1) * 80 + 40), y: 500)
         let endEdit = fixture.builder.element(965_310), endSelectAll = fixture.builder.element(965_311)
         if fullDomainMixerOpen {
             // Native-style named Mixer, with no legacy AXIdentifier shortcut.
@@ -2267,6 +2293,22 @@ struct Issue965FreshPopulationAcquisitionTests {
         if mouseCase == "prepare_failed" { preparation = { _, _ in nil } }
         else { preparation = nil }
         let observationMouse = AXMouseHelper.Runtime(postMouseEvent: { type, point, clicks in
+            if mixerFocusACKHasNoEffect, point == endFocusPoint {
+                #expect(clicks == 1 && (type == .leftMouseDown || type == .leftMouseUp))
+                fixture.reads.record(type == .leftMouseDown ? "owned_end_focus_down" : "owned_end_focus_up")
+                if mixerFocusClickFault == "up_failed", type == .leftMouseDown {
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
+                        exposedStrips[associationStripIndices[0]])
+                }
+                if mixerFocusClickFault == "up_failed", type == .leftMouseUp {
+                    fixture.reads.record("owned_focus_click_up_failed"); return false
+                }
+                if type == .leftMouseUp, !mixerFocusClickDelayed, mixerFocusClickFault != "click_no_effect" {
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
+                        exposedStrips[associationStripIndices[0]])
+                }
+                return true
+            }
             if type == .leftMouseDown, fixture.events.count == 2, let sliderMetadataObservations {
                 sliderMetadataObservations.record("inverse_boundary_\(sliderMetadataObservations.recorded.filter { $0 == "metadata" }.count)")
             }
@@ -2473,11 +2515,27 @@ struct Issue965FreshPopulationAcquisitionTests {
                     }
                     return true
                 },
-                wrongDisclosureHit: mouseCase == "wrong_hit", focusSetter: { element, attribute, value in
+                observationHit: { point in
+                    guard mixerFocusACKHasNoEffect, point == endFocusPoint else { return nil }
+                    fixture.reads.record("owned_focus_blank_hit")
+                    if mixerFocusClickFault == "wrong_hit" || (mixerFocusClickFault == "changed_hit"
+                        && fixture.reads.recorded.filter({ $0 == "owned_focus_blank_hit" }).count == 2) {
+                        fixture.reads.record("owned_focus_blank_wrong_hit"); return otherLabel
+                    }
+                    return exposedStrips[associationStripIndices[0]]
+                }, wrongDisclosureHit: mouseCase == "wrong_hit", focusSetter: { element, attribute, value in
                     if fullDomainMixerEnd {
                         if attribute == kAXFocusedAttribute as String,
                            CFEqual(element, passiveLabel) || CFEqual(element, exposedStrips[associationStripIndices[0]]) {
                             fixture.reads.record(CFEqual(element, passiveLabel) ? "owned_end_header_focus_inverse" : "owned_end_mixer_focus_forward")
+                            if mixerFocusACKHasNoEffect, !CFEqual(element, passiveLabel) {
+                                do {
+                                    let current = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+                                    #expect(CFEqual(current as AnyObject, passiveLabel))
+                                } catch { return false }
+                                fixture.reads.record("owned_focus_ack_ineffective")
+                                return true
+                            }
                             if CFEqual(element, passiveLabel), mixerEndFault == "declined_inverse" { return false }
                             fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, element)
                             return true
@@ -2705,6 +2763,16 @@ struct Issue965FreshPopulationAcquisitionTests {
                         fixture.builder.setChildren(fixture.rail, changed)
                     }
                 }, readingAttribute: { element, attribute in
+                    if mixerFocusClickDelayed, CFEqual(element, fixture.app), attribute == kAXFocusedUIElementAttribute as String,
+                       fixture.reads.recorded.contains("owned_end_focus_up"),
+                       !fixture.reads.recorded.contains("owned_focus_click_landed") {
+                        fixture.reads.record("owned_focus_click_landing_read")
+                        if fixture.reads.recorded.filter({ $0 == "owned_focus_click_landing_read" }).count == 2 {
+                            fixture.reads.record("owned_focus_click_landed")
+                            fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
+                                exposedStrips[associationStripIndices[0]])
+                        }
+                    }
                     if fullDomainMixerEnd, exposedStrips.contains(where: { CFEqual($0, element) }),
                        [kAXValueAttribute as String, kAXSelectedTextAttribute as String].contains(attribute) {
                         return .failure(.init(raw: AXError.noValue.rawValue))
@@ -2911,6 +2979,24 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(pairs.isEmpty, "unrestored or conflicted exposed relationships must not be published")
             return
         }
+        if let mixerFocusClickFault {
+            #expect(fixture.reads.recorded.contains("owned_focus_ack_ineffective"))
+            #expect(!fixture.reads.recorded.contains("owned_end_select_all"))
+            #expect(!fixture.reads.recorded.contains("owned_end_header_focus_inverse"))
+            if mixerFocusClickFault == "wrong_hit" || mixerFocusClickFault == "changed_hit" {
+                #expect(fixture.reads.recorded.contains("owned_focus_blank_wrong_hit"))
+                #expect(!fixture.reads.recorded.contains("owned_end_focus_down"))
+            } else {
+                #expect(fixture.reads.recorded.contains("owned_end_focus_down") && fixture.reads.recorded.contains("owned_end_focus_up"))
+                if mixerFocusClickFault == "up_failed" { #expect(fixture.reads.recorded.contains("owned_focus_click_up_failed")) }
+            }
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let effects = try #require(body["ui_effects"] as? [String: Any])
+            #expect(effects["restoration"] as? String == "not_restored")
+            #expect(body["snapshot_id"] == nil, "An ineffective/uncertain focus transport cannot certify any whole population")
+            #expect(gate.currentOperation() == nil && fixture.builder.actionCalls.isEmpty)
+            return
+        }
         if let mixerEndFault {
             let endSequence = fixture.reads.recorded.filter { $0.hasPrefix("owned_end_") }
             #expect(fixture.reads.recorded.filter { $0 == "exposed_association_setter_call" }.count == 4)
@@ -2973,8 +3059,11 @@ struct Issue965FreshPopulationAcquisitionTests {
             }
             if fullDomainMixerEnd {
                 let endSequence = fixture.reads.recorded.filter { $0.hasPrefix("owned_end_") }
-                #expect(endSequence == ["owned_end_mixer_focus_forward", "owned_end_open_edit", "owned_end_select_all",
+                let focusClick = mixerFocusACKHasNoEffect ? ["owned_end_focus_down", "owned_end_focus_up"] : []
+                #expect(endSequence == ["owned_end_mixer_focus_forward"] + focusClick + ["owned_end_open_edit", "owned_end_select_all",
                     "owned_end_mixer_selection_inverse", "owned_end_header_focus_inverse"])
+                if mixerFocusACKHasNoEffect { #expect(fixture.reads.recorded.contains("owned_focus_ack_ineffective")) }
+                if mixerFocusClickDelayed { #expect(fixture.reads.recorded.contains("owned_focus_click_landed")) }
                 let strips = try #require(body["strips"] as? [String: Any])
                 #expect(strips["coverage"] as? String == "complete")
                 let overall = try #require(body["overall"] as? [String: Any])

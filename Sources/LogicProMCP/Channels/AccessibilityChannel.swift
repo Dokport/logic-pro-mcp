@@ -789,7 +789,8 @@ actor AccessibilityChannel: Channel {
                         // and inverses its focus excursion before stack cleanup.
                         selectedMixerPopulation = await owner.observeWholeStripSelectionFromRetainedHeader(
                             headerFocus: heldFocus, association: association, pair: pair,
-                            readFocusScope: readFocusScope, stoppingWhen: stop)
+                            readFocusScope: readFocusScope,
+                            mouse: runtime.canPostEvents() ? runtime.observationMouseRuntime : nil, stoppingWhen: stop)
                         exposedMixerEndEffects = owner.effects
                         population.uiEffects = mergedEffects(population.uiEffects, owner.effects)
                         if owner.effects.reason != nil
