@@ -761,10 +761,10 @@ enum SagaWire {
                 } else { status = "unknown" }
                 return ["param": step.params["param"]?.stringValue as Any? ?? NSNull(),
                     "raw_unit": step.params["unit"]?.stringValue as Any? ?? NSNull(),
-                    "requested": step.params["value"].map(ResourceHandlers.jsonObject) ?? NSNull(),
-                    "approved_before": step.params["expected_before"].map(ResourceHandlers.jsonObject) ?? NSNull(),
-                    "observed_before": record?.beforeState.map { ResourceHandlers.jsonObject($0.value) } ?? NSNull(),
-                    "observed_after": record?.verificationEvidence?.readback.map { ResourceHandlers.jsonObject($0.value) } ?? NSNull(),
+                    "requested": step.params["value"].map(foundationValue) ?? NSNull(),
+                    "approved_before": step.params["expected_before"].map(foundationValue) ?? NSNull(),
+                    "observed_before": record?.beforeState.map { foundationValue($0.value) } ?? NSNull(),
+                    "observed_after": record?.verificationEvidence?.readback.map { foundationValue($0.value) } ?? NSNull(),
                     "status": status, "write_attempted": record?.writeBoundaryCrossed ?? false]
             }
         }

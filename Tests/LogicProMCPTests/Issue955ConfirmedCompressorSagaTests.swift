@@ -300,5 +300,37 @@ struct Issue955ConfirmedCompressorSagaTests {
         #expect(result["error"] as? String == HonestContract.FailureError.idempotencyKeyConflict.rawValue)
         #expect(await f.channel.snapshot().2.count == count)
     }
+
+    @Test(arguments: ["threshold", "limiter_on"])
+    func parameterOutcomeJSONPreservesItsActualNumericAndBooleanValues(_ param: String) async throws {
+        let f = await fixture()
+        let result = try await run(f, params: confirmed(f))
+        #expect(result["state"] as? String == "A")
+        #expect(await f.channel.snapshot().2 == ["threshold", "limiter_on"])
+        let rows = try #require(result["parameters"] as? [[String: Any]])
+        let row = try #require(rows.first { $0["param"] as? String == param })
+        let steps = try #require(result["steps"] as? [[String: Any]])
+        let index = param == "threshold" ? 0 : 1
+        let evidence = try #require(steps[index]["evidence"] as? [String: Any])
+        let before = try #require(evidence["before_state"] as? [String: Any])
+        if param == "threshold" {
+            #expect(before["value"].flatMap { JSONInspector.number(of: $0) } == 60)
+            for key in ["requested", "approved_before", "observed_before", "observed_after"] {
+                let expected = key == "requested" || key == "observed_after" ? 38.0 : 60.0
+                #expect(row[key].flatMap { JSONInspector.number(of: $0) } == expected)
+            }
+        } else {
+            let prior = try #require(before["value"] as? Bool)
+            #expect(!prior)
+            for key in ["requested", "approved_before", "observed_before", "observed_after"] {
+                let raw = try #require(row[key])
+                #expect(JSONInspector.isBoolean(raw))
+                if let observed = raw as? Bool {
+                    if key == "requested" || key == "observed_after" { #expect(observed) }
+                    else { #expect(!observed) }
+                } else { Issue.record("parameter outcome \(key) must be a literal JSON Boolean") }
+            }
+        }
+    }
 }
 }
