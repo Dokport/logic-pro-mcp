@@ -17,6 +17,84 @@ import Testing
 @Suite("Issue290HeaderPanIdentity")
 struct Issue290HeaderPanIdentityTests {
 
+    @Test("header scalars use fresh paired role/children samples without sharing inventories between fields",
+          arguments: ["healthy", "late_role_loss", "late_child_loss", "null_fallback", "batch_failure", "malformed_role", "malformed_children"])
+    func scalarWalkCoalescesOnlyOneFreshNodeSample(condition: String) {
+        final class Reads: @unchecked Sendable {
+            private let lock = NSLock()
+            private var events: [String] = []
+            func record(_ event: String) { lock.withLock { events.append(event) } }
+            var calls: [String] { lock.withLock { events } }
+        }
+        func sample(bulk: Bool) -> (Double?, Double?, [String]) {
+            let builder = FakeAXRuntimeBuilder(), reads = Reads()
+            let header = builder.element(965_801), volume = builder.element(965_802), pan = builder.element(965_803)
+            for (element, description, maximum, value) in [(volume, "Volume", 1.0, 0.75), (pan, "Pan", 127.0, 32.0)] {
+                builder.setRole(element, kAXSliderRole as String)
+                builder.setAttribute(element, kAXDescriptionAttribute as String, description)
+                builder.setAttribute(element, kAXMinValueAttribute as String, 0.0)
+                builder.setAttribute(element, kAXMaxValueAttribute as String, maximum)
+                builder.setAttribute(element, kAXValueAttribute as String, value)
+                builder.setChildren(element, [])
+            }
+            builder.setChildren(header, [volume, pan])
+            let group = builder.element(965_804)
+            if condition == "malformed_children" {
+                builder.setRole(group, kAXGroupRole as String)
+                builder.setChildren(group, [volume, pan])
+                builder.setChildren(header, [group])
+            }
+            let base = builder.makeAXRuntime()
+            let batch: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError>)?
+            if bulk {
+                batch = { element, attributes in
+                    reads.record("batch")
+                    if condition == "batch_failure" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                    return .success(attributes.map { attribute -> AnyObject in
+                        if condition == "null_fallback" { return NSNull() }
+                        if condition == "malformed_role", attribute == kAXRoleAttribute as String { return NSNumber(value: 1) }
+                        if condition == "malformed_children", CFEqual(element, group), attribute == kAXChildrenAttribute as String {
+                            return "not a child collection" as NSString
+                        }
+                        if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                        return base.attributeValue(element, attribute) ?? NSNull()
+                    })
+                }
+            } else { batch = nil }
+            let runtime = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { element, attribute in
+                if attribute == kAXRoleAttribute as String { reads.record("role") }
+                return base.attributeValue(element, attribute)
+            }, setAttributeValue: base.setAttributeValue, children: { element in
+                reads.record("children"); return base.children(element)
+            }, performAction: base.performAction, childCount: base.childCount,
+                childrenResult: { element in reads.record("children"); return .success(base.children(element)) },
+                attributeValueResult: { element, attribute in
+                    if attribute == kAXRoleAttribute as String { reads.record("role") }
+                    if attribute == kAXChildrenAttribute as String {
+                        reads.record("children"); return .success(base.children(element) as CFArray)
+                    }
+                    return .success(base.attributeValue(element, attribute))
+                }, attributeValuesResult: batch)
+            let volumeValue = AXLogicProElements.findVolumeFader(in: header, runtime: runtime)
+                .flatMap { AXValueExtractors.extractSliderValue($0, runtime: runtime) }
+            if condition == "late_role_loss" { builder.setRole(pan, kAXButtonRole as String) }
+            if condition == "late_child_loss" { builder.setChildren(header, [volume]) }
+            let panValue = AXLogicProElements.findPanControlInHeader(header, runtime: runtime)
+                .flatMap { AXValueExtractors.extractSliderValue($0, runtime: runtime) }
+            return (volumeValue, panValue, reads.calls)
+        }
+        let legacy = sample(bulk: false), paired = sample(bulk: true)
+        #expect(paired.2.contains("batch"), "Reach the real scalar locator's native batch seam")
+        if ["batch_failure", "malformed_role", "malformed_children"].contains(condition) {
+            #expect(paired.0 == nil && paired.1 == nil)
+        } else {
+            #expect(paired.0 == legacy.0 && paired.1 == legacy.1)
+            #expect(paired.0 == 0.75)
+            #expect(paired.1 == (["late_role_loss", "late_child_loss"].contains(condition) ? nil : 32.0))
+            if condition != "null_fallback" { #expect(paired.2.count < legacy.2.count) }
+        }
+    }
+
     private static let panHelp = "패닝 노브 및 밸런스 노브. 트랙 신호를 스테레오 필드에 위치하려면 수직으로 드래그합니다."
     private static let volumeHelp = "볼륨 페이더. 트랙의 재생 볼륨을 설정합니다."
 

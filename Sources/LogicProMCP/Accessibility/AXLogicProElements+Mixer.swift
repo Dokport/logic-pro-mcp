@@ -277,6 +277,7 @@ extension AXLogicProElements {
         observingExposure: AXTrackBinding.Exposure? = nil
     ) -> AXUIElement? {
         let sliders = AXHelpers.findAllDescendants(of: header, role: kAXSliderRole, maxDepth: 4, runtime: runtime,
+            batchingRoleAndChildren: true,
             observingRole: { observingExposure?.observeRole(element: $0, role: $1) },
             observingChildren: { observingExposure?.observeChildren(element: $0, children: $1) })
         let candidates = headerPanSliderCandidates(among: sliders, runtime: runtime)
@@ -1815,6 +1816,7 @@ extension AXLogicProElements {
         } else {
             sliders = AXHelpers.findAllDescendants(
                 of: strip, role: kAXSliderRole, maxDepth: 4, runtime: ax,
+                batchingRoleAndChildren: true,
                 observingRole: { observingExposure?.observeRole(element: $0, role: $1) },
                 observingChildren: { observingExposure?.observeChildren(element: $0, children: $1) }
             )
