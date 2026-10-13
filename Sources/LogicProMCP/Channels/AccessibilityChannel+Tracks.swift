@@ -228,6 +228,19 @@ extension AccessibilityChannel {
                 }
 
                 func permits() -> Bool {
+                    corroborates(focusedOn: focus)
+                }
+
+                /// Only an independently current passive Mixer source can
+                /// bracket the inverse of our own focus excursion. The retained
+                /// label's metadata and reciprocal CF ancestry stay unchanged.
+                func permitsOwnedMixerInverseMetadata(from source: PassiveMixerReadFocus) -> Bool {
+                    guard source.pid == pid, CFEqual(source.app, app), CFEqual(source.window, window),
+                          source.document.utf8.elementsEqual(document.utf8), source.permits() else { return false }
+                    return corroborates(focusedOn: source.focus)
+                }
+
+                private func corroborates(focusedOn expectedFocus: AXUIElement) -> Bool {
                     var permitted = false
                     defer { if !permitted { lost = true } }
                     guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
@@ -240,7 +253,7 @@ extension AccessibilityChannel {
                           case .success(.some(let doc)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                           doc.utf8.elementsEqual(document.utf8),
                           let currentFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                          CFEqual(currentFocus, focus),
+                          CFEqual(currentFocus, expectedFocus),
                           AXHelpers.getRole(focus, runtime: logic.ax) == kAXTextFieldRole as String,
                           AXHelpers.isAttributeSettable(focus, kAXValueAttribute as String, runtime: logic.ax) == false,
                           case .success(.some(let raw)) = AXHelpers.getAttributeResult(focus, kAXValueAttribute as String,
@@ -268,7 +281,7 @@ extension AccessibilityChannel {
                               CFEqual(actualParent, parent) else { return false }
                     }
                     guard let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                          CFEqual(finalFocus, focus),
+                          CFEqual(finalFocus, expectedFocus),
                           case .success(.some(let finalDoc)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                           finalDoc.utf8.elementsEqual(document.utf8),
                           (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }

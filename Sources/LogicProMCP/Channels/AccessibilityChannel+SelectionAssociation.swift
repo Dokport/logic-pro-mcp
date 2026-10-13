@@ -655,6 +655,19 @@ extension AccessibilityChannel {
             return false
         }
 
+        /// UI focus may enter only the already observed original physical pair,
+        /// never a strip chosen by label, ordinal or an initial selected flag.
+        func permitsOriginalMixerFocusTarget(_ pair: Pair) -> Bool {
+            guard let retainedTrackBindings, originalHeaderFocus != nil,
+                  expectedIndex == originalIndex, pair.track.matches(retainedTrackBindings[originalIndex]),
+                  CFEqual(pair.strip.window, window), CFEqual(pair.strip.mixer, mixer),
+                  pair.strip.document.utf8.elementsEqual(document.utf8),
+                  CFEqual(associationStrip, pair.strip.strip), permitsRead(),
+                  passiveStripMatches(pair.strip.strip), owned(), selectedChildCustodyMatches(),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            return true
+        }
+
         /// Reverse only scroll/own-zoom values sampled immediately after our held-rail selections.
         /// A newer viewport, replacement control/path or scope loss ends cleanup authority.
         private func restoreViewport(referenceIsCurrent: @Sendable () async -> Bool,
