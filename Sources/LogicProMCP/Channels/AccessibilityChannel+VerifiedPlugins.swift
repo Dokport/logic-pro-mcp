@@ -991,10 +991,11 @@ extension AccessibilityChannel {
                 }
             } else { selected = nil }
             guard await restoreCapturedFocusAfterReveal(stripMixer: pair.strip.mixer,
-                headerFocus: headerFocus, inverseSource: source,
+                headerFocus: headerFocus, inverseSource: source, mouse: mouse,
                 selectionOrigin: { current in CFEqual(current, source.focus) && source.permits() },
                 stoppingWhen: stop), headerFocus.permits(), sameFocus() else {
-                effects.reason = "mixer_focus_restoration_unverified"; return nil
+                if effects.reason == "header_focus_release_unverified" { readFocusScope?.retain(nil) }
+                effects.reason = effects.reason ?? "mixer_focus_restoration_unverified"; return nil
             }
             effects.changed.append("keyboard_focus_restoration")
             effects.restoration = "restored"
@@ -1265,6 +1266,7 @@ extension AccessibilityChannel {
         private func restoreCapturedFocusAfterReveal(afterHide: Bool = false, stripMixer: AXUIElement? = nil,
                                                      headerFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus? = nil,
                                                      inverseSource: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus? = nil,
+                                                     mouse: AXMouseHelper.Runtime? = nil,
                                                      selectionOrigin: ((AXUIElement) async -> Bool)? = nil,
                                                      stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
             let pid = acquiredPID
@@ -1300,26 +1302,45 @@ extension AccessibilityChannel {
             menuOpen = false
             focusRestoreAttempted = true
             if let headerFocus {
-                guard let inverseSource else { return false }
-                // Reassert only the unchanged original selection on its retained
-                // rail. AXFocused on the passive name opens a different editor;
-                // neither selection ACK nor Help text proves focus restoration.
+                guard let inverseSource, let mouse, let hitTest = runtime.ax.elementAtPosition else { return false }
+                func frame() -> CGRect? {
+                    let values = AXHelpers.getNonHelpAttributes(focus,
+                        [kAXPositionAttribute, kAXSizeAttribute] as [String], runtime: runtime.ax,
+                        permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+                    guard case .success(.some(let p)) = values[0], case .success(.some(let s)) = values[1],
+                          let point = AXHelpers.point(fromRawAttribute: p), let size = AXHelpers.size(fromRawAttribute: s),
+                          point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
+                          size.width > 0, size.height > 0 else { return nil }
+                    let result = CGRect(origin: point, size: size)
+                    return result.midX.isFinite && result.midY.isFinite ? result : nil
+                }
+                // One single click on the exact retained passive field, never a
+                // rename setter or another descendant. Its selection must already
+                // be exclusive: clicking cannot silently clear selected peers.
                 let expected = zip(headers, selected).filter { $0.1 }.map { $0.0 }
-                guard expected.filter({ CFEqual($0, headerFocus.header) }).count == 1,
+                guard expected.count == 1, CFEqual(expected[0], headerFocus.header),
                       headerFocus.permitsOwnedMixerInverseMetadata(from: inverseSource),
                       case .success(.elements(let original)) = AXHelpers.getAXUIElementArrayRead(
                         headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
                       original.count == expected.count, zip(original, expected).allSatisfy({ CFEqual($0, $1) }),
-                      AXHelpers.isAttributeSettable(headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax) == true,
+                      let heldFrame = frame(),
+                      let prepared = mouse.prepareMouseClick(CGPoint(x: heldFrame.midX, y: heldFrame.midY), 1),
+                      case .success(.some(let hit)) = hitTest(app, CGPoint(x: heldFrame.midX, y: heldFrame.midY)), CFEqual(hit, focus),
                       await stillOwned(stoppingWhen: stop),
                       case .success(.elements(let deciding)) = AXHelpers.getAXUIElementArrayRead(
                         headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
                       deciding.count == original.count, zip(deciding, original).allSatisfy({ CFEqual($0, $1) }),
+                      frame() == heldFrame,
+                      case .success(.some(let decidingHit)) = hitTest(app, CGPoint(x: heldFrame.midX, y: heldFrame.midY)), CFEqual(decidingHit, focus),
                       headerFocus.permitsOwnedMixerInverseMetadata(from: inverseSource), !stop(),
-                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
-                      AXHelpers.setAttribute(headerFocus.rail, kAXSelectedChildrenAttribute as String,
-                        original as CFArray, runtime: runtime.ax),
-                      case .success(.elements(let after)) = AXHelpers.getAXUIElementArrayRead(
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                effects.attempted.append("header_focus_click")
+                guard prepared.postDown() else { return false }
+                // Complete only this preconstructed pair: no AX/read/await between halves.
+                guard prepared.postUp() else {
+                    effects.reason = "header_focus_release_unverified"; return false
+                }
+                guard case .success(.elements(let after)) = AXHelpers.getAXUIElementArrayRead(
                         headerFocus.rail, kAXSelectedChildrenAttribute as String, runtime: runtime.ax),
                       after.count == original.count, zip(after, original).allSatisfy({ CFEqual($0, $1) }) else { return false }
             } else {
