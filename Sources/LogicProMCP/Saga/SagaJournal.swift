@@ -549,8 +549,9 @@ enum SagaWire {
         }
         let plan = SagaPlan(steps: steps, idempotencyKey: idempotencyKey)
         try CompressorParameterSaga.validate(plan)
-        if params["confirmed_plan_hash"] != nil && !CompressorParameterSaga.containsPluginSteps(plan) {
-            throw SagaWireError.invalid("confirmed_plan_hash belongs only to the selected Compressor workflow")
+        try SelectedEQParameterSaga.validate(plan)
+        if params["confirmed_plan_hash"] != nil && !CompressorParameterSaga.containsPluginSteps(plan) && !SelectedEQParameterSaga.contains(plan) {
+            throw SagaWireError.invalid("confirmed_plan_hash belongs only to the selected plug-in workflows")
         }
         return plan
     }
@@ -749,7 +750,7 @@ enum SagaWire {
         ]) { _, new in new }
         if let id = plan.canonicalPlanID { extras["plan_id"] = id }
         if let digest = plan.canonicalDigest { extras["digest"] = digest }
-        if CompressorParameterSaga.containsPluginSteps(plan) {
+        if CompressorParameterSaga.containsPluginSteps(plan) || SelectedEQParameterSaga.contains(plan) {
             extras["plan_hash"] = SagaJournal.planHash(plan)
             extras["parameters"] = plan.steps.enumerated().map { index, step -> [String: Any] in
                 let record = outcome.journal.first { $0.stepIndex == index }
@@ -759,13 +760,21 @@ enum SagaWire {
                 } else if record?.verificationEvidence?.disposition == .applied {
                     status = record?.writeBoundaryCrossed == false ? "unchanged" : "applied"
                 } else { status = "unknown" }
-                return ["param": step.params["param"]?.stringValue as Any? ?? NSNull(),
-                    "raw_unit": step.params["unit"]?.stringValue as Any? ?? NSNull(),
+                let selectedEQ = step.operationID == .pluginsSetEQBandVerified
+                var row: [String: Any] = ["param": (selectedEQ ? step.params["parameter"] : step.params["param"])?.stringValue as Any? ?? NSNull(),
+                    "raw_unit": selectedEQ ? "raw_ax_value" : (step.params["unit"]?.stringValue as Any? ?? NSNull()),
                     "requested": step.params["value"].map(foundationValue) ?? NSNull(),
                     "approved_before": step.params["expected_before"].map(foundationValue) ?? NSNull(),
                     "observed_before": record?.beforeState.map { foundationValue($0.value) } ?? NSNull(),
                     "observed_after": record?.verificationEvidence?.readback.map { foundationValue($0.value) } ?? NSNull(),
                     "status": status, "write_attempted": record?.writeBoundaryCrossed ?? false]
+                if selectedEQ {
+                    row["requested_unit"] = step.params["unit"]?.stringValue as Any? ?? NSNull()
+                    row["recommendation"] = step.params["recommendation"].map(foundationValue) ?? NSNull()
+                    row["observed_before_display"] = record?.beforeState?.read?.hostDisplay as Any? ?? NSNull()
+                    row["observed_after_display"] = record?.verificationEvidence?.readback?.read?.hostDisplay as Any? ?? NSNull()
+                }
+                return row
             }
         }
 
@@ -1084,6 +1093,7 @@ enum SagaWire {
         object["field"] = read.field
         object["observed"] = foundationValue(read.observed)
         object["sampled_at"] = read.sampledAt
+        if let display = read.hostDisplay { object["host_display"] = display }
         return object
     }
 
@@ -1101,6 +1111,7 @@ enum SagaWire {
         if let desired = comparison.desired { object["desired"] = foundationValue(desired) }
         if let observed = comparison.observed { object["observed"] = foundationValue(observed) }
         if let delta = comparison.delta { object["delta"] = delta }
+        if let unit = comparison.unit { object["unit"] = unit }
         return object
     }
 
@@ -1137,6 +1148,8 @@ enum SagaWire {
         switch operationID {
         case .pluginsSetParamVerified:
             return try CompressorParameterSaga.canonicalParams(params)
+        case .pluginsSetEQBandVerified:
+            return try SelectedEQParameterSaga.canonicalParams(params)
         case .tracksRename:
             try requireExactKeys(params, allowed: ["name"], context: context)
             guard let name = params["name"]?.stringValue, !name.isEmpty else {

@@ -329,7 +329,7 @@ enum SliderIncrementWalk {
     /// Splits only a leading signed decimal from Logic's rendering. Everything
     /// after it remains opaque unit text; this core must not create a dB or Hz
     /// parser just to choose a raw slider direction.
-    private static func leadingNumber(in display: String) -> (number: Double, suffix: String)? {
+    static func leadingNumber(in display: String) -> (number: Double, suffix: String)? {
         let bytes = Array(display.utf8)
         guard !bytes.isEmpty else { return nil }
 

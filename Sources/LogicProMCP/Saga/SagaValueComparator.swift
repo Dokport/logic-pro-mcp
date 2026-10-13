@@ -41,6 +41,7 @@ struct SagaComparisonEvidence: Codable, Equatable, Sendable {
     let observed: Value?
     let delta: Double?
     let equal: Bool
+    var unit: String? = nil
 }
 
 /// The single decision point for saga value equality.
@@ -49,6 +50,12 @@ struct SagaComparisonEvidence: Codable, Equatable, Sendable {
 /// inverse ownership instead compares actual observed states exactly. State-A
 /// dispatcher trust is handled by `MutationSaga.classifyVerifiedWrite`.
 enum SagaValueComparator {
+    static func evidence(observedState: ObservedState?, desired: Value?, step: SagaStep) -> SagaComparisonEvidence {
+        if step.operationID == .pluginsSetEQBandVerified {
+            return SelectedEQParameterSaga.comparison(observedState, desired: desired, step: step)
+        }
+        return evidence(observed: observedState?.value, desired: desired, step: step)
+    }
     static func equals(observed: Value, expected: Value, step: SagaStep) -> Bool {
         guard step.operationID == .pluginsSetParamVerified else {
             return equals(observed: observed, expected: expected, op: step.operationID)

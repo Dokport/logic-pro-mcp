@@ -1527,6 +1527,18 @@ extension AccessibilityChannel {
         }
     }
 
+    /// Pure selected-plan validation through the same catalog/unit/actuation
+    /// resolver as the writer. Placeholder indices supply no target authority.
+    static func verifiedEQParameterPreflight(band: String, parameter: String, value: Double, unit: String) -> Bool {
+        switch resolveVerifiedParameter(selector: .channelEQ(bandName: band, parameterName: parameter),
+            requested: value, unit: unit, operation: "logic_plugins.set_eq_band_verified", track: 0, insert: 0,
+            entryLookup: VerifiedPluginCatalog.productionEntryLookup,
+            paramAliasLookup: VerifiedPluginCatalog.canonicalParamKey, preResolutionIdentity: [:]) {
+        case .success: true
+        case .failure: false
+        }
+    }
+
     private static func resolveVerifiedParameter(
         selector: VerifiedParameterSelector,
         requested: Double,
