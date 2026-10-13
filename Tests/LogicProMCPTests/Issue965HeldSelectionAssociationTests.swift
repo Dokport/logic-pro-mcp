@@ -250,6 +250,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
         var routingDestinationPresses = 0
+        var routingClassifierHelpReads = 0
+        var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
@@ -617,7 +619,7 @@ struct Issue965HeldSelectionAssociationTests {
     private func inspect(_ f: Fixture, navigation: Bool = true, cache: StateCache = StateCache(),
                          fileReader: LogicProjectFileReader.Runtime = .unavailable,
                          registry: TargetRegistry = TargetRegistry(), projectRef: String? = nil,
-                         domains: [String] = ["associations"], guardedRenewalFocus: Bool = false,
+                         domains: [String]? = ["associations"], guardedRenewalFocus: Bool = false,
                          guardedPassiveFocus: Bool = false,
                          scope: String = "whole_project") async throws -> [String: Any] {
         let gate = LogicMutationGate()
@@ -631,13 +633,72 @@ struct Issue965HeldSelectionAssociationTests {
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
             liveTrackNames: { [:] }, projectFileReader: fileReader)
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
-        var arguments: [String: Value] = ["domains": .array(domains.map(Value.string)), "allow_ui_navigation": .bool(navigation),
+        var arguments: [String: Value] = ["allow_ui_navigation": .bool(navigation),
                                         "scope": .string(scope)]
+        if let domains { arguments["domains"] = .array(domains.map(Value.string)) }
         if let projectRef { arguments["project_ref"] = .string(projectRef) }
         let params = arguments
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
         return try #require(sharedJSONObject(sharedToolText(result)))
+    }
+
+    @Test("Association-only acquisition omits unrequested routing classification without replacing observed scalars",
+          arguments: ["association_only", "strips", "routing", "default"])
+    func registeredAssociationAcquisitionReadsOnlyRequestedRouting(kind: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(withViewport: true)
+            var routingControls: [AXUIElement] = []
+            for index in f.strips.indices {
+                let volume = f.builder.element(1_966_100 + index * 10), pan = f.builder.element(1_966_101 + index * 10)
+                for (control, description, value, minimum) in [(volume, "Volume", 0.7, 0.0), (pan, "Pan", -0.25, -1.0)] {
+                    f.builder.setRole(control, kAXSliderRole as String)
+                    f.builder.setAttribute(control, kAXDescriptionAttribute as String, description)
+                    f.builder.setAttribute(control, kAXValueAttribute as String, NSNumber(value: value))
+                    f.builder.setAttribute(control, kAXMinValueAttribute as String, NSNumber(value: minimum))
+                    f.builder.setAttribute(control, kAXMaxValueAttribute as String, NSNumber(value: 1.0))
+                    f.builder.setChildren(control, [])
+                }
+                let output = f.builder.element(1_966_102 + index * 10), input = f.builder.element(1_966_103 + index * 10)
+                let send = f.builder.element(1_966_104 + index * 10)
+                for (control, description, help) in [
+                    (output, "Stereo Output", "Output slot. Choose the channel strip output."),
+                    (input, "Bus 1", "Input slot. Choose the channel strip input."),
+                    (send, "send button", "Send slot. Choose the channel strip send.")
+                ] {
+                    f.builder.setButton(control, description: description, help: help, x: 0, y: 0, width: 1, height: 1)
+                    f.builder.setChildren(control, [])
+                    routingControls.append(control)
+                }
+                f.builder.setChildren(f.strips[index], f.builder.makeAXRuntime().children(f.strips[index]) + [volume, pan, output, input, send])
+            }
+            f.routingClassifierControls = routingControls
+            f.routingRead = { element, attribute in
+                // These exact leaf controls need no Inspector/discovery Help.
+                // StripHelpSamples clears its TaskLocal while invoking the native provider.
+                if attribute == kAXHelpAttribute as String,
+                   f.routingClassifierControls.contains(where: { CFEqual($0, element) }) { f.routingClassifierHelpReads += 1 }
+            }
+            let cache = StateCache()
+            let domains: [String]? = kind == "default" ? nil : kind == "association_only" ? ["associations"] : ["associations", kind]
+            let body = try await inspect(f, cache: cache, domains: domains)
+            let captureID = try #require(body["snapshot_id"] as? String)
+            let retained = try #require(await cache.retainedInspection(id: captureID))
+            let strips = retained.capture.channelStrips
+            #expect(strips.count == 2 && strips.allSatisfy { $0.physicalBinding != nil && $0.name == "Duplicate" })
+            #expect(strips.allSatisfy { $0.volume == 0.7 && $0.pan == -0.25 })
+            #expect(await cache.getChannelStrips().allSatisfy { $0.volume == 0.7 && $0.pan == -0.25 })
+            #expect(retained.capture.freshPopulation?.selectionAssociations.count == 2)
+            #expect(f.selections == [1, 0] && (body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+            if kind == "association_only" {
+                #expect(f.routingClassifierHelpReads == 0)
+                #expect(strips.allSatisfy { $0.output == nil && $0.input == nil && $0.inputObservation == nil && $0.inputSlotBinding == nil && $0.sendSlots == nil })
+                #expect((body["strips"] as? [String: Any])?["coverage"] as? String != "complete")
+            } else {
+                #expect(f.routingClassifierHelpReads > 0)
+                #expect(strips.allSatisfy { $0.output == "Stereo Output" && $0.input == "Bus 1" && $0.inputObservation?.state == .observedSource && $0.sendSlots != nil })
+            }
+        }
     }
 
     @Test("A complete fresh track population qualifies only its fully observed physical associations",
