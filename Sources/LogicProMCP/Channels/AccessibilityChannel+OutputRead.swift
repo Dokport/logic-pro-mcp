@@ -487,8 +487,21 @@ extension AccessibilityChannel {
                 let cancelled = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax)
                 if case .success = cancelled { extras["popup_cancel_succeeded"] = true }
                 else { extras["popup_cancel_succeeded"] = false }
-                let closed = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
-                    && runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true
+                // Cancel acknowledges the action before the native popup has
+                // necessarily disappeared. Observe its bounded settlement;
+                // never send a second action or turn an unreadable into absence.
+                let closeDeadline = Date().addingTimeInterval(Double(timing.popupCloseTimeoutMs) / 1_000)
+                var closed = false
+                repeat {
+                    guard !interrupted(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                          runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
+                          let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
+                          menus.isEmpty || (menus.count == 1 && CFEqual(menus[0], root)),
+                          let windows = runtime.onScreenWindowList() else { break }
+                    closed = menus.isEmpty && LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0
+                    if closed || Date() >= closeDeadline { break }
+                    if timing.pollIntervalMs > 0 { try? await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) }
+                } while Date() < closeDeadline
                 extras["popup_menu_state"] = closed ? "closed" : "not_restored"
                 guard closed, writerContextCurrent(),
                       let finalControl = assignedControl(), assigned.matches(finalControl),

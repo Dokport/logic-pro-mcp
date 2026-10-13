@@ -77,6 +77,7 @@ struct Issue291AssignedSendMenuTests {
         var open = false
         var pressed: [String] = []
         var cancels = 0
+        var closeWindowReads = 0
         var foregroundLost = false
         var fault: String?
         init(_ p: Prepared) {
@@ -174,14 +175,27 @@ struct Issue291AssignedSendMenuTests {
                 performActionResultHandler: { [self] in action($0,$1) ? .success(()) : .failure(.init(raw:-25204)) })
             return .init(logicProPID:base.logicProPID,ax:ax,
                 executeAppleScript: { _ in Issue.record("AppleScript forbidden"); return .error("forbidden") },
-                onScreenWindowList: { [self] in open ? [[kCGWindowOwnerPID as String:f.pid,
-                    kCGWindowLayer as String:LogicOnScreenWindows.popupMenuLevel]] : [] },
+                onScreenWindowList: { [self] in
+                    var visible = open
+                    if cancels > 0, fault?.hasPrefix("cancel_cg_") == true {
+                        closeWindowReads += 1
+                        if fault == "cancel_cg_unreadable" { return nil }
+                        visible = fault == "cancel_cg_persistent" || closeWindowReads == 1
+                        if fault == "cancel_cg_project", closeWindowReads == 2 {
+                            f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///wrong.logicx")
+                        }
+                    }
+                    return visible ? [[kCGWindowOwnerPID as String:f.pid,
+                        kCGWindowNumber as String:291_979,
+                        kCGWindowLayer as String:LogicOnScreenWindows.popupMenuLevel]] : []
+                },
                 postPopupMenuEscape: { Issue.record("Escape forbidden") },
                 focusedApplicationPID: { [self] in foregroundLost ? f.pid + 1 : base.focusedApplicationPID() },
                 observeFrontmost:base.observeFrontmost)
         }
         func write(destination: String = "physical:3-4", expected: String = "stereo_output",
-                   replacement: Bool = true, ordinal: Int = 1) async -> ChannelResult {
+                   replacement: Bool = true, ordinal: Int = 1,
+                   timing: AccessibilityChannel.OutputAssignmentTiming = .immediate) async -> ChannelResult {
             let f = p.f, gate = LogicMutationGate()
             guard let claim = gate.tryAcquire(operation:"logic_mixer.set_send_output_verified") else { return .error("gate") }
             defer { gate.release(claim) }
@@ -191,9 +205,28 @@ struct Issue291AssignedSendMenuTests {
                     strip:f.strips[0],document:f.bundle.absoluteString)) {
                     await AccessibilityChannel.setAssignedSendOutputVerified(params:["destination":destination,
                         "expected_current":expected,"replace_existing":replacement ? "true" : "false",
-                        "send_ordinal":String(ordinal)],runtime:runtime,timing:.immediate)
+                        "send_ordinal":String(ordinal)],runtime:runtime,timing:timing)
                 }
             }
+        }
+    }
+    @Test("A matching send waits for observed asynchronous popup closure without another action",
+          arguments: ["cancel_cg_delayed", "cancel_cg_persistent", "cancel_cg_unreadable", "cancel_cg_project"])
+    func occupiedSendNoOpWaitsForPopupClosure(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = fault
+        let result = try #require(sharedJSONObject(await probe.write(destination: "stereo_output",
+            timing: .init(popupOpenTimeoutMs: 0, popupCloseTimeoutMs: 30, readbackTimeoutMs: 0, pollIntervalMs: 1)).message))
+        #expect(result["state"] as? String == (fault == "cancel_cg_delayed" ? "A" : "C"), "\(result)")
+        let attempted = try #require(result["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(probe.pressed.isEmpty)
+        #expect(probe.cancels == 1)
+        if fault == "cancel_cg_delayed" {
+            #expect(probe.closeWindowReads >= 2)
+            #expect(result["popup_menu_state"] as? String == "closed")
+        } else {
+            #expect(result["after"] == nil)
         }
     }
     @Test("An already-matching checked send closes its popup without reapplying the destination",
