@@ -502,6 +502,34 @@ actor AccessibilityChannel: Channel {
             }
             let mixerNavigationPerformed = navigation?.effects.navigationPerformed == true
             let stackNavigationPerformed = stackNavigation?.effects.navigationPerformed == true
+            var associationCapturedAfterStackExposure = false
+            if association == nil, request.allowUINavigation, request.domains.contains(.associations),
+               population.stable, stackNavigationPerformed, !mixerNavigationPerformed,
+               let stack = stackNavigation, stack.effects.reason == nil,
+               !stack.capturedDisclosureExposures(in: population.tracks).isEmpty,
+               stack.permitsHeldPassiveHeaderFocus(),
+               let heldFocus = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus(
+                    window: stack.window, logic: runtime.logicRuntime),
+               CFEqual(heldFocus.focus, stack.originalFocus),
+               let candidate = HeldSelectionAssociation(window: stack.window, logic: runtime.logicRuntime,
+                    expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
+                    allowsSelectedChildRailEntry: true, retainedHeaderFocus: heldFocus,
+                    retainedTrackBindings: population.tracks?.compactMap(\.physicalBinding)),
+               let tracks = population.tracks, tracks.count == candidate.headers.count,
+               zip(tracks, candidate.headers).allSatisfy({ row, header in
+                    row.physicalBinding.map { CFEqual($0.window, candidate.window) && CFEqual($0.header, header)
+                        && $0.document.utf8.elementsEqual(candidate.document.utf8) } == true
+               }), let strips = population.strips, strips.count == candidate.strips.count,
+               zip(strips, candidate.strips).allSatisfy({ row, strip in
+                    row.physicalBinding.map { CFEqual($0.window, candidate.window) && CFEqual($0.mixer, candidate.mixer)
+                        && CFEqual($0.strip, strip) && $0.document.utf8.elementsEqual(candidate.document.utf8) } == true
+               }), candidate.permitsRead(), await navigationReferenceIsCurrent(), !stop() {
+                // The collapsed baseline could not hold descendants. Acquire
+                // only their actual exposed CFs, never a name/count/index join.
+                association = candidate
+                associationCapturedAfterStackExposure = true
+                readFocusScope?.retainAssociation(candidate)
+            }
             func collectRouting(_ original: SessionPopulationObservation.FreshPopulation) async throws -> SessionPopulationObservation.FreshPopulation {
                 var population = original
                 guard request.allowUINavigation, request.domains.contains(.routing), population.stable,
@@ -687,7 +715,8 @@ actor AccessibilityChannel: Channel {
                 }
                 return population
             }
-            if !sharedAcquisitionPerformed, let association, stackNavigation?.effects.navigationPerformed != true,
+            if !sharedAcquisitionPerformed, let association,
+               !stackNavigationPerformed || associationCapturedAfterStackExposure,
                navigation?.effects.navigationPerformed != true, population.stable {
                 population.selectionAssociations = await association.observe(
                     referenceIsCurrent: navigationReferenceIsCurrent, stoppingWhen: stop,
@@ -703,6 +732,7 @@ actor AccessibilityChannel: Channel {
                     let boundary = association.effects.restoration == "restored" && association.effects.reason == nil
                         ? await associationReadbackBoundary() : nil
                     let current = try? await readExposedSessionPopulation(request: request, fileReader: fileReader,
+                        exposure: associationCapturedAfterStackExposure ? stackNavigation?.exposure : nil,
                         stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                     func sameValues<T: Encodable>(_ lhs: T?, _ rhs: T?) -> Bool {
                         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -739,6 +769,7 @@ actor AccessibilityChannel: Channel {
                population.stable, let navigation,
                let selected = await navigation.observeWholeStripSelection(readFocusScope: readFocusScope, stoppingWhen: stop) {
                 let refreshed = try await readExposedSessionPopulation(request: request, fileReader: fileReader,
+                    exposure: stackNavigationPerformed ? stackNavigation?.exposure : nil,
                     stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                 if refreshed.stable, let states = refreshed.strips, states.count == selected.count,
                    zip(states, selected).allSatisfy({ $0.physicalBinding?.matches($1) == true }) {
