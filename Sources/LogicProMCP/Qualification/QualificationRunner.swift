@@ -363,7 +363,11 @@ package struct QualificationRunner: Sendable {
             registryEvidencePassed = registryEvidencePassed && registrySpecFound
             handlerEvidencePassed = handlerEvidencePassed && handlerBound
             let operationResult = driveResult.operationResults[spec.id.rawValue]
-            let observedStatus = operationResult?.status ?? .failed
+            let withheld = operationResult == nil && spec.mutability == .mutating && !options.mutateOpenProject
+            let observedStatus = withheld ? QualificationStatus.notQualified : operationResult?.status ?? .failed
+            let operationDeferral = operationResult?.deferral ?? (withheld ? QualificationDeferral(
+                code: .liveMutationNotRun,
+                detail: "live mutation was not run: --mutate-open-project was not supplied") : nil)
             let caseID = "in-process/\(spec.id.rawValue)"
             let operationWaived = (observedStatus == .notQualified
                 || observedStatus == .protocolSmoke)
@@ -409,7 +413,7 @@ package struct QualificationRunner: Sendable {
                 status: status,
                 verified: passed,
                 verificationKind: verificationKind,
-                deferral: operationResult?.deferral,
+                deferral: operationDeferral,
                 readback: operationResult?.readback,
                 operationResponseSHA256: operationResult?.responseSHA256,
                 operationRequestID: operationResult?.requestID,
@@ -483,7 +487,7 @@ package struct QualificationRunner: Sendable {
                 evidenceFiles: evidenceFiles,
                 reason: passed
                     ? nil
-                    : operationResult?.deferral?.detail
+                    : operationDeferral?.detail
                         ?? operationResult?.failureReason
                         ?? driveResult.failureReason
                         ?? "operation-specific protocol evidence failed",
@@ -492,7 +496,7 @@ package struct QualificationRunner: Sendable {
                 operationID: spec.id.rawValue,
                 operationRequestID: operationResult?.requestID,
                 verificationKind: verificationKind,
-                deferral: operationResult?.deferral,
+                deferral: operationDeferral,
                 readback: operationResult?.readback,
                 restore: operationResult?.restore
             ))

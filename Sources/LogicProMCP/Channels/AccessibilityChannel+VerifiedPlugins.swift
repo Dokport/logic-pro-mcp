@@ -37,6 +37,12 @@ extension AccessibilityChannel {
         /// stops there: the Mixer may already be showing, and View > Show Mixer or key 7 could
         /// hide it again.
         var mixerChildrenUnread = false
+        var windowUnavailable = false
+
+        static func notRevealed(windowUnavailable: Bool = false) -> Self {
+            .init(attempted:false, alreadyVisible:false, strategies:[], menuItemFound:false,
+                menuClicked:false, keySent:false, mixerVisible:false, windowUnavailable:windowUnavailable)
+        }
 
         static let alreadyVisible = MixerRevealResult(
             attempted: false,
@@ -183,11 +189,27 @@ extension AccessibilityChannel {
         }
 
         let fetchedAt = ISO8601DateFormatter.cacheFormatter.string(from: Date())
+        let revealRequested: Bool
+        switch params["reveal_mixer"] {
+        case nil, "false": revealRequested = false
+        case "true": revealRequested = true
+        default:
+            return .error(HonestContract.encodeV2StateC(error:.invalidParams,
+                extras:["operation":operation,"what_was_observed":"reveal_mixer must be a Boolean",
+                    "safe_to_retry":false]))
+        }
 
         // The AX insert subtree is unreadable when the mixer or the requested
         // strip cannot be located — there is nothing to enumerate, so this is
         // State B `readback_unavailable` rather than a fabricated empty chain.
-        let ensuredMixer = await revealMixer(runtime)
+        let ensuredMixer: (mixer: AXUIElement?, result: MixerRevealResult)
+        if let observed = mixerWithoutReveal(runtime:runtime) {
+            ensuredMixer = observed
+        } else if revealRequested, inventoryRevealWindow(runtime:runtime) != nil {
+            ensuredMixer = await revealMixer(runtime)
+        } else {
+            ensuredMixer = (nil,.notRevealed(windowUnavailable:inventoryRevealWindow(runtime:runtime) == nil))
+        }
         let reveal = ensuredMixer.result
         // #982: children that did not read are unknown. Before, they read as no Mixer at all, as a
         // Mixer with no strips ("track index is not present") or as a strip with no inserts.
@@ -219,7 +241,7 @@ extension AccessibilityChannel {
                     "track": track,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
-                    "plugins_unknown_reason": "mixer_not_visible",
+                    "plugins_unknown_reason": reveal.windowUnavailable ? "logic_window_unavailable" : "mixer_not_visible",
                     "mixer_reveal_attempted": reveal.attempted,
                     "mixer_reveal_strategies": reveal.strategies,
                     "mixer_reveal_menu_item_found": reveal.menuItemFound,
@@ -228,7 +250,9 @@ extension AccessibilityChannel {
                     "what_was_attempted": reveal.attempted
                         ? "reveal the mixer, then read insert chain inventory for track \(track)"
                         : "read insert chain inventory for track \(track)",
-                    "what_was_observed": reveal.attempted
+                    "what_was_observed": reveal.windowUnavailable
+                        ? "Logic's window or modal state could not be observed safely; no Mixer reveal was attempted"
+                        : reveal.attempted
                         ? "the mixer remained hidden after the reveal attempt, so the insert subtree could not be read"
                         : "mixer area was not locatable in the AX tree",
                     "recovery_hint": "Open View > Show Mixer in Logic Pro and retry the inventory read.",
@@ -239,7 +263,10 @@ extension AccessibilityChannel {
         guard AXLogicProElements.mixerChannelStrips(in: mixer, runtime: runtime.ax) != nil else {
             return mixerChildrenUnread()
         }
-        guard let target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime) else {
+        var bindingRefusal: String?
+        var failingHeader: Int?
+        guard let target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime,
+            onRefusal:{ bindingRefusal = $0 }, onRefusalHeaderIndex:{ failingHeader = $0 }) else {
             return .success(HonestContract.encodeV2StateB(
                 reason: .readbackUnavailable,
                 extras: [
@@ -248,6 +275,8 @@ extension AccessibilityChannel {
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "ax_subtree_unreadable",
+                    "binding_refusal_reason": bindingRefusal ?? "binding_unavailable",
+                    "binding_refusal_header_index": failingHeader.map { $0 as Any } ?? NSNull(),
                     "what_was_attempted": "read insert chain inventory for track \(track)",
                     "what_was_observed": pluginTrackBindingFailureDetail(mixer: mixer, runtime: runtime),
                     "safe_to_retry": true,
@@ -357,6 +386,20 @@ extension AccessibilityChannel {
         return nil
     }
 
+    /// A missing Mixer is hidden only when its owning Logic window is positively observable.
+    /// Unknown/locked-window and modal observations never authorize a reveal or fallback key.
+    static func inventoryRevealWindow(runtime: AXLogicProElements.Runtime) -> AXUIElement? {
+        guard let app = AXLogicProElements.appRoot(runtime:runtime),
+              case .success(.elements(let windows)) = AXHelpers.getAXUIElementArrayRead(app,kAXWindowsAttribute as String,runtime:runtime.ax),
+              !windows.isEmpty,
+              case .found(let window) = AXLogicProElements.arrangeWindowVerifiedRead(runtime:runtime),
+              windows.contains(where:{ CFEqual($0,window) }),
+              AXHelpers.getRole(window,runtime:runtime.ax) == kAXWindowRole as String,
+              case .success = AXHelpers.childrenResult(window,runtime:runtime.ax),
+              !AXLogicProElements.dialogPresenceReason(runtime:runtime).isBlocked else { return nil }
+        return window
+    }
+
     /// The actions the menu-click reveal takes outside its AX runtime. Production by default. A
     /// test injects all four, so the reveal's branches after an actuation (#982) run without
     /// activating, keying or raising the running Logic.
@@ -387,6 +430,12 @@ extension AccessibilityChannel {
         if let found = mixerWithoutReveal(runtime: runtime) {
             return found
         }
+        guard let window = inventoryRevealWindow(runtime:runtime) else {
+            return (nil,.notRevealed(windowUnavailable:true))
+        }
+        func windowCurrent() -> Bool {
+            inventoryRevealWindow(runtime:runtime).map { CFEqual($0,window) } == true
+        }
 
         // #142 — reveal-reliability hardening. The deterministic AX menu-click
         // path (View > Show Mixer) is PREFERRED and retried (it targets the
@@ -411,7 +460,9 @@ extension AccessibilityChannel {
                 mixerChildrenUnread: true
             ))
         }
-        _ = actuators.activateLogic()
+        guard windowCurrent(), actuators.activateLogic(), windowCurrent() else {
+            return (nil,.notRevealed(windowUnavailable:true))
+        }
 
         // Strategy 1 (preferred): AX menu-click, with retry.
         let menuAttempt = await clickTopLevelMenuItemViaAXMenuClick(
@@ -419,13 +470,19 @@ extension AccessibilityChannel {
             runtime: runtime,
             maxEnabledRetries: 2,
             focusBetweenAttempts: false,
-            actuators: actuators
+            actuators: actuators,
+            permittingActuation: windowCurrent
         )
         var itemFound = menuAttempt.itemFound
         var menuClicked = menuAttempt.clicked
         if menuAttempt.clicked {
             strategies.append("ax_menu_view_show_mixer")
-            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs)
+            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs,
+                in:window, permittingObservation:windowCurrent)
+            guard windowCurrent() else {
+                return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                    menuItemFound:itemFound,menuClicked:true,keySent:false,mixerVisible:false,windowUnavailable:true))
+            }
             if polled.childrenUnread {
                 return unreadAfterReveal(itemFound: itemFound, menuClicked: true, keySent: false)
             }
@@ -447,11 +504,16 @@ extension AccessibilityChannel {
 
         // Strategy 2 (fallback): cgevent key-7 (View > Show Mixer default key).
         var keySent = false
-        if let pid = runtime.logicProPID(),
+        if windowCurrent(), let pid = runtime.logicProPID(),
            actuators.postKeyEvent(7, [], pid) {
             keySent = true
             strategies.append("cgevent_x")
-            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs)
+            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs,
+                in:window, permittingObservation:windowCurrent)
+            guard windowCurrent() else {
+                return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                    menuItemFound:itemFound,menuClicked:menuClicked,keySent:true,mixerVisible:false,windowUnavailable:true))
+            }
             if polled.childrenUnread {
                 return unreadAfterReveal(itemFound: itemFound, menuClicked: menuClicked, keySent: true)
             }
@@ -474,12 +536,17 @@ extension AccessibilityChannel {
         // Strategy 3 (final AX menu retry): the deterministic path again, in
         // case key-7 restored focus the menu needs to resolve. Only attempted
         // when an earlier AX click did not already land the mixer.
+        guard windowCurrent() else {
+            return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                menuItemFound:itemFound,menuClicked:menuClicked,keySent:keySent,mixerVisible:false,windowUnavailable:true))
+        }
         let menuRetry = await clickTopLevelMenuItemViaAXMenuClick(
             candidates: [AXLocalePolicy.showMixerMenuPath],
             runtime: runtime,
             maxEnabledRetries: 1,
             focusBetweenAttempts: true,
-            actuators: actuators
+            actuators: actuators,
+            permittingActuation: windowCurrent
         )
         itemFound = itemFound || menuRetry.itemFound
         if menuRetry.clicked {
@@ -487,7 +554,12 @@ extension AccessibilityChannel {
             if !strategies.contains("ax_menu_view_show_mixer_retry") {
                 strategies.append("ax_menu_view_show_mixer_retry")
             }
-            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs)
+            let polled = await pollMixerAreaVisible(runtime: runtime, timeoutMs: mixerRevealPollTimeoutMs,
+                in:window, permittingObservation:windowCurrent)
+            guard windowCurrent() else {
+                return (nil,.init(attempted:true,alreadyVisible:false,strategies:strategies,
+                    menuItemFound:itemFound,menuClicked:true,keySent:keySent,mixerVisible:false,windowUnavailable:true))
+            }
             if polled.childrenUnread {
                 return unreadAfterReveal(itemFound: itemFound, menuClicked: true, keySent: keySent)
             }
@@ -525,11 +597,16 @@ extension AccessibilityChannel {
     /// at once (#982): it is present, so waiting for it to appear cannot help.
     static func pollMixerAreaVisible(
         runtime: AXLogicProElements.Runtime,
-        timeoutMs: Int
+        timeoutMs: Int,
+        in window: AXUIElement? = nil,
+        permittingObservation: () -> Bool = { true }
     ) async -> AXLogicProElements.MixerAreaLookup {
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
         repeat {
-            let lookup = AXLogicProElements.mixerAreaLookup(runtime: runtime)
+            guard permittingObservation() else { return .notFound }
+            let lookup = window.map { AXLogicProElements.mixerAreaLookup(in:$0,runtime:runtime) }
+                ?? AXLogicProElements.mixerAreaLookup(runtime:runtime)
+            guard permittingObservation() else { return .notFound }
             if lookup.mixer != nil || lookup.childrenUnread {
                 return lookup
             }
@@ -1849,6 +1926,7 @@ extension AccessibilityChannel {
                 extras: ["operation": operation, "write_attempted": false]))
         }
         let contextIsCurrent: () -> Bool = {
+            if PluginsDispatcher.sagaLease != nil, !pluginRollbackOperationIsCurrent() { return false }
             guard !Task.isCancelled,
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime),
                   CFEqual(currentWindow, projectWindow),
@@ -2841,7 +2919,22 @@ extension AccessibilityChannel {
                 window: window,
                 runtime: runtime.ax,
                 verifiedWriteEnvelope: verifiedParameterEnvelope,
-                stateCWithPluginViewRestoration: stateCWithPluginViewRestoration
+                stateCWithPluginViewRestoration: stateCWithPluginViewRestoration,
+                allowingPress: { checkbox, before in
+                    guard let expected = PluginSagaExpectedBefore.current else { return true }
+                    guard expected.matches(track: track, insert: insert, pluginID: pluginID, param: paramKey,
+                        projectPath: referenceParams["project_expected_path"] ?? "", observed: .bool(before)),
+                        pluginRollbackOperationIsCurrent(),
+                        targetPluginIdentityIsStable(target: target, insert: insert, pluginID: pluginID,
+                            originalSlot: slots[insert].element, runtime: runtime),
+                        controlsViewAcquiredPluginWindowFailureStateC(acquiredWindow: window, operation: operation,
+                            identity: identity, pluginID: pluginID, trackName: trackName, runtime: runtime) == nil,
+                        case .found(.checkBox(let current)) = ControlsViewBooleanParameterWriter.locate(
+                            label: controlsViewRowLabel, in: window, runtime: runtime.ax), CFEqual(current, checkbox),
+                        case .success(.some(let latest)) = AXValueExtractors.extractButtonStateResult(checkbox, runtime: runtime.ax),
+                        latest == before else { return false }
+                    return pluginRollbackOperationIsCurrent()
+                }
             )
         }
 
@@ -2960,11 +3053,9 @@ extension AccessibilityChannel {
             return .error(invalidParamsStateC(operation, "missing parameter access"))
         }
 
-        // Step 10 — read the before value (for rollback + provenance). A
-        // direct AXValue write is never safe to issue without a recoverable
-        // state: an accepted write followed by lost readback needs this exact
-        // value for compensation.
-        guard let before = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax) else {
+        // Step 10 — retain the before value for provenance and a possible owned
+        // inverse. It does not authorize compensation if the after-state is lost.
+        guard let before = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax), before.isFinite else {
             return .error(HonestContract.encodeV2StateC(
                 error: .readbackUnavailable,
                 extras: [
@@ -3031,15 +3122,52 @@ extension AccessibilityChannel {
             ))
         }
 
+        func rollbackTargetIsCurrent() -> Bool {
+            guard pluginRollbackOperationIsCurrent(),
+                  targetPluginIdentityIsStable(target: target, insert: insert, pluginID: pluginID,
+                    originalSlot: slots[insert].element, runtime: runtime),
+                  acquiredPluginWindowFailureStateC(acquiredWindow: window, operation: operation,
+                    identity: identity, pluginID: pluginID, trackName: trackName,
+                    axDescription: axDescription, detail: "the acquired editor changed before rollback", runtime: runtime) == nil,
+                  case .unique(let current) = AXLogicProElements.pluginWindowSliderResolution(
+                    in: window, axDescription: axDescription, runtime: runtime.ax),
+                  CFEqual(current, slider) else { return false }
+            return pluginRollbackOperationIsCurrent()
+        }
+
+        // Identity reads can outlive the numeric before-read even while every
+        // original CF survives. A later user value is not this write's baseline.
+        func beforeValueIsCurrent() -> Bool {
+            guard rollbackTargetIsCurrent(),
+                  let current = AXValueExtractors.extractSliderValue(slider, runtime: runtime.ax),
+                  current.isFinite, current == before else { return false }
+            if let expected = PluginSagaExpectedBefore.current,
+               !expected.matches(track: track, insert: insert, pluginID: pluginID, param: paramKey,
+                    projectPath: referenceParams["project_expected_path"] ?? "", observed: .double(current)) { return false }
+            return pluginRollbackOperationIsCurrent()
+        }
+        func beforeValueRefusal() -> ChannelResult {
+            .error(HonestContract.encodeV2StateC(error: .readbackUnavailable, extras: [
+                "operation": operation, "target_identity": identity, "param": paramAlias,
+                "before_normalized": before,
+                "what_was_attempted": "require the retained before-value and target immediately before the first parameter mutation",
+                "what_was_observed": "the current value was changed, unreadable or non-finite, or target/operation ownership ended; no parameter mutation or inverse was sent",
+                "write_attempted": false, "rollback_attempted": false, "safe_to_retry": false,
+            ]))
+        }
+
         // Step 11 — choose the declared AX write method. Compressor threshold
         // remains a single AXValue assignment; Channel EQ's measured controls
         // require readback-driven AXValue nudges.
         switch writeMethod {
         case "ax_slider_axvalue":
+            guard beforeValueIsCurrent() else { return beforeValueRefusal() }
             guard AXValueExtractors.setSliderValue(slider, requested, runtime: runtime.ax) else {
                 let rollback = rollbackSliderValue(
                     slider,
                     to: before,
+                    ownedAfter: nil,
+                    targetIsCurrent: rollbackTargetIsCurrent,
                     writeMethod: writeMethod,
                     tolerance: tolerance,
                     runtime: runtime.ax
@@ -3055,9 +3183,9 @@ extension AccessibilityChannel {
                         "rollback_attempted": rollback.attempted,
                         "rollback_succeeded": rollback.succeeded,
                         "rollback_observed": rollback.observed ?? NSNull(),
-                        "rolled_back": rollback.succeeded,
-                        "parameter_left_changed": !rollback.succeeded,
-                        "what_was_observed": "the AX value write was rejected; rollback to the readable pre-write value was attempted",
+                        "rolled_back": rollback.attempted && rollback.succeeded,
+                        "parameter_left_changed": rollback.parameterLeftChanged(before: before, tolerance: tolerance),
+                        "what_was_observed": "the AX value write was rejected; no inverse was authorized without an owned after-state",
                         "safe_to_retry": rollback.succeeded,
                         "write_attempted": true,
                     ]
@@ -3070,6 +3198,8 @@ extension AccessibilityChannel {
                 let rollback = rollbackSliderValue(
                     slider,
                     to: before,
+                    ownedAfter: nil,
+                    targetIsCurrent: rollbackTargetIsCurrent,
                     writeMethod: writeMethod,
                     tolerance: tolerance,
                     runtime: runtime.ax
@@ -3085,9 +3215,9 @@ extension AccessibilityChannel {
                         "rollback_attempted": rollback.attempted,
                         "rollback_succeeded": rollback.succeeded,
                         "rollback_observed": rollback.observed ?? NSNull(),
-                        "rolled_back": rollback.succeeded,
-                        "parameter_left_changed": !rollback.succeeded,
-                        "what_was_observed": "the slider value could not be read after the write; rollback to the readable pre-write value was attempted",
+                        "rolled_back": rollback.attempted && rollback.succeeded,
+                        "parameter_left_changed": rollback.parameterLeftChanged(before: before, tolerance: tolerance),
+                        "what_was_observed": "the slider value could not be read after the write; no inverse was authorized from an unknown state",
                         "safe_to_retry": rollback.succeeded,
                         "write_attempted": true,
                     ]
@@ -3111,11 +3241,13 @@ extension AccessibilityChannel {
                 ]))
             }
 
-            // Mismatch — roll back to the before value (re-set + re-read) so a
-            // failed verified write does not leave the parameter changed.
+            // The observed mismatch is not permanent ownership: a fresh exact
+            // value and target check must still permit any inverse.
             let rollback = rollbackSliderValue(
                 slider,
                 to: before,
+                ownedAfter: after,
+                targetIsCurrent: rollbackTargetIsCurrent,
                 writeMethod: writeMethod,
                 tolerance: tolerance,
                 runtime: runtime.ax
@@ -3134,8 +3266,8 @@ extension AccessibilityChannel {
                     "rollback_attempted": rollback.attempted,
                     "rollback_succeeded": rollback.succeeded,
                     "rollback_observed": rollback.observed ?? NSNull(),
-                    "rolled_back": rollback.succeeded,
-                    "parameter_left_changed": !rollback.succeeded,
+                    "rolled_back": rollback.attempted && rollback.succeeded,
+                    "parameter_left_changed": rollback.parameterLeftChanged(before: before, tolerance: tolerance),
                     "rollback_outcome": rollback.walkOutcome ?? NSNull(),
                     "rollback_to": before,
                     "what_was_attempted": "verify the '\(axDescription)' write within tolerance \(tolerance)",
@@ -3166,6 +3298,8 @@ extension AccessibilityChannel {
             } else {
                 needsDisplay = false
             }
+            var nudgeAttempted = false
+            var firstNudgeRefused = false
             let outcome = SliderIncrementWalk.walk(
                 to: walkTarget,
                 read: {
@@ -3177,10 +3311,20 @@ extension AccessibilityChannel {
                     return SliderIncrementWalk.Reading(value: value, display: display ?? "")
                 },
                 nudge: { rawTarget in
-                    AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime.ax)
+                    if !nudgeAttempted, !beforeValueIsCurrent() {
+                        firstNudgeRefused = true
+                        return false
+                    }
+                    nudgeAttempted = true
+                    return AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime.ax)
                 },
                 budget: incrementWalkBudget
             )
+            if firstNudgeRefused { return beforeValueRefusal() }
+            if !nudgeAttempted {
+                if case .readbackLost = outcome { return beforeValueRefusal() }
+                guard beforeValueIsCurrent() else { return beforeValueRefusal() }
+            }
             switch outcome {
             case let .arrived(steps, final):
                 var extras: [String: Any] = [
@@ -3202,9 +3346,17 @@ extension AccessibilityChannel {
                 }
                 return .success(verifiedParameterEnvelope(extras: extras))
             case .noProgress(_, _), .budgetExhausted(_, _), .overshot(_, _), .readbackLost(_):
+                let ownedAfter: Double?
+                switch outcome {
+                case let .noProgress(_, last), let .budgetExhausted(_, last), let .overshot(_, last):
+                    ownedAfter = last.value
+                case .readbackLost, .arrived: ownedAfter = nil
+                }
                 let rollback = rollbackSliderValue(
                     slider,
                     to: before,
+                    ownedAfter: ownedAfter,
+                    targetIsCurrent: rollbackTargetIsCurrent,
                     writeMethod: writeMethod,
                     tolerance: tolerance,
                     runtime: runtime.ax,
@@ -3270,7 +3422,8 @@ extension AccessibilityChannel {
         window: AXUIElement,
         runtime: AXHelpers.Runtime,
         verifiedWriteEnvelope: ([String: Any]) -> String,
-        stateCWithPluginViewRestoration: (HonestContract.FailureError, [String: Any]) -> String
+        stateCWithPluginViewRestoration: (HonestContract.FailureError, [String: Any]) -> String,
+        allowingPress: (AXUIElement, Bool) -> Bool = { _, _ in true }
     ) -> ChannelResult {
         // The caller already selected and structurally confirmed Controls view.
         // Do not repeat the selection here: reopening its menu would make this
@@ -3320,7 +3473,8 @@ extension AccessibilityChannel {
         let toggle = ControlsViewBooleanParameterWriter.pressAndVerify(
             checkbox,
             requested: requestedState,
-            runtime: runtime
+            runtime: runtime,
+            allowingPress: { allowingPress(checkbox, $0) }
         )
         if toggle.verified, let observed = toggle.observedAfterPress {
             return .success(verifiedWriteEnvelope([
@@ -3345,7 +3499,7 @@ extension AccessibilityChannel {
         case .some(false):
             restorationObservation = "restore not observed: AXValue did not return to the pre-press state"
         case nil:
-            restorationObservation = "restore not observed: AXValue was unreadable after the compensating press"
+            restorationObservation = "restore not observed: the after-state is unknown and no inverse was sent"
         }
         let failureObservation = [
             toggle.refusal ?? "Controls-view checkbox verification did not establish the requested state",
@@ -3365,7 +3519,7 @@ extension AccessibilityChannel {
                 "restore_attempted": toggle.restoreAttempted,
                 "restore_observed": toggle.restoreObserved ?? NSNull(),
                 "restore_observed_boolean": toggle.restoreObservedValue ?? NSNull(),
-                "parameter_left_changed": toggle.restoreAttempted && toggle.restoreObserved == false,
+                "parameter_left_changed": toggle.observedAfterPress == nil ? NSNull() : false,
                 "what_was_attempted": "AXPress the labelled Controls-view AXCheckBox then require changed AXValue readback",
                 "what_was_observed": failureObservation,
                 "safe_to_retry": false,
@@ -3379,55 +3533,87 @@ extension AccessibilityChannel {
         let succeeded: Bool
         let observed: Double?
         let walkOutcome: String?
+
+        func parameterLeftChanged(before: Double, tolerance: Double) -> Any {
+            guard let observed, observed.isFinite, before.isFinite else { return NSNull() }
+            return abs(observed - before) > tolerance
+        }
     }
 
-    /// Roll a slider back to its pre-write value. A slider that required an
-    /// increment walk for the forward write gets the same walk for rollback;
-    /// using one AXValue set there would only leave it one step closer.
+    private static func pluginRollbackOperationIsCurrent() -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let context = OperationTraceContext.current else { return true }
+        return context.ownsGate() && !context.cancellationRequested()
+            && (context.deadline.map { ContinuousClock.now < $0 } ?? true)
+    }
+
+    /// An inverse requires a finite observed after-state, the exact retained
+    /// target, and an equal fresh value. A before-value alone is not ownership.
     private static func rollbackSliderValue(
         _ slider: AXUIElement,
         to before: Double?,
+        ownedAfter: Double?,
+        targetIsCurrent: () -> Bool,
         writeMethod: String,
         tolerance: Double,
         runtime: AXHelpers.Runtime,
         incrementWalkBudget: Int = ChannelEQBandCatalog.incrementWalkBudget
     ) -> SliderRollback {
-        guard let before else {
+        guard let before, before.isFinite, let ownedAfter, ownedAfter.isFinite,
+              targetIsCurrent(),
+              let current = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+              current.isFinite, current == ownedAfter, targetIsCurrent(),
+              pluginRollbackOperationIsCurrent() else {
             return SliderRollback(attempted: false, succeeded: false, observed: nil, walkOutcome: nil)
+        }
+        if current == before {
+            return SliderRollback(attempted: false, succeeded: true, observed: current, walkOutcome: nil)
         }
         switch writeMethod {
         case "ax_slider_increment_walk":
+            var ownedCurrent = current
+            var inverseAttempted = false
             let outcome = SliderIncrementWalk.walk(
                 to: .rawValue(before, tolerance: tolerance),
                 read: {
-                    AXValueExtractors.extractSliderValue(slider, runtime: runtime).map {
-                        SliderIncrementWalk.Reading(value: $0, display: "")
-                    }
+                    guard targetIsCurrent(),
+                          let value = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+                          value.isFinite, (inverseAttempted || value == ownedCurrent),
+                          pluginRollbackOperationIsCurrent() else { return nil }
+                    ownedCurrent = value
+                    return SliderIncrementWalk.Reading(value: value, display: "")
                 },
                 nudge: { rawTarget in
-                    AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime)
+                    guard targetIsCurrent(),
+                          let latest = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+                          latest.isFinite, latest == ownedCurrent,
+                          pluginRollbackOperationIsCurrent() else { return false }
+                    inverseAttempted = true
+                    return AXValueExtractors.setSliderValue(slider, rawTarget, runtime: runtime)
                 },
                 budget: incrementWalkBudget
             )
             if case let .arrived(_, final) = outcome {
                 return SliderRollback(
-                    attempted: true,
+                    attempted: inverseAttempted,
                     succeeded: true,
                     observed: final.value,
                     walkOutcome: "arrived"
                 )
             }
             return SliderRollback(
-                attempted: true,
+                attempted: inverseAttempted,
                 succeeded: false,
                 observed: nil,
                 walkOutcome: incrementWalkOutcomeName(outcome)
             )
         default:
-            guard AXValueExtractors.setSliderValue(slider, before, runtime: runtime) else {
-                return SliderRollback(attempted: true, succeeded: false, observed: nil, walkOutcome: nil)
-            }
-            guard let restored = AXValueExtractors.extractSliderValue(slider, runtime: runtime) else {
+            // ACK is not the resulting state. An accepted inverse can lose its
+            // readback, and a rejected ACK can still leave the original value.
+            _ = AXValueExtractors.setSliderValue(slider, before, runtime: runtime)
+            guard targetIsCurrent(), pluginRollbackOperationIsCurrent(),
+                  let restored = AXValueExtractors.extractSliderValue(slider, runtime: runtime),
+                  restored.isFinite, targetIsCurrent(), pluginRollbackOperationIsCurrent() else {
                 return SliderRollback(attempted: true, succeeded: false, observed: nil, walkOutcome: nil)
             }
             return SliderRollback(
@@ -5251,20 +5437,25 @@ extension AccessibilityChannel {
         runtime: AXLogicProElements.Runtime,
         maxEnabledRetries: Int,
         focusBetweenAttempts: Bool,
-        actuators: MenuClickActuators = .production
+        actuators: MenuClickActuators = .production,
+        permittingActuation: () -> Bool = { true }
     ) async -> (itemFound: Bool, clicked: Bool, enabledRetries: Int) {
         var itemFound = false
         for attempt in 0..<maxEnabledRetries {
+            guard permittingActuation() else { return (itemFound,false,attempt) }
             _ = actuators.activateLogic()
+            guard permittingActuation() else { return (itemFound,false,attempt) }
             for candidate in candidates {
                 guard let barItem = menuBarItem(matching: candidate.bar, runtime: runtime) else {
                     continue
                 }
 
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 if !openMenuBarItem(barItem, runtime: runtime.ax) {
                     continue
                 }
                 try? await Task.sleep(for: .milliseconds(120))
+                guard permittingActuation() else { return (itemFound,false,attempt) }
 
                 guard let item = menuItem(
                     matching: candidate.item,
@@ -5272,6 +5463,7 @@ extension AccessibilityChannel {
                     under: barItem,
                     runtime: runtime.ax
                 ) else {
+                    guard permittingActuation() else { return (itemFound,false,attempt) }
                     actuators.pressEscape()
                     continue
                 }
@@ -5279,6 +5471,7 @@ extension AccessibilityChannel {
 
                 if let enabled: Bool = AXHelpers.getAttribute(item, kAXEnabledAttribute, runtime: runtime.ax),
                    enabled == false {
+                    guard permittingActuation() else { return (itemFound,false,attempt) }
                     actuators.pressEscape()
                     continue
                 }
@@ -5290,13 +5483,16 @@ extension AccessibilityChannel {
                 // runs, the mixer-reveal consumer falls back to the non-coordinate
                 // cgevent key-7 channel, and the hide-plugin-windows consumer is
                 // explicitly best-effort — so no feature is degraded.
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 if AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax) {
                     return (true, true, attempt)
                 }
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 actuators.pressEscape()
             }
 
             if focusBetweenAttempts {
+                guard permittingActuation() else { return (itemFound,false,attempt) }
                 _ = actuators.raiseMixerWindow()
             }
             try? await Task.sleep(for: .milliseconds(250))

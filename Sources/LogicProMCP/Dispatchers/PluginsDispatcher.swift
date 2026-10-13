@@ -28,6 +28,43 @@ final class VerifiedOpGate: @unchecked Sendable {
     }
 }
 
+/// A single release for one acquired existing gate, including terminal/defer
+/// paths. A later request's gate must never be released by an old defer.
+final class VerifiedPluginSagaLease: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate: VerifiedOpGate
+    private var active = true
+    private var closing = false
+    private var workers = 0
+    init?(gate: VerifiedOpGate) {
+        guard gate.tryAcquire() else { return nil }
+        self.gate = gate
+    }
+    func matches(_ other: VerifiedOpGate) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return active && !closing && gate === other
+    }
+    func beginWorker() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard active, !closing else { return false }
+        workers += 1
+        return true
+    }
+    func endWorker() {
+        lock.lock(); defer { lock.unlock() }
+        workers -= 1
+        if closing && workers == 0 && active { active = false; gate.release() }
+    }
+    func release() {
+        lock.lock(); defer { lock.unlock() }
+        guard active else { return }
+        // A deadline can return before an inner AX worker exits. Close admission
+        // immediately, but retain the actual gate until that worker unwinds.
+        closing = true
+        if workers == 0 { active = false; gate.release() }
+    }
+}
+
 /// `logic_plugins` — verified plugin apply-back surface (R16 Plane 1).
 ///
 /// Commands: get_inventory, get_param_verified, get_channel_eq_state_verified, set_param_verified, set_eq_band_verified,
@@ -37,14 +74,17 @@ final class VerifiedOpGate: @unchecked Sendable {
 /// (router chain is `[.accessibility]` alone) so a State C is always the honest
 /// AX result.
 struct PluginsDispatcher: OperationTraceDispatching {
+    // An internal Saga scope holds the same gate across its complete before-set,
+    // forward writes and compensation. No client-supplied lease is accepted.
+    @TaskLocal static var sagaLease: VerifiedPluginSagaLease?
     // Keeps dispatcher cases auditable against the registry so fallback cannot bypass strict validation.
     static let handledCommands: Set<String> = OperationRegistry.commands(for: .logicPlugins)
 
     static let tool = commandTool(
         name: "logic_plugins",
-        description: "get_param_verified reads one current occupied insert parameter without audio mutation. Inputs: target_ref (ins_...) and param; optional unit, project_ref, track, insert and plugin aliases only corroborate the observed binding. No value, mode, confirmation or caller-supplied project path. Raw units: threshold normalized 0..100 percentage, Channel EQ raw_ax_value, limiter_on/auto_release boolean. observed_display is verbatim, not an inferred conversion. Reads can acquire an editor and temporarily change views; data and UI cleanup outcomes are reported separately. " +
+        description: "plan_parameter_changes takes an occupied target_ref and changes:[{param,value,unit}] and returns a read-only requested-supported-subset before-state/diff. Every request is validated before acquisition; unknown/unsupported/missing/extra fields remain visible. Raw B0 readers run under one UI lease with repeated value bookends and separate cleanup receipts. No audio mutation, atomic snapshot, retained plan or application authority. " + "get_param_verified reads one current occupied insert parameter without audio mutation. Inputs: target_ref (ins_...) and param; optional unit, project_ref, track, insert and plugin aliases only corroborate the observed binding. No value, mode, confirmation or caller-supplied project path. Raw units: threshold normalized 0..100 percentage, Channel EQ raw_ax_value, limiter_on/auto_release boolean. observed_display is verbatim, not an inferred conversion. Reads can acquire an editor and temporarily change views; data and UI cleanup outcomes are reported separately. " +
             "get_channel_eq_state_verified reads the current referenced Channel EQ insert's eight bands in one owned Controls-view acquisition. Required target_ref; optional project_ref, track, insert, plugin aliases and project_expected_path only corroborate that binding. No param, unit, value, mode or confirmation. Returns frequency/gain/Q raw_ax_value with actual host displays, Cut slope host_choice_text, separate Boolean band enable and plugin bypass observations. Missing/unstable required data is partial, never an invented zero or complete state. Stable bookends are not an atomic snapshot; editor/view acquisition and cleanup are reported separately. " +
-            "Verified plugin apply-back for Logic Pro (logic_plugins.*). Commands: get_inventory, get_param_verified, get_channel_eq_state_verified, set_param_verified, set_eq_band_verified, insert_verified. Unlike legacy logic_mixer.set_plugin_param (Scripter, unverified State B), this surface identifies the target track/insert/plugin/param via AX, writes, and reads back — State A only when the observed value matches within tolerance. get_inventory -> { track: Int (required, >= 0) } returns a drift-safe insert chain (physical slot index, read_status ok|empty|unreadable, complete). set_param_verified -> { track: Int, insert: Int, plugin: canonical logic.stock.* id or alias, param: key (e.g. gain_db), value: Float, unit: String, mode: \"duplicate_applyback\", project_expected_path: String (required) }. set_eq_band_verified -> { track: Int, insert: Int, band: String (e.g. Peak 1), parameter: String (e.g. Frequency), value: Float, unit: raw_ax_value|Hz|dB|Q, mode: \"duplicate_applyback\", project_expected_path: String (required) }. Engineering-unit Channel EQ requests are checked against Logic's AXValueDescription; no Hz-to-raw mapping is used. insert_verified -> { track: Int, insert: Int, plugin: Gain|Channel EQ|Compressor, mode: \"duplicate_applyback\", project_expected_path: String (required), expected_name: String }. PRD-007 index binding: insert_verified is `corroborated` — a bare `track` index is REFUSED with index_binding_corroboration_required; supply expected_name (the track name you expect at that index, corroborated against the live header and required to be unique across the surface) or a target_ref instead; expected_name + target_ref together is invalid_params; every binding failure is pre-write with write_attempted:false and takes no verified-op gate. mode confirmed_live is not supported in Release 1 (State C unsupported_mode). ADR-002 (on by default; disable with LOGIC_MCP_ADR002_TARGET_REF=0): set_param_verified, set_eq_band_verified, and insert_verified ALSO accept a session-stable { target_ref: String } from logic://tracks (trk_…) or logic_plugins.get_inventory (ins_…); plugin-insert refs resolve track and physical insert, and explicit track/insert values must agree when supplied or the op fails closed (stale_target_reference); when the kill-switch is set, any supplied target_ref fails closed with target_ref_unavailable; omit target_ref to use explicit selectors.",
+            "Verified plugin apply-back for Logic Pro (logic_plugins.*). Commands: get_inventory, get_param_verified, get_channel_eq_state_verified, plan_parameter_changes, set_param_verified, set_eq_band_verified, insert_verified. Unlike legacy logic_mixer.set_plugin_param (Scripter, unverified State B), this surface identifies the target track/insert/plugin/param via AX, writes, and reads back — State A only when the observed value matches within tolerance. get_inventory -> { track: Int (required, >= 0), reveal_mixer?: Bool (default false) } reads without UI actuation by default. Explicit reveal requires a positively observable non-modal Logic window; unknown windows never authorize a menu click or fallback key. Binding refusals include binding_refusal_reason and binding_refusal_header_index. It returns a drift-safe insert chain (physical slot index, read_status ok|empty|unreadable, complete). set_param_verified -> { track: Int, insert: Int, plugin: canonical logic.stock.* id or alias, param: key (e.g. gain_db), value: Float, unit: String, mode: \"duplicate_applyback\", project_expected_path: String (required) }. set_eq_band_verified -> { track: Int, insert: Int, band: String (e.g. Peak 1), parameter: String (e.g. Frequency), value: Float, unit: raw_ax_value|Hz|dB|Q, mode: \"duplicate_applyback\", project_expected_path: String (required) }. Engineering-unit Channel EQ requests are checked against Logic's AXValueDescription; no Hz-to-raw mapping is used. insert_verified -> { track: Int, insert: Int, plugin: Gain|Channel EQ|Compressor, mode: \"duplicate_applyback\", project_expected_path: String (required), expected_name: String }. PRD-007 index binding: insert_verified is `corroborated` — a bare `track` index is REFUSED with index_binding_corroboration_required; supply expected_name (the track name you expect at that index, corroborated against the live header and required to be unique across the surface) or a target_ref instead; expected_name + target_ref together is invalid_params; every binding failure is pre-write with write_attempted:false and takes no verified-op gate. mode confirmed_live is not supported in Release 1 (State C unsupported_mode). ADR-002 (on by default; disable with LOGIC_MCP_ADR002_TARGET_REF=0): set_param_verified, set_eq_band_verified, and insert_verified ALSO accept a session-stable { target_ref: String } from logic://tracks (trk_…) or logic_plugins.get_inventory (ins_…); plugin-insert refs resolve track and physical insert, and explicit track/insert values must agree when supplied or the op fails closed (stale_target_reference); when the kill-switch is set, any supplied target_ref fails closed with target_ref_unavailable; omit target_ref to use explicit selectors.",
         commandDescription: "Verified plugin command to execute"
     )
 
@@ -88,14 +128,16 @@ struct PluginsDispatcher: OperationTraceDispatching {
         }
 
         switch command {
-        case "get_param_verified", "get_channel_eq_state_verified":
+        case "get_param_verified", "get_channel_eq_state_verified", "plan_parameter_changes":
             // Reads need the same editor/view custody as writes, but never arm a write boundary.
             let wholeEQState = command == "get_channel_eq_state_verified"
+            let parameterPlan = command == "plan_parameter_changes"
             let operation = "logic_plugins.\(command)"
             let allowed = OperationRegistry.spec(tool: "logic_plugins", command: command)?.allowedParams ?? []
             guard params.keys.allSatisfy({ allowed.contains($0) || $0 == "command" }),
                   nonEmptyString(params, "target_ref") != nil,
-                  wholeEQState || nonEmptyString(params, "param") != nil,
+                  wholeEQState || parameterPlan || nonEmptyString(params, "param") != nil,
+                  !parameterPlan || !(params["changes"]?.arrayValue?.isEmpty ?? true),
                   ["track", "insert"].allSatisfy({
                       switch params[$0] {
                       case nil: return true
@@ -149,9 +191,18 @@ struct PluginsDispatcher: OperationTraceDispatching {
                     if let failure = applyPluginInsertBinding(resolved, params: params, writeParams: &readParams, operation: operation) {
                         return failure
                     }
-                    let result = await router.route(operation: "plugin.\(command)", params: readParams)
+                    let result: ChannelResult
+                    if parameterPlan, let changes = params["changes"]?.arrayValue {
+                        result = await Self.parameterPlan(changes: changes, pluginID: plugin, readParams: readParams,
+                            router: router, contextIsCurrent: {
+                                guard !Task.isCancelled, await targetRegistry.resolve(binding.reference) != nil,
+                                      await targetRegistry.currentProjectIdentity == project else { return false }
+                                return true
+                            })
+                    } else { result = await router.route(operation: "plugin.\(command)", params: readParams) }
                     guard !Task.isCancelled, await targetRegistry.resolve(binding.reference) != nil,
                           await targetRegistry.currentProjectIdentity == project else {
+                        if parameterPlan { return toolTextResult(Self.parameterPlanContextFailure(result)) }
                         return toolTextResult(AccessibilityChannel.parameterReadContextFailure(
                             result, error: .staleTargetReference, operation: operation
                         ))
@@ -171,6 +222,12 @@ struct PluginsDispatcher: OperationTraceDispatching {
             var inventoryParams: [String: String] = [:]
             if let track = intParamOrNil(params, "track", "track_index", "index") {
                 inventoryParams["track"] = String(track)
+            }
+            if params["reveal_mixer"] != nil {
+                guard case .value(let reveal) = strictBoolParam(params,"reveal_mixer") else {
+                    return toolInvalidParamsResult("reveal_mixer must be a Boolean")
+                }
+                inventoryParams["reveal_mixer"] = reveal ? "true" : "false"
             }
             let targetSnapshot: TargetRegistrySnapshot?
             if FeatureFlags.adr002TargetRef, let targetRegistry {
@@ -389,7 +446,11 @@ struct PluginsDispatcher: OperationTraceDispatching {
         gate: VerifiedOpGate,
         _ body: () async -> CallTool.Result
     ) async -> CallTool.Result {
-        guard gate.tryAcquire() else {
+        let inheritedLease = sagaLease
+        let acquired: Bool
+        if let inheritedLease { acquired = inheritedLease.matches(gate) }
+        else { acquired = gate.tryAcquire() }
+        guard acquired else {
             return toolTextResult(HonestContract.encodeV2StateC(
                 error: .verifiedOpInProgress,
                 extras: [
@@ -401,7 +462,7 @@ struct PluginsDispatcher: OperationTraceDispatching {
                 ]
             ), isError: true)
         }
-        defer { gate.release() }
+        defer { if inheritedLease == nil { gate.release() } }
         return await body()
     }
 

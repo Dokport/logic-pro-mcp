@@ -319,6 +319,44 @@ func testIssue1228OccupiedPlaceholderIsUnreadable(name: String) {
 
 // MARK: - #982: children that did not read are unknown, not absent
 
+@Test("#1262 inventory never reveals by default, or when windows are unknown even with opt-in",
+      arguments: ["default", "windows_unreadable", "window_absent"])
+func inventoryReadDoesNotActuateUnknownWindow(mode: String) async throws {
+    let b = FakeAXRuntimeBuilder(), app = b.element(126_200), window = b.element(126_201)
+    b.setAttribute(app,kAXMainWindowAttribute as String,window)
+    b.setRole(window,kAXWindowRole as String); b.setChildren(window,[])
+    if mode == "window_absent" { b.removeAttribute(app,kAXMainWindowAttribute as String) }
+    let runtime = b.makeLogicRuntime(appElement:app,
+        attributeValueResultHandler: { node,key in
+            if mode == "windows_unreadable", CFEqual(node,app), key == kAXWindowsAttribute as String {
+                return .failure(.init(raw:AXError.cannotComplete.rawValue))
+            }
+            return nil
+        },setAttributeHandler:nil,performActionHandler:nil)
+    let result = await AccessibilityChannel.defaultGetPluginInventory(
+        params: mode == "default" ? ["track":"0"] : ["track":"0","reveal_mixer":"true"],
+        runtime:runtime,revealMixer: { _ in
+            Issue.record("Inventory revealed without positive observed-window authorization")
+            return (nil,.childrenUnreadBeforeReveal)
+        })
+    let obj = try #require(sharedJSONObject(result.message))
+    #expect(obj["state"] as? String == "B")
+    let attempted = try #require(obj["mixer_reveal_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test("#1262 inventory preserves the exact binding refusal and failing header index")
+func inventoryReportsBindingNameRefusal() async throws {
+    let b = FakeAXRuntimeBuilder()
+    let runtime = makeMixerFixture(b) { [addEmptySlot($0,126_220)] }
+    b.setAttribute(b.element(800_001),kAXDescriptionAttribute as String,"unreadable track header")
+    let result = await AccessibilityChannel.defaultGetPluginInventory(params:["track":"0"],runtime:runtime)
+    let obj = try #require(sharedJSONObject(result.message))
+    #expect(obj["state"] as? String == "B")
+    #expect(obj["binding_refusal_reason"] as? String == "arrange_name_unavailable")
+    #expect(obj["binding_refusal_header_index"] as? Int == 0)
+}
+
 @Test(arguments: [(true, true), (true, false), (false, false)])
 func testGetInventoryDoesNotReportUnreadChildrenAsAbsent(mixerUnread: Bool, mixerByIdentifier: Bool) async throws {
     let b = FakeAXRuntimeBuilder()
@@ -361,9 +399,11 @@ func testGetInventoryDoesNotReportUnreadChildrenAsAbsent(mixerUnread: Bool, mixe
     let runtime = b.makeLogicRuntime(appElement: app)
     b.setAttribute(app, kAXMainWindowAttribute as String, window)
     b.setChildren(window, [])
+    b.setRole(window,kAXWindowRole as String)
+    b.setAttribute(app,kAXWindowsAttribute as String,[window])
 
     let result = await AccessibilityChannel.defaultGetPluginInventory(
-        params: ["track": "0"],
+        params: ["track": "0", "reveal_mixer":"true"],
         runtime: runtime,
         revealMixer: { _ in
             let mixer = b.element(762)
@@ -422,9 +462,11 @@ func testGetInventoryDoesNotReportUnreadChildrenAsAbsent(mixerUnread: Bool, mixe
     let runtime = b.makeLogicRuntime(appElement: app)
     b.setAttribute(app, kAXMainWindowAttribute as String, window)
     b.setChildren(window, [])
+    b.setRole(window,kAXWindowRole as String)
+    b.setAttribute(app,kAXWindowsAttribute as String,[window])
 
     let result = await AccessibilityChannel.defaultGetPluginInventory(
-        params: ["track": "0"],
+        params: ["track": "0", "reveal_mixer":"true"],
         runtime: runtime,
         revealMixer: { _ in
             let mixer = b.element(782)
@@ -469,9 +511,11 @@ func testGetInventoryDoesNotReportUnreadChildrenAsAbsent(mixerUnread: Bool, mixe
     let runtime = b.makeLogicRuntime(appElement: app)
     b.setAttribute(app, kAXMainWindowAttribute as String, window)
     b.setChildren(window, [])
+    b.setRole(window,kAXWindowRole as String)
+    b.setAttribute(app,kAXWindowsAttribute as String,[window])
 
     let result = await AccessibilityChannel.defaultGetPluginInventory(
-        params: ["track": "0"],
+        params: ["track": "0", "reveal_mixer":"true"],
         runtime: runtime,
         revealMixer: { _ in
             (

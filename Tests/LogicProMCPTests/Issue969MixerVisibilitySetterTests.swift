@@ -928,7 +928,9 @@ struct Issue969MixerVisibilitySetterTests {
         case "visible": fixture.unreadNestedGroup = group
         case "malformed_help":
             let child = fixture.builder.element(969_052)
-            fixture.builder.setRole(child, kAXButtonRole as String)
+            // A control-only forest deliberately omits unrelated Help. Keep
+            // this malformed-Help refusal on a container requiring that read.
+            fixture.builder.setRole(child, kAXGroupRole as String)
             fixture.builder.setChildren(child, [])
             fixture.builder.setChildren(group, [child])
             fixture.builder.setAttribute(group, kAXHelpAttribute as String, 42)

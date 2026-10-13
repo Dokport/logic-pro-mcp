@@ -384,6 +384,7 @@ extension AXLogicProElements {
             ancestorIsInspector: false,
             ancestorIsMixer: false,
             parentRequiresNonStripRole: false,
+            ancestorRequiresNoMixerRole: false,
             ancestors: [],
             owners: [],
             remainingNodes: &remainingNodes,
@@ -404,6 +405,7 @@ extension AXLogicProElements {
         ancestorIsInspector: Bool,
         ancestorIsMixer: Bool,
         parentRequiresNonStripRole: Bool,
+        ancestorRequiresNoMixerRole: Bool,
         ancestors: [AXUIElement],
         owners: [AXUIElement],
         remainingNodes: inout Int,
@@ -427,7 +429,7 @@ extension AXLogicProElements {
         // authority token. Help still runs separately under its per-read guard.
         // Older/injected runtimes retain the original individual status reads.
         let nonHelpAttributes = [kAXRoleAttribute, kAXIdentifierAttribute,
-                                 kAXDescriptionAttribute, kAXTitleAttribute] as [String]
+                                 kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as [String]
         var batchCutoff: Error?
         let metadataBatch = requiresCompleteAbsence && runtime.attributeValuesResult != nil
             ? AXHelpers.getNonHelpAttributes(element, nonHelpAttributes, runtime: runtime,
@@ -473,6 +475,13 @@ extension AXLogicProElements {
         if parentRequiresNonStripRole, role == (kAXLayoutItemRole as String) {
             sawIncompleteAbsence = true
         }
+        if ancestorRequiresNoMixerRole,
+           role == (kAXLayoutItemRole as String) || isMixerContainerRole(role) {
+            // A formerly observed control leaf changed into a possible Mixer
+            // subtree after its ancestor omitted Inspector Help. Do not renew
+            // that omission with the changed candidate's new metadata.
+            sawIncompleteAbsence = true
+        }
         let identifier = try metadata(kAXIdentifierAttribute)
         let description = try metadata(kAXDescriptionAttribute, deferCandidateTextFailure: role != nil)
         let title = try metadata(kAXTitleAttribute, deferCandidateTextFailure: role != nil)
@@ -480,7 +489,16 @@ extension AXLogicProElements {
         // can affect this node or a subtree. A failed read still hides possible
         // strips; it is never an observed leaf.
         try check()
-        let observedChildren = childrenIfRead(element, runtime: runtime)
+        let observedChildren: [AXUIElement]?
+        if let metadataBatch {
+            switch metadataBatch[4] {
+            case .success(let value):
+                if case .success(let children) = AXHelpers.projectChildrenStatus(.success, value) {
+                    observedChildren = children
+                } else { observedChildren = nil }
+            case .failure(let error): observedChildren = error.isDefinitiveAbsence ? [] : nil
+            }
+        } else { observedChildren = childrenIfRead(element, runtime: runtime) }
         if let observedChildren { observingExposure?.observeChildren(element: element, children: observedChildren) }
         let canBeEmptyLegacyMixer = identifier == "Mixer"
             && (role == (kAXGroupRole as String) || role == (kAXScrollAreaRole as String))
@@ -488,19 +506,73 @@ extension AXLogicProElements {
         // is unavailable, conservatively census every descendant instead: that
         // enlarges the search rather than hiding a possible Mixer. Role, possible
         // candidate identity, children and traversal bounds remain strict.
-        // A completely read childless nonlegacy node cannot be a candidate or
-        // contain one. Omit its side-effecting Help, not any deciding metadata,
-        // child/status read, traversal or remaining per-Help guard.
-        let needsInspectorHelp = observedChildren?.isEmpty != true || canBeEmptyLegacyMixer
+        // A completely observed forest of leaf controls (including a slider's
+        // leaf readout/knob) contains no eligible Mixer container or strip.
+        // Legacy IDs, unknown reads, other roles and deeper subtrees retain Help.
+        let controlRoles = [kAXRadioButtonRole, kAXSplitterRole, kAXDisclosureTriangleRole,
+                            kAXCheckBoxRole, kAXButtonRole, kAXSliderRole,
+                            kAXTextFieldRole, kAXStaticTextRole, kAXValueIndicatorRole] as [String]
+        let scalarLeafRoles = [kAXValueIndicatorRole, kAXSliderRole, kAXStaticTextRole] as [String]
+        var hasOnlyControlLeaves = false
+        if requiresCompleteAbsence, !sawIncompleteAbsence, !canBeEmptyLegacyMixer, depth < 12,
+           let observedChildren, observedChildren.count <= remainingNodes {
+            hasOnlyControlLeaves = true
+            var remainingLeafNodes = remainingNodes - observedChildren.count
+            for child in observedChildren {
+                try check()
+                let childRole = AXHelpers.getRole(child, runtime: runtime)
+                observingExposure?.observeRole(element: child, role: childRole)
+                guard let childRole, controlRoles.contains(childRole) else {
+                    if childRole == nil { sawIncompleteAbsence = true }
+                    hasOnlyControlLeaves = false
+                    break
+                }
+                try check()
+                guard let grandchildren = childrenIfRead(child, runtime: runtime) else {
+                    sawIncompleteAbsence = true
+                    hasOnlyControlLeaves = false
+                    break
+                }
+                observingExposure?.observeChildren(element: child, children: grandchildren)
+                if !grandchildren.isEmpty {
+                    guard childRole == (kAXSliderRole as String), depth + 2 <= 12,
+                          grandchildren.count <= remainingLeafNodes else {
+                        hasOnlyControlLeaves = false; break
+                    }
+                    remainingLeafNodes -= grandchildren.count
+                    for grandchild in grandchildren {
+                        try check()
+                        let grandchildRole = AXHelpers.getRole(grandchild, runtime: runtime)
+                        observingExposure?.observeRole(element: grandchild, role: grandchildRole)
+                        guard let grandchildRole, scalarLeafRoles.contains(grandchildRole) else {
+                            if grandchildRole == nil { sawIncompleteAbsence = true }
+                            hasOnlyControlLeaves = false; break
+                        }
+                        try check()
+                        guard let leaves = childrenIfRead(grandchild, runtime: runtime) else {
+                            sawIncompleteAbsence = true
+                            hasOnlyControlLeaves = false; break
+                        }
+                        observingExposure?.observeChildren(element: grandchild, children: leaves)
+                        if !leaves.isEmpty { hasOnlyControlLeaves = false; break }
+                    }
+                    if !hasOnlyControlLeaves { break }
+                }
+            }
+        }
+        // Omit only side-effecting Help; all metadata, status reads and bounded
+        // descendant traversal still run. Performed Help keeps its deciding census.
+        let needsInspectorHelp = (observedChildren?.isEmpty != true && !hasOnlyControlLeaves)
+            || canBeEmptyLegacyMixer
         let help = needsInspectorHelp
             ? try metadata(kAXHelpAttribute, allowUnreadContext: role != nil) : nil
         let text = [identifier, description, title, help].compactMap { $0 }.joined(separator: " ").lowercased()
         let isInspector = ancestorIsInspector
             || AXLocalePolicy.mixerInspectorContext.containsAny(in: text)
-        let isMixerContainer = !isInspector
+        let isMixerContainer = !ancestorRequiresNoMixerRole && !isInspector
             && [identifier, description, title].contains { AXLocalePolicy.mixerNamedElement.containsNormalized($0) }
             && isMixerContainerRole(role)
-        let legacyRole = !isInspector && identifier == "Mixer"
+        let legacyRole = !ancestorRequiresNoMixerRole && !isInspector && identifier == "Mixer"
             && (role == (kAXGroupRole as String) || role == (kAXScrollAreaRole as String)) ? role : nil
         // Performed Help retains its original post-Help deciding census. A
         // failed earlier read is not renewed by a later successful one.
@@ -553,6 +625,7 @@ extension AXLogicProElements {
                 ancestorIsInspector: isInspector,
                 ancestorIsMixer: !isInspector && (ancestorIsMixer || isMixerContainer),
                 parentRequiresNonStripRole: requiresNonStripChildren,
+                ancestorRequiresNoMixerRole: ancestorRequiresNoMixerRole || hasOnlyControlLeaves,
                 ancestors: ancestors + [element],
                 owners: isMixerContainer ? owners + [element] : owners,
                 remainingNodes: &remainingNodes,
@@ -1333,6 +1406,23 @@ extension AXLogicProElements {
               case .success(.some(let listRole)) = AXHelpers.getAttributeResult(
                 children[1], kAXRoleAttribute as String, runtime: runtime) as Result<String?, AXHelpers.AXStatusError>,
               listRole == kAXButtonRole as String else { return nil }
+        // Offscreen native controls can expose the generic assigned-slot placeholder
+        // with a default checkbox value. Occupancy stays known; signal bypass does not.
+        if case .success(.some(let description)) = slotDecidingString(group, kAXDescriptionAttribute as String, runtime: runtime),
+           description.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "send button" { return nil }
+        // The display read can itself observe a change. Preserve the same value
+        // and original direct controls after that deciding read, not a stale bit.
+        guard case .success(.some(let current)) = AXHelpers.getAttributeResult(
+            control, kAXValueAttribute as String, runtime: runtime) as Result<NSNumber?, AXHelpers.AXStatusError>,
+              current.doubleValue == value.doubleValue,
+              case .success(.some(let finalRole)) = AXHelpers.getAttributeResult(
+                control, kAXRoleAttribute as String, runtime: runtime) as Result<String?, AXHelpers.AXStatusError>,
+              finalRole == kAXCheckBoxRole as String,
+              case .success(.some(let finalListRole)) = AXHelpers.getAttributeResult(
+                children[1], kAXRoleAttribute as String, runtime: runtime) as Result<String?, AXHelpers.AXStatusError>,
+              finalListRole == kAXButtonRole as String,
+              let finalChildren = childrenIfRead(group, runtime: runtime), finalChildren.count == 2,
+              zip(finalChildren, children).allSatisfy({ CFEqual($0, $1) }) else { return nil }
         return value.doubleValue == 1
     }
 

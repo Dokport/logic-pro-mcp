@@ -603,6 +603,29 @@ extension AccessibilityChannel {
         // that gap. Focus agreement only permits the ordinary source checks;
         // a mismatch still requires the full original-header renewal below.
         let originalInputFocusCurrent = !inputBusOnly || focusRestored
+        // Popup absence is an observation of the original window/Mixer, not
+        // assignment authority over a strip that Cancel may have retired.
+        // Keep sourceAfter independent and strict: a closed popup cannot renew it.
+        func popupAbsenceObserved() -> Bool {
+            guard !interrupted(), runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
+                  case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+                  CFEqual(window, physical.window),
+                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime),
+                  document.utf8.elementsEqual(physical.document.utf8),
+                  let lookup = try? AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: runtime,
+                    requiresCompleteAbsence: true, checking: {
+                        if interrupted() { throw SessionPopulationObservation.AcquisitionError.cancelled }
+                    }),
+                  case .found(let mixer) = lookup.lookup, CFEqual(mixer, physical.mixer),
+                  checkedOutputPopupMenus(in: mixer, runtime: runtime.ax)?.isEmpty == true,
+                  runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true,
+                  case .found(let finalWindow) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+                  CFEqual(finalWindow, window),
+                  case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime),
+                  finalDocument.utf8.elementsEqual(physical.document.utf8),
+                  runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid, !interrupted() else { return false }
+            return true
+        }
         let closed = originalSourcePresent() && originalInputFocusCurrent && sourceOwned()
             && checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
             && runtime.onScreenWindowList().map { LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 } == true
@@ -657,7 +680,7 @@ extension AccessibilityChannel {
                        inputControlStillCurrent(control), popupAbsent(), source.permits(runtime: runtime) {
                         sourceAfter = true
                         extras["popup_menu_state"] = "closed"
-                        extras["source_renewal"] = "held_exclusive_selection_focus"
+                        extras["source_renewal"] = source.pair.source
                         extras["reference_reread_required"] = true
                         extras["source_index_after"] = source.index
                         inputRenewal = source
@@ -670,6 +693,12 @@ extension AccessibilityChannel {
         extras["menu_custody_at_read"] = dataOwned
         extras["output_checkmark_reads_observed"] = (first == nil ? 0 : 1) + (second == nil ? 0 : 1)
         extras["output_checkmark_reads_agree"] = first != nil && second == first
+        // Do not add fresh window census reads to the original-header renewal
+        // interval. Observe closure only after renewal has already failed;
+        // this receipt cannot repair sourceAfter or publish an assignment.
+        if inputBusOnly, !sourceAfter, !closed, popupAbsenceObserved() {
+            extras["popup_menu_state"] = "closed"
+        }
         // Logic can report a failed AXPress after actually opening this popup. The
         // acknowledgement is a receipt, not read authority: require the newly
         // observed, unchanged source/menu and two agreeing checked choices instead.

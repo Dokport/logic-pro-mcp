@@ -166,6 +166,8 @@ extension Issue982UnreadChildrenTests {
     {
         let (f, failing) = unread.fixture()
         let builder = f.builder, window = f.window, mixer = f.mixerPath[0]
+        builder.setRole(window,kAXWindowRole as String)
+        builder.setAttribute(f.app,kAXWindowsAttribute as String,[window])
         let inspector = builder.element(9850)
         builder.setChildren(window, [inspector])
         let recorded = RecordedActuations()
@@ -203,7 +205,7 @@ extension Issue982UnreadChildrenTests {
     func getInventoryReportsTheRevealThatFoundAnUnreadMixer(_ unread: UnreadMixer) async throws {
         let (_, runtime, actuators, recorded) = Self.revealByKey(unread)
         let obj = try Self.object(await AccessibilityChannel.defaultGetPluginInventory(
-            params: ["track": "0"], runtime: runtime,
+            params: ["track": "0", "reveal_mixer":"true"], runtime: runtime,
             revealMixer: { await AccessibilityChannel.ensureMixerAreaVisibleForInventory(runtime: $0, actuators: actuators) }))
         #expect(obj["state"] as? String == "B")
         #expect(obj["plugins_unknown_reason"] as? String == "ax_subtree_unreadable")
@@ -216,6 +218,29 @@ extension Issue982UnreadChildrenTests {
     }
 
     // MARK: - Census
+
+    @Test("#1262 window loss inside the menu helper stops every later actuation")
+    func inventoryRevealRechecksWindowInsideMenuHelper() async throws {
+        let (f,runtime,_,recorded) = Self.revealByKey(try #require(Self.unidentified.first))
+        let b = f.builder, bar = b.element(126_280), item = b.element(126_281)
+        b.setRole(bar,kAXMenuBarRole as String); b.setRole(item,kAXMenuBarItemRole as String)
+        b.setAttribute(item,kAXTitleAttribute as String,"View")
+        b.setChildren(bar,[item]); b.setChildren(item,[])
+        b.setAttribute(f.app,kAXMenuBarAttribute as String,bar)
+        let actuators = AccessibilityChannel.MenuClickActuators(
+            activateLogic: {
+                recorded.activations += 1
+                if recorded.activations == 2 { b.setAttribute(f.app,kAXWindowsAttribute as String,[AXUIElement]()) }
+                return true
+            },postKeyEvent: { _,_,_ in Issue.record("Key after window loss"); return false },
+            pressEscape: { Issue.record("Escape after window loss") },
+            raiseMixerWindow: { Issue.record("Raise after window loss"); return false })
+        let observed = await AccessibilityChannel.ensureMixerAreaVisibleForInventory(runtime:runtime,actuators:actuators)
+        #expect(observed.mixer == nil)
+        #expect(observed.result.windowUnavailable)
+        #expect(recorded.activations == 2)
+        #expect(b.actionCalls.isEmpty)
+    }
 
     @Test(arguments: unidentified)
     func theCensusNamesAnUnreadMixerAsUnreadable(_ unread: UnreadMixer) throws {

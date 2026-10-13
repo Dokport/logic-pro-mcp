@@ -88,11 +88,12 @@ struct Issue965FreshPopulationAcquisitionTests {
                      observationAction: (@Sendable (AXUIElement, String) -> Bool?)? = nil,
                      wrongDisclosureHit: Bool = false,
                      focusSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool)? = nil,
+                     frameReads: Reads? = nil, frameFault: String? = nil,
                      observingAttribute: (@Sendable (AXUIElement, String) -> Void)? = nil,
                      readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil,
                      observingChildren: (@Sendable (AXUIElement) -> Void)? = nil,
                      observingLegacyChildren: (@Sendable (AXUIElement) -> Void)? = nil) -> AccessibilityChannel {
-            let ax = builder.makeAXRuntime(
+            let baseAX = builder.makeAXRuntime(
                     appElement: app,
                     attributeValueHandler: { element, attribute in
                         reads.record(attribute)
@@ -137,6 +138,53 @@ struct Issue965FreshPopulationAcquisitionTests {
                         guard let disclosure, point == CGPoint(x: 16, y: 26) else { return .success(nil) }
                         return .success(wrongDisclosureHit ? header : disclosure)
                     })
+            let ax: AXHelpers.Runtime
+            if let frameReads {
+                let frameBatch: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError>)?
+                if frameFault == "legacy" { frameBatch = nil }
+                else {
+                    frameBatch = { element, attributes in
+                        let geometry = attributes == [kAXPositionAttribute as String, kAXSizeAttribute as String]
+                        if geometry {
+                            frameReads.record("frame_batch")
+                            if frameFault == "failure" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                            if frameFault == "null_fallback" || frameFault == "missing" { return .success([NSNull(), NSNull()]) }
+                        }
+                        var values: [AnyObject] = []
+                        for attribute in attributes {
+                            let reading: Result<AnyObject?, AXHelpers.AXStatusError> = attribute == kAXChildrenAttribute as String
+                                ? AXHelpers.childrenResult(element, runtime: baseAX).map { $0 as CFArray }
+                                : AXHelpers.getAttributeResult(element, attribute, runtime: baseAX)
+                            switch reading {
+                            case .success(let value): values.append(value ?? NSNull())
+                            case .failure(let error):
+                                var nativeError = AXError(rawValue: error.raw) ?? .cannotComplete
+                                guard let wrapped = AXValueCreate(.axError, &nativeError) else { return .failure(error) }
+                                values.append(wrapped)
+                            }
+                        }
+                        if geometry {
+                            if frameFault == "short" { return .success(Array(values.prefix(1))) }
+                            if frameFault == "position_type" { values[0] = NSNumber(value: 0) }
+                            if frameFault == "size_type" { values[1] = NSNumber(value: 0) }
+                            if frameFault == "position_kind" { values[0] = values[1] }
+                        }
+                        return .success(values)
+                    }
+                }
+                ax = AXHelpers.Runtime(axApp: baseAX.axApp, attributeValue: baseAX.attributeValue,
+                    attributeIsSettable: baseAX.attributeIsSettable, setAttributeValue: baseAX.setAttributeValue,
+                    children: baseAX.children, performAction: baseAX.performAction, childCount: baseAX.childCount,
+                    actionNames: baseAX.actionNames, actionNamesResult: baseAX.actionNamesResult,
+                    childrenResult: baseAX.childrenResult, attributeValueResult: { element, attribute in
+                        if [kAXPositionAttribute as String, kAXSizeAttribute as String].contains(attribute) {
+                            frameReads.record("frame_single")
+                            if frameFault == "missing", attribute == kAXPositionAttribute as String { return .success(nil) }
+                        }
+                        return AXHelpers.getAttributeResult(element, attribute, runtime: baseAX)
+                    }, performActionResult: baseAX.performActionResult, elementAtPosition: baseAX.elementAtPosition,
+                    attributeValuesResult: frameBatch)
+            } else { ax = baseAX }
             let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax,
                 executeAppleScript: { _ in Issue.record("fixture forbids AppleScript"); return .error("forbidden") },
                 onScreenWindowList: { reads.record("window_server_bootstrap"); return [] },
@@ -325,6 +373,171 @@ struct Issue965FreshPopulationAcquisitionTests {
         default: break
         }
         return fixture
+    }
+
+    @Test("Whole population needs a real all-shown single-page end, not merely saved count agreement",
+          arguments: ["complete", "complete_bottom", "flat_hierarchy", "flat_hierarchy_no_navigation", "flat_hierarchy_bottom",
+                      "flat_hierarchy_hidden", "flat_hierarchy_count_gap", "flat_hierarchy_open_stack",
+                      "hidden", "scrollable", "scrolled", "negative_scroll", "out_of_range_scroll", "nonfinite_scroll", "infinite_scroll", "offscreen", "missing_row",
+                      "unreadable_enabled", "foreign_scrollbar", "duplicate_scrollbar",
+                      "late_scrollbar_retirement", "late_frame_loss", "late_scrollbar_role", "late_hidden_view",
+                      "late_scrollbar_orientation", "late_scrollbar_parent", "late_scrollbar_window",
+                      "paired_complete", "paired_null_fallback", "paired_legacy", "paired_missing",
+                      "paired_position_type", "paired_size_type", "paired_position_kind", "paired_failure", "paired_short",
+                      "paired_late_frame_loss", "paired_late_scrollbar_retirement"])
+    func registeredSinglePageTrackPopulationEnd(caseName: String) async throws {
+        let frameMode = caseName.hasPrefix("paired_") ? String(caseName.dropFirst("paired_".count)) : nil
+        let fault = frameMode.map { ["complete", "null_fallback", "legacy"].contains($0) ? "complete" : $0 } ?? caseName
+        let frameReads = frameMode.map { _ in Reads() }
+        let f = hiddenViewFixture(shown: fault != "hidden" && fault != "flat_hierarchy_hidden")
+        let second = f.builder.element(965_990), workspace = f.builder.element(965_991)
+        let content = f.builder.element(965_992), vertical = f.builder.element(965_993)
+        for (i, header) in [f.header, second].enumerated() {
+            f.builder.setRole(header, kAXLayoutItemRole as String)
+            f.builder.setAttribute(header, kAXTitleAttribute as String, "Track \(i + 1)")
+            f.builder.setAttribute(header, kAXDescriptionAttribute as String, "Track \(i + 1) “Track \(i + 1)”")
+            f.builder.setAttribute(header, kAXSelectedAttribute as String, false)
+            f.builder.setFrame(header, x: 0, y: CGFloat(i * 40), width: 200, height: 40)
+            f.builder.setChildren(header, [])
+        }
+        f.builder.setChildren(f.rail, fault == "missing_row" ? [f.header] : [f.header, second])
+        if fault == "flat_hierarchy_open_stack" {
+            let disclosure = f.builder.element(965_996)
+            f.builder.setRole(disclosure, kAXDisclosureTriangleRole as String)
+            f.builder.setAttribute(disclosure, kAXValueAttribute as String, NSNumber(value: 1))
+            f.builder.setChildren(f.header, [disclosure])
+        }
+        let headerScroll = f.builder.element(965_971), headerSplit = f.builder.element(965_976)
+        f.builder.setFrame(headerScroll, x: 0, y: 0, width: 200, height: 200)
+        f.builder.setRole(workspace, kAXScrollAreaRole as String)
+        f.builder.setFrame(workspace, x: 200, y: 0, width: 400, height: 200)
+        f.builder.setRole(content, kAXGroupRole as String)
+        f.builder.setAttribute(content, kAXDescriptionAttribute as String, "Tracks contents")
+        f.builder.setChildren(content, [])
+        f.builder.setRole(vertical, kAXScrollBarRole as String)
+        f.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+        f.builder.setAttribute(vertical, kAXEnabledAttribute as String, NSNumber(value: fault == "scrollable"))
+        let scrollValue: Double
+        switch fault {
+        case "scrolled": scrollValue = 0.5
+        case "complete_bottom", "flat_hierarchy_bottom": scrollValue = 1
+        case "negative_scroll": scrollValue = -1
+        case "out_of_range_scroll": scrollValue = 2
+        case "nonfinite_scroll": scrollValue = .nan
+        case "infinite_scroll": scrollValue = .infinity
+        default: scrollValue = 0
+        }
+        f.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: scrollValue))
+        f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.window)
+        f.builder.setChildren(vertical, [])
+        f.builder.setChildren(workspace, [content, vertical])
+        f.builder.setChildren(headerSplit, [headerScroll, workspace])
+        if fault == "offscreen" { f.builder.setFrame(second, x: 0, y: 190, width: 200, height: 40) }
+        if fault == "foreign_scrollbar" {
+            f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.builder.element(965_994))
+        }
+        if fault == "duplicate_scrollbar" {
+            let other = f.builder.element(965_995)
+            f.builder.setRole(other, kAXScrollBarRole as String)
+            f.builder.setAttribute(other, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+            f.builder.setAttribute(other, kAXEnabledAttribute as String, NSNumber(value: false))
+            f.builder.setAttribute(other, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setChildren(other, [])
+            f.builder.setChildren(workspace, [content, vertical, other])
+        }
+        let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-single-page-\(UUID().uuidString).logicx")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, bundle.absoluteString)
+        let metadata = try PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": fault == "flat_hierarchy_count_gap" ? 3 : 2], format: .xml, options: 0)
+        let reader = LogicProjectFileReader.Runtime(currentDocumentPath: { nil }, now: Date.init,
+            readPlistData: { _ in metadata }, mtime: { _ in Date(timeIntervalSince1970: 0) }, sleep: { _ in })
+        let endBoundaryReads = Reads()
+        let flatHierarchy = fault.hasPrefix("flat_hierarchy")
+        let result = try await inspect(fixture: f, domains: flatHierarchy ? ["tracks", "hierarchy"] : ["tracks"],
+            navigation: fault == "flat_hierarchy", fileReader: reader,
+            frameReads: frameReads, frameFault: frameMode,
+            readingAttribute: { element, attribute in
+                if fault == "unreadable_enabled", CFEqual(element, vertical), attribute == kAXEnabledAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                if fault.hasPrefix("late_"), CFEqual(element, vertical), attribute == kAXValueAttribute as String {
+                    endBoundaryReads.record("deciding_value")
+                    if endBoundaryReads.count == 3 {
+                        if fault == "late_frame_loss" {
+                            f.builder.setFrame(second, x: 0, y: 190, width: 200, height: 40)
+                        } else if fault == "late_scrollbar_role" {
+                            f.builder.setRole(vertical, kAXButtonRole as String)
+                        } else if fault == "late_hidden_view" {
+                            f.builder.setAttribute(f.builder.element(965_973), kAXValueAttribute as String, NSNumber(value: 0))
+                        } else if fault == "late_scrollbar_orientation" {
+                            f.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXHorizontalOrientationValue as String)
+                        } else if fault == "late_scrollbar_parent" {
+                            f.builder.setAttribute(vertical, kAXParentAttribute as String, f.builder.element(965_994))
+                        } else if fault == "late_scrollbar_window" {
+                            f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.builder.element(965_994))
+                        } else {
+                            let replacement = f.builder.element(965_995)
+                            f.builder.setRole(replacement, kAXScrollBarRole as String)
+                            f.builder.setAttribute(replacement, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+                            f.builder.setAttribute(replacement, kAXEnabledAttribute as String, NSNumber(value: false))
+                            f.builder.setAttribute(replacement, kAXValueAttribute as String, NSNumber(value: 0))
+                            f.builder.setChildren(replacement, [])
+                            f.builder.setChildren(workspace, [content, replacement])
+                        }
+                    }
+                    return .success(NSNumber(value: 0))
+                }
+                return nil
+            })
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        let tracks = try #require(body["tracks"] as? [String: Any])
+        let witnesses = try #require(tracks["witnesses"] as? [String: Any])
+        let completeFlat = fault == "flat_hierarchy" || fault == "flat_hierarchy_no_navigation" || fault == "flat_hierarchy_bottom"
+        if fault == "complete" || fault == "complete_bottom" || completeFlat || fault == "flat_hierarchy_open_stack" {
+            #expect(tracks["coverage"] as? String == "complete", "A real one-page end must be usable, not unconditional count-only partial coverage")
+            #expect(witnesses["population_end_source"] as? String == "ax_all_shown_single_page")
+        } else {
+            #expect(tracks["coverage"] as? String != "complete")
+        }
+        if completeFlat {
+            let hierarchy = try #require(body["hierarchy"] as? [String: Any])
+            #expect(hierarchy["coverage"] as? String == "complete")
+            #expect(hierarchy["reasons"] as? [String] == [])
+            let rows = try #require(tracks["rows"] as? [[String: Any]])
+            #expect(rows.count == 2)
+            for row in rows {
+                #expect(row["parent"] is NSNull)
+                #expect(row["depth"] as? Int == 0)
+                #expect(row["parent_source"] as? String == "ax_complete_flat_population")
+                #expect(row["depth_source"] as? String == "ax_complete_flat_population")
+                #expect(row["track_ref"] as? String != nil)
+            }
+        } else if flatHierarchy {
+            let hierarchy = try #require(body["hierarchy"] as? [String: Any])
+            #expect(hierarchy["coverage"] as? String != "complete")
+            for row in try #require(tracks["rows"] as? [[String: Any]]) {
+                #expect(row["parent"] as? String == "unknown")
+                #expect(row["depth"] as? String == "unknown")
+                #expect(row["parent_source"] == nil && row["depth_source"] == nil)
+            }
+        }
+        if fault.hasPrefix("late_") { #expect(endBoundaryReads.count >= 3, "Actually execute the deciding final end read") }
+        if let frameReads {
+            let batches = frameReads.recorded.filter { $0 == "frame_batch" }.count
+            let singles = frameReads.recorded.filter { $0 == "frame_single" }.count
+            if frameMode == "legacy" {
+                #expect(batches == 0 && singles == 36, "Keep every independent frame sample on non-batch runtimes")
+            } else {
+                #expect(batches > 0, "Reach the actual paired geometry reader, not merely inject an unused batch")
+                if frameMode == "complete" || frameMode == "null_fallback" {
+                    #expect(batches == 18, "Both geometry observations of all three elements remain in all three coverage bookends")
+                    #expect(singles == (frameMode == "null_fallback" ? 36 : 0))
+                }
+            }
+        }
+        #expect(f.events.recorded.isEmpty && f.builder.setCalls.isEmpty && f.builder.actionCalls.isEmpty)
+        #expect(f.reads.helpCount == 0)
     }
 
     @Test("permitted hidden-track observation captures hidden members and restores the current rail", arguments: [false, true])
@@ -670,6 +883,20 @@ struct Issue965FreshPopulationAcquisitionTests {
             verifyHierarchy: true, verifyDirectChildren: true)
     }
 
+    @Test("A complete population and every stack's actual direct children establish the whole forest",
+          arguments: [false, true], ["complete", "complete_bottom", "count_gap", "offscreen"])
+    func registeredCompleteStackHierarchy(nested: Bool, fault: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false, nested: nested,
+            verifyHierarchy: true, verifyDirectChildren: true, completeHierarchy: fault)
+    }
+
+    @Test("A complete visible population cannot fill an unobserved stack's direct children",
+          arguments: ["open", "boolean"])
+    func registeredCompletePopulationStillNeedsEveryDirectStackObservation(child: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            verifyHierarchy: true, verifyDirectChildren: true, revealedStack: child, completeHierarchy: "complete")
+    }
+
     @Test(arguments: ["open", "boolean", "late_open"])
     func registeredHierarchyDoesNotPromoteAnOpenOrUntypedChildStackToDirectMembership(child: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false,
@@ -691,10 +918,22 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await observeStack(navigation: true, initiallyExpanded: false, headerFocus: "initial_passive")
     }
 
+    @Test func registeredMixerInclusiveStackReadsItsOriginalNoneditablePassiveName() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "initial_passive", includeStrips: true)
+    }
+
     @Test(arguments: ["initial_editable", "initial_insertion", "initial_foreign", "initial_range",
         "initial_alias", "initial_string", "initial_value", "initial_wrong_window"])
     func registeredStackInitialFocusExceptionCannotAcquireAnEditorOrOtherField(focus: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, headerFocus: focus)
+    }
+
+    @Test(arguments: ["initial_editable", "initial_insertion", "initial_foreign", "initial_range",
+        "initial_alias", "initial_string", "initial_value", "initial_wrong_window"])
+    func registeredMixerInclusiveInitialFocusStillRefusesAnEditorOrOtherField(focus: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: focus, includeStrips: true)
     }
 
     @Test(arguments: [false, true])
@@ -1272,6 +1511,40 @@ struct Issue965FreshPopulationAcquisitionTests {
             headerFocus: headerFocus, focusRestoration: "restored")
     }
 
+    @Test func registeredStackRestoresAfterItsUnchangedPreheldSliderTakesFocus() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "slider_held", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
+    }
+
+    @Test func registeredStackRefusesSliderChangedByTheLastPreInverseMetadataRead() async throws {
+        let calibration = Reads()
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "slider_held", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String,
+            sliderMetadataObservations: calibration)
+        let boundary = try #require(calibration.recorded.first(where: { $0.hasPrefix("inverse_boundary_") }))
+        let finalRead = try #require(Int(boundary.dropFirst("inverse_boundary_".count)))
+        #expect(finalRead > 0)
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "slider_final_changed", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String,
+            sliderMetadataObservations: Reads(), sliderMutationAt: finalRead)
+    }
+
+    @Test func registeredStackRetainsPreheldPassiveFocusWhenOwnershipReadsMoveIt() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "slider_to_label", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
+    }
+
+    @Test func registeredStackRefusesForeignPassiveLabelAfterOwnershipReads() async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: "slider_to_foreign_label", focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
+    }
+
+    @Test(arguments: ["slider_foreign", "slider_replacement", "slider_changed", "slider_insertion", "slider_text", "slider_late_changed"])
+    func registeredStackRefusesLostOrEditingSliderFocus(headerFocus: String) async throws {
+        try await observeStack(navigation: true, initiallyExpanded: false,
+            headerFocus: headerFocus, focusRestoration: "restored", originalFocusRole: kAXGroupRole as String)
+    }
+
     @Test(arguments: ["radio_foreign", "radio_replacement", "radio_ambiguous", "radio_ambiguous_late", "radio_editable", "radio_changed", "radio_unknown", "radio_role", "radio_role_sample"])
     func registeredStackDoesNotAdoptUnownedOrChangedRadioFocus(headerFocus: String) async throws {
         try await observeStack(navigation: true, initiallyExpanded: false, headerFocus: headerFocus)
@@ -1642,12 +1915,14 @@ struct Issue965FreshPopulationAcquisitionTests {
                               knownInnerReplacement: Bool = false, disclosureDecision: String? = nil,
                               delayedLanding: Bool = false, headerFocus: String? = nil,
                               helpMovesFocus: Bool = false, focusRestoration: String? = nil,
-                              originalFocusRole: String = "AXLayoutArea",
+                              originalFocusRole: String = "AXLayoutArea", includeStrips: Bool = false,
                               hiddenViewLoss: Bool = false, hiddenView: Bool = false,
                               hiddenFocusFault: String? = nil, lateScopeFault: String? = nil,
                               verifyHierarchy: Bool = false, verifyDirectChildren: Bool = false,
                               revealedStack: String? = nil, selectedCensusLoss: Bool = false,
-                              selectedEnumerationLoss: Bool = false, postAckForeignFocus: Bool = false) async throws {
+                              selectedEnumerationLoss: Bool = false, postAckForeignFocus: Bool = false,
+                              sliderMetadataObservations: Reads? = nil, sliderMutationAt: Int? = nil,
+                              completeHierarchy: String? = nil) async throws {
         let fixture = Fixture()
         let focusBoundaryReads = Reads()
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("lpm965-stack-\(UUID().uuidString).logicx")
@@ -1690,10 +1965,15 @@ struct Issue965FreshPopulationAcquisitionTests {
         }
         if let headerFocus {
             for label in [passiveLabel, otherLabel] {
-                fixture.builder.setRole(label, headerFocus.hasPrefix("radio_") ? kAXRadioButtonRole as String : kAXTextFieldRole as String)
+                fixture.builder.setRole(label, headerFocus.hasPrefix("slider_") ? kAXSliderRole as String
+                    : headerFocus.hasPrefix("radio_") ? kAXRadioButtonRole as String : kAXTextFieldRole as String)
                 fixture.builder.setAttribute(label, kAXDescriptionAttribute as String,
                     headerFocus.hasPrefix("radio_") ? "Has Focus" : "Track 1")
-                fixture.builder.setAttribute(label, kAXValueAttribute as String, headerFocus.hasPrefix("radio_") ? 1 : 0)
+                fixture.builder.setAttribute(label, kAXValueAttribute as String,
+                    headerFocus.hasPrefix("slider_") ? 173 : headerFocus.hasPrefix("radio_") ? 1 : 0)
+                if headerFocus.hasPrefix("slider_") {
+                    fixture.builder.setAttributeSettable(label, kAXValueAttribute as String, true)
+                }
                 fixture.builder.setAttribute(label, kAXWindowAttribute as String, fixture.window)
             }
             if headerFocus == "editable" || headerFocus == "initial_editable" {
@@ -1716,6 +1996,14 @@ struct Issue965FreshPopulationAcquisitionTests {
                 fixture.builder.setAttribute(shownLabel, kAXValueAttribute as String, 0)
                 fixture.builder.setAttribute(shownLabel, kAXWindowAttribute as String, fixture.window)
                 fixture.builder.setChildren(headers[0], [disclosure, passiveLabel, shownLabel])
+            }
+            if headerFocus == "slider_to_label" || headerFocus == "slider_to_foreign_label" {
+                fixture.builder.setRole(shownLabel, kAXTextFieldRole as String)
+                fixture.builder.setAttribute(shownLabel, kAXValueAttribute as String, 0)
+                fixture.builder.setAttribute(shownLabel, kAXWindowAttribute as String, fixture.window)
+                if headerFocus == "slider_to_label" {
+                    fixture.builder.setChildren(headers[0], [disclosure, passiveLabel, shownLabel])
+                }
             }
             if headerFocus == "radio_ambiguous" { fixture.builder.setChildren(headers[0], [disclosure, passiveLabel, otherLabel]) }
             if headerFocus == "radio_editable" { fixture.builder.setAttributeSettable(passiveLabel, kAXValueAttribute as String, true) }
@@ -1814,6 +2102,43 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.setChildren(menuBar, [trackMenu])
             fixture.builder.setAttribute(fixture.app, kAXMenuBarAttribute as String, menuBar)
         }
+        if let completeHierarchy {
+            // The same real end scaffold as the registered flat-population test,
+            // now around actual owned outer/inner disclosure transitions.
+            let split = fixture.builder.element(965_246), legendSplit = fixture.builder.element(965_247)
+            let headerSplit = fixture.builder.element(965_248), scroll = fixture.builder.element(965_249)
+            let legend = fixture.builder.element(965_250), pageWorkspace = fixture.builder.element(965_258)
+            let content = fixture.builder.element(965_259), vertical = fixture.builder.element(965_260)
+            for element in [split, legendSplit, headerSplit] { fixture.builder.setRole(element, kAXSplitGroupRole as String) }
+            fixture.builder.setRole(fixture.rail, kAXGroupRole as String)
+            fixture.builder.setAttribute(fixture.rail, kAXDescriptionAttribute as String, "Tracks header")
+            fixture.builder.setRole(scroll, kAXScrollAreaRole as String)
+            fixture.builder.setFrame(scroll, x: 0, y: 0, width: 200, height: 2000)
+            for (index, header) in fullyExposed.enumerated() {
+                fixture.builder.setFrame(header, x: 0, y: CGFloat(index * 40), width: 200, height: 40)
+            }
+            if completeHierarchy == "offscreen" {
+                fixture.builder.setFrame(headers.last!, x: 0, y: 1990, width: 200, height: 40)
+            }
+            fixture.builder.setRole(legend, kAXGroupRole as String)
+            fixture.builder.setRole(hide, kAXCheckBoxRole as String)
+            fixture.builder.setAttribute(hide, kAXDescriptionAttribute as String, "Show/Hide Hidden Tracks   H")
+            fixture.builder.setAttribute(hide, kAXValueAttribute as String, NSNumber(value: 1))
+            fixture.builder.setAttribute(hide, kAXWindowAttribute as String, fixture.window)
+            fixture.builder.setChildren(legend, [hide]); fixture.builder.setChildren(scroll, [fixture.rail])
+            fixture.builder.setRole(pageWorkspace, kAXScrollAreaRole as String)
+            fixture.builder.setRole(content, kAXGroupRole as String)
+            fixture.builder.setAttribute(content, kAXDescriptionAttribute as String, "Tracks contents")
+            fixture.builder.setChildren(content, [])
+            fixture.builder.setRole(vertical, kAXScrollBarRole as String)
+            fixture.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+            fixture.builder.setAttribute(vertical, kAXEnabledAttribute as String, NSNumber(value: false))
+            fixture.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: completeHierarchy == "complete_bottom" ? 1 : 0))
+            fixture.builder.setAttribute(vertical, kAXWindowAttribute as String, fixture.window)
+            fixture.builder.setChildren(vertical, []); fixture.builder.setChildren(pageWorkspace, [content, vertical])
+            fixture.builder.setChildren(legendSplit, [legend]); fixture.builder.setChildren(headerSplit, [scroll, pageWorkspace])
+            fixture.builder.setChildren(split, [legendSplit, headerSplit]); fixture.builder.setChildren(fixture.window, [split, controlBar])
+        }
         let replacement = fixture.builder.element(965_231)
         fixture.builder.setRole(replacement, kAXLayoutItemRole as String)
         fixture.builder.setAttribute(replacement, kAXTitleAttribute as String, "Repeated grandchild")
@@ -1823,6 +2148,9 @@ struct Issue965FreshPopulationAcquisitionTests {
         if mouseCase == "prepare_failed" { preparation = { _, _ in nil } }
         else { preparation = nil }
         let observationMouse = AXMouseHelper.Runtime(postMouseEvent: { type, point, clicks in
+            if type == .leftMouseDown, fixture.events.count == 2, let sliderMetadataObservations {
+                sliderMetadataObservations.record("inverse_boundary_\(sliderMetadataObservations.recorded.filter { $0 == "metadata" }.count)")
+            }
             let isInner = nested && point == CGPoint(x: 26, y: 36)
             guard (type == .leftMouseDown || type == .leftMouseUp),
                   point == CGPoint(x: 16, y: 26) || isInner, clicks == 1 else {
@@ -1852,12 +2180,19 @@ struct Issue965FreshPopulationAcquisitionTests {
             if type == .leftMouseDown {
                 if mouseCase == "down_failed" { return false }
                 if let headerFocus {
-                    let focused = ["foreign", "replacement", "radio_foreign", "radio_replacement"].contains(headerFocus) ? otherLabel
+                    let focused = ["foreign", "replacement", "radio_foreign", "radio_replacement", "slider_foreign", "slider_replacement"].contains(headerFocus) ? otherLabel
                         : hiddenView ? shownLabel : passiveLabel
-                    if headerFocus == "replacement" || headerFocus == "radio_replacement" {
+                    if headerFocus == "replacement" || headerFocus == "radio_replacement" || headerFocus == "slider_replacement" {
                         fixture.builder.setChildren(headers[0], [disclosure, otherLabel])
                     }
                     if headerFocus == "radio_changed" { fixture.builder.setAttribute(passiveLabel, kAXValueAttribute as String, 0) }
+                    if headerFocus == "slider_changed" { fixture.builder.setAttribute(passiveLabel, kAXValueAttribute as String, 172) }
+                    if headerFocus == "slider_insertion" {
+                        fixture.builder.setAttribute(passiveLabel, kAXInsertionPointLineNumberAttribute as String, 0)
+                    }
+                    if headerFocus == "slider_text" {
+                        fixture.builder.setAttribute(passiveLabel, kAXSelectedTextAttribute as String, "editing")
+                    }
                     if headerFocus == "radio_role" {
                         fixture.builder.setRole(passiveLabel, kAXTextFieldRole as String)
                         fixture.builder.setAttribute(passiveLabel, kAXValueAttribute as String, 0)
@@ -1971,7 +2306,11 @@ struct Issue965FreshPopulationAcquisitionTests {
                     fixture.builder.setChildren(fixture.rail, fullyExposed)
                 }
                 return nil
-            }, sleep: { _ in }) : .unavailable
+            }, sleep: { _ in }) : completeHierarchy == nil ? .unavailable : .init(
+                currentDocumentPath: { nil }, now: Date.init, readPlistData: { _ in
+                    try? PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": fullyExposed.count
+                        + (completeHierarchy == "count_gap" ? 1 : 0)], format: .xml, options: 0)
+                }, mtime: { _ in Date(timeIntervalSince1970: 0) }, sleep: { _ in })
         let dependencies = HandlerDependencies(router: ChannelRouter(), cache: cache, targetRegistry: registry,
             poller: StatePoller(axChannel: fixture.channel(disclosure: disclosure,
                 additionalDisclosure: nested ? inner : nil, observationMouse: observationMouse,
@@ -2181,6 +2520,29 @@ struct Issue965FreshPopulationAcquisitionTests {
                         fixture.builder.setChildren(fixture.rail, changed)
                     }
                 }, readingAttribute: { element, attribute in
+                    if ["slider_to_label", "slider_to_foreign_label"].contains(headerFocus ?? ""),
+                       fixture.events.count == 2, CFEqual(element, play), attribute == kAXValueAttribute as String,
+                       Thread.callStackSymbols.contains(where: { $0.contains("owned") }),
+                       !fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read") {
+                        fixture.reads.record("held_slider_focus_moved_by_owned_transport_read")
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, shownLabel)
+                    }
+                    if headerFocus?.hasPrefix("slider_") == true,
+                       CFEqual(element, passiveLabel) || CFEqual(element, otherLabel),
+                       [kAXInsertionPointLineNumberAttribute as String, kAXSelectedTextRangeAttribute as String,
+                        kAXSelectedTextAttribute as String, kAXNumberOfCharactersAttribute as String].contains(attribute) {
+                        if fixture.events.count == 2, attribute == kAXNumberOfCharactersAttribute as String {
+                            sliderMetadataObservations?.record("metadata")
+                        }
+                        if fixture.events.count == 2, attribute == kAXNumberOfCharactersAttribute as String,
+                           headerFocus == "slider_late_changed" || (headerFocus == "slider_final_changed"
+                            && sliderMetadataObservations?.recorded.filter { $0 == "metadata" }.count == sliderMutationAt) {
+                            fixture.reads.record("slider_value_changed_at_final_metadata")
+                            fixture.builder.setAttribute(passiveLabel, kAXValueAttribute as String, 172)
+                        }
+                        if let value = fixture.builder.attributeValue(element, attribute) { return .success(value as AnyObject) }
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
                     if helpMovesFocus, fixture.events.count > 0, attribute == kAXHelpAttribute as String {
                         fixture.reads.record("focus_moving_help_read")
                         fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, otherLabel)
@@ -2306,7 +2668,8 @@ struct Issue965FreshPopulationAcquisitionTests {
             liveTrackNames: { [:] }, projectFileReader: fileReader)
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
         let params: [String: Value] = ["domains": .array(verifyHierarchy
-            ? [.string("tracks"), .string("hierarchy")] : [.string("tracks")]), "allow_ui_navigation": .bool(navigation),
+            ? [.string("tracks"), .string("hierarchy")] : includeStrips
+                ? [.string("tracks"), .string("strips")] : [.string("tracks")]), "allow_ui_navigation": .bool(navigation),
             "scope": .string(selectedCensusLoss || selectedEnumerationLoss ? "selection" : "whole_project")]
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: params, mutationGate: gate) {
@@ -2621,8 +2984,29 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty && gate.currentOperation() == nil)
             return
         }
+        if let headerFocus, headerFocus.hasPrefix("slider_"), headerFocus != "slider_held", headerFocus != "slider_to_label" {
+            if headerFocus == "slider_to_foreign_label" {
+                #expect(fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read"))
+            }
+            if headerFocus == "slider_late_changed" || headerFocus == "slider_final_changed" {
+                #expect(fixture.reads.recorded.contains("slider_value_changed_at_final_metadata"))
+            }
+            #expect(fixture.events.recorded == ["disclosure_down", "disclosure_up"])
+            #expect(!fixture.reads.recorded.contains("workspace_focus_setter"))
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let effects = try #require(body["ui_effects"] as? [String: Any])
+            #expect(effects["restoration"] as? String == "not_restored")
+            #expect(["stack_navigation_ownership_lost", "stack_expansion_unverified", "stack_restoration_unverified"].contains(effects["reason"] as? String ?? ""))
+            #expect(await cache.getTracks().isEmpty)
+            #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+            #expect(gate.currentOperation() == nil)
+            return
+        }
         if let focusRestoration {
             let restored = focusRestoration == "restored"
+            if headerFocus == "slider_to_label" {
+                #expect(fixture.reads.recorded.contains("held_slider_focus_moved_by_owned_transport_read"))
+            }
             let setters = fixture.reads.recorded.filter { $0 == "workspace_focus_setter" }
             #expect(setters.count == (["restored", "declined", "wrong_readback"].contains(focusRestoration) ? 1 : 0))
             let stackEvents = nested
@@ -2764,12 +3148,15 @@ struct Issue965FreshPopulationAcquisitionTests {
             fixture.builder.attributeValue($0, kAXTitleAttribute as String) as? String
         })
         #expect(rows.compactMap { $0["track_ref"] as? String }.count == expectedHeaders.count)
-        #expect(tracks["coverage"] as? String == "partial", "exposure alone does not prove hidden/nested/global completion")
+        let completeForest = (completeHierarchy == "complete" || completeHierarchy == "complete_bottom") && revealedStack == nil
+        let completePopulation = completeHierarchy == "complete" || completeHierarchy == "complete_bottom"
+        #expect(tracks["coverage"] as? String == (completePopulation ? "complete" : "partial"),
+            "only an independently complete all-shown page plus its bound saved count establishes the full population")
         if verifyHierarchy {
             let hierarchy = try #require(body["hierarchy"] as? [String: Any])
             if navigation {
                 let exposures = try #require(hierarchy["disclosure_exposures"] as? [[String: Any]])
-                #expect(hierarchy["coverage"] as? String == "partial")
+                #expect(hierarchy["coverage"] as? String == (completeForest ? "complete" : "partial"))
                 #expect(exposures.count == (nested ? 2 : 1))
                 #expect(exposures.first?["stack_ref"] as? String == rows[0]["track_ref"] as? String)
                 #expect(exposures.first?["exposed_track_refs"] as? [String]
@@ -2803,11 +3190,43 @@ struct Issue965FreshPopulationAcquisitionTests {
                 #expect(hierarchy["coverage"] as? String == "unavailable")
                 #expect(hierarchy["disclosure_exposures"] == nil)
             }
-            #expect(rows.allSatisfy { $0["parent"] as? String == "unknown" && $0["depth"] as? String == "unknown" },
-                "a disclosure delta does not establish immediate parents or absolute depth")
+            var observedParents: [String: String] = [:]
+            if navigation, revealedStack == nil {
+                let outer = try #require(rows[0]["track_ref"] as? String)
+                for header in headers[1...23] {
+                    let index = try #require(expectedHeaders.firstIndex(where: { CFEqual($0, header) }))
+                    observedParents[try #require(rows[index]["track_ref"] as? String)] = outer
+                }
+                if nested {
+                    let inner = try #require(rows[1]["track_ref"] as? String)
+                    for row in rows[2...3] { observedParents[try #require(row["track_ref"] as? String)] = inner }
+                }
+            }
+            for row in rows {
+                let ref = try #require(row["track_ref"] as? String)
+                if let parent = observedParents[ref] {
+                    #expect(row["parent"] as? String == parent,
+                        "qualified closed-descendant observations should project their captured physical parent")
+                    #expect(row["parent_source"] as? String == "owned_disclosure_closed_descendants")
+                } else {
+                    if completeForest {
+                        #expect(row["parent"] is NSNull)
+                        #expect(row["parent_source"] as? String == "ax_complete_disclosure_population")
+                    } else { #expect(row["parent"] as? String == "unknown" && row["parent_source"] == nil) }
+                }
+                if completeForest {
+                    var depth = 0, current = ref
+                    while let parent = observedParents[current] { depth += 1; current = parent }
+                    #expect(row["depth"] as? Int == depth)
+                    #expect(row["depth_source"] as? String == "ax_complete_disclosure_population")
+                } else {
+                    #expect(row["depth"] as? String == "unknown",
+                        "partial population or missing direct-stack proof cannot establish absolute depth")
+                }
+            }
             let overall = try #require(body["overall"] as? [String: Any])
             let complete = try #require(overall["complete"] as? Bool)
-            #expect(!complete)
+            if completeForest { #expect(complete) } else { #expect(!complete) }
         }
         let current = await cache.getTracks()
         #expect(current.count == (initiallyExpanded ? 42 : 19), "collapsed descendants must not become ordinary current cache rows")
@@ -3182,6 +3601,83 @@ struct Issue965FreshPopulationAcquisitionTests {
         return (fixture, focus)
     }
 
+    @Test("a fresh Mixer population does not query focus-moving scalar Help",
+          arguments: ["none", "indicator", "slider", "text"])
+    func registeredMixerReadOmitsFocusMovingScalarHelp(childShape: String) async throws {
+        let (fixture, focus) = passiveMixerFocusFixture()
+        let volume = fixture.builder.element(965_987)
+        let pan = fixture.builder.element(965_988)
+        let scalarReads = Reads()
+        for (slider, name, value) in [(volume, "Volume", 0.75), (pan, "Pan", 0.25)] {
+            fixture.builder.setRole(slider, kAXSliderRole as String)
+            fixture.builder.setAttribute(slider, kAXDescriptionAttribute as String, name)
+            fixture.builder.setAttribute(slider, kAXHelpAttribute as String, name)
+            fixture.builder.setAttribute(slider, kAXMinValueAttribute as String, 0.0)
+            fixture.builder.setAttribute(slider, kAXMaxValueAttribute as String, 1.0)
+            fixture.builder.setAttribute(slider, kAXValueAttribute as String, value)
+            fixture.builder.setChildren(slider, [])
+        }
+        if childShape != "none" {
+            let indicator = fixture.builder.element(965_989)
+            let role = childShape == "slider" ? kAXSliderRole as String
+                : childShape == "text" ? kAXStaticTextRole as String : kAXValueIndicatorRole as String
+            fixture.builder.setRole(indicator, role)
+            fixture.builder.setChildren(indicator, [])
+            fixture.builder.setChildren(childShape == "text" ? pan : volume, [indicator])
+        }
+        fixture.builder.setChildren(focus, [volume, pan])
+        let result = try await inspect(fixture: fixture, domains: ["strips"],
+            readingAttribute: { element, attribute in
+                if attribute == kAXHelpAttribute as String,
+                   CFEqual(element, volume) || CFEqual(element, pan) {
+                    scalarReads.record(attribute)
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, element)
+                }
+                return nil
+            })
+        let isError = result.isError ?? false
+        #expect(!isError)
+        #expect(scalarReads.count == 0, "Scalar metadata is not permission to move focus during a fresh population")
+        let held = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+        #expect(CFEqual(held as AnyObject, focus))
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test("fresh Mixer discovery omits focus-moving Help on a completely read header control forest")
+    func registeredMixerDiscoveryOmitsFocusMovingHeaderHelp() async throws {
+        let (fixture, focus) = passiveMixerFocusFixture()
+        let roles = [kAXRadioButtonRole, kAXSplitterRole, kAXDisclosureTriangleRole,
+                     kAXCheckBoxRole, kAXSliderRole, kAXTextFieldRole] as [String]
+        var controls: [AXUIElement] = []
+        for (index, role) in roles.enumerated() {
+            let control = fixture.builder.element(965_990 + index)
+            fixture.builder.setRole(control, role)
+            fixture.builder.setChildren(control, [])
+            controls.append(control)
+        }
+        let thumb = fixture.builder.element(965_996)
+        fixture.builder.setRole(thumb, kAXSliderRole as String)
+        fixture.builder.setChildren(thumb, [])
+        fixture.builder.setChildren(controls[4], [thumb])
+        fixture.builder.setChildren(fixture.header, controls)
+        fixture.builder.setAttribute(fixture.header, kAXHelpAttribute as String, "Track header. Mute or solo the track.")
+        let headerHelp = Reads()
+        let result = try await inspect(fixture: fixture, domains: ["strips"],
+            readingAttribute: { element, attribute in
+                if CFEqual(element, fixture.header), attribute == kAXHelpAttribute as String {
+                    headerHelp.record(attribute)
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header)
+                }
+                return nil
+            })
+        let isError = result.isError ?? false
+        #expect(!isError)
+        #expect(headerHelp.count == 0, "A fully read forest of non-Mixer controls needs no Inspector exclusion")
+        let held = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+        #expect(CFEqual(held as AnyObject, focus))
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
     private func passiveMixerAttributeRead(_ focus: AXUIElement, fault: String? = nil)
         -> @Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>? {
         { element, attribute in
@@ -3449,6 +3945,8 @@ struct Issue965FreshPopulationAcquisitionTests {
         navigation: Bool = false,
         stopBeforeRead: Bool? = nil,
         keyboardFocus: @escaping @Sendable () -> AccessibilityChannel.LogicKeyboardFocus = { .notTextEditing },
+        fileReader: LogicProjectFileReader.Runtime = .unavailable,
+        frameReads: Reads? = nil, frameFault: String? = nil,
         readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil
     ) async throws -> CallTool.Result {
         let cache = StateCache()
@@ -3457,8 +3955,9 @@ struct Issue965FreshPopulationAcquisitionTests {
         await cache.updateChannelStrips([ChannelStripState(trackIndex: 0, name: "Old cached strip")])
         let gate = LogicMutationGate()
         let poller = StatePoller(axChannel: fixture.channel(unreadableRail: unreadableRail,
+                                                         frameReads: frameReads, frameFault: frameFault,
                                                          readingAttribute: readingAttribute), cache: cache,
-                                 runtime: .init(hasVisibleWindow: { hasVisibleWindow }, projectFileReader: .unavailable,
+                                 runtime: .init(hasVisibleWindow: { hasVisibleWindow }, projectFileReader: fileReader,
                                                 keyboardFocus: keyboardFocus))
         if let awaitStop = stopBeforeRead {
             if awaitStop { await poller.stop() }
@@ -3468,7 +3967,7 @@ struct Issue965FreshPopulationAcquisitionTests {
             router: ChannelRouter(), cache: cache, targetRegistry: TargetRegistry(),
             poller: poller,
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
-            liveTrackNames: { [:] }, projectFileReader: .unavailable
+            liveTrackNames: { [:] }, projectFileReader: fileReader
         )
         let handler = try #require(OperationHandlerRegistry.handler(
             tool: "logic_project", command: "inspect_session"

@@ -1279,7 +1279,8 @@ enum ControlsViewBooleanParameterWriter {
     static func pressAndVerify(
         _ checkbox: AXUIElement,
         requested: Bool,
-        runtime: AXHelpers.Runtime = .production
+        runtime: AXHelpers.Runtime = .production,
+        allowingPress: (Bool) -> Bool = { _ in true }
     ) -> ToggleResult {
         let before: Bool
         switch AXValueExtractors.extractButtonStateResult(checkbox, runtime: runtime) {
@@ -1307,6 +1308,12 @@ enum ControlsViewBooleanParameterWriter {
                 restoreObservedValue: nil,
                 refusal: "the Controls-view AXCheckBox AXValue read failed before AXPress (status \(error.diagnosticLabel))"
             )
+        }
+        guard allowingPress(before) else {
+            return ToggleResult(verified: false, pressAttempted: false, before: before,
+                observedAfterPress: before, restoreAttempted: false, restoreObserved: nil,
+                restoreObservedValue: nil,
+                refusal: "the approved before-state, target or operation ownership ended before AXPress")
         }
         guard before != requested else {
             return ToggleResult(
@@ -1361,36 +1368,23 @@ enum ControlsViewBooleanParameterWriter {
             )
         }
 
-        // The first press may have landed even though its state did not verify.
-        // One inverse press is the only available compensation; it is not a
-        // retry of the requested write, and its result is observed separately.
-        _ = AXHelpers.performAction(checkbox, kAXPressAction as String, runtime: runtime)
-        let restored: Bool?
-        let restorationReadFailure: AXHelpers.AXStatusError?
-        switch AXValueExtractors.extractButtonStateResult(checkbox, runtime: runtime) {
-        case let .success(observed):
-            restored = observed
-            restorationReadFailure = nil
-        case let .failure(error):
-            restored = nil
-            restorationReadFailure = error
-        }
+        // Every readable Boolean is either the requested state or the original
+        // state, handled above. An unknown state cannot authorize an inverse:
+        // another toggle could be the first one that lands or undo a user edit.
         let refusal: String
         if let afterReadFailure {
-            refusal = "the Controls-view AXCheckBox AXValue read failed after AXPress (status \(afterReadFailure.diagnosticLabel)); restoration was attempted once"
-        } else if let restorationReadFailure {
-            refusal = "the Controls-view AXCheckBox restoration AXValue read failed (status \(restorationReadFailure.diagnosticLabel)) after one compensating AXPress"
+            refusal = "the Controls-view AXCheckBox AXValue read failed after AXPress (status \(afterReadFailure.diagnosticLabel)); no inverse was sent because the current state is unknown"
         } else {
-            refusal = "the Controls-view AXCheckBox did not change to the requested state after AXPress; AX status is not confirmation, and restoration was attempted once"
+            refusal = "the Controls-view AXCheckBox state was unreadable after AXPress; AX status is not confirmation, and no inverse was sent"
         }
         return ToggleResult(
             verified: false,
             pressAttempted: true,
             before: before,
             observedAfterPress: after,
-            restoreAttempted: true,
-            restoreObserved: restored.map { $0 == before },
-            restoreObservedValue: restored,
+            restoreAttempted: false,
+            restoreObserved: nil,
+            restoreObservedValue: nil,
             refusal: refusal
         )
     }

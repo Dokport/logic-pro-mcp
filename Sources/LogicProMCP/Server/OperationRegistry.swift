@@ -53,6 +53,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case systemSetupControlSurface = "system.setup_control_surface"
     case pluginsGetInventory = "plugins.get_inventory"
     case pluginsGetParamVerified = "plugins.get_param_verified"
+    case pluginsPlanParameterChanges = "plugins.plan_parameter_changes"
     case pluginsGetChannelEQStateVerified = "plugins.get_channel_eq_state_verified"
     case pluginsSetParamVerified = "plugins.set_param_verified"
     case pluginsSetEQBandVerified = "plugins.set_eq_band_verified"
@@ -329,7 +330,7 @@ enum OperationRegistry {
             "system.setup_arm_key", "system.setup_control_surface",
         ],
         ToolID.logicPlugins.rawValue: [
-            "plugins.get_inventory", "plugins.get_param_verified", "plugins.get_channel_eq_state_verified", "plugins.set_param_verified", "plugins.set_eq_band_verified", "plugins.insert_verified",
+            "plugins.get_inventory", "plugins.get_param_verified", "plugins.get_channel_eq_state_verified", "plugins.plan_parameter_changes", "plugins.set_param_verified", "plugins.set_eq_band_verified", "plugins.insert_verified",
         ],
         ToolID.logicEdit.rawValue: [
             "edit.undo", "edit.redo", "edit.cut", "edit.copy", "edit.paste", "edit.delete",
@@ -389,7 +390,7 @@ enum OperationRegistry {
             "setup_arm_key", "setup_control_surface",
         ],
         ToolID.logicPlugins.rawValue: [
-            "get_inventory", "get_param_verified", "get_channel_eq_state_verified", "set_param_verified", "set_eq_band_verified", "insert_verified",
+            "get_inventory", "get_param_verified", "get_channel_eq_state_verified", "plan_parameter_changes", "set_param_verified", "set_eq_band_verified", "insert_verified",
         ],
         ToolID.logicEdit.rawValue: [
             "undo", "redo", "cut", "copy", "paste", "delete", "select_all", "split", "join",
@@ -693,7 +694,7 @@ enum OperationRegistry {
         (.systemExportSupportBundle, "export_support_bundle", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, ["dir"]),
         (.systemHelp, "help", Mutability.readOnly, DeadlineClass.short, VerificationPolicy.none, ["category"]),
         (.systemSagaPreflight, "saga_preflight", Mutability.readOnly, DeadlineClass.medium, VerificationPolicy.none, ["idempotency_key", "steps"]),
-        (.systemSagaExecute, "saga_execute", Mutability.`mutating`, DeadlineClass.long, VerificationPolicy.readbackRequired, ["idempotency_key", "steps"]),
+        (.systemSagaExecute, "saga_execute", Mutability.`mutating`, DeadlineClass.long, VerificationPolicy.readbackRequired, ["idempotency_key", "steps", "confirmed_plan_hash"]),
         (.systemSagaStatus, "saga_status", Mutability.readOnly, DeadlineClass.short, VerificationPolicy.none, ["idempotency_key"]),
         (.systemSagaCancel, "saga_cancel", Mutability.`mutating`, DeadlineClass.short, VerificationPolicy.readbackRequired, ["idempotency_key"]),
         // WHY: a consent-gated one-time Key Commands configuration write (#413); mutating with a long budget (drives the KC GUI + a functional arm-flip verify), consent is the only required param.
@@ -725,7 +726,7 @@ enum OperationRegistry {
             DeadlineClass.short,
             VerificationPolicy.none,
             TargetPolicy.none,
-            ["index", "track", "track_index"]
+            ["index", "track", "track_index", "reveal_mixer"]
         ),
         (
             .pluginsGetParamVerified,
@@ -744,6 +745,15 @@ enum OperationRegistry {
             VerificationPolicy.readbackRequired,
             TargetPolicy.acceptsStableTarget,
             ["insert", "plugin", "plugin_id", "plugin_name", "project_expected_path", "track"]
+        ),
+        (
+            .pluginsPlanParameterChanges,
+            "plan_parameter_changes",
+            Mutability.readOnly,
+            DeadlineClass.medium,
+            VerificationPolicy.readbackRequired,
+            TargetPolicy.acceptsStableTarget,
+            ["changes", "insert", "plugin", "plugin_id", "plugin_name", "track"]
         ),
         (
             .pluginsSetParamVerified,

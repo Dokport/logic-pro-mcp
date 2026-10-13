@@ -7,6 +7,59 @@ import Testing
 
 @Suite("ADR-001 qualification runner", .serialized)
 struct QualificationRunnerTests {
+    @Test("Only intentionally withheld mutations get a non-crediting not-run receipt",
+          arguments: ["withheld", "opted_in_missing", "missing_readonly", "actual_failure"])
+    func missingResultsDistinguishWithheldMutationFromFailedExecution(shape: String) async throws {
+        let read = try #require(OperationRegistry.specs.first { $0.id == .systemHealth })
+        let mutation = try #require(OperationRegistry.specs.first { $0.id == .mixerSetVolume })
+        let specs = [read, mutation]
+        let original = Self.driveResult(specs: specs,
+            failedOperationID: shape == "actual_failure" ? mutation.id : nil)
+        let fixture = try Fixture(specs: specs, drive: { request in
+            #expect(request.expectedOperationCount == specs.count)
+            if shape == "opted_in_missing" { #expect(request.operations.contains(where: { $0.id == mutation.id })) }
+            else { #expect(!request.operations.contains(where: { $0.id == mutation.id })) }
+            let included = Set((shape == "actual_failure" ? specs : request.operations).map(\.id.rawValue))
+            let results = original.operationResults.filter { entry in
+                included.contains(entry.key)
+                    && !(shape == "opted_in_missing" && entry.key == mutation.id.rawValue)
+                    && !(shape == "missing_readonly" && entry.key == read.id.rawValue)
+            }
+            return QualificationDriveResult(handshake: original.handshake, health: original.health,
+                catalog: original.catalog, expectedOperationCount: original.expectedOperationCount,
+                traceList: original.traceList, traceDetail: original.traceDetail, negative: original.negative,
+                observedLocale: original.observedLocale, operationResults: results,
+                wireFrames: original.wireFrames.filter { included.contains($0.operationID) || $0.operationID == "handshake" },
+                mutationRestoreRecords: [], failureReason: original.failureReason)
+        })
+        defer { fixture.remove() }
+        let result = await fixture.runQualification(mutateOpenProject: shape == "opted_in_missing")
+        #expect(result.exitCode == 1, "nonwaived missing or withheld operations still prevent full qualification")
+        let attestation = try JSONDecoder().decode(ReleaseQualificationAttestation.self,
+            from: Data(contentsOf: fixture.attestationURL))
+        let mutationCase = try #require(attestation.cases.first { $0.operationID == mutation.id.rawValue })
+        if shape == "withheld" || shape == "missing_readonly" {
+            #expect(mutationCase.status == .notQualified)
+            #expect(mutationCase.verificationKind == .typedDeferral)
+            #expect(mutationCase.deferral?.code == .liveMutationNotRun)
+            let reason = try #require(mutationCase.reason)
+            #expect(reason.contains("--mutate-open-project"))
+            #expect(mutationCase.operationRequestID == nil && mutationCase.readback == nil && mutationCase.restore == nil)
+            let evidenceURL = fixture.directory.appendingPathComponent(try #require(mutationCase.evidenceFiles.first))
+            let evidence = try JSONDecoder().decode(CaseEvidence.self, from: Data(contentsOf: evidenceURL))
+            #expect(QualificationRunner.evidence(evidence, binds: mutationCase))
+            #expect(!QualificationRunner.evidenceShapeIsValid(evidence), "no readback or trusted-acceptance proof was invented")
+        } else { #expect(mutationCase.status == .failed) }
+        #expect(!mutationCase.verified)
+        #expect(!PromotionGate.operationIsLiveCredited(mutationCase))
+        let readCase = try #require(attestation.cases.first { $0.operationID == read.id.rawValue })
+        #expect(readCase.status == (shape == "missing_readonly" ? .failed : .passed))
+        let decision = PromotionGate().evaluate(attestation: attestation, releaseVersion: "1.2.3",
+            expectedBinarySHA256: fixture.binarySHA256, presentArtifacts: [], requiredArtifacts: [],
+            requiredOperationIDs: Set(specs.map(\.id.rawValue)))
+        #expect(!decision.promotable)
+    }
+
     /// #284 has no measured product defect pinned here at the moment. This is
     /// intentionally an exact list, rather than an allow-list: a new failure, a
     /// changed reason, OR a known failure beginning to pass must all redden the
@@ -241,7 +294,7 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified]))
+            .mixerGetInputBusVerified, .pluginsPlanParameterChanges]))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let markedIDs = Set(marked.map(\.rawValue))
         let passed = operationCases.filter { $0.status == .passed }
@@ -4638,7 +4691,7 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified]))
+            .mixerGetInputBusVerified, .pluginsPlanParameterChanges]))
         let markedIDs = Set(marked.map(\.rawValue))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let passed = operationCases.filter { $0.status == .passed }

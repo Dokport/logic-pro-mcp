@@ -528,6 +528,13 @@ enum AXHelpers {
         guard CFGetTypeID(value) == CFArrayGetTypeID() else {
             return .failure(.malformedChildren)
         }
+        let children = unsafeDowncast(value, to: CFArray.self)
+        for index in 0..<CFArrayGetCount(children) {
+            let item = unsafeBitCast(CFArrayGetValueAtIndex(children, index), to: CFTypeRef.self)
+            guard CFGetTypeID(item) == AXUIElementGetTypeID() else {
+                return .failure(.malformedChildren)
+            }
+        }
         return .success(decodeChildrenArray(value))
     }
 
@@ -781,11 +788,74 @@ enum AXHelpers {
         maxDepth: Int = 10,
         runtime: Runtime = .production,
         requiresCompleteTraversal: Bool = false,
+        batchingRoleAndChildren: Bool = false,
         permittingRead: () -> Bool = { true },
         observingRole: (AXUIElement, String?) -> Void = { _, _ in },
         observingChildren: (AXUIElement, [AXUIElement]) -> Void = { _, _ in }
     ) -> Result<Census, AXStatusError> {
         var hits: [AXUIElement] = []
+        if batchingRoleAndChildren, requiresCompleteTraversal, let role,
+           title == nil, identifier == nil, runtime.attributeValuesResult != nil {
+            // The complete viewport walk opts in to fresh metadata batching;
+            // all other censuses retain their existing seams and ordering.
+            // No Help, previous traversal or cached ownership is reused.
+            guard permittingRead() else { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+            let rootChildren: [AXUIElement]
+            switch childrenResult(element, runtime: runtime) {
+            case .success(let children): rootChildren = children
+            case .failure(let error) where error.isDefinitiveAbsence: rootChildren = []
+            case .failure(let error): return .failure(error)
+            }
+            guard permittingRead() else { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+            observingChildren(element, rootChildren)
+            func visit(_ children: [AXUIElement], remaining: Int) -> Result<Void, AXStatusError> {
+                guard remaining > 0 else {
+                    return children.isEmpty ? .success(()) : .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                for child in children {
+                    let reads = getNonHelpAttributes(child,
+                        [kAXRoleAttribute as String, kAXChildrenAttribute as String], runtime: runtime,
+                        permittingRead: permittingRead)
+                    let actualRole: String
+                    switch reads[0] {
+                    case .success(.some(let value)):
+                        guard CFGetTypeID(value) == CFStringGetTypeID(), let decoded = value as? String else {
+                            observingRole(child, nil); return .failure(.malformedAttribute)
+                        }
+                        actualRole = decoded
+                    case .failure(let error) where !error.isDefinitiveAbsence:
+                        observingRole(child, nil); return .failure(error)
+                    default: observingRole(child, nil); return .failure(.malformedAttribute)
+                    }
+                    observingRole(child, actualRole)
+                    let descendants: [AXUIElement]
+                    switch reads[1] {
+                    case .success(let value):
+                        if let value {
+                            guard CFGetTypeID(value) == CFArrayGetTypeID() else { return .failure(.malformedChildren) }
+                            let array = unsafeDowncast(value, to: CFArray.self)
+                            for index in 0..<CFArrayGetCount(array) {
+                                let item = unsafeBitCast(CFArrayGetValueAtIndex(array, index), to: CFTypeRef.self)
+                                guard CFGetTypeID(item) == AXUIElementGetTypeID() else { return .failure(.malformedChildren) }
+                            }
+                        }
+                        descendants = value.map(decodeChildrenArray) ?? []
+                    case .failure(let error) where error.isDefinitiveAbsence: descendants = []
+                    case .failure(let error): return .failure(error)
+                    }
+                    guard permittingRead() else { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                    if actualRole == role { hits.append(child) }
+                    observingChildren(child, descendants)
+                    if case .failure(let error) = visit(descendants, remaining: remaining - 1) { return .failure(error) }
+                }
+                return .success(())
+            }
+            switch visit(rootChildren, remaining: maxDepth) {
+            case .success: return .success(Census(element: hits.count == 1 ? hits[0] : nil,
+                candidates: hits.count, matches: hits))
+            case .failure(let error): return .failure(error)
+            }
+        }
         switch collectMatchingResult(
             of: element,
             role: role,

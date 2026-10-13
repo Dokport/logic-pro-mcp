@@ -1340,7 +1340,7 @@ struct SemanticOracleMutationTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified]))
+            .mixerGetInputBusVerified, .pluginsPlanParameterChanges]))
         let fixture = try #require(SemanticOracleFixtures.byOperationID[operationID])
         let routed = QualificationSemanticReadbackValidator.validate(
             operationID: operationID.rawValue,

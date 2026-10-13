@@ -51,13 +51,20 @@ extension AccessibilityChannel {
         states.reserveCapacity(headers.count)
         for (index, header) in headers.enumerated() {
             if stop() { return (nil, true) }
-            guard var state = AXValueExtractors.extractTrackState(
-                from: header, index: index, runtime: runtime.ax,
-                observingStackChildren: { exposure?.observeDisclosureChildren(header: header, children: $0, selected: $1) },
-                observingExposure: exposure,
-                readingTypeHelp: readingTypeHelp,
-                stoppingBeforeHelp: stop
-            ) else { return (nil, true) }
+            func extract() -> TrackState? {
+                AXValueExtractors.extractTrackState(
+                    from: header, index: index, runtime: runtime.ax,
+                    observingStackChildren: { exposure?.observeDisclosureChildren(header: header, children: $0, selected: $1) },
+                    observingExposure: exposure,
+                    readingTypeHelp: readingTypeHelp,
+                    stoppingBeforeHelp: stop)
+            }
+            // Population reads already omit focus-moving type Help. Scalar
+            // selectors also query Help, so omit it for this entire header
+            // extraction. Keep non-Help scalar evidence and the ordinary reader.
+            let extracted = readingTypeHelp ? extract() : AXHelpers.HelpReadGuard.$current.withValue(
+                AXHelpers.HelpReadGuard(allowHelpReads: false, stop: { false }), operation: extract)
+            guard var state = extracted else { return (nil, true) }
             if !readingTypeHelp, let window {
                 state.hideButtonReadback = readTrackHideButton(header, in: window, runtime: runtime, exposure: exposure)
             }
@@ -401,6 +408,7 @@ extension AccessibilityChannel {
         private struct PassiveFocusControl {
             let element: AXUIElement
             let role: String
+            let sliderValue: Double?
         }
         private var completedClickFocus: (target: Disclosure, controls: [PassiveFocusControl])?
         private var acceptedPassiveClickFocus: (target: Disclosure, controls: [PassiveFocusControl])?
@@ -482,7 +490,7 @@ extension AccessibilityChannel {
             // admit arbitrary text focus or acquire an editing value as passive.
             if hiddenControl == nil, selected.count == 1, CFEqual(selected[0], first.0) {
                 let controls = passiveFocusControls(first)
-                if controls.filter({ CFEqual($0.element, focus) }).count == 1 {
+                if controls.filter({ $0.sliderValue == nil && CFEqual($0.element, focus) }).count == 1 {
                     originalPassiveFocus = (first, controls)
                 }
             }
@@ -768,11 +776,32 @@ extension AccessibilityChannel {
                 Log.info("Population navigation ownership unavailable: transport", subsystem: "ax"); return false
             }
             guard let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                  CFEqual(focus, observedFocus), !stop(), logic.logicProPID() == pid,
+                  retainCompletedPassiveFocus(focus), !stop(), logic.logicProPID() == pid,
                   isBoundHiddenMenuTarget(target) || logic.focusedApplicationPID() == pid,
-                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(finalFocus, focus),
+                  let finalMain: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
+                  let finalWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
+                  CFEqual(finalMain, window), CFEqual(finalWindow, window),
+                  case .success(.some(let finalDoc)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
+                  finalDoc.utf8.elementsEqual(document.utf8) else {
                 Log.info("Population navigation ownership unavailable: final focus or process", subsystem: "ax"); return false
             }
+            return true
+        }
+
+        private func retainCompletedPassiveFocus(_ focus: AXUIElement) -> Bool {
+            if CFEqual(focus, observedFocus) { return true }
+            // Native ownership reads can move focus between the exact controls
+            // held before our completed click. Revalidate that same passive
+            // custody, not a new role/name/index match or arbitrary workspace.
+            guard completedClickFocus != nil, passiveClickFocus(matching: focus) != nil,
+                  permitsHeldPassiveHeaderFocus(),
+                  let current: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+                  CFEqual(current, focus) else { return false }
+            observedFocus = focus
+            if !effects.changed.contains("keyboard_focus") { effects.changed.append("keyboard_focus") }
             return true
         }
 
@@ -795,7 +824,36 @@ extension AccessibilityChannel {
             }
         }
 
-        private func isPassiveFocusControl(_ field: AXUIElement, expectedRole: String) -> Bool {
+        private func isPassiveFocusControl(_ field: AXUIElement, expectedRole: String,
+                                           sliderValue: Double? = nil) -> Bool {
+            // A completed disclosure click can focus an already-held header
+            // slider. This permits reads and the original workspace inverse,
+            // never a slider action or value write. Editing metadata or a changed
+            // numeric value ends the exception; names/ordinals grant no custody.
+            if expectedRole == kAXSliderRole as String {
+                guard let sliderValue, sliderValue.isFinite,
+                      AXHelpers.getRole(field, runtime: logic.ax) == expectedRole,
+                      AXHelpers.isAttributeSettable(field, kAXValueAttribute as String, runtime: logic.ax) == true,
+                      case .success(.some(let raw)) = AXHelpers.getAttributeResult(field, kAXValueAttribute as String,
+                        runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                      CFGetTypeID(raw) == CFNumberGetTypeID(), let value = raw as? NSNumber,
+                      value.doubleValue == sliderValue,
+                      let owner: AXUIElement = AXHelpers.getAttribute(field, kAXWindowAttribute as String, runtime: logic.ax),
+                      CFEqual(owner, window) else { return false }
+                for attribute in [kAXInsertionPointLineNumberAttribute, kAXSelectedTextRangeAttribute,
+                                  kAXSelectedTextAttribute, kAXNumberOfCharactersAttribute] {
+                    guard case .failure(let error) = AXHelpers.getAttributeResult(field, attribute as String,
+                        runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                          error.isDefinitiveAbsence else { return false }
+                }
+                // Metadata reads are AX boundaries too. Do not let their old
+                // numeric sample authorize an inverse after a concurrent change.
+                guard case .success(.some(let finalRaw)) = AXHelpers.getAttributeResult(field, kAXValueAttribute as String,
+                    runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                      CFGetTypeID(finalRaw) == CFNumberGetTypeID(), let finalValue = finalRaw as? NSNumber,
+                      finalValue.doubleValue == sliderValue else { return false }
+                return true
+            }
             guard let role = AXHelpers.getRole(field, runtime: logic.ax),
                   role == expectedRole,
                   role == kAXTextFieldRole as String || role == kAXRadioButtonRole as String,
@@ -816,9 +874,18 @@ extension AccessibilityChannel {
             var roles = Set<String>()
             for child in children {
                 guard let role = AXHelpers.getRole(child, runtime: logic.ax) else { return [] }
+                if role == kAXSliderRole as String {
+                    guard case .success(.some(let raw)) = AXHelpers.getAttributeResult(child, kAXValueAttribute as String,
+                        runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                          CFGetTypeID(raw) == CFNumberGetTypeID(), let value = raw as? NSNumber else { continue }
+                    if isPassiveFocusControl(child, expectedRole: role, sliderValue: value.doubleValue) {
+                        controls.append(.init(element: child, role: role, sliderValue: value.doubleValue))
+                    }
+                    continue
+                }
                 if role == kAXTextFieldRole as String || role == kAXRadioButtonRole as String {
                     guard roles.insert(role).inserted else { return [] }
-                    if isPassiveFocusControl(child, expectedRole: role) { controls.append(.init(element: child, role: role)) }
+                    if isPassiveFocusControl(child, expectedRole: role) { controls.append(.init(element: child, role: role, sliderValue: nil)) }
                 }
             }
             return controls
@@ -854,10 +921,12 @@ extension AccessibilityChannel {
                   let currentSelection = Self.selectedHeaders(rows, ax: logic.ax), same(currentSelection, selected),
                   completed.controls.filter({ CFEqual($0.element, focus) }).count == 1,
                   AXHelpers.getRole(focus, runtime: logic.ax) == held.role,
-                  isPassiveFocusControl(focus, expectedRole: held.role),
+                  isPassiveFocusControl(focus, expectedRole: held.role, sliderValue: held.sliderValue),
                   case .success(let children) = AXHelpers.childrenResult(completed.target.header, runtime: logic.ax),
                   children.filter({ CFEqual($0, focus) }).count == 1,
-                  passiveFocusControls(completed.target).contains(where: { CFEqual($0.element, focus) && $0.role == held.role }),
+                  passiveFocusControls(completed.target).contains(where: {
+                    CFEqual($0.element, focus) && $0.role == held.role && $0.sliderValue == held.sliderValue
+                  }),
                   AXLogicProElements.heldTrackDisclosureValue(header: completed.target.header,
                     disclosure: completed.target.disclosure, runtime: logic).map({ !usingOriginal || $0 == 0 }) == true,
                   let finalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),

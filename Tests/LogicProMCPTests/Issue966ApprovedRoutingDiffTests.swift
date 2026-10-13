@@ -278,6 +278,36 @@ struct Issue966ApprovedRoutingDiffTests {
         #expect(body["protected_invariants"] == repeated["protected_invariants"])
     }
 
+    @Test(arguments: [.noOutput, .physicalOutput] as [RoutingOutputClassification],
+          ["source", "receiver", "send_only", "disconnected"])
+    func protectedPathsCannotCertifyContradictoryNonBusOutputEvidence(
+        _ classification: RoutingOutputClassification, _ kind: String
+    ) throws {
+        let original = protectedGraph()
+        let contradictedID = kind == "receiver" ? "receiver_one" : "source_opaque"
+        let ns = original.nodes.map { node in
+            guard node.id == contradictedID else { return node }
+            return RoutingNode(id: node.id, kind: node.kind, displayName: node.displayName,
+                busNumber: node.busNumber, targetRef: node.targetRef, outputClassification: classification)
+        }
+        var es = original.edges
+        if kind == "send_only" || kind == "disconnected" {
+            es.removeAll { $0.kind == .mainOutput && $0.source == "source_opaque" }
+        }
+        if kind == "disconnected" { es.removeAll { $0.kind == .send && $0.source == "source_opaque" } }
+        var extras = protectedSink
+        extras["outputs"] = .array([])
+        let body = try plan(graph(nodes: ns, edges: es), policyExtras: extras)
+        let invariant = try #require(body["protected_invariants"]?.arrayValue?.first?.objectValue)
+        let expected = kind == "send_only" ? "connected" : kind == "disconnected" ? "disconnected" : "unverified"
+        #expect(invariant["baseline"]?.stringValue == expected)
+        #expect(invariant["final"]?.stringValue == expected)
+        #expect(invariant["status"]?.stringValue == (kind == "send_only" ? "preserved" : "unverified"))
+        #expect(body["steps"] == body["preview"])
+        let executable = try #require(body["executable"]?.boolValue as Bool?)
+        #expect(!executable)
+    }
+
     @Test func deliberateDisconnectionWithoutProtectionDoesNotInventMusicalIntent() throws {
         let body = try plan(protectedGraph(), noOutput: true, policyExtras: ["sends": .array([.object([
             "target": .string("approved"), "physical_slot": .int(5), "remove": .bool(true)])])])
@@ -1145,11 +1175,16 @@ struct Issue966ApprovedRoutingDiffTests {
     @Test(arguments: [false, true])
     func contradictoryPhysicalClassificationCannotSupplyABusBeforeEdge(noOutput: Bool) throws {
         let body = try plan(graph(nodes: nodes(output: .physicalOutput)), noOutput: noOutput)
+        let findings = try #require(body["findings"]?.arrayValue)
+        let finding = try #require(findings.first?.objectValue)
+        #expect(finding["status"]?.stringValue == "unverified")
+        #expect(finding["observed"] == nil || finding["observed"] == .null)
         let delta = try proposal(body)
         #expect(delta["status"]?.stringValue == "unverified")
         #expect(delta["output_changes"] == nil)
         let reasons = try #require(delta["reasons"]?.arrayValue)
-        #expect(reasons.contains(.string("proposed_before_output_not_bus")))
+        #expect(reasons.contains(.string("output_edge_ambiguous")))
+        #expect(reasons.contains(.string("main_output_proposal_unverified")))
         let executable = try #require(body["executable"]?.boolValue as Bool?)
         #expect(!executable)
     }

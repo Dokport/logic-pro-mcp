@@ -43,8 +43,8 @@ private enum ControlsCheckboxWriteBehavior: Sendable, Equatable {
     /// AXPress reports status 0/accepted but the checkbox AXValue is inert.
     /// This is the exact observation that prevents a status-only success.
     case statusZeroUnchanged
-    /// The first post-press value is mixed, so compensation is warranted; the
-    /// compensating press lands on `true` rather than the original `false`.
+    /// The first post-press value is mixed; a blind second press would land on
+    /// `true` rather than the original `false`.
     case mixedThenChanged
 }
 
@@ -92,9 +92,12 @@ private final class LiveFixture: @unchecked Sendable {
         slotPressReturnsFalse: Bool = false,
         sliderWriteBehavior: SliderWriteBehavior = .direct,
         rejectSliderWrites: Bool = false,
+        rejectSliderInverseAcknowledgement: Bool = false,
         sliderDisplayUnit: String = "%",
         sliderDisplayRoundsDown: Bool = false,
         sliderUsesSignedPositiveDisplay: Bool = false,
+        onSliderDisplayAfterWrite: (@Sendable (FakeAXRuntimeBuilder, AXUIElement) -> Void)? = nil,
+        onSliderAttributeRead: (@Sendable (FakeAXRuntimeBuilder, AXUIElement, String, Int) -> Void)? = nil,
         pluginWindowStaticTextValues: [String]? = nil,
         pluginWindowTitleReadFails: Bool = false,
         pluginWindowsReadStatusBeforeTargetOpen: AXHelpers.AXStatusError? = nil,
@@ -402,7 +405,20 @@ private final class LiveFixture: @unchecked Sendable {
         let pendingPluginWindowChildren = MutableBox<(children: [AXUIElement], settlesAt: Date)?>(nil)
         let runtime = b.makeLogicRuntime(
             appElement: app,
+            attributeValueHandler: { element, attribute in
+                if CFEqual(element, slider) {
+                    onSliderAttributeRead?(b, slider, attribute, sliderWriteCount.value)
+                }
+                if CFEqual(element, slider), attribute == (kAXValueDescriptionAttribute as String),
+                   sliderWriteCount.value > 0 {
+                    onSliderDisplayAfterWrite?(b, slider)
+                }
+                return nil
+            },
             attributeValueResultHandler: { element, attribute in
+                if CFEqual(element, slider) {
+                    onSliderAttributeRead?(b, slider, attribute, sliderWriteCount.value)
+                }
                 if let status = pluginWindowsReadStatusBeforeTargetOpen,
                    CFEqual(element, app),
                    attribute == (kAXWindowsAttribute as String),
@@ -525,6 +541,7 @@ private final class LiveFixture: @unchecked Sendable {
                 if let landed {
                     b.setAttribute(el, kAXValueDescriptionAttribute as String, formatSliderDisplay(landed))
                 }
+                if rejectSliderInverseAcknowledgement, writeIndex > 0 { return false }
                 return true
             },
             performActionHandler: { [b, axActions] el, action in
@@ -1025,6 +1042,143 @@ private func namedEQBandParams(
     let noViewMenuSelection = fixture.controlsViewMenuPressCount.value == 0
         && fixture.editorViewMenuPressCount.value == 0
     #expect(noViewMenuSelection)
+}
+
+@Test(arguments: ["75", "60.5", "unknown", "nonfinite", "gate", "cancellation", "deadline"])
+func testForwardWriteDoesNotOverwriteItsChangedBeforeValue(_ fault: String) async throws {
+    let retainedBefore = MutableBox<Double?>(nil)
+    let injected = MutableBox(false)
+    let zeroSettersAtInjection = MutableBox(false)
+    let fixture = LiveFixture(beforeValue: 60, onSliderAttributeRead: { builder, slider, attribute, writes in
+        guard writes == 0 else { return }
+        if attribute == (kAXValueAttribute as String), retainedBefore.value == nil {
+            retainedBefore.value = builder.attributeValue(slider, attribute) as? Double
+        }
+        guard attribute == (kAXDescriptionAttribute as String), retainedBefore.value != nil,
+              !injected.value else { return }
+        // The engine already read its numeric before-state. This later identity
+        // read retains the SAME description, slot, editor and control CFs.
+        injected.value = true
+        zeroSettersAtInjection.value = writes == 0
+        if let value = Double(fault) {
+            builder.setAttribute(slider, kAXValueAttribute as String, value)
+        } else if fault == "unknown" {
+            builder.setAttribute(slider, kAXValueAttribute as String, NSNull())
+        } else if fault == "nonfinite" {
+            builder.setAttribute(slider, kAXValueAttribute as String, Double.nan)
+        }
+    })
+    let context = OperationTraceContext(mutationGateAcquired: true,
+        ownsGate: { fault != "gate" || !injected.value },
+        deadline: fault == "deadline" ? ContinuousClock.now.advanced(by: .seconds(-1)) : nil,
+        cancellationRequested: { fault == "cancellation" && injected.value })
+    let result = await OperationTraceContext.$current.withValue(context) {
+        await runLive(fixture: fixture, params: thresholdParams(value: "38"))
+    }
+    #expect(retainedBefore.value == 60)
+    #expect(injected.value)
+    #expect(zeroSettersAtInjection.value)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(result["state"] as? String == "C")
+    if let value = Double(fault) { #expect(fixture.currentSliderValue == value) }
+    else if fault == "unknown" { #expect(fixture.currentSliderValue == nil) }
+    else if fault == "nonfinite" {
+        let current = try #require(fixture.currentSliderValue)
+        #expect(current.isNaN)
+    } else { #expect(fixture.currentSliderValue == 60) }
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test func testForwardWriteWithStableBeforeStillSetsRequestedValue() async throws {
+    let fixture = LiveFixture(beforeValue: 60)
+    let result = await runLive(fixture: fixture, params: thresholdParams(value: "38"))
+    #expect(result["state"] as? String == "A")
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 38)
+}
+
+@Test func testSagaApprovedThresholdBeforeIsCheckedByTheActualWriter() async throws {
+    let fixture = LiveFixture(beforeValue: 75)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: "threshold", observed: .double(60))
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: thresholdParams(value: "38"))
+    }
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.currentSliderValue == 75)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test func testSagaApprovedLimiterBeforeIsCheckedBeforeTheActualCheckboxPress() async throws {
+    let fixture = LiveFixture(controlsViewRowLabel: "Limiter On", controlsCheckboxBefore: true,
+        controlsViewInitiallySelected: true)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: "limiter_on", observed: .bool(false))
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: controlsBooleanParams())
+    }
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+    let current = try #require(fixture.builder.attributeValue(fixture.builder.element(100_908), kAXValueAttribute as String) as? Bool)
+    #expect(current)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test(arguments: ["threshold", "limiter_on"])
+func testSagaMatchingApprovedBeforeReachesItsActualParameterMutation(_ param: String) async throws {
+    let fixture = param == "threshold" ? LiveFixture(beforeValue: 60)
+        : LiveFixture(controlsViewRowLabel: "Limiter On", controlsViewInitiallySelected: true)
+    let expected = PluginSagaExpectedBefore(track: 0, insert: 6, projectPath: expectedPath,
+        param: param, observed: param == "threshold" ? .double(60) : .bool(false))
+    let params = param == "threshold" ? thresholdParams(value: "38") : controlsBooleanParams()
+    let result = await PluginSagaExpectedBefore.$current.withValue(expected) {
+        await runLive(fixture: fixture, params: params)
+    }
+    #expect(result["state"] as? String == "A")
+    if param == "threshold" {
+        #expect(fixture.sliderWriteCount.value == 1)
+        #expect(fixture.currentSliderValue == 38)
+    } else {
+        #expect(fixture.controlsCheckboxPressCount.value == 1)
+        let current = try #require(fixture.builder.attributeValue(fixture.builder.element(100_908), kAXValueAttribute as String) as? Bool)
+        #expect(current)
+    }
+}
+
+@Test func testFirstIncrementNudgeDoesNotOverwriteAChangedEntryReading() async throws {
+    let reads = MutableBox(0)
+    let injected = MutableBox(false)
+    let zeroSettersAtInjection = MutableBox(false)
+    let fixture = LiveFixture(
+        thresholdDescription: channelEQFixtureAXDescription, pluginSlotName: "Channel EQ",
+        beforeValue: 0, sliderWriteBehavior: .oneStepTowardRequest,
+        onSliderAttributeRead: { builder, slider, attribute, writes in
+            guard writes == 0 else { return }
+            if attribute == (kAXValueAttribute as String) { reads.value += 1 }
+            if attribute == (kAXValueDescriptionAttribute as String), reads.value >= 2, !injected.value {
+                // The walk's entry numeric reading is retained before its display
+                // is read. An external edit happens before the FIRST nudge.
+                injected.value = true
+                zeroSettersAtInjection.value = writes == 0
+                builder.setAttribute(slider, kAXValueAttribute as String, 7.0)
+            }
+        }
+    )
+    let result = try await runChannelEQFixture(fixture: fixture,
+        params: channelEQFixtureParams(value: "3", unit: "raw_ax_value"),
+        writeMethod: "ax_slider_increment_walk")
+    #expect(reads.value >= 2)
+    #expect(injected.value)
+    #expect(zeroSettersAtInjection.value)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.currentSliderValue == 7)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["write_attempted"] as? Bool)
+    #expect(!attempted)
 }
 
 @Test func testVerifiedParameterBindsArrangeNineToMixerElevenPastTwoAuxes() async {
@@ -1532,7 +1686,7 @@ private func namedEQBandParams(
     #expect(noCheckboxPress)
 }
 
-@Test func testFailedCompensatingCheckboxPressReportsTheChangedParameter() async throws {
+@Test func testUnknownCheckboxReadbackDoesNotClaimAChangedOrRestoredParameter() async throws {
     let fixture = LiveFixture(
         controlsViewRowLabel: "Limiter On",
         controlsCheckboxBefore: false,
@@ -1541,17 +1695,16 @@ private func namedEQBandParams(
     let result = await runLive(fixture: fixture, params: controlsBooleanParams())
 
     let state = try #require(result["state"] as? String)
-    let leftChanged = try #require(result["parameter_left_changed"] as? Bool)
-    let restorationObserved = try #require(result["restore_observed"] as? Bool)
-    let restoredValue = try #require(result["restore_observed_boolean"] as? Bool)
+    let restoreAttempted = try #require(result["restore_attempted"] as? Bool)
     let safeToRetry = try #require(result["safe_to_retry"] as? Bool)
-    let compensationWasAttempted = fixture.controlsCheckboxPressCount.value == 2
+    let onlyTheInitialPressWasSent = fixture.controlsCheckboxPressCount.value == 1
     #expect(state == "C")
-    #expect(leftChanged)
-    #expect(!restorationObserved)
-    #expect(restoredValue)
+    #expect(result["parameter_left_changed"] is NSNull)
+    #expect(result["restore_observed"] is NSNull)
+    #expect(result["restore_observed_boolean"] is NSNull)
+    #expect(!restoreAttempted)
     #expect(!safeToRetry)
-    #expect(compensationWasAttempted)
+    #expect(onlyTheInitialPressWasSent)
 }
 
 @Test func testCompressorControlsViewMixedNSNumberReadbackRefusesInsteadOfStateA() async throws {
@@ -1567,11 +1720,11 @@ private func namedEQBandParams(
     let writeAttempted = try #require(result["write_attempted"] as? Bool)
     let stateIsC = state == "C"
     let mixedReadbackWasNotVerified = error == "readback_lost_after_write"
-    let compensatingPressWasAttempted = fixture.controlsCheckboxPressCount.value == 2
+    let noBlindInverseWasSent = fixture.controlsCheckboxPressCount.value == 1
     #expect(stateIsC)
     #expect(mixedReadbackWasNotVerified)
     #expect(writeAttempted)
-    #expect(compensatingPressWasAttempted)
+    #expect(noBlindInverseWasSent)
 }
 
 @Test func testControlsLookupRefusalReportsFailedRestoreThatLeavesControlsSelected() async throws {
@@ -1698,15 +1851,15 @@ private func namedEQBandParams(
     let error = try #require(result["error"] as? String)
     let restorationFailureWasVisible = reportsFailedPluginViewRestoration(result)
     let rollbackAttempted = try #require(result["rollback_attempted"] as? Bool)
-    let parameterMayBeChanged = try #require(result["parameter_left_changed"] as? Bool)
     let reportedAXWriteFailure = error == "ax_write_failed"
     #expect(reportedAXWriteFailure)
     #expect(restorationFailureWasVisible)
-    #expect(rollbackAttempted)
-    #expect(parameterMayBeChanged)
+    #expect(!rollbackAttempted)
+    #expect(result["parameter_left_changed"] is NSNull)
+    #expect(fixture.sliderWriteCount.value == 1)
 }
 
-@Test func testDirectReadbackLossRollsBackAndReportsFailedViewRestore() async throws {
+@Test func testDirectReadbackLossWithholdsInverseAndReportsFailedViewRestore() async throws {
     let fixture = LiveFixture(
         sliderWriteBehavior: .scripted([nil, 51]),
         controlsViewInitiallySelected: true,
@@ -1717,25 +1870,21 @@ private func namedEQBandParams(
     let error = try #require(result["error"] as? String)
     let rollbackAttempted = try #require(result["rollback_attempted"] as? Bool)
     let rolledBack = try #require(result["rolled_back"] as? Bool)
-    let rollbackObserved = try #require(result["rollback_observed"] as? Double)
     let safeToRetry = try #require(result["safe_to_retry"] as? Bool)
-    let parameterLeftChanged = try #require(result["parameter_left_changed"] as? Bool)
     let restorationFailureWasVisible = reportsFailedPluginViewRestoration(result)
-    let rollbackWasWritten = fixture.sliderWriteCount.value == 2
+    let onlyTheInitialWriteWasSent = fixture.sliderWriteCount.value == 1
     let reportedReadbackLoss = error == "readback_lost_after_write"
-    let rollbackObservedOriginalValue = rollbackObserved == 51
-    let parameterWasNotLeftChanged = !parameterLeftChanged
     #expect(reportedReadbackLoss)
-    #expect(rollbackAttempted)
-    #expect(rolledBack)
-    #expect(rollbackObservedOriginalValue)
-    #expect(safeToRetry)
-    #expect(parameterWasNotLeftChanged)
+    #expect(!rollbackAttempted)
+    #expect(!rolledBack)
+    #expect(result["rollback_observed"] is NSNull)
+    #expect(!safeToRetry)
+    #expect(result["parameter_left_changed"] is NSNull)
     #expect(restorationFailureWasVisible)
-    #expect(rollbackWasWritten)
+    #expect(onlyTheInitialWriteWasSent)
 }
 
-@Test func testDirectReadbackLossWithFailedRollbackReportsParameterLeftChanged() async throws {
+@Test func testDirectReadbackLossWithWithheldRollbackReportsUnknownParameter() async throws {
     let fixture = LiveFixture(
         sliderWriteBehavior: .scripted([nil, nil]),
         controlsViewInitiallySelected: true,
@@ -1745,14 +1894,14 @@ private func namedEQBandParams(
 
     let rollbackAttempted = try #require(result["rollback_attempted"] as? Bool)
     let rolledBack = try #require(result["rolled_back"] as? Bool)
-    let parameterLeftChanged = try #require(result["parameter_left_changed"] as? Bool)
     let safeToRetry = try #require(result["safe_to_retry"] as? Bool)
     let restorationFailureWasVisible = reportsFailedPluginViewRestoration(result)
     let rollbackWasNotObserved = !rolledBack
     let retryIsNotSafe = !safeToRetry
-    #expect(rollbackAttempted)
+    #expect(!rollbackAttempted)
     #expect(rollbackWasNotObserved)
-    #expect(parameterLeftChanged)
+    #expect(result["parameter_left_changed"] is NSNull)
+    #expect(fixture.sliderWriteCount.value == 1)
     #expect(retryIsNotSafe)
     #expect(restorationFailureWasVisible)
 }
@@ -1762,9 +1911,9 @@ private func namedEQBandParams(
         thresholdDescription: channelEQFixtureAXDescription,
         pluginSlotName: "Channel EQ",
         beforeValue: 51,
-        // The write's readback is lost; compensation reaches 51.4 rather than
+        // The readable mismatch is owned; compensation reaches 51.4 rather than
         // the pre-write 51. This fixture declares tolerance 0 below.
-        sliderWriteBehavior: .scripted([nil, 51.4])
+        sliderWriteBehavior: .scripted([40, 51.4])
     )
     let result = try await runChannelEQFixture(
         fixture: fixture,
@@ -2960,6 +3109,137 @@ private func assertExpectedNameAcquisitionRefusal(eq: Bool, occupiedInsertRefere
     #expect(fixture.currentSliderValue == 51)
 }
 
+@Test func testUnknownCheckboxAfterPressDoesNotSendBlindInverse() async throws {
+    let fixture = LiveFixture(
+        controlsViewRowLabel: "Limiter On", controlsCheckboxBefore: false,
+        controlsCheckboxWriteBehavior: .mixedThenChanged,
+        controlsViewInitiallySelected: true, viewSettleDelay: 0
+    )
+    let result = await runLive(fixture: fixture, params: controlsBooleanParams())
+    #expect(fixture.controlsCheckboxPressCount.value == 1)
+    let raw = try #require(fixture.builder.attributeValue(
+        fixture.builder.element(100_908), kAXValueAttribute as String) as? NSNumber)
+    #expect(raw.intValue == 2)
+    #expect(result["state"] as? String == "C")
+    #expect(result["error"] as? String == "readback_lost_after_write")
+    let attempted = try #require(result["restore_attempted"] as? Bool)
+    let safe = try #require(result["safe_to_retry"] as? Bool)
+    #expect(!attempted)
+    #expect(!safe)
+    #expect(result["observed_boolean"] is NSNull)
+}
+
+@Test func testUnknownSliderAfterWriteDoesNotSendBlindInverse() async throws {
+    let fixture = LiveFixture(sliderWriteBehavior: .scripted([nil, 51]))
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == nil)
+    #expect(result["error"] as? String == "readback_lost_after_write")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    let safe = try #require(result["safe_to_retry"] as? Bool)
+    #expect(!attempted)
+    #expect(!safe)
+}
+
+@Test func testSliderRollbackDoesNotOverwriteNewerUserValue() async throws {
+    let edits = MutableBox(0)
+    let fixture = LiveFixture(
+        sliderWriteBehavior: .scripted([40, 51]),
+        onSliderDisplayAfterWrite: { builder, slider in
+            if edits.value == 0 {
+                // The write's independent numeric readback already observed 40.
+                // A later user edit lands while its display is being read.
+                edits.value += 1
+                builder.setAttribute(slider, kAXValueAttribute as String, 75.0)
+            }
+        }
+    )
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(edits.value == 1)
+    #expect(result["observed_normalized"] as? Double == 40)
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 75)
+    #expect(result["error"] as? String == "readback_mismatch")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    let safe = try #require(result["safe_to_retry"] as? Bool)
+    #expect(!attempted)
+    #expect(!safe)
+}
+
+@Test(arguments: ["slot", "control", "gate", "cancellation"])
+func testSliderRollbackRequiresItsStillOwnedTarget(_ loss: String) async throws {
+    let injected = MutableBox(false)
+    let fixture = LiveFixture(
+        sliderWriteBehavior: .scripted([40, 51]),
+        onSliderDisplayAfterWrite: { builder, _ in
+            guard !injected.value else { return }
+            injected.value = true
+            if loss == "slot" {
+                builder.setAttribute(builder.element(1306), kAXDescriptionAttribute as String, "Noise Gate")
+            } else if loss == "control" {
+                let replacement = builder.element(100_999)
+                builder.setRole(replacement, kAXSliderRole as String)
+                builder.setAttribute(replacement, kAXDescriptionAttribute as String, "Threshold")
+                builder.setAttribute(replacement, kAXValueAttribute as String, 40.0)
+                let window = builder.element(1004)
+                let children = builder.makeAXRuntime().children(window)
+                builder.setChildren(window, children.map { CFEqual($0, builder.element(1005)) ? replacement : $0 })
+            }
+        }
+    )
+    let context = OperationTraceContext(mutationGateAcquired: true,
+        ownsGate: { loss != "gate" || !injected.value },
+        cancellationRequested: { loss == "cancellation" && injected.value })
+    let result = await OperationTraceContext.$current.withValue(context) {
+        await runLive(fixture: fixture, params: thresholdParams())
+    }
+    #expect(injected.value)
+    #expect(result["observed_normalized"] as? Double == 40)
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 40)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    #expect(!attempted)
+}
+
+@Test func testSliderAlreadyAtBeforeDoesNotClaimAnInverse() async throws {
+    let fixture = LiveFixture(beforeValue: 51, forcedAfterValue: 51)
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(fixture.sliderWriteCount.value == 1)
+    #expect(fixture.currentSliderValue == 51)
+    #expect(result["error"] as? String == "readback_mismatch")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    let rolledBack = try #require(result["rolled_back"] as? Bool)
+    let leftChanged = try #require(result["parameter_left_changed"] as? Bool)
+    #expect(!attempted)
+    #expect(!rolledBack)
+    #expect(!leftChanged)
+}
+
+@Test(arguments: ["unknown", "before_despite_failed_ack"])
+func testSliderInverseReceiptUsesIndependentStateNotAttemptStatus(_ state: String) async throws {
+    let fixture = LiveFixture(
+        sliderWriteBehavior: .scripted([40, state == "unknown" ? nil : 51]),
+        rejectSliderInverseAcknowledgement: state != "unknown"
+    )
+    let result = await runLive(fixture: fixture, params: thresholdParams())
+    #expect(fixture.sliderWriteCount.value == 2)
+    #expect(result["observed_normalized"] as? Double == 40)
+    #expect(result["state"] as? String == "C")
+    let attempted = try #require(result["rollback_attempted"] as? Bool)
+    #expect(attempted)
+    if state == "unknown" {
+        #expect(fixture.currentSliderValue == nil)
+        #expect(result["rollback_observed"] is NSNull)
+        #expect(result["parameter_left_changed"] is NSNull)
+    } else {
+        #expect(fixture.currentSliderValue == 51)
+        #expect(result["rollback_observed"] as? Double == 51)
+        let changed = try #require(result["parameter_left_changed"] as? Bool)
+        #expect(!changed)
+    }
+}
+
 // MARK: - State C: window not found → window_open_failed
 
 @Test func testNoOpenPluginWindowIsWindowOpenFailed() async throws {
@@ -3953,6 +4233,58 @@ private func parameterReadParams(_ param: String = "threshold") -> [String: Stri
     ["track": "0", "insert": "6", "plugin": "Compressor", "param": param,
      "project_expected_path": expectedPath, "expected_track_name": trackName,
      "expected_slot_read_status": "ok", "expected_plugin_identity": "logic.stock.effect.compressor"]
+}
+
+@Test func testIssue955ParameterPlanUsesActualAXReadersAndRestoresViewsWithoutAudioWrites() async throws {
+    try await FeatureFlags.withAdr002TargetRefForTests(true) {
+        let fixture = LiveFixture(beforeValue: 51, controlsViewRowLabel: "Limiter On",
+            controlsCheckboxBefore: true, controlsViewInitiallySelected: true, viewSettleDelay: 0)
+        fixture.builder.setAttribute(fixture.builder.element(1001), kAXDocumentAttribute as String,
+                                     URL(fileURLWithPath: expectedPath).absoluteString)
+        let channel = AccessibilityChannel(runtime: .axBacked(
+            isTrusted: { true }, isLogicProRunning: { true }, hasVisibleWindow: { true },
+            logicRuntime: parameterReadRuntime(fixture), canPostEvents: { false }))
+        let router = ChannelRouter(), cache = StateCache(), registry = TargetRegistry()
+        await router.register(channel)
+        let project = ProjectInfo(name: "Parameter fixture", filePath: expectedPath)
+        await cache.updateProject(project)
+        await cache.updateTracks([TrackState(id: 0, name: trackName, type: .audio)])
+        let snapshot = await registry.currentSnapshot
+        _ = await registry.snapshotForObservedProject(project, ifCurrent: snapshot, stoppingWhen: { false })
+        let descriptor = TargetDescriptor(trackIndex: 0, trackName: trackName)
+        let reference = await registry.bind(kind: .pluginInsert, descriptor: descriptor,
+            fingerprint: TargetRefResolver.pluginInsertFingerprint(descriptor: descriptor, insert: 6,
+                pluginIdentity: "logic.stock.effect.compressor"))
+        let result = await PluginsDispatcher.handle(verifiedGate: VerifiedOpGate(), command: "plan_parameter_changes",
+            params: ["target_ref": .string(reference.rawValue), "changes": .array([
+                .object(["param": "threshold", "value": .int(38), "unit": "percent"]),
+                .object(["param": "limiter_on", "value": false, "unit": "boolean"]),
+            ])], router: router, cache: cache, targetRegistry: registry)
+        let object = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(object["state"] as? String == "A", "Injected real B0 acquisition must produce a plan: \(object)")
+        #expect(try #require(object["complete"] as? Bool))
+        let entries = try #require(object["entries"] as? [[String: Any]])
+        #expect(entries.count == 2)
+        let threshold = try #require(entries.first { $0["param"] as? String == "threshold" })
+        #expect(threshold["observed_before"] as? Double == 51)
+        #expect(threshold["requested_value"] as? Double == 38)
+        let limiter = try #require(entries.first { $0["param"] as? String == "limiter_on" })
+        let limiterBefore = try #require(limiter["observed_before"] as? Bool)
+        #expect(limiterBefore)
+        #expect(fixture.sliderWriteCount.value == 0)
+        #expect(fixture.controlsCheckboxPressCount.value == 0)
+        #expect(fixture.currentSliderValue == 51)
+        #expect(fixture.currentPluginViewTitle == "컨트롤")
+        for entry in entries {
+            let observations = try #require(entry["read_observations"] as? [[String: Any]])
+            #expect(observations.count == 2)
+            for observation in observations {
+                let response = try #require(observation["response"] as? [String: Any])
+                let restored = try #require(response["plugin_view_restore_observed"] as? Bool)
+                #expect(restored)
+            }
+        }
+    }
 }
 
 @Test func testIssue301StateReaderUsesOwnedEditorAndReportsMissingBandsWithoutWriting() async throws {

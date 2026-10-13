@@ -415,7 +415,7 @@ extension OperationRegistry {
             "plugins.get_inventory": .init(params: Dictionary(uniqueKeysWithValues: ["index", "track", "track_index"].map {
                 ($0, ParamRule.unconstrained("omitted when it does not read as an integer; the channel then refuses the request",
                                              sample: .int(0)))
-            }), required: [["index", "track", "track_index"]]),
+            }).merging(["reveal_mixer": .enforced(.boolean, .bool(false))],uniquingKeysWith:{ _,new in new }), required: [["index", "track", "track_index"]]),
             "plugins.get_param_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("ins_lpm_contract_955")), "project_ref": projectRef,
                 "param": .enforced(.string, .string("threshold")),
@@ -434,6 +434,14 @@ extension OperationRegistry {
                 "track": .enforced(.integer, .int(0)), "insert": .enforced(.integer, .int(0)),
                 "project_expected_path": .enforced(.string, .string("/tmp/lpm-301.logicx")),
             ], required: [["target_ref"]]),
+            "plugins.plan_parameter_changes": .init(params: [
+                "target_ref": .enforced(.string, .string("ins_lpm_contract_955")), "project_ref": projectRef,
+                "changes": .enforced(.array, .array([.object(["param": "threshold", "value": .int(38), "unit": "normalized"])])),
+                "plugin": .enforced(.string, .string("Compressor")),
+                "plugin_id": .enforced(.string, .string("logic.stock.effect.compressor")),
+                "plugin_name": .enforced(.string, .string("Compressor")),
+                "track": .enforced(.integer, .int(0)), "insert": .enforced(.integer, .int(6)),
+            ], required: [["target_ref"], ["changes"]]),
             "plugins.insert_verified": .init(params: pluginWriteRules(["insert", "slot", "plugin", "plugin_id", "plugin_name", "mode", "project_expected_path", "track"])
                 .merging([
                     "expected_name": .unconstrained("corroborates a bare track index, which is refused without it "
@@ -498,7 +506,8 @@ extension OperationRegistry {
             // the generic unknown-parameter gate).
             "system.saga_preflight": .init(params: ["idempotency_key": .enforced(.string, .string("k-957")), "steps": .enforced(.array, .array([]))],
                                            required: [["idempotency_key"], ["steps"]]),
-            "system.saga_execute": .init(params: ["idempotency_key": .enforced(.string, .string("k-957")), "steps": .enforced(.array, .array([]))],
+            "system.saga_execute": .init(params: ["idempotency_key": .enforced(.string, .string("k-957")), "steps": .enforced(.array, .array([])),
+                "confirmed_plan_hash": .enforced(.string, .string(String(repeating: "a", count: 64)))],
                                          required: [["idempotency_key"], ["steps"]]),
             "system.saga_status": .init(params: ["idempotency_key": .enforced(.string, .string("k-957"))], required: [["idempotency_key"]]),
             "system.saga_cancel": .init(params: ["idempotency_key": .enforced(.string, .string("k-957"))], required: [["idempotency_key"]]),

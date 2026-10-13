@@ -401,7 +401,7 @@ extension AccessibilityChannel {
                 if let label = observed.label, let renewedIndex = observed.index {
                     afterLabel = label
                     after = OutputAssignment.observed(slotLabel: label)
-                    extras["source_renewal"] = "held_exclusive_selection_focus"
+                    extras["source_renewal"] = observed.source
                     extras["reference_reread_required"] = true
                     extras["source_index_after"] = renewedIndex
                 }
@@ -443,12 +443,12 @@ extension AccessibilityChannel {
     private static func readOutputThroughOriginalHeader(
         _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
         runtime: AXLogicProElements.Runtime
-    ) async -> (label: String?, index: Int?, effects: SessionPopulationObservation.UIEffects) {
+    ) async -> (label: String?, index: Int?, source: String?, effects: SessionPopulationObservation.UIEffects) {
         let observed = await renewSourceThroughOriginalHeader(originalPair, original: original, runtime: runtime)
         guard let source = observed.source,
               let label = AXLogicProElements.outputSlotDestination(in: source.pair.strip.strip, runtime: runtime.ax),
-              source.permits(runtime: runtime) else { return (nil, nil, observed.effects) }
-        return (label, source.index, observed.effects)
+              source.permits(runtime: runtime) else { return (nil, nil, nil, observed.effects) }
+        return (label, source.index, source.pair.source, observed.effects)
     }
 
     struct OriginalHeaderSourceRenewal: Sendable {
@@ -482,7 +482,7 @@ extension AccessibilityChannel {
     ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
               let observation = HeldSelectionAssociation(window: original.window, logic: runtime,
-                  expectedProject: nil, requiresProjectReference: false),
+                  expectedProject: nil, requiresProjectReference: false, allowsSelectedChildRailEntry: true),
               CFEqual(observation.mixer, original.mixer),
               observation.document.utf8.elementsEqual(original.document.utf8),
               observation.headers.filter({ CFEqual($0, originalPair.track.header) }).count == 1,
@@ -495,7 +495,7 @@ extension AccessibilityChannel {
         let pairs = await observation.observe(referenceIsCurrent: {
             originalPair.track.currentIndex() != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
-        }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil })
+        }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil }, allHeldHeaders: true)
         let candidates = pairs.filter { $0.track.matches(originalPair.track) }
         guard candidates.count == 1, let pair = candidates.first,
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,

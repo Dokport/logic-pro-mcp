@@ -886,6 +886,42 @@ struct Issue291AssignedSendAsDumpedTests {
         #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
     }
 
+    @Test("An offscreen assigned-send placeholder cannot supply signal bypass",
+          arguments: ["generic", "during_value", "during_description", "second_value_role", "second_value_list_role", "stamped"], [0, 1])
+    func placeholderOrChangingSendDisplayDoesNotQualifyBypass(kind: String, bit: Int) throws {
+        let builder = FakeAXRuntimeBuilder()
+        let dumped = strip(assignedSendStripEn, builder: builder, id: 38_700)
+        let group = try element(at: "13", role: kAXGroupRole as String, in: assignedSendStripEn, builder: builder, stripID: 38_700)
+        let checkbox = try element(at: "13.0", role: kAXCheckBoxRole as String, in: assignedSendStripEn, builder: builder, stripID: 38_700)
+        let list = try element(at: "13.1", role: kAXButtonRole as String, in: assignedSendStripEn, builder: builder, stripID: 38_700)
+        builder.setAttribute(group, kAXDescriptionAttribute as String, kind == "generic" ? "send button" : "Bus 1")
+        builder.setAttribute(checkbox, kAXValueAttribute as String, bit)
+        let runtime = builder.makeAXRuntime(attributeValueResultHandler: { target, attribute in
+            if CFEqual(target, checkbox), attribute == kAXValueAttribute as String {
+                let reads = (builder.attributeValue(checkbox, "fixtureValueReads") as? Int ?? 0) + 1
+                builder.setAttribute(checkbox, "fixtureValueReads", reads)
+                if reads == 2, kind == "second_value_role" { builder.setRole(checkbox, kAXButtonRole as String) }
+                if reads == 2, kind == "second_value_list_role" { builder.setRole(list, kAXCheckBoxRole as String) }
+            }
+            if kind == "during_value", CFEqual(target, checkbox), attribute == kAXValueAttribute as String {
+                builder.setAttribute(group, kAXDescriptionAttribute as String, "send button")
+            }
+            if kind == "during_description", CFEqual(target, group), attribute == kAXDescriptionAttribute as String {
+                builder.setAttribute(checkbox, kAXValueAttribute as String, 1 - bit)
+            }
+            return nil
+        }, setAttributeHandler: nil, performActionHandler: nil)
+        let slots = try #require(AXLogicProElements.sendSlotObservations(in: dumped, runtime: runtime))
+        #expect(slots.count == 2)
+        #expect(slots[1].state == .occupiedUnknownDestination)
+        #expect(slots[1].levelRaw == 0 && slots[1].levelDescription == "-∞")
+        if kind == "stamped" {
+            let bypassed = try #require(slots[1].bypassed)
+            if bit == 1 { #expect(bypassed) } else { #expect(!bypassed) }
+        } else { #expect(slots[1].bypassed == nil) }
+        #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
+    }
+
     @Test(arguments: [false, true])
     func multipleGroupsReadTheirOwnBypassWithoutPairingKnobs(sharedCheckbox: Bool) throws {
         let builder = FakeAXRuntimeBuilder()

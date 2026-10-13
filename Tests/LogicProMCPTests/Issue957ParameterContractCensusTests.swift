@@ -318,8 +318,30 @@ struct Issue957ParameterContractCensusTests {
         #expect(complete, "\(problems.joined(separator: "\n"))")
     }
 
+    /// Confirmation has a cross-field contract: a string is only a valid control for
+    /// the exact selected two-step plan. Use an unregistered insert so validation
+    /// can progress without granting any target or invoking a real channel.
+    private static func confirmedSagaKindControl(_ params: [String: Value]) throws -> [String: Value] {
+        var control = params
+        let values: [(String, String, Value, Value)] = [
+            ("threshold", "normalized", .double(38), .double(60)),
+            ("limiter_on", "boolean", .bool(true), .bool(false)),
+        ]
+        control["steps"] = .array(values.map { param, unit, value, before in .object([
+            "operation_id": .string("plugins.set_param_verified"),
+            "target_ref": .string("ins_00000000-0000-0000-0000-000000000957"),
+            "params": .object(["param": .string(param), "unit": .string(unit),
+                "value": value, "expected_before": before]),
+            "expected_inverse": .object(["operation_id": .string("plugins.set_param_verified"),
+                "value_parameter": .string("value")]),
+        ]) })
+        control.removeValue(forKey: "confirmed_plan_hash")
+        control["confirmed_plan_hash"] = .string(SagaJournal.planHash(try SagaWire.plan(from: control)))
+        return control
+    }
+
     @Test("an enforced parameter given a value outside its kind is refused before any channel runs")
-    func enforcedKindsAreRefused() async {
+    func enforcedKindsAreRefused() async throws {
         var problems: [String] = []
         for spec in OperationRegistry.specs {
             guard let contract = OperationRegistry.parameterContracts[spec.id] else { continue }
@@ -336,7 +358,12 @@ struct Issue957ParameterContractCensusTests {
                 for (label, context) in [("alone", alone), ("beside the others", beside)] {
                     var control = context
                     control[key] = rule.sample
-                    var outside = context
+                    if spec.id == .systemSagaExecute, control["confirmed_plan_hash"] != nil {
+                        control = try Self.confirmedSagaKindControl(control)
+                    }
+                    // Change only the parameter being tested, preserving the valid
+                    // cross-field control instead of testing two invalid requests.
+                    var outside = control
                     outside[key] = kind.outsideValue
                     let controlled = await Self.dispatch(spec, control)
                     let refusedOutside = await Self.dispatch(spec, outside)

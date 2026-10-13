@@ -586,7 +586,7 @@ extension ProjectSessionAudit {
               let name = capture.channelStrips[row].name else { return .null }
         return .array([.object([
             "target_ref": .string(reference.rawValue), "observed_name": .string(name),
-            "source": .string("held_exclusive_selection_focus")
+            "source": .string(pair.source)
         ])])
     }
 

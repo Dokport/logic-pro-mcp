@@ -32,6 +32,9 @@ enum SessionPopulationObservation {
         var restoredTracks: [TrackState]? = nil
         /// The live held view control, not a claim about saved/live population equivalence.
         var hiddenTracksShown: Bool? = nil
+        /// Read-only end witness from three exact native page/scrollbar bookends.
+        /// Requires an independent bound count for complete whole-population coverage.
+        var populationEndSource: String? = nil
         /// Strict selected-child membership corroborated against physical headers
         /// throughout the fresh read. Never an end witness for the whole project.
         var selectedTrackMembershipObserved = false
@@ -248,6 +251,7 @@ enum SessionPopulationObservation {
         case noObservedAssociationEvidence = "no_observed_association_evidence"
         case associationPopulationNotObserved = "association_population_not_observed"
         case parentDepthNotObserved = "parent_depth_not_observed"
+        case hierarchyLinksInconsistent = "hierarchy_links_inconsistent"
         case routingGraphPartial = "routing_graph_partial"
         case routingGraphUnavailable = "routing_graph_unavailable"
         case colorDeferredToIssue970 = "color_deferred_to_issue_970"
@@ -700,8 +704,11 @@ enum SessionPopulationObservation {
         let isStackHeader: Bool?
         let stackCollapsed: Bool?
         var hidden: Bool? = nil
-        let parent = "unknown"
+        var parent = "unknown"
+        var parentSource: String? = nil
         let depth = "unknown"
+        var observedDepth: Int? = nil
+        var depthSource: String? = nil
         let isSelected: Bool?
         let placeholder: Bool?
         let trackRef: String?
@@ -716,7 +723,9 @@ enum SessionPopulationObservation {
             case stackCollapsed = "stack_collapsed"
             case hidden
             case parent
+            case parentSource = "parent_source"
             case depth
+            case depthSource = "depth_source"
             case isSelected = "is_selected"
             case placeholder
             case trackRef = "track_ref"
@@ -735,8 +744,12 @@ enum SessionPopulationObservation {
             try container.encode(stackCollapsed, forKey: .stackCollapsed)
             if let hidden { try container.encode(hidden, forKey: .hidden) }
             else { try container.encode("unknown", forKey: .hidden) }
-            try container.encode(parent, forKey: .parent)
-            try container.encode(depth, forKey: .depth)
+            if observedDepth == 0 { try container.encodeNil(forKey: .parent) }
+            else { try container.encode(parent, forKey: .parent) }
+            try container.encodeIfPresent(parentSource, forKey: .parentSource)
+            if let observedDepth { try container.encode(observedDepth, forKey: .depth) }
+            else { try container.encode(depth, forKey: .depth) }
+            try container.encodeIfPresent(depthSource, forKey: .depthSource)
             try container.encode(isSelected, forKey: .isSelected)
             try container.encode(placeholder, forKey: .placeholder)
             try container.encodeIfPresent(trackRef, forKey: .trackRef)
@@ -753,6 +766,7 @@ enum SessionPopulationObservation {
         /// Present only beside `expected_count`. A match is evidence, not completeness.
         let expectedCountMatchesRail: Bool?
         let hiddenTracksShown: Bool?
+        var populationEndSource: String? = nil
         var selectionMembershipSource: String? = nil
 
         enum CodingKeys: String, CodingKey {
@@ -763,6 +777,7 @@ enum SessionPopulationObservation {
             case expectedCountSource = "expected_count_source"
             case expectedCountMatchesRail = "expected_count_matches_rail"
             case hiddenTracksShown = "hidden_tracks_shown"
+            case populationEndSource = "population_end_source"
             case selectionMembershipSource = "selection_membership_source"
         }
 
@@ -775,6 +790,7 @@ enum SessionPopulationObservation {
             try container.encodeIfPresent(expectedCountSource, forKey: .expectedCountSource)
             try container.encodeIfPresent(expectedCountMatchesRail, forKey: .expectedCountMatchesRail)
             try container.encodeIfPresent(hiddenTracksShown, forKey: .hiddenTracksShown)
+            try container.encodeIfPresent(populationEndSource, forKey: .populationEndSource)
             try container.encodeIfPresent(selectionMembershipSource, forKey: .selectionMembershipSource)
         }
     }
@@ -783,7 +799,7 @@ enum SessionPopulationObservation {
         let coverage: Coverage
         let reasons: [Reason]
         let witnesses: TrackWitnesses
-        let rows: [TrackRow]
+        var rows: [TrackRow]
         let ambiguousTrackIndices: [Int]
         let collapsedStackRows: [Int]
 
@@ -884,11 +900,37 @@ enum SessionPopulationObservation {
         }
     }
 
+    // Only already-qualified historical direct-child witnesses are projected. This
+    // does not establish absolute depth, root membership, or current write authority.
+    static func qualifiedDirectParents(_ exposures: [DisclosureExposureRow]) -> [String: String]? {
+        var parents: [String: String] = [:]
+        for exposure in exposures {
+            guard exposure.directChildrenSource == "owned_disclosure_closed_descendants",
+                  let children = exposure.directChildTrackRefs else { continue }
+            guard Set(children).count == children.count,
+                  Set(children).isSubset(of: Set(exposure.exposedTrackRefs)) else { return nil }
+            for child in children {
+                guard child != exposure.stackRef,
+                      parents[child] == nil || parents[child] == exposure.stackRef else { return nil }
+                parents[child] = exposure.stackRef
+            }
+        }
+        for child in parents.keys {
+            var seen: Set<String> = [child]
+            var cursor = child
+            while let parent = parents[cursor] {
+                guard seen.insert(parent).inserted else { return nil }
+                cursor = parent
+            }
+        }
+        return parents
+    }
+
     struct AssociationRow: Encodable, Sendable {
         let trackIndex: Int
         let trackRef: String
         let mixerStripRef: String
-        let source = "held_exclusive_selection_focus"
+        var source = "held_exclusive_selection_focus"
         enum CodingKeys: String, CodingKey {
             case trackIndex = "track_index", trackRef = "track_ref", mixerStripRef = "mixer_strip_ref", source
         }
@@ -972,6 +1014,33 @@ enum SessionPopulationObservation {
     }
 
     // MARK: - Build
+
+    /// Qualify only this immutable capture's checked send. Cached/decoded values cannot
+    /// provide the physical source witness, and no extra read or UI action occurs here.
+    static func reportedSendSlots(of strip: ChannelStripState, capture: Capture,
+                                  qualified: Bool) -> [SendSlotObservation]? {
+        guard let slots = strip.sendSlots else { return nil }
+        return slots.map { slot in
+            var result = slot
+            result.checkedDestination = nil; result.destinationSource = nil
+            if result.state == .occupiedKnownDestination { result.state = .occupiedUnknownDestination }
+            guard qualified, capture.freshPopulation?.stable == true,
+                  let owner = strip.physicalBinding,
+                  capture.channelStrips.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1,
+                  slot.state == .occupiedUnknownDestination, slot.ordinal >= 0,
+                  slots.filter({ $0.ordinal == slot.ordinal }).count == 1 else { return result }
+            let checked = capture.freshPopulation?.checkedOutputs.filter {
+                $0.source.matches(owner) && $0.sendOrdinal == slot.ordinal
+            } ?? []
+            guard checked.count == 1, let assignment = checked.first?.assignment,
+                  assignment != .noOutput,
+                  OutputAssignment(token: assignment.token) == assignment else { return result }
+            result.state = .occupiedKnownDestination
+            result.checkedDestination = assignment.token
+            result.destinationSource = "ax_send_menu_checkmark"
+            return result
+        }
+    }
 
     /// Pure: the same capture and request always produce the same report.
     static func build(request: Request, capture: Capture) -> Report {
@@ -1061,10 +1130,13 @@ enum SessionPopulationObservation {
                 // The independently observed selected set is this request's
                 // population. It says nothing about hidden or virtualized peers.
             } else if let expected = capture.fileTrackCount {
-                // A matching count says the rail has as many rows as the file has tracks, not
-                // that these rows are those tracks: nothing in the cache witnesses where the rail
-                // ends, so a count alone never makes the population complete (#965).
-                tracksReasons.append(expected == live.count ? .countIsTheOnlyEndWitness : .trackReadbackGap)
+                // Count agreement alone is not an end. Only the fresh all-shown
+                // single-page witness can corroborate it; cached rows retain
+                // the original count-only limitation (#965).
+                if expected != live.count { tracksReasons.append(.trackReadbackGap) }
+                else if capture.freshPopulation?.populationEndSource != "ax_all_shown_single_page" {
+                    tracksReasons.append(.countIsTheOnlyEndWitness)
+                }
             } else {
                 if capture.projectFileNotBound {
                     tracksReasons.append(.projectFileNotBound)
@@ -1087,7 +1159,7 @@ enum SessionPopulationObservation {
         case .selection:
             rows = allRows.filter { $0.isSelected == true }
         }
-        let tracks = TracksSection(
+        var tracks = TracksSection(
             coverage: tracksCoverage,
             reasons: tracksReasons,
             witnesses: TrackWitnesses(
@@ -1098,6 +1170,7 @@ enum SessionPopulationObservation {
                 expectedCountSource: capture.fileTrackCount == nil ? nil : "project_file",
                 expectedCountMatchesRail: capture.fileTrackCount.map { $0 == live.count },
                 hiddenTracksShown: capture.freshPopulation?.stable == true ? capture.freshPopulation?.hiddenTracksShown : nil,
+                populationEndSource: capture.freshPopulation?.stable == true ? capture.freshPopulation?.populationEndSource : nil,
                 selectionMembershipSource: selectedMembershipObserved ? "ax_selected_children" : nil
             ),
             rows: rows,
@@ -1152,11 +1225,12 @@ enum SessionPopulationObservation {
                     output: strip.output,
                     input: strip.input,
                     inputObservation: strip.inputObservation,
-                    pluginCount: request.domains == [.routing] && strip.pluginsSource == nil
+                    pluginCount: !request.domains.contains(.strips) && strip.pluginsSource == nil
                         && strip.pluginsReadError == nil ? nil : strip.plugins.count,
                     pluginsSource: strip.pluginsSource,
                     mixerStripRef: capture.mixerReference(at: row)?.rawValue,
-                    sendSlots: strip.sendSlots
+                    sendSlots: reportedSendSlots(of: strip, capture: capture,
+                        qualified: !moved && !referencesStale)
                 )
             }
         )
@@ -1173,7 +1247,6 @@ enum SessionPopulationObservation {
            let pairs = capture.freshPopulation?.selectionAssociations, !pairs.isEmpty {
             var rows: [AssociationRow] = []
             var heldTracks: [AXTrackBinding.Binding] = []
-            var heldStrips: [AXMixerStripBinding.Binding] = []
             var qualified = true
             for pair in pairs {
                 let trackMatches = live.indices.filter { live[$0].physicalBinding?.matches(pair.track) == true }
@@ -1181,19 +1254,44 @@ enum SessionPopulationObservation {
                 guard trackMatches.count == 1, stripMatches.count == 1,
                       let trackRow = trackMatches.first, let stripRow = stripMatches.first,
                       !heldTracks.contains(where: { $0.matches(pair.track) }),
-                      !heldStrips.contains(where: { $0.matches(pair.strip) }),
                       let trackRef = allRows[trackRow].trackRef,
                       let stripRef = capture.mixerReference(at: stripRow)?.rawValue else { qualified = false; break }
-                heldTracks.append(pair.track); heldStrips.append(pair.strip)
+                // Several independently selected original headers may share one
+                // held strip. Observation does not grant its consumers unique
+                // header ownership or permission to write through that alias.
+                heldTracks.append(pair.track)
                 if request.scope == .wholeProject || live[trackRow].selectionReadback == true {
-                    rows.append(.init(trackIndex: live[trackRow].id, trackRef: trackRef, mixerStripRef: stripRef))
+                    rows.append(.init(trackIndex: live[trackRow].id, trackRef: trackRef, mixerStripRef: stripRef,
+                        source: pair.source))
                 }
             }
             if qualified, !rows.isEmpty {
-                associations = .init(coverage: .partial, reasons: [.associationPopulationNotObserved], rows: rows)
+                // Each row already required a distinct held physical header and
+                // its actual current strip. Only an independently complete whole
+                // track population can make those exhaustive observations complete.
+                let complete = request.scope == .wholeProject && tracksCoverage == .complete && rows.count == live.count
+                associations = .init(coverage: complete ? .complete : .partial,
+                    reasons: complete ? [] : [.associationPopulationNotObserved], rows: rows)
             }
         }
         var hierarchy = deferred(.parentDepthNotObserved)
+        // An exhaustive fresh flat population has no possible stack parent.
+        // Count-only, cached, selected, unknown and partially exposed rails do
+        // not establish roots. This projection adds no AX action or authority.
+        if movementReason == nil, request.scope == .wholeProject,
+           request.domains.contains(.hierarchy), tracksCoverage == .complete,
+           let fresh = capture.freshPopulation, fresh.stable,
+           fresh.disclosureExposures.isEmpty, !live.isEmpty,
+           live.allSatisfy({ $0.isStackHeader == false && $0.physicalBinding != nil }),
+           allRows.allSatisfy({ $0.trackRef != nil }),
+           Set(allRows.compactMap(\.trackRef)).count == live.count {
+            for index in tracks.rows.indices {
+                tracks.rows[index].parentSource = "ax_complete_flat_population"
+                tracks.rows[index].observedDepth = 0
+                tracks.rows[index].depthSource = "ax_complete_flat_population"
+            }
+            hierarchy = .init(coverage: .complete, reasons: [])
+        }
         if movementReason == nil, request.allowUINavigation, request.domains.contains(.hierarchy),
            tracksCoverage == .partial || tracksCoverage == .complete,
            let observations = capture.freshPopulation?.disclosureExposures, !observations.isEmpty {
@@ -1203,6 +1301,7 @@ enum SessionPopulationObservation {
                 return (row, ref)
             }
             var exposures: [DisclosureExposureRow] = []
+            var fullExposures: [DisclosureExposureRow] = []
             var qualified = true
             for observation in observations {
                 guard let (_, stackRef) = reference(for: observation.stack) else { qualified = false; break }
@@ -1211,6 +1310,9 @@ enum SessionPopulationObservation {
                       Set(members.map(\.1)).count == members.count,
                       !members.contains(where: { $0.1 == stackRef }) else { qualified = false; break }
                 let refs = members.filter { request.scope == .wholeProject || live[$0.0].selectionReadback == true }.map(\.1)
+                fullExposures.append(.init(stackRef: stackRef, exposedTrackRefs: members.map(\.1),
+                    directChildTrackRefs: observation.revealedStacksWereClosed ? members.map(\.1) : nil,
+                    directChildrenSource: observation.revealedStacksWereClosed ? "owned_disclosure_closed_descendants" : nil))
                 if !refs.isEmpty {
                     exposures.append(.init(stackRef: stackRef, exposedTrackRefs: refs,
                         directChildTrackRefs: observation.revealedStacksWereClosed ? refs : nil,
@@ -1218,7 +1320,48 @@ enum SessionPopulationObservation {
                 }
             }
             if qualified, !exposures.isEmpty {
-                hierarchy = .init(coverage: .partial, reasons: [.parentDepthNotObserved], disclosureExposures: exposures)
+                if let parents = qualifiedDirectParents(fullExposures) {
+                    if request.scope == .wholeProject {
+                        for index in tracks.rows.indices {
+                            if let ref = tracks.rows[index].trackRef, let parent = parents[ref] {
+                                tracks.rows[index].parent = parent
+                                tracks.rows[index].parentSource = "owned_disclosure_closed_descendants"
+                            }
+                        }
+                    }
+                    hierarchy = .init(coverage: .partial, reasons: [.parentDepthNotObserved], disclosureExposures: exposures)
+                    // Complete population excludes unseen parents; every physical
+                    // stack still needs its own qualified direct-child observation.
+                    // A consistent partial edge set alone cannot establish roots.
+                    let stackRefs = Set(live.indices.filter { live[$0].isStackHeader == true }
+                        .compactMap { allRows[$0].trackRef })
+                    if request.scope == .wholeProject, tracksCoverage == .complete,
+                       capture.freshPopulation?.stable == true,
+                       live.allSatisfy({ $0.isStackHeader != nil && $0.physicalBinding != nil }),
+                       allRows.allSatisfy({ $0.trackRef != nil }),
+                       Set(allRows.compactMap(\.trackRef)).count == live.count,
+                       Set(fullExposures.map(\.stackRef)) == stackRefs,
+                       fullExposures.allSatisfy({ $0.directChildTrackRefs != nil
+                           && $0.directChildrenSource == "owned_disclosure_closed_descendants" }) {
+                        for index in tracks.rows.indices {
+                            guard let ref = tracks.rows[index].trackRef else { continue }
+                            var depth = 0, current = ref
+                            while let parent = parents[current] { depth += 1; current = parent }
+                            if parents[ref] == nil {
+                                tracks.rows[index].parentSource = "ax_complete_disclosure_population"
+                            }
+                            tracks.rows[index].observedDepth = depth
+                            tracks.rows[index].depthSource = "ax_complete_disclosure_population"
+                        }
+                        hierarchy = .init(coverage: .complete, reasons: [], disclosureExposures: exposures)
+                    }
+                } else {
+                    for index in exposures.indices {
+                        exposures[index].directChildTrackRefs = nil
+                        exposures[index].directChildrenSource = nil
+                    }
+                    hierarchy = .init(coverage: .partial, reasons: [.parentDepthNotObserved, .hierarchyLinksInconsistent], disclosureExposures: exposures)
+                }
             }
         }
         let routing = request.domains.contains(.routing) ? routingSection(capture: capture, moved: moved) : nil

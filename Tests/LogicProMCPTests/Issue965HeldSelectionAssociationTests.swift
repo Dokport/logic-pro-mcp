@@ -7,12 +7,50 @@ import Testing
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
     @Test("A held input popup may move focus without losing its original complete association",
-          arguments: ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window", "popup_unreadable_window", "popup_foreign_window", "foreign_document", "foreign_focus", "detached_search", "retired_strip", "changed_selection", "playing"])
+          arguments: ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window", "popup_unreadable_window", "popup_foreign_window", "foreign_document", "foreign_focus", "detached_search", "retired_strip", "changed_selection", "playing", "rail", "rail_unchanged", "rail_missing_relationship", "rail_changed_child", "rail_editor", "rail_final_child_drift", "rail_final_focus_drift", "rail_final_rail_editor", "rail_final_rail_insertion"])
     func ownedPopupFocusPreservesOnlyActualHeldCustody(_ fault: String) async throws {
         let f = try Fixture(), gate = LogicMutationGate()
+        if fault.hasPrefix("rail") {
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
+        }
         _ = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: ["domains": .array([.string("associations")])], mutationGate: gate) {
-            let base = f.builder.makeLogicRuntime(appElement: f.app, attributeValueResultHandler: { element, attribute in
+            let base = f.builder.makeLogicRuntime(appElement: f.app, attributeValueHandler: { element, attribute in
+                if ["rail_final_child_drift", "rail_final_focus_drift", "rail_final_rail_editor", "rail_final_rail_insertion"].contains(fault), f.ownedPopupObservationStarted,
+                   CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                    f.passivePermissionFocusReads += 1
+                    if f.passivePermissionFocusReads == 2 {
+                        if fault == "rail_final_child_drift" {
+                            f.routingLateScopeInjected = true
+                            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+                        } else { f.passivePermissionArmed = true }
+                    }
+                }
+                if fault == "rail_final_focus_drift", f.passivePermissionArmed,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    let foreign = f.builder.element(1_965_983)
+                    f.builder.setRole(foreign, kAXTextFieldRole as String)
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                    f.routingLateScopeInjected = true
+                }
+                if ["rail_final_rail_editor", "rail_final_rail_insertion"].contains(fault), f.passivePermissionArmed,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    if fault == "rail_final_rail_editor" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
+                    f.routingLateScopeInjected = true
+                }
+                return nil
+            }, attributeValueResultHandler: { element, attribute in
+                if fault.hasPrefix("rail"), CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                    kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                    if fault == "rail_final_rail_insertion", f.routingLateScopeInjected,
+                       attribute == kAXInsertionPointLineNumberAttribute as String { return .success(NSNumber(value: 1)) }
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
+                if fault == "rail_missing_relationship", f.ownedPopupObservationStarted,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
                 if f.ownedPopupObservationStarted, CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
                     if ["popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window"].contains(fault) {
                         return .failure(.init(raw: AXError.noValue.rawValue))
@@ -29,7 +67,8 @@ struct Issue965HeldSelectionAssociationTests {
                 executeAppleScript: { _ in Issue.record("No scripts"); return .error("forbidden") },
                 onScreenWindowList: { [] }, focusedApplicationPID: { 4242 })
             guard let association = AccessibilityChannel.HeldSelectionAssociation(window: f.window,
-                logic: logic, expectedProject: nil, requiresProjectReference: false) else {
+                logic: logic, expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: fault.hasPrefix("rail")) else {
                 Issue.record("Fixture must hold a real association before its popup"); return .init(content: [])
             }
             let root = f.builder.element(1_965_980), search = f.builder.element(1_965_981)
@@ -40,6 +79,8 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, search)
             f.ownedPopupObservationStarted = true
             switch fault {
+            case "rail_unchanged", "rail_final_rail_editor", "rail_final_rail_insertion":
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, association.originalFocus)
             case "unchanged_focus", "popup_unchanged_no_focused_window", "ordinary_no_focused_window":
                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, association.originalFocus)
                 f.builder.setAttribute(association.originalFocus, kAXInsertionPointLineNumberAttribute as String, 0)
@@ -54,11 +95,22 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
                 f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
             case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+            case "rail_changed_child": f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+            case "rail_editor": f.builder.setRole(f.rail, kAXTextFieldRole as String)
             default: break
             }
             let permitted = fault == "ordinary_no_focused_window" ? association.permitsRead() : association.permitsOwnedPopupRead(root)
-            if ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window"].contains(fault) { #expect(permitted) } else { #expect(!permitted) }
+            if ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "rail", "rail_unchanged"].contains(fault) { #expect(permitted) } else { #expect(!permitted) }
             #expect(f.builder.actionCalls.isEmpty)
+            if fault == "rail_final_child_drift" {
+                #expect(f.routingLateScopeInjected, "Reach the deciding popup-focus read before refusing the changed original child")
+            }
+            if fault == "rail_final_focus_drift" {
+                #expect(f.routingLateScopeInjected, "Move focus during the final child read without changing the original child or header")
+            }
+            if ["rail_final_rail_editor", "rail_final_rail_insertion"].contains(fault) {
+                #expect(f.routingLateScopeInjected, "Change passive rail metadata during the final child read while retaining its CF focus identity")
+            }
             return .init(content: [])
         }
     }
@@ -155,6 +207,12 @@ struct Issue965HeldSelectionAssociationTests {
         let scroll: AXUIElement
         let bundle: URL
         var selections: [Int] = []
+        var focusRestorationWrites: [AXUIElement] = []
+        var cleanupTransportReads = 0
+        var cleanupTransportReadsAtWrite = 0
+        var cleanupScopeInjected = false
+        var focusRestorationAckOnly = false
+        var wholeHeaderSelectionReads = 0
         var ownedPopupObservationStarted = false
         var scrollWrites: [Double] = []
         var viewportReadsAfterSelection = 0
@@ -168,6 +226,10 @@ struct Issue965HeldSelectionAssociationTests {
         var pathBatchFault: String?
         var windowScopeBatchCalls = 0
         var windowScopeBatchFault: String?
+        var windowCustodyBatchCalls = 0
+        var windowCustodySingleReads = 0
+        var windowCustodyFault: String?
+        var activeBulkAttributes: [String]?
         var fault: String?
         var transientEditorRead = false
         var transientForeignRead = false
@@ -188,10 +250,20 @@ struct Issue965HeldSelectionAssociationTests {
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
         var routingDestinationPresses = 0
+        var routingClassifierHelpReads = 0
+        var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
+        var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingSelection: (@Sendable (Int) -> Void)?
+        var sharedThirdStrip = false
+        var thirdSharesOriginalStrip = false
+        var thirdRetainsPreviousFocus = false
+        var selectedChildrenReads = 0
+        var selectedChildrenReadsAtWrite = 0
+        var associationStopReads = 0
+        var associationStopReadsAtWrite = 0
         var routingLateScopeInjected = false
         var inputMenuPresses = 0
         var inputMenuCancels = 0
@@ -205,7 +277,7 @@ struct Issue965HeldSelectionAssociationTests {
         var passivePermissionFocusReads = 0
         var passivePermissionArmed = false
 
-        init(withViewport: Bool = false) throws {
+        init(withViewport: Bool = false, fourTracks: Bool = false) throws {
             bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-selection-\(UUID().uuidString).logicx")
             try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
             app = builder.element(1_965_700)
@@ -213,7 +285,9 @@ struct Issue965HeldSelectionAssociationTests {
             rail = builder.element(1_965_702)
             mixer = builder.element(1_965_703)
             headers = [builder.element(1_965_704), builder.element(1_965_705)]
+                + (fourTracks ? [builder.element(1_965_760), builder.element(1_965_761)] : [])
             strips = [builder.element(1_965_706), builder.element(1_965_707)]
+                + (fourTracks ? [builder.element(1_965_770), builder.element(1_965_771)] : [])
             scroll = builder.element(1_965_708)
             builder.setRole(window, kAXWindowRole as String)
             builder.setAttribute(window, kAXTitleAttribute as String, "Selection fixture - Tracks")
@@ -267,9 +341,22 @@ struct Issue965HeldSelectionAssociationTests {
 
         deinit { try? FileManager.default.removeItem(at: bundle) }
 
-        func channel() -> AccessibilityChannel {
+        func logic() -> AXLogicProElements.Runtime {
             let base = builder.makeLogicRuntime(appElement: app,
                 attributeValueHandler: { [self] element, attribute in
+                    if CFEqual(element, app), [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String].contains(attribute) {
+                        if activeBulkAttributes == nil { windowCustodySingleReads += 1 }
+                        if activeBulkAttributes == nil || activeBulkAttributes == [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String] {
+                            if windowCustodyFault == "absent" { return .some(nil) }
+                            if windowCustodyFault == "main_type", attribute == kAXMainWindowAttribute as String { return .some(NSNumber(value: 0)) }
+                            if windowCustodyFault == "focused_type", attribute == kAXFocusedWindowAttribute as String { return .some(NSNumber(value: 0)) }
+                            if windowCustodyFault == "foreign_main", attribute == kAXMainWindowAttribute as String { return .some(builder.element(1_965_999)) }
+                            if windowCustodyFault == "foreign_focused", attribute == kAXFocusedWindowAttribute as String { return .some(builder.element(1_965_999)) }
+                            if windowCustodyFault == "late_document", attribute == kAXFocusedWindowAttribute as String {
+                                builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
+                        }
+                    }
                     if CFEqual(element, window), attribute == kAXHelpAttribute as String { presentationCensusReads += 1 }
                     routingRead?(element, attribute)
                     if CFEqual(element, scroll), selections.count == 1 {
@@ -343,6 +430,11 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     return nil
                 }, attributeValueResultHandler: { [self] element, attribute in
+                    if let result = routingReadResult?(element, attribute) { return result }
+                    if fault == "selected_child_unreadable", CFEqual(element, mixer),
+                       attribute == kAXSelectedChildrenAttribute as String {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
                     if routingOtherReplacement != nil, CFEqual(element, strips[0]) {
                         return .failure(.init(raw: AXError.invalidUIElement.rawValue))
                     }
@@ -373,6 +465,13 @@ struct Issue965HeldSelectionAssociationTests {
                     return .success(strips)
                 },
                 setAttributeHandler: { [self] element, attribute, value in
+                    if strips.contains(where: { CFEqual($0, element) }), attribute == kAXFocusedAttribute as String {
+                        cleanupTransportReadsAtWrite = cleanupTransportReads
+                        focusRestorationWrites.append(element)
+                        if focusRestorationAckOnly { return true }
+                        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, element)
+                        return true
+                    }
                     if CFEqual(element, scroll), attribute == kAXValueAttribute as String,
                        let number = value as? NSNumber {
                         scrollWrites.append(number.doubleValue)
@@ -387,6 +486,7 @@ struct Issue965HeldSelectionAssociationTests {
                         Issue.record("only exact held rail selection is authorized"); return false
                     }
                     selections.append(index)
+                    let previousFocus = builder.attributeValue(app, kAXFocusedUIElementAttribute as String)
                     routingSelection?(index)
                     if fault == "no_op" { return true }
                     for (row, header) in headers.enumerated() {
@@ -394,7 +494,15 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     // The actual physical relationship is deliberately not positional.
                     builder.setAttribute(app, kAXFocusedUIElementAttribute as String,
-                        index == 0 ? routingReplacement ?? strips[1] : routingOtherReplacement ?? strips[0])
+                        index == 0 ? routingReplacement ?? strips[1]
+                            : index == 1 ? routingOtherReplacement ?? strips[0]
+                                : strips[index == 2 ? (thirdSharesOriginalStrip ? 1 : sharedThirdStrip ? 0 : 3) : 2])
+                    if index == 2, thirdRetainsPreviousFocus, let previousFocus {
+                        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, previousFocus)
+                    }
+                    if index == 0, fault == "restore_retains_held_focus", let previousFocus {
+                        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, previousFocus)
+                    }
                     if fault == "selection_scroll" || fault?.hasPrefix("scroll_") == true {
                         // Native R11: restoring the selected header/focused strip did
                         // not restore the Tracks scrollbar's original value.
@@ -443,6 +551,13 @@ struct Issue965HeldSelectionAssociationTests {
                     performActionResult: base.ax.performActionResult, elementAtPosition: base.ax.elementAtPosition,
                     attributeValuesResult: { [self] element, attributes in
                         batchReadCalls += 1
+                        activeBulkAttributes = attributes
+                        defer { activeBulkAttributes = nil }
+                        if CFEqual(element, app), attributes == [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String] {
+                            windowCustodyBatchCalls += 1
+                            if windowCustodyFault == "failure" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                            if windowCustodyFault == "short" { return .success([window]) }
+                        }
                         let scopeBatch = CFEqual(element, window)
                             && attributes == [kAXTitleAttribute as String, kAXDocumentAttribute as String]
                         if scopeBatch {
@@ -492,32 +607,173 @@ struct Issue965HeldSelectionAssociationTests {
                 executeAppleScript: { _ in Issue.record("no scripts"); return .error("forbidden") },
                 onScreenWindowList: { [] }, postPopupMenuEscape: { Issue.record("no Escape") },
                 focusedApplicationPID: { 4242 })
-            return AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
-                isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic))
+            return logic
+        }
+
+        func channel() -> AccessibilityChannel {
+            AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
+                isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic()))
         }
     }
 
     private func inspect(_ f: Fixture, navigation: Bool = true, cache: StateCache = StateCache(),
                          fileReader: LogicProjectFileReader.Runtime = .unavailable,
                          registry: TargetRegistry = TargetRegistry(), projectRef: String? = nil,
-                         domains: [String] = ["associations"], guardedRenewalFocus: Bool = false) async throws -> [String: Any] {
+                         domains: [String]? = ["associations"], guardedRenewalFocus: Bool = false,
+                         guardedPassiveFocus: Bool = false,
+                         scope: String = "whole_project") async throws -> [String: Any] {
         let gate = LogicMutationGate()
         let dependencies = HandlerDependencies(router: ChannelRouter(), cache: cache, targetRegistry: registry,
             poller: StatePoller(axChannel: f.channel(), cache: cache,
                 runtime: .init(hasVisibleWindow: { true }, projectFileReader: fileReader,
                                keyboardFocus: {
-                                   guardedRenewalFocus && f.routingReplacement != nil
+                                   guardedPassiveFocus || (guardedRenewalFocus && f.routingReplacement != nil)
                                        ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing
                                })),
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
             liveTrackNames: { [:] }, projectFileReader: fileReader)
         let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
-        var arguments: [String: Value] = ["domains": .array(domains.map(Value.string)), "allow_ui_navigation": .bool(navigation)]
+        var arguments: [String: Value] = ["allow_ui_navigation": .bool(navigation),
+                                        "scope": .string(scope)]
+        if let domains { arguments["domains"] = .array(domains.map(Value.string)) }
         if let projectRef { arguments["project_ref"] = .string(projectRef) }
         let params = arguments
         let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
             commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
         return try #require(sharedJSONObject(sharedToolText(result)))
+    }
+
+    @Test("Association-only acquisition omits unrequested routing classification without replacing observed scalars",
+          arguments: ["association_only", "strips", "routing", "default"])
+    func registeredAssociationAcquisitionReadsOnlyRequestedRouting(kind: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(withViewport: true)
+            var routingControls: [AXUIElement] = []
+            for index in f.strips.indices {
+                let volume = f.builder.element(1_966_100 + index * 10), pan = f.builder.element(1_966_101 + index * 10)
+                for (control, description, value, minimum) in [(volume, "Volume", 0.7, 0.0), (pan, "Pan", -0.25, -1.0)] {
+                    f.builder.setRole(control, kAXSliderRole as String)
+                    f.builder.setAttribute(control, kAXDescriptionAttribute as String, description)
+                    f.builder.setAttribute(control, kAXValueAttribute as String, NSNumber(value: value))
+                    f.builder.setAttribute(control, kAXMinValueAttribute as String, NSNumber(value: minimum))
+                    f.builder.setAttribute(control, kAXMaxValueAttribute as String, NSNumber(value: 1.0))
+                    f.builder.setChildren(control, [])
+                }
+                let output = f.builder.element(1_966_102 + index * 10), input = f.builder.element(1_966_103 + index * 10)
+                let send = f.builder.element(1_966_104 + index * 10)
+                for (control, description, help) in [
+                    (output, "Stereo Output", "Output slot. Choose the channel strip output."),
+                    (input, "Bus 1", "Input slot. Choose the channel strip input."),
+                    (send, "send button", "Send slot. Choose the channel strip send.")
+                ] {
+                    f.builder.setButton(control, description: description, help: help, x: 0, y: 0, width: 1, height: 1)
+                    f.builder.setChildren(control, [])
+                    routingControls.append(control)
+                }
+                f.builder.setChildren(f.strips[index], f.builder.makeAXRuntime().children(f.strips[index]) + [volume, pan, output, input, send])
+            }
+            f.routingClassifierControls = routingControls
+            f.routingRead = { element, attribute in
+                // These exact leaf controls need no Inspector/discovery Help.
+                // StripHelpSamples clears its TaskLocal while invoking the native provider.
+                if attribute == kAXHelpAttribute as String,
+                   f.routingClassifierControls.contains(where: { CFEqual($0, element) }) { f.routingClassifierHelpReads += 1 }
+            }
+            let cache = StateCache()
+            let domains: [String]? = kind == "default" ? nil : kind == "association_only" ? ["associations"] : ["associations", kind]
+            let body = try await inspect(f, cache: cache, domains: domains)
+            let captureID = try #require(body["snapshot_id"] as? String)
+            let retained = try #require(await cache.retainedInspection(id: captureID))
+            let strips = retained.capture.channelStrips
+            #expect(strips.count == 2 && strips.allSatisfy { $0.physicalBinding != nil && $0.name == "Duplicate" })
+            #expect(strips.allSatisfy { $0.volume == 0.7 && $0.pan == -0.25 })
+            #expect(await cache.getChannelStrips().allSatisfy { $0.volume == 0.7 && $0.pan == -0.25 })
+            #expect(retained.capture.freshPopulation?.selectionAssociations.count == 2)
+            #expect(f.selections == [1, 0] && (body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+            if kind == "association_only" {
+                #expect(f.routingClassifierHelpReads == 0)
+                #expect(strips.allSatisfy { $0.output == nil && $0.input == nil && $0.inputObservation == nil && $0.inputSlotBinding == nil && $0.sendSlots == nil })
+                #expect((body["strips"] as? [String: Any])?["coverage"] as? String != "complete")
+            } else {
+                #expect(f.routingClassifierHelpReads > 0)
+                #expect(strips.allSatisfy { $0.output == "Stereo Output" && $0.input == "Bus 1" && $0.inputObservation?.state == .observedSource && $0.sendSlots != nil })
+            }
+        }
+    }
+
+    @Test("A complete fresh track population qualifies only its fully observed physical associations",
+          arguments: ["complete", "count_gap", "missing_pair", "hidden"])
+    func completeFreshPopulationQualifiesAllObservedAssociations(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            if fault == "missing_pair" { f.thirdRetainsPreviousFocus = true }
+            let split = f.builder.element(1_966_000), headerSplit = f.builder.element(1_966_001)
+            let legendSplit = f.builder.element(1_966_002), headerScroll = f.builder.element(1_966_003)
+            let legend = f.builder.element(1_966_004), hide = f.builder.element(1_966_005)
+            let workspace = f.builder.element(1_966_006), content = f.builder.element(1_966_007)
+            let vertical = f.builder.element(1_966_008)
+            for element in [split, headerSplit, legendSplit] {
+                f.builder.setRole(element, kAXSplitGroupRole as String)
+            }
+            f.builder.setRole(headerScroll, kAXScrollAreaRole as String)
+            f.builder.setFrame(headerScroll, x: 0, y: 0, width: 200, height: 200)
+            f.builder.setRole(f.rail, kAXGroupRole as String)
+            f.builder.setAttribute(f.rail, kAXDescriptionAttribute as String, "Tracks header")
+            for (index, header) in f.headers.enumerated() {
+                f.builder.setFrame(header, x: 0, y: CGFloat(index * 40), width: 200, height: 40)
+            }
+            f.builder.setRole(legend, kAXGroupRole as String)
+            f.builder.setRole(hide, kAXCheckBoxRole as String)
+            f.builder.setAttribute(hide, kAXDescriptionAttribute as String, "Show/Hide Hidden Tracks   H")
+            f.builder.setAttribute(hide, kAXValueAttribute as String, NSNumber(value: fault == "hidden" ? 0 : 1))
+            f.builder.setAttribute(hide, kAXWindowAttribute as String, f.window)
+            f.builder.setChildren(hide, [])
+            f.builder.setChildren(legend, [hide])
+            f.builder.setRole(workspace, kAXScrollAreaRole as String)
+            f.builder.setRole(content, kAXGroupRole as String)
+            f.builder.setAttribute(content, kAXDescriptionAttribute as String, "Tracks contents")
+            f.builder.setChildren(content, [])
+            f.builder.setRole(vertical, kAXScrollBarRole as String)
+            f.builder.setAttribute(vertical, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+            f.builder.setAttribute(vertical, kAXEnabledAttribute as String, NSNumber(value: false))
+            f.builder.setAttribute(vertical, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setAttribute(vertical, kAXWindowAttribute as String, f.window)
+            f.builder.setChildren(vertical, [])
+            f.builder.setChildren(workspace, [content, vertical])
+            f.builder.setChildren(headerScroll, [f.rail])
+            f.builder.setChildren(headerSplit, [headerScroll, workspace])
+            f.builder.setChildren(legendSplit, [legend])
+            f.builder.setChildren(split, [legendSplit, headerSplit])
+            f.builder.setChildren(f.window, [split, f.mixer, f.builder.element(1_965_720), f.scroll])
+            let data = try PropertyListSerialization.data(fromPropertyList: ["NumberOfTracks": fault == "count_gap" ? 5 : 4],
+                                                         format: .xml, options: 0)
+            let reader = LogicProjectFileReader.Runtime(currentDocumentPath: { nil }, now: Date.init,
+                readPlistData: { _ in data }, mtime: { _ in Date(timeIntervalSince1970: 0) }, sleep: { _ in })
+            let body = try await inspect(f, fileReader: reader, domains: ["tracks", "associations"])
+            let tracks = try #require(body["tracks"] as? [String: Any])
+            let associations = try #require(body["associations"] as? [String: Any])
+            let pairs = try #require(associations["rows"] as? [[String: Any]])
+            if fault == "complete" {
+                #expect(tracks["coverage"] as? String == "complete")
+                #expect(pairs.count == 4)
+                #expect(associations["coverage"] as? String == "complete")
+                #expect(associations["reasons"] as? [String] == [])
+                let overall = try #require(body["overall"] as? [String: Any])
+                let complete = try #require(overall["complete"] as? Bool)
+                #expect(complete)
+            } else {
+                #expect(associations["coverage"] as? String == "partial")
+                #expect(associations["reasons"] as? [String] == ["association_population_not_observed"])
+                if fault == "missing_pair" {
+                    #expect(tracks["coverage"] as? String == "complete")
+                    #expect(pairs.count < 4)
+                } else {
+                    #expect(tracks["coverage"] as? String == "partial")
+                    #expect(pairs.count == 4)
+                }
+            }
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        }
     }
 
     @Test func retainedMixerPairUsesActualCaptureAndExactPhysicalReferenceOnly() async throws {
@@ -549,7 +805,7 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: ["paired", "missing_pair", "replaced_header", "foreign_project", "foreign_focus", "deciding_read", "partial_restore", "track_ref", "track_ref_missing_pair", "track_ref_replaced_strip"])
+    @Test(arguments: ["paired", "missing_pair", "replaced_header", "foreign_project", "foreign_focus", "deciding_read", "partial_restore", "track_ref", "track_ref_missing_pair", "track_ref_replaced_strip", "rail", "rail_editor", "rail_missing_relationship", "rail_unselected_header"])
     func outputReadbackRenewsRetiredSourceOnlyThroughOriginalCapturedHeader(condition: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture()
@@ -585,6 +841,30 @@ struct Issue965HeldSelectionAssociationTests {
             }
             f.builder.setChildren(leaf, []); f.builder.setChildren(submenu, [leaf])
             f.builder.setChildren(parent, [submenu]); f.builder.setChildren(root, [parent])
+            if condition.hasPrefix("rail") {
+                f.routingRead = { element, attribute in
+                    guard f.routingReplacement != nil else { return }
+                    if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                        f.builder.setAttribute(f.app, attribute, f.rail)
+                    }
+                    if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                        let selectedOther = AXValueExtractors.extractSelectedState(f.headers[1], runtime: f.builder.makeAXRuntime()) == true
+                        f.builder.setAttribute(f.mixer, attribute, [selectedOther ? f.strips[0] : replacement])
+                    }
+                }
+                f.routingReadResult = { element, attribute in
+                    guard f.routingReplacement != nil else { return nil }
+                    if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String,
+                       condition == "rail_missing_relationship" {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                        kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    return nil
+                }
+            }
             if condition == "deciding_read" {
                 f.routingRead = { element, attribute in
                     if f.selections.count == 4, CFEqual(element, newOutput), attribute == kAXDescriptionAttribute as String {
@@ -616,7 +896,13 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     f.routingReplacement = replacement
                     f.builder.setChildren(f.mixer, [f.strips[0], replacement])
-                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                        condition.hasPrefix("rail") ? f.rail : replacement)
+                    if condition == "rail_editor" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
+                    if condition == "rail_unselected_header" {
+                        f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
+                        f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
+                    }
                     if condition == "replaced_header" {
                         let foreign = f.builder.element(1_965_957)
                         f.builder.setRole(foreign, kAXLayoutItemRole as String)
@@ -681,13 +967,15 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.selections == [1, 0])
                 return
             }
-            let succeeds = condition == "paired" || condition == "track_ref"
+            let succeeds = condition == "paired" || condition == "track_ref" || condition == "rail"
             #expect(body["state"] as? String == (succeeds ? "A" : "B"), "Actual response: \(sharedToolText(result))")
             let verified = try #require(body["verified"] as? Bool)
             if succeeds {
                 #expect(verified)
                 let reread = try #require(body["reference_reread_required"] as? Bool)
                 #expect(reread)
+                #expect(body["source_renewal"] as? String == (condition == "rail"
+                    ? "held_exclusive_selection_selected_child" : "held_exclusive_selection_focus"))
             } else { #expect(!verified) }
             #expect(f.routingReplacement != nil)
             let expectedSelections = condition == "partial_restore" ? [1, 0, 1]
@@ -819,6 +1107,45 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("The input reader must not press any destination, decoy, or replacement popup")
                 return false
             }
+            if condition == "two_input_retirements" {
+                let otherInput = decoy, renewedOtherInput = f.builder.element(1_965_976)
+                let finalOther = f.builder.element(1_965_977), finalOtherInput = f.builder.element(1_965_978)
+                for control in [otherInput, renewedOtherInput, finalOtherInput] {
+                    f.builder.setButton(control, description: "Bus 256", help: "Input slot. Choose the channel strip input source.",
+                        x: 0, y: 0, width: 1, height: 1)
+                    f.builder.setChildren(control, []); f.builder.setActionNames(control, [kAXPressAction as String])
+                }
+                for strip in [otherReplacement, finalOther] {
+                    f.builder.setRole(strip, kAXLayoutItemRole as String)
+                    f.builder.setAttribute(strip, kAXNumberOfCharactersAttribute as String, 0)
+                    f.builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+                }
+                f.routingAction = { element, action in
+                    if action == kAXPressAction as String, CFEqual(element, otherInput) || CFEqual(element, input) {
+                        f.inputMenuPresses += 1
+                        f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1], root])
+                        return true
+                    }
+                    if CFEqual(element, root), action == kAXCancelAction as String {
+                        f.inputMenuCancels += 1
+                        if f.inputMenuCancels == 1 {
+                            f.builder.setChildren(otherReplacement,
+                                f.builder.makeAXRuntime().children(f.strips[0]).filter { !CFEqual($0, otherInput) } + [renewedOtherInput])
+                            f.routingOtherReplacement = otherReplacement
+                        } else {
+                            f.builder.setChildren(finalOther,
+                                f.builder.makeAXRuntime().children(otherReplacement).filter { !CFEqual($0, renewedOtherInput) } + [finalOtherInput])
+                            f.routingOtherReplacement = finalOther
+                            f.routingReplacement = replacement
+                        }
+                        f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
+                        return true
+                    }
+                    Issue.record("Only the two exact receiver input menus and their Cancel actions are permitted")
+                    return false
+                }
+            }
             if condition == "partial_restore" {
                 f.routingSelection = { _ in
                     if f.selections.count == (graph ? 5 : 3) {
@@ -828,6 +1155,11 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
             f.routingRead = { element, attribute in
+                if condition == "selected_child", f.routingReplacement != nil,
+                   CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    let selectedOther = AXValueExtractors.extractSelectedState(f.headers[1], runtime: f.builder.makeAXRuntime()) == true
+                    f.builder.setAttribute(f.mixer, attribute, [selectedOther ? f.strips[0] : replacement])
+                }
                 let inputDescription = f.selections.count == (graph ? 6 : 4) && CFEqual(element, newInput)
                     && attribute == kAXDescriptionAttribute as String
                 let decidingDescription = inputDescription && f.inputPreviousReadWasDescription
@@ -874,6 +1206,25 @@ struct Issue965HeldSelectionAssociationTests {
                 } else { nil as SessionPopulationObservation.Capture? }
                 let routing = retained.map { SessionPopulationObservation.routingGraph(capture: $0) }
                 let edges = routing?.edges.filter { $0.kind == .inputAssignment } ?? []
+                if condition == "two_input_retirements" {
+                    #expect(f.inputMenuPresses == 2 && f.inputMenuCancels == 2,
+                        "Both registered input acquisitions must actually replace physical owners")
+                    let fresh = try #require(retained)
+                    let receiver = try #require(fresh.channelStrips.indices.first {
+                        $0 < fresh.channelStrips.count && fresh.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, replacement) } == true
+                    })
+                    #expect(edges.count == 1 && edges.first?.source == "bus_\(number)",
+                        "Retain the last fresh checked receiver, not an all-or-nothing loss after a second renewal")
+                    #expect(edges.first?.destination == fresh.mixerReference(at: receiver)?.rawValue)
+                    #expect(edges.first?.provenance == .axInputMenuCheckmark)
+                    #expect(!fresh.channelStrips.contains {
+                        $0.physicalBinding.map { CFEqual($0.strip, otherReplacement) } == true
+                    }, "The first checked physical owner really retired again; do not transfer its checked bus to a replacement")
+                    #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+                    let complete = try #require(routing?.complete)
+                    #expect(!complete)
+                    return
+                }
                 if condition == "navigation_disabled" {
                     #expect(edges.isEmpty && f.inputMenuPresses == 0 && f.inputMenuCancels == 0)
                     #expect(f.selections == [1, 0])
@@ -950,7 +1301,7 @@ struct Issue965HeldSelectionAssociationTests {
             let current = try #require(AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: f.mixer,
                 runtime: f.builder.makeAXRuntime()))
             #expect(!current.strips.contains { CFEqual($0, f.strips[1]) }, "The original source is genuinely absent, not renamed in place")
-            let succeeded = condition == "paired" || condition == "unselected_pair"
+            let succeeded = condition == "paired" || condition == "unselected_pair" || condition == "selected_child"
             #expect(body["state"] as? String == (succeeded ? "A" : "C"), "Input renewal response: \(sharedToolText(result))")
             let attempted = try #require(body["write_attempted"] as? Bool)
             #expect(!attempted)
@@ -962,6 +1313,8 @@ struct Issue965HeldSelectionAssociationTests {
                     "Bus 256 display text cannot assign the checked Bus 1 value")
                 let reread = try #require(body["reference_reread_required"] as? Bool)
                 #expect(reread)
+                #expect(body["source_renewal"] as? String == (condition == "selected_child"
+                    ? "held_exclusive_selection_selected_child" : "held_exclusive_selection_focus"))
                 #expect(body["popup_menu_state"] as? String == "closed")
                 if condition == "unselected_pair" {
                     let selected = try #require(f.builder.attributeValue(f.headers[1], kAXSelectedAttribute as String) as? Bool)
@@ -980,9 +1333,9 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: [1, 256])
-    func inputBusRenewsRetiredSourceThroughOriginalCapturedHeader(number: Int) async throws {
-        try await assertInputBusRenewal(number: number, condition: "paired")
+    @Test(arguments: [1, 256], ["paired", "selected_child"])
+    func inputBusRenewsRetiredSourceThroughOriginalCapturedHeader(number: Int, condition: String) async throws {
+        try await assertInputBusRenewal(number: number, condition: condition)
     }
 
     @Test(arguments: [1, 256])
@@ -1002,6 +1355,10 @@ struct Issue965HeldSelectionAssociationTests {
     @Test(arguments: [1, 256])
     func registeredInputGraphUsesActualRenewalCensusWithoutRetargetingOldAssociations(number: Int) async throws {
         try await assertInputBusRenewal(number: number, condition: "whole_census_retirement", graph: true)
+    }
+
+    @Test func registeredInputGraphKeepsOnlyTheSurvivingSecondRenewal() async throws {
+        try await assertInputBusRenewal(number: 1, condition: "two_input_retirements", graph: true)
     }
 
     @Test(arguments: ["missing_pair", "replaced_header", "foreign_project", "foreign_focus", "partial_restore",
@@ -1028,6 +1385,66 @@ struct Issue965HeldSelectionAssociationTests {
         let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
         #expect(rows.count == 2 && f.selections == [1, 0])
         #expect(bulk ? f.windowScopeBatchCalls > 0 : f.windowScopeBatchCalls == 0)
+    }
+
+    @Test("One selected-child custody decision coalesces only its two app-window reads",
+          arguments: [false, true])
+    func selectedChildWindowCustodyUsesOneFreshBatch(bulk: Bool) async throws {
+        let f = try Fixture(withViewport: true)
+        f.useBulkReads = bulk
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: true))
+            f.windowCustodyBatchCalls = 0; f.windowCustodySingleReads = 0
+            #expect(association.permitsRead())
+            #expect(f.windowCustodyBatchCalls == (bulk ? 1 : 0))
+            #expect(f.windowCustodySingleReads == (bulk ? 0 : 4))
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
+    @Test("Selected-child app-window custody refuses bad values and a later document change",
+          arguments: ["absent", "main_type", "focused_type", "foreign_main", "foreign_focused", "late_document", "failure", "short"])
+    func selectedChildWindowCustodyRetainsRefusals(fault: String) async throws {
+        let f = try Fixture(withViewport: true)
+        f.useBulkReads = true
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: true))
+            f.windowCustodyBatchCalls = 0
+            f.windowCustodyFault = fault
+            #expect(!association.permitsRead())
+            #expect(f.windowCustodyBatchCalls > 0)
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
     }
 
     @Test(arguments: ["failure", "short", "title_type", "document_type",
@@ -1105,6 +1522,668 @@ struct Issue965HeldSelectionAssociationTests {
         let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String,
             runtime: f.builder.makeAXRuntime()))
         #expect(CFEqual(focus, f.strips[1]))
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("Whole-project inspection observes all held headers, without a duplicate-name or ordinal join",
+          arguments: [false, true])
+    func wholeInspectionObservesEveryHeldHeader(shared: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.sharedThirdStrip = shared
+        f.fault = "selection_scroll"
+        let cache = StateCache(), registry = TargetRegistry()
+        let body = try await inspect(f, cache: cache, registry: registry)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        let strips = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 4)
+        for (trackIndex, stripIndex) in [(0, 1), (1, 0), (2, shared ? 0 : 3), (3, 2)] {
+            let row = try #require(rows.first { $0["track_index"] as? Int == trackIndex })
+            #expect(row["mixer_strip_ref"] as? String == strips[stripIndex]["mixer_strip_ref"] as? String)
+        }
+        #expect(f.selections == (shared ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
+        #expect(f.scrollWrites == [0.8])
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        #expect(section["coverage"] as? String == "partial", "Held exposed headers still do not prove global population")
+        if shared {
+            let id = try #require(body["snapshot_id"] as? String)
+            let retained = try #require(await cache.retainedInspection(id: id))
+            let source = try #require(retained.capture.channelStrips[0].physicalBinding)
+            let ref = try #require(retained.capture.mixerReference(at: 0))
+            #expect(await cache.retainedMixerAssociation(reference: ref, source: source,
+                snapshot: await registry.currentSnapshot) == nil,
+                "Publishing observed aliases must not grant a scalar writer unique source-header custody")
+        }
+    }
+
+    @Test("An original held focus may be restored without manufacturing an original-header association")
+    func wholeInspectionRestoresRetainedFocusWithoutUsingInverseAsPairEvidence() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = section["rows"] as? [[String: Any]] ?? []
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == Set([1, 2, 3]),
+            "Explicit focus restoration is cleanup, never evidence that the original header maps to that strip")
+        #expect(f.selections == [1, 2, 3, 0])
+        #expect(f.focusRestorationWrites.count == 1)
+        let restoredFocus = try #require(f.focusRestorationWrites.first)
+        #expect(CFEqual(restoredFocus, f.strips[1]))
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+            kAXFocusedUIElementAttribute as String, runtime: f.builder.makeAXRuntime()))
+        #expect(CFEqual(focus, f.strips[1]))
+    }
+
+    @Test("Native-shaped passive focus guarding permits only the observed original-focus inverse",
+          arguments: [false, true])
+    func originalFocusInverseRenewsBeforeThePassiveEditingGuard(ackOnly: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.focusRestorationAckOnly = ackOnly
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        for strip in f.strips {
+            f.builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+        }
+        let body = try await inspect(f, guardedPassiveFocus: true)
+        #expect(f.focusRestorationWrites.count == 1)
+        if ackOnly {
+            #expect(body["associations"] == nil)
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "not_restored")
+        } else {
+            let section = try #require(body["associations"] as? [String: Any])
+            let rows = section["rows"] as? [[String: Any]] ?? []
+            #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == Set([1, 2, 3]))
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        }
+    }
+
+    @Test("An ambiguous held focus does not erase independently observed pairs when baseline selection retains focus")
+    func retainedBaselineFocusLeavesOnlyTheAmbiguousHeaderUnknown() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.thirdRetainsPreviousFocus = true
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        let body = try await inspect(f, guardedPassiveFocus: true)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = section["rows"] as? [[String: Any]] ?? []
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == Set([1, 3]))
+        #expect(section["coverage"] as? String == "partial")
+        #expect(f.selections == [1, 2, 0, 3, 0])
+        #expect(f.focusRestorationWrites.count == 1)
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("Optional whole-held challenges leave deadline time for the original inverse and final population",
+          arguments: [6, 11])
+    func wholeHeldCollectionLeavesOwnedDeadlineTimeForRestoration(elapsedSeconds: Int) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+                                            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, collectionNow: {
+                    start.advanced(by: f.selections.isEmpty ? .zero : .seconds(elapsedSeconds))
+                })
+            #expect(f.selections == [1, 0], "Stop optional challenges, not the still-owned inverse")
+            #expect(pairs.count == 2, "Retain only the independently verified subset")
+            #expect(association.effects.restoration == "restored")
+        }
+    }
+
+    @Test("Measured population cost reserves both rechecks without an unrelated quarter-deadline cap",
+          arguments: [6, 11, 16])
+    func measuredCollectionUsesAvailableTimeWithoutSpendingRecheckReserve(elapsedSeconds: Int) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+                                            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, populationReadDuration: .seconds(2), collectionNow: {
+                    start.advanced(by: f.selections.isEmpty ? .zero : .seconds(elapsedSeconds))
+                })
+            if elapsedSeconds < 16 {
+                #expect(f.selections == [1, 2, 3, 0])
+                #expect(pairs.count == 4)
+            } else {
+                #expect(f.selections == [1, 0], "The measured two-read reserve still ends optional challenges")
+                #expect(pairs.count == 2)
+            }
+            #expect(association.effects.restoration == "restored")
+        }
+    }
+
+    @Test("Insufficient measured recheck time refuses optional navigation without inventing instability")
+    func measuredRecheckReservePreservesUnchangedInitialPopulation() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+                                            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, populationReadDuration: .seconds(11), collectionNow: { start })
+            #expect(pairs.isEmpty)
+            #expect(f.selections.isEmpty)
+            #expect(f.focusRestorationWrites.isEmpty)
+            #expect(f.scrollWrites.isEmpty)
+            #expect(!association.effects.navigationPerformed)
+            #expect(association.effects.attempted.isEmpty)
+            #expect(association.effects.restoration == "not_applicable")
+            #expect(association.effects.reason == nil)
+        }
+    }
+
+    @Test("Final focus-restoration reads cannot overwrite foreign focus or a retired reference",
+          arguments: ["reference", "foreign_focus"])
+    func finalFocusInverseCustodyReadCannotAuthorizeItsWrite(fault: String) async throws {
+        func observe(_ f: Fixture) async throws -> SessionPopulationObservation.FreshPopulation {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            return try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(
+                    request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                    fileReader: .unavailable,
+                    navigationReferenceIsCurrent: { f.referenceCurrent }, stoppingWhen: { false })
+            }
+        }
+        let calibration = try Fixture(withViewport: true, fourTracks: true)
+        calibration.fault = "restore_retains_held_focus"
+        calibration.builder.setAttributeSettable(calibration.strips[1], kAXFocusedAttribute as String, true)
+        calibration.routingRead = { element, attribute in
+            if calibration.selections == [1, 2, 3, 0], CFEqual(element, calibration.builder.element(1_965_721)),
+               attribute == kAXValueAttribute as String { calibration.cleanupTransportReads += 1 }
+        }
+        let positive = try await observe(calibration)
+        #expect(positive.selectionAssociations.count == 3)
+        #expect(calibration.focusRestorationWrites.count == 1)
+        #expect(calibration.cleanupTransportReadsAtWrite > 0)
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        f.routingRead = { element, attribute in
+            if f.selections == [1, 2, 3, 0], CFEqual(element, f.builder.element(1_965_721)),
+               attribute == kAXValueAttribute as String {
+                f.cleanupTransportReads += 1
+                if f.cleanupTransportReads == calibration.cleanupTransportReadsAtWrite {
+                    f.cleanupScopeInjected = true
+                    if fault == "reference" { f.referenceCurrent = false }
+                    else {
+                        let editor = f.builder.element(1_965_989)
+                        f.builder.setRole(editor, kAXTextFieldRole as String)
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                    }
+                }
+            }
+        }
+        let refused = try await observe(f)
+        #expect(f.cleanupScopeInjected, "Inject at the actual final custody read before the explicit inverse")
+        #expect(f.focusRestorationWrites.isEmpty)
+        #expect(refused.selectionAssociations.isEmpty)
+        #expect(refused.uiEffects.restoration == "not_restored")
+    }
+
+    @Test("Focus cleanup refuses lost custody and never treats a setter acknowledgement as restoration",
+          arguments: ["unsettable", "document", "foreign_focus", "retired_original", "playing", "newer_viewport", "ack_only"])
+    func focusCleanupRequiresOriginalCustodyAndObservedEffect(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.fault = "restore_retains_held_focus"
+        f.focusRestorationAckOnly = fault == "ack_only"
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, fault != "unsettable")
+        if fault != "unsettable", fault != "ack_only" {
+            f.routingRead = { element, attribute in
+                guard !f.cleanupScopeInjected, f.selections == [1, 2, 3, 0],
+                      CFEqual(element, f.strips[1]), attribute == kAXNumberOfCharactersAttribute as String else { return }
+                f.cleanupScopeInjected = true
+                switch fault {
+                case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                case "foreign_focus": f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.headers[0])
+                case "retired_original": f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[1]) })
+                case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+                case "newer_viewport": f.builder.setAttribute(f.scroll, kAXValueAttribute as String, NSNumber(value: 0.6))
+                default: Issue.record("Unknown cleanup counterexample")
+                }
+            }
+        }
+        let body = try await inspect(f)
+        #expect(f.selections == [1, 2, 3, 0])
+        if fault != "unsettable", fault != "ack_only" { #expect(f.cleanupScopeInjected) }
+        #expect(f.focusRestorationWrites.count == (fault == "ack_only" ? 1 : 0))
+        #expect(f.scrollWrites.isEmpty)
+        #expect(body["associations"] == nil)
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "not_restored")
+    }
+
+    @Test("Selection scope retains its bounded challenge and excludes unselected pairs")
+    func selectionInspectionDoesNotScanAllHeldHeaders() async throws {
+        let f = try Fixture(fourTracks: true)
+        let body = try await inspect(f, scope: "selection")
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 1 && rows.first?["track_index"] as? Int == 0)
+        #expect(f.selections == [1, 0])
+    }
+
+    @Test("Whole-header selection does not repeat full selection bookends before the same action")
+    func wholeHeaderSelectionsAvoidRedundantBookends() async throws {
+        let f = try Fixture(fourTracks: true)
+        f.routingRead = { element, attribute in
+            if attribute == kAXSelectedAttribute as String,
+               f.headers.contains(where: { CFEqual($0, element) }) { f.wholeHeaderSelectionReads += 1 }
+        }
+        let body = try await inspect(f)
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 4 && f.selections == [1, 2, 3, 0])
+        #expect(f.wholeHeaderSelectionReads <= 300,
+            "Retain deciding ownership and selection checks without redundant pre-action full censuses: \(f.wholeHeaderSelectionReads)")
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("A later header's custody loss discards earlier pairs and prohibits further selection",
+          arguments: ["document", "strip_replacement", "playing", "cancel"])
+    func laterWholeInspectionLossCannotPublishEarlierPairs(_ fault: String) async throws {
+        let f = try Fixture(fourTracks: true)
+        f.routingSelection = { index in
+            if index == 2 {
+                switch fault {
+                case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                case "strip_replacement": f.builder.setChildren(f.mixer, [f.strips[0], f.strips[1], f.strips[2]])
+                case "playing": f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+                case "cancel": withUnsafeCurrentTask { $0?.cancel() }
+                default: Issue.record("Unexpected fault")
+                }
+            }
+        }
+        let body = try await inspect(f)
+        #expect(body["state"] as? String == "C")
+        #expect(body["associations"] == nil)
+        #expect(f.selections == [1, 2])
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String != "restored")
+    }
+
+    @Test("A fresh changed focus can prove an alias of the original strip without treating unchanged focus as proof")
+    func wholeHeaderAliasOfOriginalHasAnIndependentFocusTransition() async throws {
+        let f = try Fixture(fourTracks: true)
+        f.thirdSharesOriginalStrip = true
+        let cache = StateCache(), registry = TargetRegistry()
+        let body = try await inspect(f, cache: cache, registry: registry)
+        let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+        let original = try #require(rows.first { $0["track_index"] as? Int == 0 })
+        let alias = try #require(rows.first { $0["track_index"] as? Int == 2 })
+        #expect(original["mixer_strip_ref"] as? String == alias["mixer_strip_ref"] as? String)
+        #expect(rows.count == 4 && f.selections == [1, 2, 3, 0])
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        let id = try #require(body["snapshot_id"] as? String)
+        let retained = try #require(await cache.retainedInspection(id: id))
+        let source = try #require(retained.capture.channelStrips[1].physicalBinding)
+        let ref = try #require(retained.capture.mixerReference(at: 1))
+        #expect(await cache.retainedMixerAssociation(reference: ref, source: source,
+            snapshot: await registry.currentSnapshot) == nil,
+            "An observed alias of the original strip must not acquire unique scalar actuation custody")
+    }
+
+    @Test("Returning an already focused strip proves restoration, not a new baseline association",
+          arguments: [false, true])
+    func finalChallengeAtOriginalFocusRequiresAnIndependentOriginalHeaderWitness(provedEarlier: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.thirdRetainsPreviousFocus = provedEarlier
+        f.routingRead = { element, attribute in
+            if f.selections.last == 3, CFEqual(element, f.app),
+               attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+            }
+        }
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        let expected: Set<Int> = provedEarlier ? [0, 1] : [1, 2, 3]
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == expected)
+        #expect(f.selections == (provedEarlier ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
+        #expect(f.focusRestorationWrites.isEmpty)
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test("Actual Mixer selected-child transitions can prove held pairs while keyboard focus stays elsewhere",
+          arguments: [false, true])
+    func mixerSelectedChildrenObservePairsWithoutInventingFocus(shared: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let mapping = [0, 3, shared ? 3 : 1, 2]
+        f.routingRead = { element, attribute in
+            if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, attribute, f.strips[1])
+            }
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+            }
+        }
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        let strips = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+        #expect(rows.count == 4)
+        for index in mapping.indices {
+            let row = try #require(rows.first { $0["track_index"] as? Int == index })
+            #expect(row["mixer_strip_ref"] as? String == strips[mapping[index]]["mixer_strip_ref"] as? String)
+            #expect(row["source"] as? String == "held_exclusive_selection_selected_child")
+        }
+        #expect(f.focusRestorationWrites.isEmpty)
+        #expect(f.selections == (shared ? [1, 2, 0, 2, 3, 0] : [1, 2, 3, 0]))
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        #expect(section["coverage"] as? String == "partial", "This does not certify global population")
+    }
+
+    @Test("Whole-held selected-child observation can enter from its exact nonediting rail without changing scalar entry",
+          arguments: [false, true])
+    func mixerSelectedChildrenCanEnterFromTheOriginalPassiveRail(whole: Bool) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let mapping = [0, 3, 1, 2]
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        f.routingRead = { element, attribute in
+            if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, attribute, f.rail)
+            }
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+            }
+        }
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let body = try await inspect(f, scope: whole ? "whole_project" : "selected_only")
+        let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+        #expect(rows.count == (whole ? 4 : 0))
+        if whole {
+            let stripRows = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+            for index in mapping.indices {
+                let row = try #require(rows.first { $0["track_index"] as? Int == index })
+                #expect(row["mixer_strip_ref"] as? String == stripRows[mapping[index]]["mixer_strip_ref"] as? String)
+                #expect(row["source"] as? String == "held_exclusive_selection_selected_child")
+            }
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        }
+        #expect(f.selections == (whole ? [1, 2, 3, 0] : []))
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("Passive rail entry refuses editing, unknown metadata and lost exact custody before navigation",
+          arguments: ["text_role", "settable", "zero_insertion", "unreadable", "nil_metadata", "foreign_focus", "detached_rail", "retired_strip", "foreign_document", "missing_relationship"])
+    func passiveRailSelectedChildEntryMustRetainExactNoneditingCustody(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let mapping = [0, 3, 1, 2]
+        let foreign = f.builder.element(1_965_998)
+        f.builder.setRole(foreign, kAXGroupRole as String)
+        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+        if fault == "text_role" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
+        if fault == "settable" { f.builder.setAttributeSettable(f.rail, kAXValueAttribute as String, true) }
+        f.routingRead = { element, attribute in
+            if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                f.builder.setAttribute(f.app, attribute, fault == "foreign_focus" ? foreign : f.rail)
+            }
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                f.selectedChildrenReads += 1
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                if fault == "detached_rail" { f.builder.setChildren(f.window, [f.mixer]) }
+                if fault == "retired_strip" { f.builder.setChildren(f.mixer, Array(f.strips.dropFirst())) }
+            }
+        }
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String,
+               fault == "missing_relationship" { return .failure(.init(raw: AXError.noValue.rawValue)) }
+            if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                if fault == "foreign_document" {
+                    // Switch after the association has captured its original
+                    // document, at the new rail-focus qualification itself.
+                    f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                }
+                if fault == "zero_insertion", attribute == kAXInsertionPointLineNumberAttribute as String {
+                    return .success(NSNumber(value: 0))
+                }
+                if fault == "unreadable" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                if fault == "nil_metadata" { return .success(nil) }
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        let body = try await inspect(f)
+        let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+        #expect(rows.isEmpty)
+        #expect(f.selections.isEmpty, "An unknown/editor/foreign rail must not authorize a selection")
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("The final passive rail metadata read cannot authorize a retired selected strip")
+    func passiveRailFinalMetadataMustRenewSelectedStripCustody() async throws {
+        func fixture(injectAt: Int?) throws -> Fixture {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            let mapping = [0, 3, 1, 2]
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                    f.builder.setAttribute(f.app, attribute, f.rail)
+                }
+                if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                }
+            }
+            f.routingReadResult = { element, attribute in
+                if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                    kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                    if attribute == kAXInsertionPointLineNumberAttribute as String {
+                        f.cleanupTransportReads += 1
+                        if f.selections.isEmpty, f.cleanupTransportReads == injectAt {
+                            f.cleanupScopeInjected = true
+                            // A retired AX child can retain its old parent and
+                            // the Mixer's old selected-child attribute.
+                            f.builder.setChildren(f.mixer, Array(f.strips.dropFirst()))
+                        }
+                    }
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
+                return nil
+            }
+            f.routingSelection = { index in
+                if index == 1, f.selections == [1] { f.cleanupTransportReadsAtWrite = f.cleanupTransportReads }
+            }
+            return f
+        }
+        let calibration = try fixture(injectAt: nil)
+        let positive = try await inspect(calibration)
+        #expect(((positive["associations"] as? [String: Any])?["rows"] as? [[String: Any]])?.count == 4)
+        #expect(calibration.cleanupTransportReadsAtWrite > 0)
+        let f = try fixture(injectAt: calibration.cleanupTransportReadsAtWrite)
+        let body = try await inspect(f)
+        #expect(f.cleanupScopeInjected, "Reach the actual final metadata read before the first action")
+        #expect(f.selections.isEmpty, "A deciding rail metadata read must not authorize a retired selected strip")
+        #expect(((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []).isEmpty)
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("The deciding selected-child read cannot outlive reference, editor, document or strip custody",
+          arguments: ["reference", "document", "editor", "same_focus_editor", "retired_strip"])
+    func mixerSelectedChildDecidingReadMustRemainOwned(fault: String) async throws {
+        func observe(_ f: Fixture) async throws -> SessionPopulationObservation.FreshPopulation {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            return try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(
+                    request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                    fileReader: .unavailable,
+                    navigationReferenceIsCurrent: { f.referenceCurrent }, stoppingWhen: { false })
+            }
+        }
+        func fixture(injectAt: Int?) throws -> Fixture {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            let mapping = [0, 3, 1, 2]
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String {
+                    if !f.cleanupScopeInjected || fault != "editor" {
+                        f.builder.setAttribute(f.app, attribute, f.strips[1])
+                    }
+                }
+                if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    f.selectedChildrenReads += 1
+                    f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                    if f.selections.isEmpty, f.selectedChildrenReads == injectAt {
+                        f.cleanupScopeInjected = true
+                        switch fault {
+                        case "reference": f.referenceCurrent = false
+                        case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        case "editor":
+                            let editor = f.builder.element(1_965_995)
+                            f.builder.setRole(editor, kAXTextFieldRole as String)
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                        case "same_focus_editor":
+                            f.builder.setAttribute(f.strips[1], kAXNumberOfCharactersAttribute as String, 1)
+                        case "retired_strip": f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[0]) })
+                        default: Issue.record("Unexpected fault")
+                        }
+                    }
+                }
+            }
+            f.routingSelection = { index in
+                if index == 1, f.selections == [1] { f.selectedChildrenReadsAtWrite = f.selectedChildrenReads }
+            }
+            return f
+        }
+        let calibration = try fixture(injectAt: nil)
+        let positive = try await observe(calibration)
+        #expect(positive.selectionAssociations.count == 4)
+        #expect(calibration.selectedChildrenReadsAtWrite > 0)
+        let f = try fixture(injectAt: calibration.selectedChildrenReadsAtWrite)
+        let body = try await observe(f)
+        #expect(f.cleanupScopeInjected)
+        #expect(f.selections.isEmpty, "Lost custody at the actual deciding relationship read must prevent the first selection")
+        #expect(body.selectionAssociations.isEmpty)
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("A focus-reading stop callback must precede the final selected-child action proof",
+          arguments: ["reference", "document", "editor", "retired_strip"])
+    func mixerSelectedChildStopReadCannotInvalidateTheFinalActionProof(fault: String) async throws {
+        func observe(_ f: Fixture, injectAt: Int?) async throws -> SessionPopulationObservation.FreshPopulation {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            return try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(
+                    request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                    fileReader: .unavailable, navigationReferenceIsCurrent: { f.referenceCurrent },
+                    stoppingWhen: {
+                        f.associationStopReads += 1
+                        if f.selections.isEmpty, f.associationStopReads == injectAt {
+                            f.cleanupScopeInjected = true
+                            switch fault {
+                            case "reference": f.referenceCurrent = false
+                            case "document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            case "editor":
+                                let editor = f.builder.element(1_965_997)
+                                f.builder.setRole(editor, kAXTextFieldRole as String)
+                                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                            case "retired_strip": f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[0]) })
+                            default: Issue.record("Unexpected fault")
+                            }
+                        }
+                        return false
+                    })
+            }
+        }
+        func fixture() throws -> Fixture {
+            let f = try Fixture(withViewport: true, fourTracks: true)
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    f.builder.setAttribute(f.mixer, attribute, [f.strips[f.selections.last ?? 0]])
+                }
+            }
+            f.routingSelection = { index in
+                if index == 1, f.selections == [1] { f.associationStopReadsAtWrite = f.associationStopReads }
+            }
+            return f
+        }
+        let calibration = try fixture()
+        #expect(try await observe(calibration, injectAt: nil).selectionAssociations.count == 4)
+        #expect(calibration.associationStopReadsAtWrite > 0)
+        let f = try fixture()
+        let body = try await observe(f, injectAt: calibration.associationStopReadsAtWrite)
+        #expect(f.cleanupScopeInjected)
+        #expect(f.selections.isEmpty)
+        #expect(body.selectionAssociations.isEmpty)
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("Malformed or lost Mixer selected-child relationships cannot fall back to keyboard focus",
+          arguments: ["malformed", "non_element", "empty", "multiple", "foreign", "wrong_parent", "unreadable", "lost_after_selection"])
+    func mixerSelectedChildMustBeOneActualReciprocalHeldElement(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        if fault == "unreadable" { f.fault = "selected_child_unreadable" }
+        f.routingRead = { element, attribute in
+            guard CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String else { return }
+            f.selectedChildrenReads += 1
+            let selected = f.strips[f.selections.last ?? 0]
+            switch fault {
+            case "malformed": f.builder.setAttribute(f.mixer, attribute, "not an array")
+            case "non_element": f.builder.setAttribute(f.mixer, attribute, ["not an AX element"])
+            case "empty": f.builder.setAttribute(f.mixer, attribute, [AXUIElement]())
+            case "multiple": f.builder.setAttribute(f.mixer, attribute, [f.strips[0], f.strips[1]])
+            case "foreign": f.builder.setAttribute(f.mixer, attribute, [f.builder.element(1_965_996)])
+            case "wrong_parent":
+                f.builder.setAttribute(selected, kAXParentAttribute as String, f.builder.element(1_965_996))
+                f.builder.setAttribute(f.mixer, attribute, [selected])
+            case "lost_after_selection":
+                f.builder.setAttribute(f.mixer, attribute, f.selections.isEmpty ? [selected] : [AXUIElement]())
+            default: break
+            }
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let body = try await OperationTraceContext.$current.withValue(context) {
+            try await f.channel().readFreshSessionPopulation(
+                request: .init(domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                fileReader: .unavailable, stoppingWhen: { false })
+        }
+        #expect(body.selectionAssociations.isEmpty)
+        #expect(f.selectedChildrenReads > 0)
+        #expect(f.selections == (fault == "lost_after_selection" ? [1] : []))
+        #expect(f.focusRestorationWrites.isEmpty)
+    }
+
+    @Test("A header with unchanged focus remains unknown without discarding other independently proved pairs")
+    func anUnprovedHeaderDoesNotInventAnAliasOrPoisonOtherProofs() async throws {
+        let f = try Fixture(fourTracks: true)
+        f.thirdRetainsPreviousFocus = true
+        let body = try await inspect(f)
+        let section = try #require(body["associations"] as? [String: Any])
+        let rows = try #require(section["rows"] as? [[String: Any]])
+        #expect(Set(rows.compactMap { $0["track_index"] as? Int }) == [0, 1, 3])
+        #expect(f.selections == [1, 2, 0, 2, 3, 0])
+        #expect(section["coverage"] as? String == "partial")
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
     }
 

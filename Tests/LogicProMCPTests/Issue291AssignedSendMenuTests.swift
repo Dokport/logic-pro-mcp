@@ -357,8 +357,9 @@ struct Issue291AssignedSendMenuTests {
         } else { #expect(control == nil) }
         #expect(f.mutations.isEmpty)
     }
-    @Test("Routing-only population does not claim or classify unrequested inserts", arguments: [false, true])
-    func routingPopulationSkipsUnrequestedInserts(includeStrips: Bool) async throws {
+    @Test("Routing/association population reads inserts only when the strip footprint is requested",
+          arguments: [SessionPopulationObservation.Domain.routing, .associations], [false, true])
+    func routingPopulationSkipsUnrequestedInserts(domain: SessionPopulationObservation.Domain, includeStrips: Bool) async throws {
         let p = try prepare(), f = p.f
         defer { try? FileManager.default.removeItem(at: f.bundle) }
         let insert = Issue982UnreadChildrenTests.occupiedSlot(f.b, 291_950, name: "Compressor")
@@ -369,7 +370,7 @@ struct Issue291AssignedSendMenuTests {
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
         let population = try await OperationTraceContext.$current.withValue(context) {
             try await f.channel().readFreshSessionPopulation(request: .init(
-                domains: includeStrips ? [.routing, .strips] : [.routing]),
+                domains: includeStrips ? [domain, .strips] : [domain]),
                 fileReader: .unavailable, stoppingWhen: { false })
         }
         #expect(population.stable)
@@ -387,7 +388,7 @@ struct Issue291AssignedSendMenuTests {
         let capture = await SessionPopulationObservation.capture(cache: cache,
             targetRegistry: nil, fileReader: .unavailable)
         let report = SessionPopulationObservation.build(request: .init(
-            domains: includeStrips ? [.routing, .strips] : [.routing]), capture: capture)
+            domains: includeStrips ? [domain, .strips] : [domain]), capture: capture)
         let wire = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any])
         let rows = try #require((wire["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
         if includeStrips {
@@ -395,8 +396,13 @@ struct Issue291AssignedSendMenuTests {
         } else {
             #expect(rows[1]["plugin_count"] == nil || rows[1]["plugin_count"] is NSNull)
         }
-        let hasSend = try #require(states.first?.sendSlots?.contains { $0.ordinal == 1 })
-        #expect(hasSend)
+        if domain == .routing || includeStrips {
+            let hasSend = try #require(states.first?.sendSlots?.contains { $0.ordinal == 1 })
+            #expect(hasSend)
+        } else {
+            // Association-only capture leaves unrequested routing unknown.
+            #expect(states.allSatisfy { $0.sendSlots == nil })
+        }
         #expect(f.mutations.isEmpty)
     }
     @Test("Explicit fresh routing capture retains the occupied send's checked destination")
@@ -489,7 +495,7 @@ struct Issue291AssignedSendMenuTests {
         #expect(!scope.permits())
     }
     @Test("A checked send graph edge is tied to its source census, not a physical write slot",
-          arguments: ["held", "absent", "other_owner", "conflict", "unstable", "empty", "duplicate_ordinal", "stereo", "no_output", "negative_ordinal", "moved"])
+          arguments: ["held", "absent", "other_owner", "conflict", "unstable", "empty", "duplicate_ordinal", "stereo", "physical", "invalid_bus", "invalid_physical", "no_output", "negative_ordinal", "moved", "decoded_known", "cache_only", "refs_stale"])
     func checkedSendGraphUsesOnlyHeldCensus(fault: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let p = try prepare(), f = p.f
@@ -498,6 +504,10 @@ struct Issue291AssignedSendMenuTests {
                 runtime: f.logic, stoppingWhen: { false }).states)
             if fault == "empty" { states[0].sendSlots?[1].state = .observedEmpty }
             if fault == "duplicate_ordinal", let slot = states[0].sendSlots?[1] { states[0].sendSlots?.append(slot) }
+            if fault == "decoded_known" {
+                states[0].sendSlots?[1] = try JSONDecoder().decode(SendSlotObservation.self, from: Data(
+                    #"{"ordinal":1,"state":"occupied_known_destination","checked_destination":"bus:1","destination_source":"ax_send_menu_checkmark","level_raw":0,"bypassed":false,"destination_display":"Bus 256"}"#.utf8))
+            }
             let cache = StateCache(), registry = TargetRegistry()
             await cache.updateProject(.init(name: "Session", filePath: f.bundle.path, source: "fixture"))
             await cache.updateDocumentState(true)
@@ -512,7 +522,9 @@ struct Issue291AssignedSendMenuTests {
             if fault != "absent" {
                 fresh.checkedOutputs = [.init(source: fault == "other_owner"
                     ? try #require(states[1].physicalBinding) : owner,
-                    assignment: fault == "stereo" ? .stereoOutput : (fault == "no_output" ? .noOutput : .bus(1)),
+                    assignment: fault == "stereo" ? .stereoOutput : (fault == "physical" ? .physical(3, 4)
+                        : (fault == "invalid_physical" ? .physical(3, 3) : (fault == "invalid_bus" ? .bus(999)
+                        : (fault == "no_output" ? .noOutput : .bus(1))))),
                     sendOrdinal: fault == "negative_ordinal" ? -1 : 1)]
                 if fault == "conflict" {
                     fresh.checkedOutputs.append(.init(source: owner, assignment: .bus(2), sendOrdinal: 1))
@@ -525,9 +537,9 @@ struct Issue291AssignedSendMenuTests {
                 projectFileNotBound: base.projectFileNotBound,
                 requestedProjectMatches: base.requestedProjectMatches,
                 referencesEnabled: base.referencesEnabled, targetSnapshot: base.targetSnapshot,
-                issued: base.issued, projectIssuance: base.projectIssuance,
+                issued: fault == "refs_stale" ? nil : base.issued, projectIssuance: base.projectIssuance,
                 beganAt: base.beganAt, endedAt: base.endedAt, captureID: base.captureID,
-                freshPopulation: fresh, mixerReferences: base.mixerReferences)
+                freshPopulation: fault == "cache_only" ? nil : fresh, mixerReferences: base.mixerReferences)
             let graph = fault == "moved" ? RoutingGraphPublication.publish(capture: capture, project: .moved)
                 : SessionPopulationObservation.routingGraph(capture: capture)
             let edges = graph.edges.filter { $0.source == source.rawValue && $0.kind == .send }
@@ -541,6 +553,29 @@ struct Issue291AssignedSendMenuTests {
                 #expect(graph.nodes.first { $0.id == "bus_1" }?.targetRef == nil)
                 #expect(graph.coverage.sends.state == .partial)
             } else { #expect(edges.isEmpty) }
+            if fault != "moved" {
+                let report = SessionPopulationObservation.build(request: .init(domains: [.routing, .strips]), capture: capture)
+                let wire = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any])
+                let rows = try #require((wire["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+                let slots = try #require(rows.first?["send_slots"] as? [[String: Any]])
+                let slot = try #require(slots.first { $0["ordinal"] as? Int == 1 })
+                if ["held", "stereo", "physical"].contains(fault) {
+                    #expect(slot["state"] as? String == "occupied_known_destination")
+                    let expected = fault == "stereo" ? "stereo_output" : (fault == "physical" ? "physical:3-4" : "bus:1")
+                    #expect(slot["checked_destination"] as? String == expected)
+                    #expect(slot["destination_source"] as? String == "ax_send_menu_checkmark")
+                } else {
+                    #expect(slot["state"] as? String == (fault == "empty" ? "observed_empty" : "occupied_unknown_destination"))
+                    #expect(slot["checked_destination"] == nil)
+                    #expect(slot["destination_source"] == nil)
+                }
+                #expect(slot["level_raw"] as? Double == 0)
+                let bypassed = try #require(slot["bypassed"] as? Bool)
+                #expect(!bypassed)
+                #expect(slot["destination_display"] as? String == "Bus 256")
+                #expect(states[0].sendSlots?[1].state == (fault == "empty" ? .observedEmpty
+                    : (fault == "decoded_known" ? .occupiedKnownDestination : .occupiedUnknownDestination)))
+            }
             #expect(!graph.complete)
             let decision = evaluate(.init(sourceTrackRef: source, physicalSlot: 1,
                 destinationBusNumber: 1, destinationRef: nil, expectedProjectEpoch: graph.projectEpoch), against: graph)

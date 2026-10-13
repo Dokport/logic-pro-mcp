@@ -285,6 +285,10 @@ struct SystemDispatcher: OperationTraceDispatching {
             clear_traces -> { confirmed: Bool }; \
             export_support_bundle -> { dir?: String } (local files only; never uploaded); \
             saga_preflight/saga_execute -> { steps: [step], idempotency_key: String }; \
+            Selected Compressor Saga: exactly threshold and limiter_on on one occupied ins_ref; \
+            step params are {param,unit,value,expected_before}, inverse value_parameter is value. \
+            Preflight returns plan_hash; execute additionally requires confirmed_plan_hash for this subset. \
+            Threshold is raw 0..100 percent and limiter_on is literal boolean; ADR004 opt-in is required. \
             saga_status/saga_cancel -> { idempotency_key: String }; \
             setup_arm_key -> { consent: "true" } (one-time consent-gated Key Commands GUI \
             drive that assigns the coordinate-free record-arm chord; no mouse); \
@@ -873,6 +877,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                         plan: plan
                     ),
                     "writes_performed": 0,
+                    "plan_hash": SagaJournal.planHash(plan),
                 ]) { _, new in new }
             return toolTextResult(HonestContract.jsonString(body))
 
@@ -883,6 +888,12 @@ struct SystemDispatcher: OperationTraceDispatching {
                 plan = try approvedSessionRepair?.plan ?? SagaWire.plan(from: params)
             } catch {
                 return await finalizeTrace(SagaWire.invalidParams(error), traceID: traceID)
+            }
+            let compressorPlan = CompressorParameterSaga.containsPluginSteps(plan)
+            if compressorPlan, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+                return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
+                    hint: "Confirm this exact canonical plan_hash before applying the two Compressor parameters",
+                    extras: ["write_attempted": false]), traceID: traceID)
             }
             switch await sagaJournal.begin(plan) {
             case .inProgress:
@@ -985,15 +996,16 @@ struct SystemDispatcher: OperationTraceDispatching {
                 let lifecycleDeadline = sagaLifecycleDeadline
                     ?? ContinuousClock.now.advanced(by: .seconds(lifecycleBudgetSeconds))
                 let inherited = OperationTraceContext.current
-                let approvedContext = approvedSessionRepair.map { _ in
+                let compressorCancellation = SagaAbandonFlag()
+                let approvedContext = (approvedSessionRepair != nil || compressorPlan) ?
                     OperationTraceContext(parentTraceID: inherited?.traceID,
                         mutationGateAcquired: mutationClaim != nil,
                         ownsGate: {
                             guard let mutationGate, let mutationClaim else { return false }
                             return mutationGate.stillOwns(mutationClaim) && (inherited?.ownsGate() ?? true)
                         }, deadline: lifecycleDeadline,
-                        cancellationRequested: { Task.isCancelled || inherited?.cancellationRequested() == true })
-                }
+                        cancellationRequested: { Task.isCancelled || inherited?.cancellationRequested() == true
+                            || (compressorPlan && compressorCancellation.value) }) : nil
                 // ADR-004 / issue #287 — qualification-only fault seam. #399 (CEO
                 // audit P0): the seam and its wiring are compiled solely in debug
                 // via `FAULT_TEST_SEAM`. The release executor is
@@ -1011,7 +1023,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     faultSeam: SagaPartialStateFaultSeam.resolve(
                         environment: ProcessInfo.processInfo.environment,
                         stepCount: plan.steps.count
-                    ), approvedSessionRepair: approvedSessionRepair
+                    ), approvedSessionRepair: approvedSessionRepair, confirmedCompressorPlan: compressorPlan
                 )
                 #else
                 let executor = ProductionSagaStepExecutor(
@@ -1021,7 +1033,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                     dialogPresent: dialogPresent,
                     liveReadback: sagaLiveReadback ?? .unavailable,
                     liveTrackName: liveTrackName,
-                    liveTrackNames: liveTrackNames, approvedSessionRepair: approvedSessionRepair
+                    liveTrackNames: liveTrackNames, approvedSessionRepair: approvedSessionRepair,
+                    confirmedCompressorPlan: compressorPlan
                 )
                 #endif
                 let saga = MutationSaga(
@@ -1075,7 +1088,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                 // terminalized the saga as a timeout, and BEFORE the continuation
                 // resumes so the dispatcher `defer` above observes the flag.
                 let outerTraceContext = approvedContext ?? OperationTraceContext.current
-                let raceResult: CallTool.Result = await withCheckedContinuation { continuation in
+                let raceResult: CallTool.Result = await withTaskCancellationHandler {
+                  await withCheckedContinuation { continuation in
                     let race = SagaDeadlineRace()
                     let timeoutHandle = SagaTimeoutHandle()
                     // Unstructured but NOT detached: `Task { }` inherits the caller's
@@ -1085,7 +1099,22 @@ struct SystemDispatcher: OperationTraceDispatching {
                     // awaiting a wedged child. `Task.detached` would sever the flags
                     // and fail the saga closed as feature-disabled.
                     let workTask = Task(priority: .userInitiated) {
-                        await OperationTraceContext.$current.withValue(outerTraceContext) {
+                        // Retain one actual UI lease until the work child finishes,
+                        // even if a lifecycle timeout returns before a wedged read.
+                        let lease = compressorPlan ? VerifiedPluginSagaLease(gate: .shared) : nil
+                        if compressorPlan, lease == nil {
+                            let refused = SagaWire.scopedStateC(.verifiedOpInProgress,
+                                hint: "A verified plug-in operation is already active", extras: ["write_attempted": false])
+                            let (winner, _) = await sagaJournal.finalizeReturningWinner(journalClaim,
+                                proposed: SagaWire.storedOutcome(from: refused), verifiedIfCancelled: true)
+                            if race.resume(continuation, returning: toolTextResult(winner.body, isError: winner.isError)) {
+                                timeoutHandle.cancel()
+                            }
+                            return
+                        }
+                        defer { lease?.release() }
+                        await PluginsDispatcher.$sagaLease.withValue(lease) {
+                          await OperationTraceContext.$current.withValue(outerTraceContext) {
                             // Only a retained, fully accounted names-only approval can
                             // reconcile an empty canonical task list. Generic empty Saga
                             // plans still pass through their unchanged rejection below.
@@ -1094,6 +1123,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                                 let (winner, _) = await sagaJournal.finalizeReturningWinner(
                                     journalClaim, proposed: proposed, verifiedIfCancelled: true
                                 )
+                                lease?.release()
                                 let didWin = race.resume(continuation,
                                     returning: toolTextResult(winner.body, isError: winner.isError))
                                 if didWin { timeoutHandle.cancel() }
@@ -1105,6 +1135,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                                     let (winner, _) = await sagaJournal.finalizeReturningWinner(
                                         journalClaim, proposed: approval.nameGoalRefusal(), verifiedIfCancelled: true
                                     )
+                                    lease?.release()
                                     let didWin = race.resume(continuation,
                                         returning: toolTextResult(winner.body, isError: winner.isError))
                                     if didWin { timeoutHandle.cancel() }
@@ -1135,6 +1166,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                                     journalClaim, proposed: SagaWire.storedOutcome(from: result),
                                     verifiedIfCancelled: true
                                 )
+                                lease?.release()
                                 let didWin = race.resume(continuation,
                                     returning: toolTextResult(winner.body, isError: winner.isError))
                                 if didWin { timeoutHandle.cancel() }
@@ -1148,6 +1180,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                                     executor: surfaceExecutor,
                                     cancellationRequested: {
                                         if deadlineReached() { return true }
+                                        if compressorPlan, outerTraceContext?.cancellationRequested() == true { return true }
                                         return await sagaJournal.record(for: plan.idempotencyKey)
                                             == .cancellationRequested
                                     },
@@ -1204,11 +1237,13 @@ struct SystemDispatcher: OperationTraceDispatching {
                                 proposed: proposed,
                                 verifiedIfCancelled: SagaWire.cancellationVerified(finalOutcome)
                             )
+                            lease?.release()
                             let didWin = race.resume(
                                 continuation,
                                 returning: toolTextResult(winner.body, isError: winner.isError)
                             )
                             if didWin { timeoutHandle.cancel() }
+                          }
                         }
                     }
                     let timeoutItem = DispatchWorkItem {
@@ -1244,6 +1279,9 @@ struct SystemDispatcher: OperationTraceDispatching {
                         deadline: .now() + LogicProServer.secondsFromNow(until: lifecycleDeadline),
                         execute: timeoutItem
                     )
+                  }
+                } onCancel: {
+                    if compressorPlan { compressorCancellation.set(true) }
                 }
                 return await finalizeTrace(raceResult, traceID: traceID)
             }
@@ -2176,7 +2214,10 @@ struct SystemDispatcher: OperationTraceDispatching {
                   get_trace         -> { trace_id: String } — Read one in-process operation trace
                   clear_traces      -> { confirmed: Bool } — Clear diagnostic evidence; requires confirmed:true
                   saga_preflight    -> { steps: [step], idempotency_key: String } — Validate and inspect before-state availability; writes 0
-                  saga_execute      -> { steps: [step], idempotency_key: String } — Execute ordered steps with evidence and compensation
+                  saga_execute      -> { steps: [step], idempotency_key: String, confirmed_plan_hash?: String } — Execute ordered steps with evidence and compensation
+                                      Selected Compressor subset: threshold + limiter_on, same occupied ins_ref,
+                                      params {param,unit,value,expected_before}; preflight plan_hash must be explicitly confirmed.
+                                      Raw threshold 0..100 percent; limiter_on literal boolean. Existing ADR004 opt-in required.
                   saga_status       -> { idempotency_key: String } — Read the session journal
                   saga_cancel       -> { idempotency_key: String } — Request cancellation; State B until unwind is journaled, then terminal status carries its outcome
                   help              -> { category: String } — Param docs per category
