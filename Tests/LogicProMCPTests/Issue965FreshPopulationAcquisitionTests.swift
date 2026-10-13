@@ -3703,7 +3703,9 @@ struct Issue965FreshPopulationAcquisitionTests {
                              "restore_selected_focus", "restore_focus_false", "restore_focus_ack_only",
                              "restore_focus_foreign", "restore_focus_unselected", "restore_focus_document",
                              "restore_focus_selection_drift", "full_population_restore_focus",
-                             "full_population_foreign_focus", "full_population_document"])
+                             "full_population_foreign_focus", "full_population_document",
+                             "full_population_shared", "full_population_shared_final_value", "full_population_shared_final_owner",
+                             "full_population_shared_final_document", "full_population_shared_final_filter"])
     func registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: Int, fault: String) async throws {
         let fixture = hiddenViewFixture(shown: fault != "hidden_off")
         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/MixerPopulation.logicx")
@@ -3825,6 +3827,8 @@ struct Issue965FreshPopulationAcquisitionTests {
         fixture.builder.setChildren(transport, controls)
         fixture.builder.setChildren(fixture.window, roots + [owner, transport])
         let selectionReads = Reads()
+        let sharedRead = fault.hasPrefix("full_population_shared")
+        let snapshotReads = Reads()
         let nativeRead = passiveMixerAttributeRead(strips[0])
         let selectionReturnsFocus = fault == "restore_selected_focus" || fault.hasPrefix("restore_focus_") || fullPopulation
         let result = try await inspect(fixture: fixture,
@@ -3873,6 +3877,14 @@ struct Issue965FreshPopulationAcquisitionTests {
                     if fault == "restore_focus_selection_drift" {
                         fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
                     }
+                    if sharedRead, fixture.events.recorded.contains("select_all") {
+                        if fault == "full_population_shared_final_value" {
+                            fixture.builder.setAttribute(fixture.builder.element(966_040), kAXValueAttribute as String, "Changed after acquisition")
+                        }
+                        if fault == "full_population_shared_final_owner" {
+                            fixture.builder.setChildren(mixer, Array(strips.dropLast()))
+                        }
+                    }
                     return fault != "restore_focus_false"
                 }
                 guard CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute as String else { return false }
@@ -3893,6 +3905,17 @@ struct Issue965FreshPopulationAcquisitionTests {
                 if fault == "restore_visible" { fixture.builder.setAttribute(mixer, kAXVisibleChildrenAttribute as String, [strips[3]]) }
                 return fault != "restore_false"
             }, readingAttribute: { element, attribute in
+                if sharedRead, CFEqual(element, fixture.builder.element(966_040)), attribute == kAXValueAttribute as String {
+                    snapshotReads.record(fixture.events.recorded.contains("select_all") ? "after" : "before")
+                    if fixture.events.recorded.contains("restore_captured_focus") {
+                        if fault == "full_population_shared_final_document" {
+                            fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                        if fault == "full_population_shared_final_filter" {
+                            fixture.builder.setAttribute(filterControls[2], kAXValueAttribute as String, 0)
+                        }
+                    }
+                }
                 if CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute as String {
                     selectionReads.record(attribute)
                     if fault == "unread_selection" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
@@ -3913,12 +3936,12 @@ struct Issue965FreshPopulationAcquisitionTests {
             })
         let body = try #require(sharedJSONObject(sharedToolText(result)))
         let section: [String: Any]
-        if fullPopulation && (fault != "full_population_restore_focus" || originalCount != 1) {
+        if fullPopulation && (!["full_population_restore_focus", "full_population_shared"].contains(fault) || originalCount != 1) {
             #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
             section = body["strips"] as? [String: Any] ?? [:]
         } else { section = try #require(body["strips"] as? [String: Any]) }
         let completeExpected = ["healthy", "restore_selected_focus"].contains(fault)
-            || (fault == "full_population_restore_focus" && originalCount == 1)
+            || (["full_population_restore_focus", "full_population_shared"].contains(fault) && originalCount == 1)
             || (originalCount == strips.count && ["noop_selection", "restore_ack_only", "restore_focus_false",
                 "restore_focus_ack_only", "restore_focus_unselected", "restore_focus_selection_drift"].contains(fault))
         if completeExpected {
@@ -3938,11 +3961,11 @@ struct Issue965FreshPopulationAcquisitionTests {
         if fullPopulation && originalCount == 1 {
             #expect(fixture.events.recorded.filter { $0 == "association_select" }.count == 2)
             #expect(fixture.events.recorded.contains("restore_mixer_selection"))
-            if fault == "full_population_restore_focus" {
+            if ["full_population_restore_focus", "full_population_shared"].contains(fault) {
                 #expect(fixture.events.recorded.contains("restore_captured_focus"))
                 let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
                 #expect(rows.count == 2)
-            } else { #expect(!fixture.events.recorded.contains("restore_captured_focus")) }
+            } else if !sharedRead { #expect(!fixture.events.recorded.contains("restore_captured_focus")) }
         }
         if ["restore_focus_foreign", "restore_focus_document"].contains(fault)
             || (fault == "restore_focus_unselected" && originalCount != strips.count) {
@@ -3960,6 +3983,14 @@ struct Issue965FreshPopulationAcquisitionTests {
         if completeExpected {
             let restored = try #require(fixture.builder.attributeValue(mixer, kAXSelectedChildrenAttribute as String) as? [AXUIElement])
             #expect(restored.count == original.count && zip(restored, original).allSatisfy { CFEqual($0, $1) })
+        }
+        if fault == "full_population_shared", originalCount == 1 {
+            // The existing name reader samples the same real Name control twice
+            // per snapshot. One initial and one final snapshot retain both reads.
+            #expect(snapshotReads.recorded.filter { $0 == "before" }.count == 2)
+            #expect(snapshotReads.recorded.filter { $0 == "after" }.count == 2)
+            #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)
+            #expect(fixture.events.recorded.filter { $0 == "restore_mixer_selection" }.count == 1)
         }
         #expect(fixture.builder.attributeValue(fixture.header, kAXSelectedAttribute as String) as? Bool == true)
     }
