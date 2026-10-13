@@ -111,7 +111,11 @@ struct Issue291AssignedSendMenuTests {
             let f = p.f
             if action == kAXCancelAction as String, CFEqual(node,f.root), open {
                 cancels += 1
-                open = false; f.b.setChildren(f.mixer,f.strips); return true
+                open = false; f.b.setChildren(f.mixer,f.strips)
+                if fault == "cancel_source_retired" { f.b.setChildren(f.mixer, [f.strips[1]]) }
+                if fault == "cancel_level" { f.b.setAttribute(p.knob, kAXValueAttribute as String, 1) }
+                if fault == "cancel_project" { f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///wrong.logicx") }
+                return fault != "cancel_failed_ack"
             }
             if action == kAXPressAction as String, CFEqual(node,f.outputs[0]) {
                 open = true; refresh(); f.b.setChildren(f.mixer,f.strips + [f.root]); return true
@@ -192,6 +196,42 @@ struct Issue291AssignedSendMenuTests {
             }
         }
     }
+    @Test("An already-matching checked send closes its popup without reapplying the destination",
+          arguments: ["source_retired", "cancel_failed_ack"])
+    func occupiedSendAlreadyMatchingDoesNotWrite(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        // A redundant destination press can retire the native source. A no-op
+        // must use checked evidence without entering that mutation boundary.
+        probe.fault = fault
+        let before = AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax)
+        let result = try #require(sharedJSONObject(await probe.write(destination: "stereo_output").message))
+        #expect(result["state"] as? String == "A", "\(result)")
+        let attempted = try #require(result["write_attempted"] as? Bool)
+        let changed = try #require(result["changed"] as? Bool)
+        #expect(!attempted)
+        #expect(!changed)
+        #expect(probe.pressed.isEmpty)
+        #expect(probe.cancels == 1)
+        #expect(!probe.open)
+        #expect(result["popup_menu_state"] as? String == "closed")
+        #expect(AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax) == before)
+    }
+
+    @Test("A matching send does not publish verified state after cleanup loses source or protected state",
+          arguments: ["cancel_source_retired", "cancel_level", "cancel_project"])
+    func occupiedSendNoOpStillRequiresCleanupCustody(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p)
+        probe.fault = fault
+        let result = try #require(sharedJSONObject(await probe.write(destination: "stereo_output").message))
+        #expect(result["state"] as? String == "C", "\(result)")
+        let attempted = try #require(result["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(probe.pressed.isEmpty)
+        #expect(probe.cancels == 1)
+        #expect(!probe.open)
+        #expect(result["after"] == nil)
+    }
+
     @Test("Occupied-send output replacement and explicit inverse retain level, bypass, mode and exact slot",
         arguments: ["fixed_label", "destination_label", "missing_identifiers"])
     func occupiedSendOutputRoundtrip(label: String) async throws {

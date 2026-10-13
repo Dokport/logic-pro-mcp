@@ -474,6 +474,40 @@ extension AccessibilityChannel {
             }
             extras["before"] = request.expected.json; extras["destination"] = request.destination.json
             extras["strip_count_before"] = population.count
+            if request.expected == request.destination {
+                // Reapplying an already checked destination can retire Logic's
+                // controls. A no-op closes only its owned popup; it never presses
+                // a destination or borrows mutation-time label-change authority.
+                guard writerMenuOwned(),
+                      case .success(let actions) = AXHelpers.getActionNamesResult(root, runtime: runtime.ax),
+                      actions.contains(kAXCancelAction as String), writeBoundary() else {
+                    return closeBeforeRefusal(.readbackUnavailable,
+                        "The matching send lost its owned popup before cleanup; nothing was selected.")
+                }
+                let cancelled = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax)
+                if case .success = cancelled { extras["popup_cancel_succeeded"] = true }
+                else { extras["popup_cancel_succeeded"] = false }
+                let closed = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
+                    && runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true
+                extras["popup_menu_state"] = closed ? "closed" : "not_restored"
+                guard closed, writerContextCurrent(),
+                      let finalControl = assignedControl(), assigned.matches(finalControl),
+                      AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax) == protectedSends,
+                      let finalPopulation = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips,
+                      finalPopulation.count == population.count,
+                      zip(finalPopulation, population).allSatisfy({ CFEqual($0, $1) }),
+                      writerContextCurrent() else {
+                    return refuse(.readbackUnavailable,
+                        "The matching send lost its original source or protected state during cleanup; nothing was selected.")
+                }
+                extras["after"] = request.expected.json
+                extras["changed"] = false
+                extras["strip_count_after"] = population.count
+                extras["verify_source"] = "ax_send_menu_checkmark"
+                extras["snapshot_atomic"] = false
+                return .init(result: .success(HonestContract.encodeStateA(extras: extras)),
+                    assignment: request.expected, sendNonRoutingChecks: sendChecks)
+            }
             // Observe retained-original identifiers for diagnosis only. Neither
             // a repeated identifier nor its absence changes CF/action authority.
             var identifiers: [String: Any] = [:]
