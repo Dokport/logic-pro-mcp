@@ -666,7 +666,7 @@ actor AccessibilityChannel: Channel {
             // and reconciled its rows. No pair is inferred for an unobserved strip.
             if request.allowUINavigation, request.scope == .wholeProject, request.needsTracks, request.domains.contains(.strips),
                population.stable, let navigation,
-               let selected = await navigation.observeWholeStripSelection(stoppingWhen: stop) {
+               let selected = await navigation.observeWholeStripSelection(readFocusScope: readFocusScope, stoppingWhen: stop) {
                 let refreshed = try await readExposedSessionPopulation(request: request, fileReader: fileReader,
                     stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                 if refreshed.stable, let states = refreshed.strips, states.count == selected.count,

@@ -140,11 +140,15 @@ extension AccessibilityChannel {
             private var passiveRoutingHeader: (PassiveRoutingReadFocus, AXLogicProElements.Runtime)?
             private var association: HeldSelectionAssociation?
             private var routingPopupFocus: (@Sendable () -> Bool)?
+            private var mixerInverseFocus: PassiveMixerReadFocus?
             func retain(_ navigation: OwnedTrackStackObservationNavigation?) {
-                lock.withLock { self.navigation = navigation; passiveMixer = nil; passiveHeader = nil; passiveRoutingHeader = nil; association = nil; routingPopupFocus = nil }
+                lock.withLock { self.navigation = navigation; passiveMixer = nil; passiveHeader = nil; passiveRoutingHeader = nil; association = nil; routingPopupFocus = nil; mixerInverseFocus = nil }
             }
             func retainRoutingPopupFocus(_ proof: (@Sendable () -> Bool)?) {
                 lock.withLock { routingPopupFocus = proof }
+            }
+            func retainMixerInverseFocus(_ proof: PassiveMixerReadFocus?) {
+                lock.withLock { mixerInverseFocus = proof }
             }
             func retainAssociation(_ observation: HeldSelectionAssociation) {
                 lock.withLock { association = observation }
@@ -163,12 +167,13 @@ extension AccessibilityChannel {
                 lock.withLock { passiveMixer = candidate; passiveHeader = nil; passiveRoutingHeader = header.map { ($0, logic) } }
             }
             func permits() -> Bool {
-                let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader) }
+                let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader, mixerInverseFocus) }
                 // A currently owned popup deliberately holds search focus. Do not
                 // revoke the original header witness during that proven excursion.
                 return held.4?() == true || held.0?.permitsHeldPassiveHeaderFocus() == true || held.1?.permits() == true
                     || held.2?.permitsPassiveFocusRead() == true || held.3?.permits() == true
                     || held.5.map { $0.0.permits(runtime: $0.1) } == true
+                    || held.6?.permits() == true
             }
 
             /// An original immutable numeric name label is not a rename editor.
