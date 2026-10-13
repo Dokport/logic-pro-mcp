@@ -10,10 +10,10 @@ struct Issue291CheckedOutputGraphTests {
         var unrelatedChildrenReads = 0
         var permitted: Bool?
     }
-    private func preparedFixture(bus: Bool = false) throws -> Issue291PhysicalStripReferenceTests.Fixture {
+    private func preparedFixture(bus: Bool = false, label: String? = nil) throws -> Issue291PhysicalStripReferenceTests.Fixture {
         let f = try Issue291PhysicalStripReferenceTests.Fixture()
-        let destination = bus ? "Bus 1" : "Stereo Output"
-        if bus {
+        let destination = label ?? (bus ? "Bus 1" : "Stereo Output")
+        if bus || label != nil {
             for output in f.outputs { f.b.setAttribute(output, kAXDescriptionAttribute as String, destination) }
         }
         let stereo = f.b.element(2_919_001)
@@ -66,21 +66,87 @@ struct Issue291CheckedOutputGraphTests {
         #expect(f.mutations.map { $0.1 } == (navigation ? ["AXPress", "AXCancel", "AXPress", "AXCancel"] : []))
     }
 
-    @Test("The bus-only graph does not acquire unrelated Stereo Output menus")
-    func busGraphSkipsUnpublishedDestinationKinds() async throws {
-        let f = try preparedFixture()
+    @Test("Checked before-output capture uses the owned menu without promoting non-bus graph coverage",
+          arguments: ["stereo", "physical", "no_output", "unknown", "navigation_denied", "missing_mark", "owner_loss"])
+    func checkedNonBusBeforeCaptureRemainsLocal(kind: String) async throws {
+        let label: String
+        switch kind {
+        case "physical": label = "Output 3-4"
+        case "no_output": label = "No Output"
+        case "unknown": label = "Unknown destination"
+        default: label = "Stereo Output"
+        }
+        let f = try preparedFixture(label: label)
         defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let probe = FocusProofProbe()
+        if kind == "missing_mark" {
+            f.attributeReadResult = { _, attribute in
+                attribute == "AXMenuItemMarkChar" ? .failure(.init(raw: AXError.cannotComplete.rawValue)) : nil
+            }
+        }
+        if kind == "owner_loss" {
+            f.onAttributeRead = { _, attribute in
+                if attribute == "AXMenuItemMarkChar" {
+                    probe.checking = true
+                    f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+                }
+            }
+        }
         let gate = LogicMutationGate()
         let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
         defer { gate.release(claim) }
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
-        let population = try await OperationTraceContext.$current.withValue(context) {
-            try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
-                allowUINavigation: true), fileReader: .unavailable, stoppingWhen: { false })
+        let population: SessionPopulationObservation.FreshPopulation
+        do {
+            population = try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
+                    allowUINavigation: kind != "navigation_denied"), fileReader: .unavailable, stoppingWhen: { false })
+            }
+        } catch {
+            #expect(kind == "owner_loss")
+            #expect(probe.checking, "The original document must actually change at the deciding menu read")
+            for mutation in f.mutations {
+                #expect(mutation.1 == kAXPressAction as String
+                    ? f.outputs.contains(where: { CFEqual($0, mutation.0) }) : CFEqual(f.root, mutation.0))
+            }
+            return
+        }
+        if kind == "owner_loss" {
+            #expect(probe.checking)
+            #expect(!population.stable)
+            #expect(population.checkedOutputs.isEmpty)
+            return
         }
         #expect(population.stable)
-        #expect(population.checkedOutputs.isEmpty)
-        #expect(f.mutations.isEmpty)
+        let expected: OutputAssignment? = kind == "stereo" ? .stereoOutput : kind == "physical" ? .physical(3, 4) : nil
+        #expect(population.checkedOutputs.count == (expected == nil ? 0 : 2))
+        for reading in population.checkedOutputs {
+            #expect(reading.assignment == expected)
+            #expect(reading.sendOrdinal == nil)
+            #expect(try #require(population.strips).filter { $0.physicalBinding?.matches(reading.source) == true }.count == 1)
+        }
+        let navigates = expected != nil || kind == "missing_mark"
+        #expect(f.mutations.map { $0.1 } == (navigates ? ["AXPress", "AXCancel", "AXPress", "AXCancel"] : []))
+        for mutation in f.mutations {
+            #expect(mutation.1 == kAXPressAction as String
+                ? f.outputs.contains(where: { CFEqual($0, mutation.0) }) : CFEqual(f.root, mutation.0))
+        }
+        for output in f.outputs {
+            #expect(f.b.attributeValue(output, kAXDescriptionAttribute as String) as? String == label)
+        }
+        let cache = StateCache(), registry = TargetRegistry()
+        await cache.updateProject(try #require(population.project))
+        if let tracks = population.tracks { await cache.updateTracks(tracks) }
+        await cache.updateChannelStrips(try #require(population.strips))
+        let boundary = await cache.captureBoundary(watching: SessionPopulationObservation.watchedSections)
+        let capture = await SessionPopulationObservation.capture(cache: cache, targetRegistry: registry,
+            fileReader: .unavailable, accepted: .init(reading: .init(state: await cache.auditSnapshot(),
+                fileTrackCount: nil, projectFileNotBound: false), boundary: boundary, population: population))
+        let graph = SessionPopulationObservation.routingGraph(capture: capture)
+        #expect(!graph.complete)
+        #expect(graph.coverage.mainOutput.state != .complete)
+        #expect(graph.coverage.physicalOutput.state != .complete)
+        #expect(!graph.edges.contains { $0.kind == .mainOutput })
     }
 
     @Test("Only request-held checked output contributes a physical-source bus edge",

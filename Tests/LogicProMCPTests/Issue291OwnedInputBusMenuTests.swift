@@ -176,7 +176,14 @@ struct Issue291OwnedInputBusMenuTests {
                 #expect(input.provenance == .axInputMenuCheckmark)
                 #expect(graph.nodes.first { $0.id == receiver.rawValue }?.kind == .physicalStrip)
                 #expect(graph.coverage.busToAuxInput.state == .partial)
-                #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+                #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel", "AXPress", "AXCancel"])
+                let owners = [f.outputs[0], f.root, f.outputs[1], f.root]
+                #expect(f.mutations.count == owners.count)
+                for (action, owner) in zip(f.mutations, owners) { #expect(CFEqual(action.0, owner)) }
+                // This fixture supplies an input-shaped menu even at the output
+                // control. Its incoming bus choices cannot become output evidence.
+                #expect(fresh.checkedOutputs.isEmpty)
+                #expect(!graph.edges.contains { $0.kind == .mainOutput })
             } else {
                 #expect(inputs.isEmpty)
                 #expect(f.mutations.isEmpty)

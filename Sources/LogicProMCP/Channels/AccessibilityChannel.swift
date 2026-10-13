@@ -546,9 +546,9 @@ actor AccessibilityChannel: Channel {
                         try SessionPopulationObservation.requireOwnedAcquisition()
                         throw SessionPopulationObservation.AcquisitionError.ownershipLost
                     }
-                    // This bounded projection publishes only checked bus edges. A
-                    // display classification selects candidates to acquire; it never
-                    // supplies the assignment, source identity or receiver identity.
+                    // The graph still publishes only checked bus edges. Acquire supported
+                    // non-bus before-assignments too; the display label selects a reader,
+                    // never supplies assignment, source or destination identity.
                     var candidates: [(input: Bool, ordinal: Int?)] = []
                     if let slot = strip.inputSlotBinding, let owner = strip.physicalBinding,
                        slot.owner.matches(owner),
@@ -557,7 +557,8 @@ actor AccessibilityChannel: Channel {
                        RoutingGraphPublication.classifyOutputLabel(label).0 == .bus {
                         candidates.append((true, nil))
                     }
-                    if let label = strip.output, RoutingGraphPublication.classifyOutputLabel(label).0 == .bus {
+                    if let label = strip.output, let assignment = OutputAssignment.observed(slotLabel: label),
+                       assignment != .noOutput {
                         candidates.append((false, nil))
                     }
                     let slots = strip.sendSlots ?? []
