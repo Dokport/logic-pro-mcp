@@ -5,6 +5,119 @@ import Testing
 
 @Suite("#965 one native Help sample per strip extraction", .serialized)
 struct Issue965StripHelpSampleTests {
+    @Test("the actual owned strip reader reaches metadata batching without changing failure-noting runtimes",
+          arguments: [false, true])
+    func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool) throws {
+        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0 }
+        let builder = FakeAXRuntimeBuilder(), calls = Calls()
+        let strip = builder.element(1_965_860), insert = builder.element(1_965_861)
+        let bypass = builder.element(1_965_862), open = builder.element(1_965_863)
+        builder.setRole(strip, kAXLayoutItemRole as String)
+        builder.setRole(insert, kAXGroupRole as String)
+        builder.setAttribute(insert, kAXDescriptionAttribute as String, "Gain")
+        for (control, role, label) in [(bypass, kAXCheckBoxRole as String, "Bypass"), (open, kAXButtonRole as String, "Open")] {
+            builder.setRole(control, role)
+            builder.setAttribute(control, kAXDescriptionAttribute as String, label)
+            builder.setAttribute(control, kAXHelpAttribute as String, label)
+            builder.setChildren(control, [])
+        }
+        builder.setAttribute(bypass, kAXValueAttribute as String, 0)
+        builder.setChildren(insert, [bypass, open]); builder.setChildren(strip, [insert])
+        let window = builder.element(1_965_864), mixer = builder.element(1_965_865)
+        builder.setRole(window, kAXWindowRole as String)
+        builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/OwnedStrip.logicx")
+        builder.setRole(mixer, kAXLayoutAreaRole as String)
+        builder.setChildren(mixer, [strip]); builder.setChildren(window, [mixer])
+        let base = builder.makeAXRuntime()
+        let metadata = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
+        let raw = AXHelpers.Runtime(axApp: base.axApp, attributeValue: base.attributeValue,
+            attributeIsSettable: base.attributeIsSettable, setAttributeValue: base.setAttributeValue,
+            children: base.children, performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult, attributeValueResult: base.attributeValueResult,
+            attributeValuesResult: { element, attributes in
+                if attributes == metadata { calls.metadataBatches += 1 }
+                return .success(attributes.map { attribute -> AnyObject in
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        let failures = AXPluginInstanceIdentity.FailedReads()
+        let ax = noting ? AXPluginInstanceIdentity.noting(failures, over: raw) : raw
+        #expect((ax.attributeValuesResult == nil) == noting)
+        let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax)
+        let guardian = AXHelpers.HelpReadGuard(stop: { calls.helpGuardCalls += 1; return false })
+        try OperationTraceContext.$current.withValue(OperationTraceContext(mutationGateAcquired: true)) {
+            try AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+                let states = try #require(AccessibilityChannel.readChannelStrips(from: [strip], runtime: logic,
+                    window: window, mixer: mixer,
+                    readingRouting: false, readingScalarHelp: false, stoppingWhen: { guardian.stopped }))
+                #expect(states.first?.pluginsSource == "ax" && states.first?.plugins.first?.name == "Gain")
+                #expect(states.first?.physicalBinding != nil)
+                #expect((calls.metadataBatches > 0) == !noting)
+                #expect(calls.helpGuardCalls > 0 && !guardian.stopped && !failures.any)
+            }
+        }
+        #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
+    }
+    @Test("plugin semantic text pairs fresh non-Help metadata but retains the full separate Help guard",
+          arguments: ["healthy", "legacy", "null_fallback", "failed_batch", "malformed_metadata", "help_cutoff", "next_sample"])
+    func semanticTextCoalescesOnlyItsFreshMetadata(kind: String) {
+        final class Calls: @unchecked Sendable {
+            var singles = 0, batches = 0, help = 0, guardCalls = 0
+            var blocked = false
+        }
+        let builder = FakeAXRuntimeBuilder(), calls = Calls()
+        let element = builder.element(1_965_870)
+        builder.setAttribute(element, kAXIdentifierAttribute as String, "slot-id")
+        builder.setAttribute(element, kAXDescriptionAttribute as String, "Audio Plug-in")
+        builder.setAttribute(element, kAXTitleAttribute as String, "FX")
+        builder.setAttribute(element, kAXHelpAttribute as String, "Native Help")
+        let base = builder.makeAXRuntime()
+        let metadata = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
+        let batch: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError>)?
+        if kind == "legacy" { batch = nil }
+        else {
+            batch = { node, attributes in
+                calls.batches += 1
+                #expect(attributes == metadata && !attributes.contains(kAXHelpAttribute as String))
+                if kind == "failed_batch" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                let values = attributes.map { attribute -> AnyObject in
+                    if kind == "null_fallback" { return NSNull() }
+                    if kind == "malformed_metadata" { return NSNumber(value: 1) }
+                    return base.attributeValue(node, attribute) ?? NSNull()
+                }
+                if kind == "help_cutoff" { calls.blocked = true }
+                return .success(values)
+            }
+        }
+        let runtime = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { node, attribute in
+            if metadata.contains(attribute) { calls.singles += 1 }
+            if attribute == kAXHelpAttribute as String { calls.help += 1 }
+            return base.attributeValue(node, attribute)
+        }, setAttributeValue: base.setAttributeValue, children: base.children,
+            performAction: base.performAction, childCount: base.childCount,
+            attributeValueResult: { node, attribute in
+                if metadata.contains(attribute) { calls.singles += 1 }
+                return .success(base.attributeValue(node, attribute))
+            }, attributeValuesResult: batch)
+        let guardian = AXHelpers.HelpReadGuard(stop: { calls.guardCalls += 1; return calls.blocked })
+        AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+            let first = AXLogicProElements.elementSearchText(element, runtime: runtime)
+            if ["failed_batch", "malformed_metadata"].contains(kind) { #expect(first == "native help") }
+            else if kind == "help_cutoff" { #expect(first == "slot-id audio plug-in fx") }
+            else { #expect(first == "slot-id audio plug-in fx native help") }
+            #expect(calls.batches == (kind == "legacy" ? 0 : 1))
+            #expect(calls.singles == (["legacy", "null_fallback"].contains(kind) ? 3 : 0))
+            #expect(calls.guardCalls == 1 && calls.help == (kind == "help_cutoff" ? 0 : 1))
+            #expect(guardian.stopped == (kind == "help_cutoff"))
+            if kind == "next_sample" {
+                builder.setAttribute(element, kAXDescriptionAttribute as String, "Changed insert")
+                #expect(AXLogicProElements.elementSearchText(element, runtime: runtime) == "slot-id changed insert fx native help")
+                #expect(calls.batches == 2 && calls.help == 2 && calls.guardCalls == 2)
+            }
+        }
+        #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
+    }
     private final class Reads: @unchecked Sendable {
         let builder: FakeAXRuntimeBuilder
         let input: AXUIElement
