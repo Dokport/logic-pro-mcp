@@ -458,7 +458,11 @@ extension ProjectSessionAudit {
             let originalOrder = tracks.rows.compactMap(\.trackRef)
             // A readable rail is not proof of the whole project. Preserve that scope in the
             // proposed inverse; no live locale/footprint/adapter is invented by this draft.
-            var blocked: Set<String> = ["sort_coupled_footprint_unavailable", "sort_preservation_adapter_unavailable"]
+            var blocked = Set<String>()
+            if !ApprovedSessionRepair.canVerifyCapturedGoals(policy: policy, policyValue: policyValue,
+                names: names, source: capture, request: request) {
+                blocked.formUnion(["sort_coupled_footprint_unavailable", "sort_preservation_adapter_unavailable"])
+            }
             let locale = capture.freshPopulation?.presentationObservation?.uiLocale
             if locale != capture.freshPopulation?.presentationBinding?.uiLocale
                 || sort.criterion.measuredLabel(for: locale) == nil
