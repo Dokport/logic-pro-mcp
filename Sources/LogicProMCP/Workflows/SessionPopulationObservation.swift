@@ -41,6 +41,9 @@ enum SessionPopulationObservation {
         /// Request-local physical witnesses from explicit selection and verified restoration.
         /// Never decoded or reconstructed from a wire reference, name or ordinal.
         var selectionAssociations: [AccessibilityChannel.HeldSelectionAssociation.Pair] = []
+        /// Native global membership after an owned Edit Select All and verified original selection/view inverse.
+        /// Never reconstructed from the currently exposed strip count or a wire reference.
+        var ownedMixerSelectedPopulation: [AXMixerStripBinding.Binding]? = nil
         /// A new full reading after verified selection restoration. This is not
         /// permission to accept changes during that reading or across projects.
         var associationReadbackBoundary: StateCache.CaptureBoundary? = nil
@@ -867,6 +870,13 @@ enum SessionPopulationObservation {
     struct StripWitnesses: Encodable, Sendable {
         let count: Int
         var presentation: MixerPresentation? = nil
+        var expectedCount: Int? = nil
+        var populationEndSource: String? = nil
+        enum CodingKeys: String, CodingKey {
+            case count, presentation
+            case expectedCount = "expected_count"
+            case populationEndSource = "population_end_source"
+        }
     }
 
     struct StripsSection: Encodable, Sendable {
@@ -1201,6 +1211,18 @@ enum SessionPopulationObservation {
         } else if stripSource == "cache_stale" {
             stripsCoverage = .partial
             stripsReasons = [.mixerCacheStale]
+        } else if let population = capture.freshPopulation, population.stable,
+                  population.uiEffects.restoration == "restored", population.hiddenTracksShown == true,
+                  let selected = population.ownedMixerSelectedPopulation, !selected.isEmpty,
+                  selected.count == capture.channelStrips.count,
+                  selected.allSatisfy({ binding in
+                      selected.filter({ $0.matches(binding) }).count == 1
+                          && capture.channelStrips.filter({ $0.physicalBinding?.matches(binding) == true }).count == 1
+                  }), population.mixerPresentation?.mode == "all",
+                  population.mixerPresentation?.typeFilters.count == 8,
+                  population.mixerPresentation?.typeFilters.values.allSatisfy({ $0 == true }) == true {
+            stripsCoverage = .complete
+            stripsReasons = []
         } else {
             // Known presentation removes an unread-filter claim, not missing independent
             // population/end evidence. Restricted views remain explicit.
@@ -1216,7 +1238,9 @@ enum SessionPopulationObservation {
             coverage: stripsCoverage,
             reasons: stripsReasons,
             witnesses: StripWitnesses(count: capture.channelStrips.count,
-                                     presentation: capture.freshPopulation?.mixerPresentation),
+                                     presentation: capture.freshPopulation?.mixerPresentation,
+                                     expectedCount: stripsCoverage == .complete ? capture.freshPopulation?.ownedMixerSelectedPopulation?.count : nil,
+                                     populationEndSource: stripsCoverage == .complete ? "ax_owned_mixer_select_all" : nil),
             rows: capture.channelStrips.enumerated().map { row, strip in
                 StripRow(
                     stripIndex: strip.trackIndex,

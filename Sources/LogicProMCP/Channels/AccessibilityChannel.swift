@@ -340,7 +340,7 @@ actor AccessibilityChannel: Channel {
         var reusesAssociationPresentation = false
         var association: HeldSelectionAssociation?
         var routingEffects = SessionPopulationObservation.UIEffects()
-        if request.allowUINavigation, request.domains.contains(.routing),
+        if request.allowUINavigation, (request.domains.contains(.routing) || request.domains.contains(.strips)),
            !request.domains.contains(.associations),
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime) {
             // Reuse this routing reader's exact existing focus witnesses, not
@@ -664,6 +664,28 @@ actor AccessibilityChannel: Channel {
             }
             // Compose only after the original selection observation has restored
             // and reconciled its rows. No pair is inferred for an unobserved strip.
+            if request.allowUINavigation, request.scope == .wholeProject, request.needsTracks, request.domains.contains(.strips),
+               population.stable, let navigation,
+               let selected = await navigation.observeWholeStripSelection(stoppingWhen: stop) {
+                let refreshed = try await readExposedSessionPopulation(request: request, fileReader: fileReader,
+                    stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
+                if refreshed.stable, let states = refreshed.strips, states.count == selected.count,
+                   zip(states, selected).allSatisfy({ $0.physicalBinding?.matches($1) == true }) {
+                    let pairs = population.selectionAssociations
+                    let effects = population.uiEffects
+                    population = refreshed
+                    population.uiEffects = effects
+                    population.selectionAssociations = pairs.filter { pair in
+                        refreshed.tracks?.filter({ $0.physicalBinding?.matches(pair.track) == true }).count == 1
+                            && states.filter({ $0.physicalBinding?.matches(pair.strip) == true }).count == 1
+                    }
+                    if population.selectionAssociations.count != pairs.count { population.stable = false }
+                    if !population.selectionAssociations.isEmpty {
+                        population.associationReadbackBoundary = await associationReadbackBoundary()
+                    }
+                    population.ownedMixerSelectedPopulation = selected
+                } else { population.stable = false }
+            }
             population = try await collectRouting(population)
             let disclosureExposures = request.domains.contains(.hierarchy) && population.stable
                 ? stackNavigation?.capturedDisclosureExposures(in: population.tracks) ?? [] : []

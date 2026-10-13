@@ -3694,6 +3694,183 @@ struct Issue965FreshPopulationAcquisitionTests {
         }
     }
 
+    @Test("owned Mixer Select All observes offscreen population and restores the actual original subset",
+          arguments: [1, 2, 4], ["healthy", "no_navigation", "not_all", "filter_off", "hidden_off", "not_settable",
+                             "unread_selection", "duplicate_original", "missing_menu", "duplicate_menu", "noop_selection",
+                             "omitted_offscreen", "foreign_selected", "duplicate_selected", "malformed_selected",
+                             "late_document", "late_focus", "replaced_census", "restore_ack_only", "restore_false",
+                             "restore_geometry", "restore_visible", "before_menu_document", "before_leaf_document", "inverse_deciding_document"])
+    func registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: Int, fault: String) async throws {
+        let fixture = hiddenViewFixture(shown: fault != "hidden_off")
+        fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/MixerPopulation.logicx")
+        fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, true)
+        let owner = fixture.builder.element(966_000), mixer = fixture.builder.element(966_001)
+        let toolbar = fixture.builder.element(966_002), filters = fixture.builder.element(966_003)
+        let strips = (0..<4).map { fixture.builder.element(966_010 + $0) }
+        for group in [owner, toolbar, filters] { fixture.builder.setRole(group, kAXGroupRole as String) }
+        for group in [owner, toolbar, mixer] { fixture.builder.setAttribute(group, kAXDescriptionAttribute as String, "Mixer") }
+        fixture.builder.setRole(mixer, kAXLayoutAreaRole as String)
+        let modeLabels = ["Single", "Tracks", "All"]
+        let modes = modeLabels.enumerated().map { index, label -> AXUIElement in
+            let node = fixture.builder.element(966_020 + index)
+            fixture.builder.setRole(node, kAXRadioButtonRole as String)
+            fixture.builder.setAttribute(node, kAXDescriptionAttribute as String, label)
+            fixture.builder.setAttribute(node, kAXValueAttribute as String, index == 2 ? 1 : 0)
+            fixture.builder.setChildren(node, [])
+            return node
+        }
+        let labels = ["Audio", "Inst", "Aux", "Bus", "Input", "Output", "Master/VCA", "MIDI"]
+        let filterControls = labels.enumerated().map { index, label -> AXUIElement in
+            let node = fixture.builder.element(966_030 + index)
+            fixture.builder.setRole(node, kAXCheckBoxRole as String)
+            fixture.builder.setAttribute(node, kAXDescriptionAttribute as String, label)
+            fixture.builder.setAttribute(node, kAXValueAttribute as String, 1)
+            fixture.builder.setChildren(node, [])
+            return node
+        }
+        for (index, strip) in strips.enumerated() {
+            fixture.builder.setRole(strip, kAXLayoutItemRole as String)
+            fixture.builder.setAttribute(strip, kAXNumberOfCharactersAttribute as String, 0)
+            fixture.builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+            fixture.builder.setAttributeSettable(strip, kAXValueAttribute as String, false)
+            let name = fixture.builder.element(966_040 + index)
+            fixture.builder.setRole(name, kAXTextFieldRole as String)
+            fixture.builder.setAttribute(name, kAXDescriptionAttribute as String, "Name")
+            fixture.builder.setAttribute(name, kAXValueAttribute as String, "Physical \(index)")
+            fixture.builder.setChildren(name, [])
+            fixture.builder.setChildren(strip, [name])
+        }
+        fixture.builder.setChildren(filters, filterControls)
+        fixture.builder.setChildren(toolbar, modes + [filters])
+        fixture.builder.setChildren(mixer, strips)
+        fixture.builder.setChildren(owner, [toolbar, mixer])
+        for (index, element) in ([mixer] + strips).enumerated() {
+            var point = CGPoint(x: Double(index * 80), y: 440)
+            var size = CGSize(width: index == 0 ? 320 : 80, height: 640)
+            fixture.builder.setAttribute(element, kAXPositionAttribute as String, AXValueCreate(.cgPoint, &point)!)
+            fixture.builder.setAttribute(element, kAXSizeAttribute as String, AXValueCreate(.cgSize, &size)!)
+        }
+        fixture.builder.setAttribute(mixer, kAXVisibleChildrenAttribute as String, Array(strips.suffix(2)))
+        let original = Array(strips.suffix(originalCount))
+        fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, original)
+        fixture.builder.setAttributeSettable(mixer, kAXSelectedChildrenAttribute as String, true)
+        if fault == "not_all" {
+            fixture.builder.setAttribute(modes[2], kAXValueAttribute as String, 0)
+            fixture.builder.setAttribute(modes[1], kAXValueAttribute as String, 1)
+        }
+        if fault == "filter_off" { fixture.builder.setAttribute(filterControls[2], kAXValueAttribute as String, 0) }
+        if fault == "not_settable" { fixture.builder.setAttributeSettable(mixer, kAXSelectedChildrenAttribute as String, false) }
+        if fault == "duplicate_original" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [strips[3], strips[3]]) }
+        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, strips[0])
+        fixture.builder.setAttribute(fixture.app, kAXFocusedWindowAttribute as String, fixture.window)
+        fixture.builder.setAttribute(fixture.app, kAXFrontmostAttribute as String, true)
+        let bar = fixture.builder.element(966_050), edit = fixture.builder.element(966_051), selectAll = fixture.builder.element(966_052)
+        fixture.builder.setRole(bar, kAXMenuBarRole as String)
+        fixture.builder.setRole(edit, kAXMenuBarItemRole as String)
+        fixture.builder.setAttribute(edit, kAXTitleAttribute as String, "Edit")
+        fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, false)
+        fixture.builder.setActionNames(edit, [kAXPressAction as String, kAXCancelAction as String])
+        fixture.builder.setRole(selectAll, kAXMenuItemRole as String)
+        fixture.builder.setAttribute(selectAll, kAXIdentifierAttribute as String, "selectAll:")
+        fixture.builder.setAttribute(selectAll, kAXTitleAttribute as String, "Select All")
+        fixture.builder.setAttribute(selectAll, kAXEnabledAttribute as String, true)
+        fixture.builder.setActionNames(selectAll, [kAXPressAction as String])
+        fixture.builder.setChildren(selectAll, [])
+        fixture.builder.setChildren(edit, [selectAll])
+        if fault == "missing_menu" { fixture.builder.setChildren(edit, []) }
+        if fault == "duplicate_menu" {
+            let duplicate = fixture.builder.element(966_053)
+            fixture.builder.setRole(duplicate, kAXMenuItemRole as String)
+            fixture.builder.setAttribute(duplicate, kAXIdentifierAttribute as String, "selectAll:")
+            fixture.builder.setChildren(duplicate, [])
+            fixture.builder.setChildren(edit, [selectAll, duplicate])
+        }
+        fixture.builder.setChildren(bar, [edit])
+        fixture.builder.setAttribute(fixture.app, kAXMenuBarAttribute as String, bar)
+        let roots = AXHelpers.getChildren(fixture.window, runtime: fixture.builder.makeAXRuntime())
+        let transport = fixture.builder.element(966_060)
+        fixture.builder.setRole(transport, kAXGroupRole as String)
+        fixture.builder.setAttribute(transport, kAXDescriptionAttribute as String, "Control Bar")
+        let controls = ["Play", "Record"].enumerated().map { index, title -> AXUIElement in
+            let control = fixture.builder.element(966_061 + index)
+            fixture.builder.setRole(control, kAXCheckBoxRole as String)
+            fixture.builder.setAttribute(control, kAXTitleAttribute as String, title)
+            fixture.builder.setAttribute(control, kAXValueAttribute as String, 0)
+            fixture.builder.setChildren(control, [])
+            return control
+        }
+        fixture.builder.setChildren(transport, controls)
+        fixture.builder.setChildren(fixture.window, roots + [owner, transport])
+        let selectionReads = Reads()
+        let nativeRead = passiveMixerAttributeRead(strips[0])
+        let result = try await inspect(fixture: fixture, domains: ["tracks", "strips"], navigation: fault != "no_navigation",
+            observationAction: { element, action in
+                if CFEqual(element, edit) {
+                    fixture.events.record(action == kAXPressAction as String ? "open_edit" : "cancel_edit")
+                    fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, action == kAXPressAction as String)
+                    return true
+                }
+                if CFEqual(element, selectAll), action == kAXPressAction as String {
+                    fixture.events.record("select_all")
+                    if fault != "noop_selection" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips) }
+                    if fault == "omitted_offscreen" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.suffix(2))) }
+                    if fault == "foreign_selected" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [fixture.header]) }
+                    if fault == "duplicate_selected" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [strips[0]]) }
+                    if fault == "malformed_selected" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, NSNumber(value: 4)) }
+                    if fault == "late_document" { fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
+                    if fault == "late_focus" { fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header) }
+                    if fault == "replaced_census" { fixture.builder.setChildren(mixer, Array(strips.dropLast())) }
+                    fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, false)
+                    return true
+                }
+                return nil
+            }, focusSetter: { element, attribute, value in
+                guard CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute as String else { return false }
+                fixture.events.record("restore_mixer_selection")
+                if fault != "restore_ack_only" { fixture.builder.setAttribute(mixer, attribute, value) }
+                if fault == "restore_geometry" {
+                    var moved = CGPoint(x: 7, y: 440)
+                    fixture.builder.setAttribute(mixer, kAXPositionAttribute as String, AXValueCreate(.cgPoint, &moved)!)
+                }
+                if fault == "restore_visible" { fixture.builder.setAttribute(mixer, kAXVisibleChildrenAttribute as String, [strips[3]]) }
+                return fault != "restore_false"
+            }, readingAttribute: { element, attribute in
+                if CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute as String {
+                    selectionReads.record(attribute)
+                    if fault == "unread_selection" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                    let opened = fixture.events.recorded.contains("open_edit")
+                    let selected = fixture.events.recorded.contains("select_all")
+                    if (fault == "before_menu_document" && selectionReads.count == 2)
+                        || (fault == "before_leaf_document" && opened && !selected)
+                        || (fault == "inverse_deciding_document" && selected && selectionReads.recorded.filter({ $0 == "after_select_all" }).count == 1) {
+                        fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    if selected { selectionReads.record("after_select_all") }
+                }
+                return nativeRead(element, attribute)
+            })
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        let section = try #require(body["strips"] as? [String: Any])
+        let completeExpected = fault == "healthy" || (originalCount == strips.count && ["noop_selection", "restore_ack_only"].contains(fault))
+        if completeExpected {
+            #expect(section["coverage"] as? String == "complete")
+            #expect(fixture.events.recorded == ["open_edit", "select_all", "restore_mixer_selection"])
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+            if originalCount == strips.count {
+                let changed = (body["ui_effects"] as? [String: Any])?["changed"] as? [String] ?? []
+                #expect(!changed.contains("mixer_selection") && !changed.contains("mixer_selection_restoration"))
+            }
+        } else { #expect(section["coverage"] as? String != "complete") }
+        if fault == "before_menu_document" { #expect(!fixture.events.recorded.contains("open_edit")) }
+        if fault == "before_leaf_document" { #expect(!fixture.events.recorded.contains("select_all")) }
+        if fault == "inverse_deciding_document" { #expect(!fixture.events.recorded.contains("restore_mixer_selection")) }
+        if completeExpected {
+            let restored = try #require(fixture.builder.attributeValue(mixer, kAXSelectedChildrenAttribute as String) as? [AXUIElement])
+            #expect(restored.count == original.count && zip(restored, original).allSatisfy { CFEqual($0, $1) })
+        }
+        #expect(fixture.builder.attributeValue(fixture.header, kAXSelectedAttribute as String) as? Bool == true)
+    }
+
     @Test("a noneditable physical Mixer strip's zero insertion sentinel does not block a no-navigation track read")
     func registeredTrackOnlyReadAdmitsHeldPassiveMixerFocus() async throws {
         let (fixture, focus) = passiveMixerFocusFixture()
@@ -3947,6 +4124,8 @@ struct Issue965FreshPopulationAcquisitionTests {
         keyboardFocus: @escaping @Sendable () -> AccessibilityChannel.LogicKeyboardFocus = { .notTextEditing },
         fileReader: LogicProjectFileReader.Runtime = .unavailable,
         frameReads: Reads? = nil, frameFault: String? = nil,
+        observationAction: (@Sendable (AXUIElement, String) -> Bool?)? = nil,
+        focusSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool)? = nil,
         readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil
     ) async throws -> CallTool.Result {
         let cache = StateCache()
@@ -3955,6 +4134,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         await cache.updateChannelStrips([ChannelStripState(trackIndex: 0, name: "Old cached strip")])
         let gate = LogicMutationGate()
         let poller = StatePoller(axChannel: fixture.channel(unreadableRail: unreadableRail,
+                                                         observationAction: observationAction, focusSetter: focusSetter,
                                                          frameReads: frameReads, frameFault: frameFault,
                                                          readingAttribute: readingAttribute), cache: cache,
                                  runtime: .init(hasVisibleWindow: { hasVisibleWindow }, projectFileReader: fileReader,
