@@ -838,10 +838,11 @@ actor AccessibilityChannel: Channel {
                   case .success(let siblings) = AXHelpers.childrenResult(split, runtime: logic.ax),
                   siblings.filter({ CFEqual($0, headerScroll) }).count == 1 else { return nil }
             func frame(_ element: AXUIElement) -> CGRect? {
-                guard case .success(.some(let p)) = AXHelpers.getAttributeResult(element, kAXPositionAttribute as String,
-                    runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
-                      case .success(.some(let s)) = AXHelpers.getAttributeResult(element, kAXSizeAttribute as String,
-                    runtime: logic.ax) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                let geometry = AXHelpers.getNonHelpAttributes(element,
+                    [kAXPositionAttribute, kAXSizeAttribute] as [String], runtime: logic.ax,
+                    permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+                guard case .success(.some(let p)) = geometry[0],
+                      case .success(.some(let s)) = geometry[1],
                       let point = AXHelpers.point(fromRawAttribute: p), let size = AXHelpers.size(fromRawAttribute: s),
                       point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
                       size.width > 0, size.height > 0 else { return nil }
@@ -1033,6 +1034,7 @@ actor AccessibilityChannel: Channel {
                             // but classify inserts only for a requested strip footprint.
                             // Default and explicit strip requests retain the full chain.
                             readingPlugins: request.domains.contains(.strips),
+                            readingRouting: request.domains.contains(.strips) || request.domains.contains(.routing),
                             readingScalarHelp: false, stoppingWhen: stop)
                     }
                 }

@@ -88,11 +88,12 @@ struct Issue965FreshPopulationAcquisitionTests {
                      observationAction: (@Sendable (AXUIElement, String) -> Bool?)? = nil,
                      wrongDisclosureHit: Bool = false,
                      focusSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool)? = nil,
+                     frameReads: Reads? = nil, frameFault: String? = nil,
                      observingAttribute: (@Sendable (AXUIElement, String) -> Void)? = nil,
                      readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil,
                      observingChildren: (@Sendable (AXUIElement) -> Void)? = nil,
                      observingLegacyChildren: (@Sendable (AXUIElement) -> Void)? = nil) -> AccessibilityChannel {
-            let ax = builder.makeAXRuntime(
+            let baseAX = builder.makeAXRuntime(
                     appElement: app,
                     attributeValueHandler: { element, attribute in
                         reads.record(attribute)
@@ -137,6 +138,53 @@ struct Issue965FreshPopulationAcquisitionTests {
                         guard let disclosure, point == CGPoint(x: 16, y: 26) else { return .success(nil) }
                         return .success(wrongDisclosureHit ? header : disclosure)
                     })
+            let ax: AXHelpers.Runtime
+            if let frameReads {
+                let frameBatch: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError>)?
+                if frameFault == "legacy" { frameBatch = nil }
+                else {
+                    frameBatch = { element, attributes in
+                        let geometry = attributes == [kAXPositionAttribute as String, kAXSizeAttribute as String]
+                        if geometry {
+                            frameReads.record("frame_batch")
+                            if frameFault == "failure" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                            if frameFault == "null_fallback" || frameFault == "missing" { return .success([NSNull(), NSNull()]) }
+                        }
+                        var values: [AnyObject] = []
+                        for attribute in attributes {
+                            let reading: Result<AnyObject?, AXHelpers.AXStatusError> = attribute == kAXChildrenAttribute as String
+                                ? AXHelpers.childrenResult(element, runtime: baseAX).map { $0 as CFArray }
+                                : AXHelpers.getAttributeResult(element, attribute, runtime: baseAX)
+                            switch reading {
+                            case .success(let value): values.append(value ?? NSNull())
+                            case .failure(let error):
+                                var nativeError = AXError(rawValue: error.raw) ?? .cannotComplete
+                                guard let wrapped = AXValueCreate(.axError, &nativeError) else { return .failure(error) }
+                                values.append(wrapped)
+                            }
+                        }
+                        if geometry {
+                            if frameFault == "short" { return .success(Array(values.prefix(1))) }
+                            if frameFault == "position_type" { values[0] = NSNumber(value: 0) }
+                            if frameFault == "size_type" { values[1] = NSNumber(value: 0) }
+                            if frameFault == "position_kind" { values[0] = values[1] }
+                        }
+                        return .success(values)
+                    }
+                }
+                ax = AXHelpers.Runtime(axApp: baseAX.axApp, attributeValue: baseAX.attributeValue,
+                    attributeIsSettable: baseAX.attributeIsSettable, setAttributeValue: baseAX.setAttributeValue,
+                    children: baseAX.children, performAction: baseAX.performAction, childCount: baseAX.childCount,
+                    actionNames: baseAX.actionNames, actionNamesResult: baseAX.actionNamesResult,
+                    childrenResult: baseAX.childrenResult, attributeValueResult: { element, attribute in
+                        if [kAXPositionAttribute as String, kAXSizeAttribute as String].contains(attribute) {
+                            frameReads.record("frame_single")
+                            if frameFault == "missing", attribute == kAXPositionAttribute as String { return .success(nil) }
+                        }
+                        return AXHelpers.getAttributeResult(element, attribute, runtime: baseAX)
+                    }, performActionResult: baseAX.performActionResult, elementAtPosition: baseAX.elementAtPosition,
+                    attributeValuesResult: frameBatch)
+            } else { ax = baseAX }
             let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax,
                 executeAppleScript: { _ in Issue.record("fixture forbids AppleScript"); return .error("forbidden") },
                 onScreenWindowList: { reads.record("window_server_bootstrap"); return [] },
@@ -333,8 +381,14 @@ struct Issue965FreshPopulationAcquisitionTests {
                       "hidden", "scrollable", "scrolled", "negative_scroll", "out_of_range_scroll", "nonfinite_scroll", "infinite_scroll", "offscreen", "missing_row",
                       "unreadable_enabled", "foreign_scrollbar", "duplicate_scrollbar",
                       "late_scrollbar_retirement", "late_frame_loss", "late_scrollbar_role", "late_hidden_view",
-                      "late_scrollbar_orientation", "late_scrollbar_parent", "late_scrollbar_window"])
-    func registeredSinglePageTrackPopulationEnd(fault: String) async throws {
+                      "late_scrollbar_orientation", "late_scrollbar_parent", "late_scrollbar_window",
+                      "paired_complete", "paired_null_fallback", "paired_legacy", "paired_missing",
+                      "paired_position_type", "paired_size_type", "paired_position_kind", "paired_failure", "paired_short",
+                      "paired_late_frame_loss", "paired_late_scrollbar_retirement"])
+    func registeredSinglePageTrackPopulationEnd(caseName: String) async throws {
+        let frameMode = caseName.hasPrefix("paired_") ? String(caseName.dropFirst("paired_".count)) : nil
+        let fault = frameMode.map { ["complete", "null_fallback", "legacy"].contains($0) ? "complete" : $0 } ?? caseName
+        let frameReads = frameMode.map { _ in Reads() }
         let f = hiddenViewFixture(shown: fault != "hidden" && fault != "flat_hierarchy_hidden")
         let second = f.builder.element(965_990), workspace = f.builder.element(965_991)
         let content = f.builder.element(965_992), vertical = f.builder.element(965_993)
@@ -402,6 +456,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         let flatHierarchy = fault.hasPrefix("flat_hierarchy")
         let result = try await inspect(fixture: f, domains: flatHierarchy ? ["tracks", "hierarchy"] : ["tracks"],
             navigation: fault == "flat_hierarchy", fileReader: reader,
+            frameReads: frameReads, frameFault: frameMode,
             readingAttribute: { element, attribute in
                 if fault == "unreadable_enabled", CFEqual(element, vertical), attribute == kAXEnabledAttribute as String {
                     return .failure(.init(raw: AXError.cannotComplete.rawValue))
@@ -468,6 +523,19 @@ struct Issue965FreshPopulationAcquisitionTests {
             }
         }
         if fault.hasPrefix("late_") { #expect(endBoundaryReads.count >= 3, "Actually execute the deciding final end read") }
+        if let frameReads {
+            let batches = frameReads.recorded.filter { $0 == "frame_batch" }.count
+            let singles = frameReads.recorded.filter { $0 == "frame_single" }.count
+            if frameMode == "legacy" {
+                #expect(batches == 0 && singles == 36, "Keep every independent frame sample on non-batch runtimes")
+            } else {
+                #expect(batches > 0, "Reach the actual paired geometry reader, not merely inject an unused batch")
+                if frameMode == "complete" || frameMode == "null_fallback" {
+                    #expect(batches == 18, "Both geometry observations of all three elements remain in all three coverage bookends")
+                    #expect(singles == (frameMode == "null_fallback" ? 36 : 0))
+                }
+            }
+        }
         #expect(f.events.recorded.isEmpty && f.builder.setCalls.isEmpty && f.builder.actionCalls.isEmpty)
         #expect(f.reads.helpCount == 0)
     }
@@ -3878,6 +3946,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         stopBeforeRead: Bool? = nil,
         keyboardFocus: @escaping @Sendable () -> AccessibilityChannel.LogicKeyboardFocus = { .notTextEditing },
         fileReader: LogicProjectFileReader.Runtime = .unavailable,
+        frameReads: Reads? = nil, frameFault: String? = nil,
         readingAttribute: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil
     ) async throws -> CallTool.Result {
         let cache = StateCache()
@@ -3886,6 +3955,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         await cache.updateChannelStrips([ChannelStripState(trackIndex: 0, name: "Old cached strip")])
         let gate = LogicMutationGate()
         let poller = StatePoller(axChannel: fixture.channel(unreadableRail: unreadableRail,
+                                                         frameReads: frameReads, frameFault: frameFault,
                                                          readingAttribute: readingAttribute), cache: cache,
                                  runtime: .init(hasVisibleWindow: { hasVisibleWindow }, projectFileReader: fileReader,
                                                 keyboardFocus: keyboardFocus))
