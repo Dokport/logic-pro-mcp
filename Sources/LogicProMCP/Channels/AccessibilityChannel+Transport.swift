@@ -50,6 +50,15 @@ extension AccessibilityChannel {
             ) {
                 state.isCycleEnabled = isCycleEnabled
             }
+            let cycleControls = checkboxes.filter {
+                AXLocalePolicy.transportCycleControl.matches(AXHelpers.getTitle($0, runtime: runtime.ax), mode: .exactStrict)
+                    || AXLocalePolicy.transportCycleControl.matches(AXHelpers.getDescription($0, runtime: runtime.ax), mode: .exactStrict)
+            }
+            if cycleControls.count == 1,
+               AXHelpers.getRole(cycleControls[0], runtime: runtime.ax) == kAXCheckBoxRole as String {
+                state.observedCycleEnabled = AXLogicProElements.readControlBarCheckboxValue(
+                    among: cycleControls, matching: AXLocalePolicy.transportCycleControl, runtime: runtime)
+            }
             if let isMetronomeEnabled = AXLogicProElements.readControlBarCheckboxValue(
                 among: checkboxes, matching: AXLocalePolicy.transportMetronomeControl, runtime: runtime
             ) {

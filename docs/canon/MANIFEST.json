@@ -113,8 +113,8 @@
     "index/strings.values.tsv": "38d6d4d79b22e359d2af139961cbd1bcd214044d448107e03a32c70ee5303b77",
     "index/stringsdict.tsv": "538081502dfdd84fb916e331a08b1682b64807cdbc2adbfe6faf9c70a983a511",
     "index/stringsdict.values.tsv": "81c2945e23ef803ec6c80a4b3b1dab6f4d4d7f16554dc07956accb89e667190f",
-    "ledger/casefold.tsv": "78c2687d54d1e61cc4e4ee71551566ac7d131143f14affaa3b6718ceee298ed1",
-    "ledger/presence.tsv": "3036e87907639f5a8f7226567a0952e0c80008e23b88f0030c8ecfd5af1c2b56"
+    "ledger/casefold.tsv": "f2e0ead02d6a52de4e5ac8fc67a14ea0d45489541cedfee231316c048361c385",
+    "ledger/presence.tsv": "7f9c6c09e10f4e74b6c39eb9f873db9bb754f9020dd95b0838e4cbf1312f45f0"
   },
   "extractor_version": 3,
   "ledger_casefold_entries": {
@@ -149,12 +149,12 @@
     "strings": {
       "-": 2,
       "de": 204,
-      "en": 205,
+      "en": 206,
       "es": 210,
       "fr": 196,
       "it": 200,
       "ja": 208,
-      "ko": 206,
+      "ko": 207,
       "pt": 212,
       "zh_CN": 195,
       "zh_TW": 183
@@ -178,7 +178,7 @@
       "zh_TW": 42
     },
     "nibstrings": {
-      "en": 95
+      "en": 96
     },
     "quickhelp": {
       "de": 54,
@@ -195,12 +195,12 @@
     "strings": {
       "-": 3,
       "de": 199,
-      "en": 201,
+      "en": 202,
       "es": 211,
       "fr": 193,
       "it": 203,
       "ja": 210,
-      "ko": 214,
+      "ko": 215,
       "pt": 211,
       "zh_CN": 202,
       "zh_TW": 185
