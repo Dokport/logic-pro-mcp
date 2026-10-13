@@ -85,6 +85,18 @@ extension AXLogicProElements {
         }
     }
 
+    /// A request-local empty anchor from the same complete source walk.
+    /// Its current CF/path, not an old occupied ordinal, is the restoration target.
+    struct EmptySendMenuControl {
+        let control: AXUIElement
+        let sourcePath: [AXUIElement]
+
+        func matches(_ other: Self) -> Bool {
+            CFEqual(control, other.control) && sourcePath.count == other.sourcePath.count
+                && zip(sourcePath, other.sourcePath).allSatisfy { CFEqual($0, $1) }
+        }
+    }
+
     /// Shares the existing census-owned assigned control with routing actions.
     /// The ordinal is a census identity, never a physical screen slot or label.
     static func assignedSendMenuControl(in strip: AXUIElement, ordinal: Int,
@@ -1183,7 +1195,8 @@ extension AXLogicProElements {
     static func sendSlotObservations(
         in strip: AXUIElement,
         runtime: AXHelpers.Runtime = .production,
-        observingAssignedGroup: ((AssignedSendMenuControl) -> Void)? = nil
+        observingAssignedGroup: ((AssignedSendMenuControl) -> Void)? = nil,
+        observingEmptySlot: ((EmptySendMenuControl) -> Void)? = nil
     ) -> [SendSlotObservation]? {
         guard let walk = preOrderDescendants(of: strip, maxDepth: 4, runtime: runtime) else {
             return nil
@@ -1192,6 +1205,7 @@ extension AXLogicProElements {
         var consumedGroups: Set<Int> = []
         var recognizedControls: [AXUIElement] = []
         var assignedControls: [AssignedSendMenuControl] = []
+        var emptyControls: [EmptySendMenuControl] = []
         // This path comes from the already-read source walk, not a later AXParent lookup
         // that could adopt a group after it migrated to another strip.
         func sourcePath(at index: Int) -> [AXUIElement]? {
@@ -1341,10 +1355,15 @@ extension AXLogicProElements {
                 controls.append(successor)
             }
             guard claim(controls) else { return nil }
+            if observation.state == .observedEmpty, observingEmptySlot != nil {
+                guard let path = sourcePath(at: index) else { return nil }
+                emptyControls.append(.init(control: visit.element, sourcePath: path))
+            }
             observations.append(observation)
         }
         // No partial walk may publish an ordinal/control selection to an acquisition caller.
         assignedControls.forEach { observingAssignedGroup?($0) }
+        emptyControls.forEach { observingEmptySlot?($0) }
         return observations
     }
 

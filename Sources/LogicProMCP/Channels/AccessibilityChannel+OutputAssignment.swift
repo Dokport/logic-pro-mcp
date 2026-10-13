@@ -473,11 +473,23 @@ extension AccessibilityChannel {
         }
     }
 
-    /// Shared physical renewal only: callers retain their own slot/readback contract.
+    enum OriginalHeaderSourceDisposition {
+        case retiredOriginal, survivingOriginal
+
+        func accepts(_ current: AXMixerStripBinding.Binding, original: AXMixerStripBinding.Binding) -> Bool {
+            switch self {
+            case .retiredOriginal: return !current.matches(original)
+            case .survivingOriginal: return current.matches(original)
+            }
+        }
+    }
+
+    /// Shared physical observation only: callers retain their own slot/readback contract.
     /// A successful inverse and original header CF are required; no reference is rebound.
     static func renewSourceThroughOriginalHeader(
         _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
         runtime: AXLogicProElements.Runtime, selectedHeaderRequired: Bool = true,
+        sourceDisposition: OriginalHeaderSourceDisposition = .retiredOriginal,
         observingReadFocus: @Sendable (HeldSelectionAssociation) -> Void = { _ in }
     ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
@@ -500,7 +512,7 @@ extension AccessibilityChannel {
         guard candidates.count == 1, let pair = candidates.first,
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,
               observation.effects.restoration == "restored",
-              !pair.strip.matches(original), originalPair.track.currentIndex() != nil,
+              sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex() != nil,
               let index = pair.strip.currentIndex(runtime: runtime) else { return (nil, observation.effects) }
         return (.init(pair: pair, index: index, original: original, originalTrack: originalPair.track,
             observation: observation), observation.effects)
@@ -578,6 +590,52 @@ extension AccessibilityChannel {
             if case .bus = $0 { return false }; return $0 != .noOutput
         }.map(\.token)
         return single(matches.map { ($0.element, $0.path) }, offered: offered)
+    }
+
+    /// Observed EN/KO No Send root action, using the same complete typed
+    /// role/title/submenu census as every other routing choice.
+    static func sendRemovalMenuChoice(in root: AXUIElement, runtime: AXHelpers.Runtime) -> OutputMenuChoice {
+        guard let items = titledMenuItems(of: root, runtime: runtime) else { return .menuUnread(path: []) }
+        let matches = items.filter { !$0.hasSubmenu && isSendRemovalTitle($0.title) }
+        return single(matches.map { ($0.element, [$0.title]) }, offered: [])
+    }
+
+    /// Unknown routing evidence is not empty. Require one explicitly checked
+    /// No Send leaf, the retained raw mode checks, and every other routing leaf
+    /// and echo known unchecked. This grants no authority without source custody.
+    static func checkedRemovedSendMenu(in root: AXUIElement, nonRoutingChecks: [String],
+        runtime: AXHelpers.Runtime) -> Bool {
+        func mark(_ element: AXUIElement) -> String? {
+            let read: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(element,
+                "AXMenuItemMarkChar", runtime: runtime)
+            switch read {
+            case .success(nil): return ""
+            case .success(.some(let raw)):
+                guard let text = raw as? String, text == "" || text == "✓" else { return nil }
+                return text
+            case .failure(let error) where error.isDefinitiveAbsence: return ""
+            default: return nil
+            }
+        }
+        guard let items = titledMenuItems(of: root, runtime: runtime),
+              items.filter({ !$0.hasSubmenu && isSendRemovalTitle($0.title) }).count == 1 else { return false }
+        var checkedNoSend = 0
+        var checkedModes: [String] = []
+        for item in items {
+            guard let checked = mark(item.element) else { return false }
+            if let submenu = item.submenu {
+                guard checked.isEmpty,
+                      let leaves = leafItems(under: submenu, path: [item.title], depth: 0, runtime: runtime),
+                      leaves.allSatisfy({ mark($0.element) == "" }) else { return false }
+            } else if checked == "✓" {
+                if isSendRemovalTitle(item.title) { checkedNoSend += 1 }
+                else {
+                    guard nonRoutingChecks.contains(item.title) else { return false }
+                    checkedModes.append(item.title)
+                }
+            }
+        }
+        return checkedNoSend == 1 && checkedModes == nonRoutingChecks
     }
 
     /// Reads the host's checked current-output echo and its matching checked routing leaf.
