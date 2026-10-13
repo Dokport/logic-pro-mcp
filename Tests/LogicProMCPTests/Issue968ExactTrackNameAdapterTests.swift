@@ -335,7 +335,8 @@ private final class ExactNameFixture: @unchecked Sendable {
         )
     }
 
-    func coupledCapture(link: String = "observed", peerStripName: String? = nil) async throws -> (SessionPopulationObservation.Capture, TargetReference, TargetReference, AXUIElement, AXUIElement) {
+    func coupledCapture(link: String = "observed", peerStripName: String? = nil,
+                        includePeerAssociation: Bool = false) async throws -> (SessionPopulationObservation.Capture, TargetReference, TargetReference, AXUIElement, AXUIElement) {
         let mixer = builder.element(968_170)
         let strip = builder.element(968_171)
         let name = builder.element(968_172)
@@ -372,6 +373,11 @@ private final class ExactNameFixture: @unchecked Sendable {
         var population = SessionPopulationObservation.FreshPopulation(project: await cache.getProject(),
             tracks: tracks, strips: strips, fileTrackCount: nil, beganAt: Date(), endedAt: Date(), stable: true)
         population.selectionAssociations = link == "missing" ? [] : (link == "duplicate" ? [pair, pair] : [pair])
+        if includePeerAssociation {
+            let peerTrack = try #require(tracks.dropFirst().first?.physicalBinding)
+            let peerStrip = try #require(strips.dropFirst().first?.physicalBinding)
+            population.selectionAssociations.append(.init(track: peerTrack, strip: peerStrip))
+        }
         population.uiEffects.restoration = "restored"
         let boundary = await cache.captureBoundary(watching: SessionPopulationObservation.watchedSections)
         let accepted = SessionPopulationObservation.AcceptedPopulation(
@@ -399,7 +405,7 @@ private final class ExactNameFixture: @unchecked Sendable {
 
     func canonicalNameApproval(_ capture: SessionPopulationObservation.Capture, project: TargetReference,
                                target: TargetReference, desired: String, key: String,
-                               journal: SagaJournal) async throws -> ApprovedSessionRepair {
+                               journal: SagaJournal, mixerOrigin: TargetReference? = nil) async throws -> ApprovedSessionRepair {
         let request = SessionPopulationObservation.Request(domains: [.tracks, .strips, .associations])
         let report = SessionPopulationObservation.build(request: request, capture: capture)
         let json = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
@@ -409,7 +415,8 @@ private final class ExactNameFixture: @unchecked Sendable {
         #expect(retained)
         let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
             "project_ref": .string(project.rawValue),
-            "targets": .array([.object(["handle": .string("exact"), "track_ref": .string(target.rawValue)])])]
+            "targets": .array([.object(["handle": .string("exact"),
+                mixerOrigin == nil ? "track_ref" : "mixer_ref": .string((mixerOrigin ?? target).rawValue)])])]
         guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
             throw NSError(domain: "ExactNameFixture", code: 1)
         }
@@ -442,6 +449,226 @@ private actor ExactNameChannel: Channel {
 
 @Suite("#968 exact-local track naming adapter")
 struct Issue968ExactTrackNameAdapterTests {
+    @Test(arguments: ["healthy", "mirror_edit_after_write"])
+    func aMatchingMixerOriginRemainsVerifiedAlongsideAChangedTrackGoal(_ change: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = ExactNameFixture()
+                let (_, peer) = f.appendTrack(name: "Peer", selected: false)
+                let (capture, project, track, _, mirror) = try await f.coupledCapture(
+                    peerStripName: "Peer", includePeerAssociation: true)
+                let origin = try #require(capture.mixerReference(at: 1))
+                let peerMirror = try #require(f.coupledPeerNameField)
+                let request = SessionPopulationObservation.Request(domains: [.tracks, .strips, .associations])
+                let report = SessionPopulationObservation.build(request: request, capture: capture)
+                let retained = await f.cache.retainSessionReport(id: capture.captureID,
+                    json: String(decoding: try JSONEncoder().encode(report), as: UTF8.self),
+                    capturedEpoch: capture.projectEpoch, capturedPath: capture.project.filePath,
+                    capture: capture, request: request)
+                #expect(retained)
+                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue), "targets": .array([
+                        .object(["handle": .string("changed"), "track_ref": .string(track.rawValue)]),
+                        .object(["handle": .string("matching"), "mixer_ref": .string(origin.rawValue)])])]
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                    Issue.record("the mixed physical-origin naming policy must parse"); return
+                }
+                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: [.init(target: "changed", name: "C"), .init(target: "matching", name: "Peer")],
+                    capture: capture, request: request, snapshotCurrent: true)
+                let stored = await f.cache.retainRepairPlan(plan, snapshotID: capture.captureID)
+                #expect(stored)
+                let journal = SagaJournal()
+                let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
+                    key: "mixed-mixer-origin", cache: f.cache, registry: f.registry, journal: journal))
+                f.onConfirm = {
+                    f.builder.setAttribute(mirror, kAXValueAttribute as String,
+                        f.builder.attributeValue(f.field, kAXDescriptionAttribute as String))
+                    if change == "mirror_edit_after_write" {
+                        f.builder.setAttribute(peerMirror, kAXValueAttribute as String, "Human Mixer")
+                    }
+                }
+                let runtime = f.runtime
+                let result = await SystemDispatcher.handle(command: "saga_execute", params: [:], router: f.router,
+                    cache: f.cache, targetRegistry: f.registry, dialogPresent: { false },
+                    sagaJournal: journal, mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {},
+                    liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
+                    liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
+                    sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if change == "healthy" {
+                    #expect(body["saga_state"] as? String == "completed")
+                    let verified = try #require(body["verified"] as? Bool)
+                    #expect(verified)
+                } else {
+                    let verified = body["verified"] as? Bool ?? false
+                    #expect(!verified)
+                }
+                #expect(f.writes == ["C"])
+                #expect(f.builder.attributeValue(peer, kAXDescriptionAttribute as String) as? String == "Peer")
+            }
+        }
+    }
+
+    @Test(arguments: ["healthy", "mirror_edit", "mirror_retired"])
+    func aMatchingMixerOriginRequiresFreshTwoSidedEvidenceWithoutWrites(_ change: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = ExactNameFixture()
+                let (capture, project, track, strip, mirror) = try await f.coupledCapture(peerStripName: "Peer")
+                let origin = try #require(capture.mixerReference(at: 0))
+                let journal = SagaJournal()
+                let approval = try await f.canonicalNameApproval(capture, project: project, target: track,
+                    desired: "A", key: "matching-mixer-origin", journal: journal, mixerOrigin: origin)
+                #expect(approval.plan.steps.isEmpty)
+                if change == "mirror_edit" { f.builder.setAttribute(mirror, kAXValueAttribute as String, "Human Mixer") }
+                if change == "mirror_retired" {
+                    let replacement = f.builder.element(968_298)
+                    f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                    f.builder.setChildren(replacement, [mirror])
+                    let mixer = try #require(capture.channelStrips.first?.physicalBinding?.mixer)
+                    let children = AXHelpers.getChildren(mixer, runtime: f.runtime.ax)
+                    f.builder.setChildren(mixer, children.map { CFEqual($0, strip) ? replacement : $0 })
+                }
+                let runtime = f.runtime
+                let result = await SystemDispatcher.handle(command: "saga_execute", params: [:], router: f.router,
+                    cache: f.cache, targetRegistry: f.registry, dialogPresent: { false },
+                    sagaJournal: journal, mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {},
+                    liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
+                    liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
+                    sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if change == "healthy" {
+                    #expect(body["saga_state"] as? String == "completed")
+                    let verified = try #require(body["verified"] as? Bool)
+                    #expect(verified)
+                } else {
+                    #expect(body["state"] as? String == "C")
+                }
+                #expect(f.writes.isEmpty)
+                #expect(f.routedOperations.isEmpty)
+                #expect(f.builder.attributeValue(f.field, kAXDescriptionAttribute as String) as? String == "A")
+            }
+        }
+    }
+
+    @Test func aPhysicalMixerOriginUsesItsCapturedPairAndTheExistingCoupledTrackSaga() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = ExactNameFixture()
+                let (_, peer) = f.appendTrack(name: "Peer", selected: false)
+                let (capture, project, track, _, mirror) = try await f.coupledCapture(peerStripName: "Peer")
+                let mixer = try #require(capture.mixerReference(at: 0))
+                let desired = "Mixer-origin, \"한글\" 😀"
+                let request = SessionPopulationObservation.Request(domains: [.tracks, .strips, .associations])
+                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue),
+                    "targets": .array([.object(["handle": .string("exact"), "mixer_ref": .string(mixer.rawValue)])])]
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                    Issue.record("An exact physical Mixer naming origin must parse without pretending to be a Track reference")
+                    return
+                }
+                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: [.init(target: "exact", name: desired)], capture: capture,
+                    request: request, snapshotCurrent: true)
+                let body = try #require(sharedJSONObject(plan.json))
+                let executable = try #require(body["executable"] as? Bool)
+                #expect(executable)
+                let step = try #require((body["steps"] as? [[String: Any]])?.first)
+                #expect(step["target_ref"] as? String == track.rawValue)
+                #expect(step["requested_mixer_ref"] as? String == mixer.rawValue)
+                let after = try #require(step["coupled_after"] as? [[String: String]])
+                #expect(after == [["target_ref": track.rawValue, "name": desired],
+                                  ["target_ref": mixer.rawValue, "name": desired]])
+                let wire = try JSONDecoder().decode(Value.self, from: Data(plan.json.utf8))
+                #expect(wire.objectValue?["steps"] == wire.objectValue?["preview"])
+                #expect(wire.objectValue?["approved_policy"] == .object(raw))
+                let repeated = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: [.init(target: "exact", name: desired)], capture: capture,
+                    request: request, snapshotCurrent: true)
+                #expect(plan.digest == repeated.digest)
+                let report = SessionPopulationObservation.build(request: request, capture: capture)
+                let retained = await f.cache.retainSessionReport(id: capture.captureID,
+                    json: String(decoding: try JSONEncoder().encode(report), as: UTF8.self),
+                    capturedEpoch: capture.projectEpoch, capturedPath: capture.project.filePath,
+                    capture: capture, request: request)
+                #expect(retained)
+                #expect(await f.cache.retainRepairPlan(plan, snapshotID: capture.captureID))
+                let journal = SagaJournal()
+                let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
+                    key: "physical-mixer-origin", cache: f.cache, registry: f.registry, journal: journal))
+                let runtime = f.runtime
+                let result = await SystemDispatcher.handle(command: "saga_execute", params: [:], router: f.router,
+                    cache: f.cache, targetRegistry: f.registry, dialogPresent: { false },
+                    sagaJournal: journal, mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {},
+                    liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
+                    liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
+                    sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
+                let outcome = try #require(sharedJSONObject(sharedToolText(result)))
+                #expect(outcome["saga_state"] as? String == "completed")
+                #expect(f.writes == [desired])
+                #expect(f.routedOperations == ["track.rename"])
+                #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == desired)
+                #expect(f.builder.attributeValue(peer, kAXDescriptionAttribute as String) as? String == "Peer")
+            }
+        }
+    }
+
+    @Test(arguments: ["missing", "duplicate", "different_name", "unmatched", "foreign_ref", "stale", "same_alias", "conflicting_alias"])
+    func aMixerOriginCannotGuessOrDuplicateItsCoupledTrackGoal(_ fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = ExactNameFixture()
+                let (capture, project, track, _, _) = try await f.coupledCapture(link: fault, peerStripName: "Peer")
+                let mixer = try #require(capture.mixerReference(at: fault == "unmatched" ? 1 : 0))
+                var targets: [Value] = [.object(["handle": .string("exact"), "mixer_ref":
+                    .string(fault == "foreign_ref" ? "mix_unissued" : mixer.rawValue)])]
+                var names: [ProjectSessionAudit.ApprovedName] = [.init(target: "exact", name: "Desired")]
+                if fault.hasSuffix("alias") {
+                    targets.append(.object(["handle": .string("track"), "track_ref": .string(track.rawValue)]))
+                    names.append(.init(target: "track", name: fault == "same_alias" ? "Desired" : "Other"))
+                }
+                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue), "targets": .array(targets)]
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                    Issue.record("The structured naming request must reach captured-pair validation: \(fault)")
+                    return
+                }
+                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                    names: names, capture: capture,
+                    request: .init(domains: [.tracks, .strips, .associations]), snapshotCurrent: fault != "stale")
+                let body = try #require(sharedJSONObject(plan.json))
+                let executable = try #require(body["executable"] as? Bool)
+                #expect(!executable)
+                let steps = try #require(body["steps"] as? [[String: Any]])
+                #expect(steps.count == names.count)
+                #expect(steps.first?["requested_mixer_ref"] as? String == (fault == "foreign_ref" ? "mix_unissued" : mixer.rawValue))
+                let reasons = try #require(body["reasons"] as? [String])
+                #expect(!reasons.isEmpty)
+                #expect(f.writes.isEmpty)
+                #expect(f.routedOperations.isEmpty)
+            }
+        }
+    }
+
+    @Test(arguments: ["both_refs", "mixer_as_track", "track_as_mixer", "output", "send", "presentation"])
+    func typedMixerNamingOriginsCannotImportTrackOrNonNamingAuthority(_ fault: String) {
+        var target: [String: Value] = ["handle": .string("exact"), "mixer_ref": .string("mix_origin")]
+        if fault == "both_refs" { target["track_ref"] = .string("trk_origin") }
+        if fault == "mixer_as_track" { target = ["handle": .string("exact"), "track_ref": .string("mix_origin")] }
+        if fault == "track_as_mixer" { target["mixer_ref"] = .string("trk_origin") }
+        var raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+            "project_ref": .string("prj_origin"), "targets": .array([.object(target)])]
+        if fault == "output" { raw["outputs"] = .array([.object(["target": .string("exact"), "bus": .int(3)])]) }
+        if fault == "send" { raw["sends"] = .array([.object(["target": .string("exact"), "physical_slot": .int(0), "bus": .int(3)])]) }
+        if fault == "presentation" { raw["presentation"] = .object(["mixer_visible": .bool(true)]) }
+        guard case .rejected(let reasons) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+            Issue.record("Invalid physical-origin namespace or non-naming authority must be rejected: \(fault)")
+            return
+        }
+        #expect(!reasons.isEmpty)
+    }
+
     @Test(arguments: ["Canonical, \"한글\" 😀", "Peer"])
     func aRetainedSingleCoupledNameUsesTheExistingCanonicalSaga(_ desired: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
