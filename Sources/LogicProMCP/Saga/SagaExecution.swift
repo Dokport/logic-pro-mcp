@@ -179,6 +179,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     private var pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var footprint: [SendSlotObservation]?
     private var removal: AccessibilityChannel.RemovedSendObservation?
+    private var change: AccessibilityChannel.ChangedSendObservation?
     private var restored: AccessibilityChannel.CheckedOutputReading?
     private var attempted = false
     private var inverseConsumed = false
@@ -189,7 +190,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
               step.targetRef != nil,
               Set(step.params.keys).subtracting(["ordinal", "destination", "expected_current", "replace_existing", "project_ref"]).isEmpty,
               step.params["ordinal"]?.intValue.map({ $0 >= 0 }) == true,
-              step.params["destination"] == .object(["kind": .string("no_send")]),
+              step.params["destination"] == .object(["kind": .string("no_send")]) || busDestination(step) != nil,
               step.params["expected_current"] == .object(["kind": .string("stereo_output")]),
               step.params["replace_existing"] == .bool(true),
               step.expectedInverse == .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination") else { return false }
@@ -197,6 +198,13 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
             guard let value = project.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         }
         return true
+    }
+
+    private static func busDestination(_ step: SagaStep) -> OutputAssignment? {
+        guard let value = step.params["destination"]?.objectValue,
+              Set(value.keys) == ["kind", "number"], value["kind"] == .string("bus"),
+              let number = value["number"]?.intValue, OutputAssignment.busNumbers.contains(number) else { return nil }
+        return .bus(number)
     }
 
     init?(plan: SagaPlan) {
@@ -209,13 +217,14 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
         if step == forward { return true }
         var inverse = forward.params
         inverse["destination"] = .string("stereo_output")
-        return removal != nil && step.operationID == forward.operationID
+        return (removal != nil || change != nil) && step.operationID == forward.operationID
             && step.targetRef == forward.targetRef && step.params == inverse
             && step.expectedInverse == forward.expectedInverse
     }
 
     static func journalValue(_ step: SagaStep) -> Value? {
-        step.params["destination"] == .object(["kind": .string("no_send")]) ? .string("no_send") : nil
+        if step.params["destination"] == .object(["kind": .string("no_send")]) { return .string("no_send") }
+        return busDestination(step).map { .string($0.token) }
     }
 
     private func scope<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
@@ -236,9 +245,16 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                     operation: "saga.send_removal") == nil else { return nil }
             let token: String
             let source: SagaReadSource
-            if let restored = self.restored, let removed = self.removal, let pair = self.pair {
+            if let restored = self.restored, let pair = self.pair,
+               let original = self.removal?.source.pair.strip ?? self.change?.source.pair.strip {
                 let checked = await AccessibilityChannel.readRestoredSendObservation(restored,
-                    original: removed.source.pair.strip, runtime: pair.track.runtime)
+                    original: original, runtime: pair.track.runtime)
+                guard let assignment = checked.assignment else { return nil }
+                token = assignment.token; source = .axSendMenuCheckmark
+            } else if let changed = self.change {
+                guard !self.inverseConsumed else { return nil }
+                let checked = await AccessibilityChannel.readChangedSendObservation(changed,
+                    runtime: changed.source.pair.track.runtime)
                 guard let assignment = checked.assignment else { return nil }
                 token = assignment.token; source = .axSendMenuCheckmark
             } else if let removed = self.removal {
@@ -283,7 +299,15 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Native removal custody unavailable")
             }
             let response: CallTool.Result
-            if let removed = self.removal {
+            if let changed = self.change {
+                guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime) else {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
+                }
+                self.inverseConsumed = true
+                let restored = await AccessibilityChannel.restoreChangedSendObservation(changed, runtime: held.track.runtime)
+                self.restored = restored
+                response = toolTextResult(restored.result)
+            } else if let removed = self.removal {
                 guard !self.inverseConsumed, removed.permits(runtime: held.track.runtime) else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned empty send is no longer current")
                 }
@@ -299,14 +323,23 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 var params = self.forward.params
                 params["target_ref"] = .string(self.forward.targetRef!.rawValue)
                 let upstream = AccessibilityChannel.sendRemovalObserver
-                response = await AccessibilityChannel.$sendRemovalObserver.withValue({ proof in
-                    if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track) {
-                        self.removal = proof
-                        upstream?(proof)
+                let upstreamChange = AccessibilityChannel.sendChangeObserver
+                response = await AccessibilityChannel.$sendChangeObserver.withValue({ proof in
+                    if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track),
+                       proof.checkedBefore == .stereoOutput, proof.checkedAfter == Self.busDestination(self.forward) {
+                        self.change = proof
+                        upstreamChange?(proof)
                     }
                 }) {
-                    await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
-                        router: router, cache: cache, targetRegistry: registry)
+                    await AccessibilityChannel.$sendRemovalObserver.withValue({ proof in
+                        if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track) {
+                            self.removal = proof
+                            upstream?(proof)
+                        }
+                    }) {
+                        await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                            router: router, cache: cache, targetRegistry: registry)
+                    }
                 }
             }
             let mapped = ProductionSagaStepExecutor.mapResponse(response, operationID: step.operationID)
