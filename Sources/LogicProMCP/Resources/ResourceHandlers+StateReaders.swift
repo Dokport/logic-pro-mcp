@@ -29,6 +29,11 @@ extension ResourceHandlers {
             {"state":\(inner),"has_document":\(hasDocument)}
             """
         var extras = transportStateEnvelopeExtras(liveRefresh: liveRefresh, cachedState: state)
+        // The state model preserves a historical 120 default. Only the existing observed-tempo
+        // channel read supplies gap-sizing evidence; absence must not become that default.
+        if liveRefresh.state != nil, let observedTempo = await TransportDispatcher.observedTempo(router: router) {
+            extras["observed_tempo"] = observedTempo
+        }
         if FeatureFlags.adr006VersionedCache {
             extras.merge(versionedCacheExtras(
                 projectEpoch: await targetRegistry?.currentProjectEpoch ?? 0,

@@ -142,7 +142,8 @@ struct QualificationMutationRestoreRecord: Codable, Equatable, Sendable {
         // the write's movement is shown by the readback being where the operation puts the
         // transport, which the state just before the write never is.
         if let expected = QualificationTransport.transportExpectedPlaying[operation] {
-            return Self.transportState(after)?["isPlaying"] as? Bool == expected
+            return QualificationTransport.recordedTransportMotion(readback)
+                == (operation == .transportPause ? .paused : (expected ? .moving : .stopped))
         }
         return Self.sameRecipeValue(operation, before, after) == false
     }
@@ -196,8 +197,10 @@ struct QualificationMutationRestoreRecord: Codable, Equatable, Sendable {
             return observedSelection == oldSelection
         }
         if QualificationTransport.transportExpectedPlaying[operation] != nil {
-            guard let old = Self.transportState(before)?["isPlaying"] as? Bool,
-                  let observed = Self.transportState(after)?["isPlaying"] as? Bool else { return nil }
+            guard let oldData = try? JSONSerialization.data(withJSONObject: before),
+                  let observedData = try? JSONSerialization.data(withJSONObject: after),
+                  let old = QualificationTransport.recordedTransportMotion(String(decoding: oldData, as: UTF8.self)),
+                  let observed = QualificationTransport.recordedTransportMotion(String(decoding: observedData, as: UTF8.self)) else { return nil }
             return old == observed
         }
         if let field = QualificationTransport.parameterlessToggleField[operation] {
@@ -1522,7 +1525,7 @@ struct QualificationTransport: Sendable {
                             } catch {
                                 phaseBRefusal = Self.observedFailureReason(
                                     from: error, during: "phase_b recipe")
-                                nextID += 16
+                                nextID += 32
                             }
                         }
                         if spec.id == .tracksSelect {
@@ -2333,14 +2336,71 @@ struct QualificationTransport: Sendable {
     static let transportExpectedPlaying: [OperationID: Bool] = [
         .transportPlay: true,
         .transportStop: false,
-        // `pause` targets the same observable as `stop` — Logic's pause halts the running
-        // transport, and the dispatcher verifies `isPlaying == false` for both. It is here rather
-        // than folded into `stop` because it is a distinct operation whose own evidence was
-        // missing; what it shares is the field, not the identity. `record` is deliberately NOT
+        // Pause leaves Play ON with the playhead stationary. The cycle below distinguishes
+        // that mode with two independent, tempo-separated position reads, not this bit alone.
+        // `record` is deliberately NOT
         // here: its readback would be the same flag, and running it would write audio into the
         // fixture, which belongs to Phase C-live with a disposable project.
-        .transportPause: false,
+        .transportPause: true,
     ]
+
+    enum TransportMotion: Equatable {
+        case stopped, paused, moving
+
+        var restoreCommand: String {
+            switch self {
+            case .stopped: "stop"
+            case .paused: "pause"
+            case .moving: "play"
+            }
+        }
+    }
+
+    /// Record-local evidence only; a single Play-on snapshot cannot answer the motion question.
+    static func recordedTransportMotion(_ raw: String) -> TransportMotion? {
+        guard let data = raw.data(using: .utf8),
+              let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = envelope["data"] as? [String: Any],
+              let state = payload["state"] as? [String: Any],
+              let playing = state["isPlaying"] as? Bool else { return nil }
+        if !playing { return .stopped }
+        guard let samples = envelope["qualification_motion_samples"] as? [[String: Any]],
+              samples.count == 2,
+              let gap = envelope["qualification_motion_gap_ms"] as? Double else { return nil }
+        var positions: [String] = []
+        var tempos: [Double] = []
+        var cycles: [Bool?] = []
+        for sample in samples {
+            guard sample["source"] as? String == "ax_live",
+                  sample["unverified"] as? Bool != true,
+                  sample["ax_occluded"] as? Bool != true,
+                  let body = sample["data"] as? [String: Any],
+                  let value = body["state"] as? [String: Any],
+                  value["isPlaying"] as? Bool == true,
+                  let tempo = sample["observed_tempo"] as? Double,
+                  let position = value["position"] as? String, !position.isEmpty,
+                  let witness = value["positionReadback"] as? [String: Any],
+                  witness["value"] as? String == position,
+                  let components = witness["observedComponents"] as? [String],
+                  components.starts(with: ["bar", "beat"]) else { return nil }
+            positions.append(position)
+            tempos.append(tempo)
+            cycles.append(value["observedCycleEnabled"] as? Bool)
+        }
+        guard tempos[0] == tempos[1], envelope["observed_tempo"] as? Double == tempos[1],
+              state["position"] as? String == positions[1],
+              let required = TransportDispatcher.pauseStillnessGapNanoseconds(tempo: tempos[0]),
+              gap >= Double(required) / 1_000_000 else { return nil }
+        if positions[0] == positions[1] {
+            // A loop can alias two sampled positions. Missing/ON Cycle is not proof of pause.
+            guard cycles.allSatisfy({ cycle in
+                guard let cycle else { return false }
+                return !cycle
+            }) else { return nil }
+            return .paused
+        }
+        return .moving
+    }
 
     private func observedPlaying(
         _ session: QualificationSubprocessSession,
@@ -2354,13 +2414,48 @@ struct QualificationTransport: Sendable {
             session, id: id + 1, uri: "logic://transport/state", phase: phase)
         let raw = String(decoding: data, as: UTF8.self)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["source"] as? String == "ax_live",
+              object["unverified"] as? Bool != true,
+              object["ax_occluded"] as? Bool != true,
               let payload = object["data"] as? [String: Any],
               let state = payload["state"] as? [String: Any],
               let playing = state["isPlaying"] as? Bool else {
             throw QualificationTransportError.protocolViolation(
-                "\(phase): logic://transport/state did not report isPlaying")
+                "\(phase): logic://transport/state did not report observed isPlaying")
         }
         return (playing, raw)
+    }
+
+    private func observedTransportMotion(
+        _ session: QualificationSubprocessSession,
+        nextID: inout Int,
+        phase: String
+    ) throws -> (motion: TransportMotion, raw: String) {
+        let first = try observedPlaying(session, id: nextID, phase: phase)
+        nextID += 2
+        if !first.playing { return (.stopped, first.raw) }
+        guard let data = first.raw.data(using: .utf8),
+              let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tempo = envelope["observed_tempo"] as? Double,
+              let gap = TransportDispatcher.pauseStillnessGapNanoseconds(tempo: tempo) else {
+            throw QualificationTransportError.protocolViolation("\(phase): transport motion tempo unavailable")
+        }
+        Thread.sleep(forTimeInterval: Double(gap) / 1_000_000_000)
+        let second = try observedPlaying(session, id: nextID, phase: "\(phase).motion_confirming")
+        nextID += 2
+        guard second.playing,
+              let secondData = second.raw.data(using: .utf8),
+              var secondEnvelope = try JSONSerialization.jsonObject(with: secondData) as? [String: Any] else {
+            throw QualificationTransportError.protocolViolation("\(phase): Play changed while observing motion")
+        }
+        secondEnvelope["qualification_motion_samples"] = [envelope, secondEnvelope]
+        secondEnvelope["qualification_motion_gap_ms"] = Double(gap) / 1_000_000
+        let raw = String(decoding: try JSONSerialization.data(withJSONObject: secondEnvelope,
+            options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+        guard let motion = Self.recordedTransportMotion(raw) else {
+            throw QualificationTransportError.protocolViolation("\(phase): transport position motion unavailable")
+        }
+        return (motion, raw)
     }
 
     /// #373 Phase B for transport. Same five steps, with one extra obligation the others do not
@@ -2379,22 +2474,34 @@ struct QualificationTransport: Sendable {
         expectedPlaying: Bool
     ) throws -> (record: QualificationMutationRestoreRecord, nextID: Int) {
         var nextID = id
-        func readStep() -> Int { defer { nextID += 2 }; return nextID }
         func step() -> Int { defer { nextID += 1 }; return nextID }
-        let inverse = expectedPlaying ? "stop" : "play"
+        let expected: TransportMotion = spec.id == .transportPause ? .paused : (expectedPlaying ? .moving : .stopped)
+        let inverse = expected == .moving ? "stop" : "play"
 
-        let pre = try observedPlaying(session, id: readStep(), phase: "phase_b.pre_state")
-        if pre.playing == expectedPlaying {
+        let pre = try observedTransportMotion(session, nextID: &nextID, phase: "phase_b.pre_state")
+        var needsRestore = false
+        defer {
+            if needsRestore {
+                // A staged precondition is acquired work too. A later refused mutation/readback
+                // must not leave it behind; failure still carries no verified cycle record.
+                _ = try? invoke(session, id: nextID + 900, tool: spec.tool.rawValue,
+                    command: pre.motion.restoreCommand, params: [:],
+                    phase: "phase_b.cleanup", timeout: spec.deadline.seconds + 5)
+            }
+        }
+        if pre.motion == expected || (expected == .paused && pre.motion != .moving) {
+            needsRestore = true
             _ = try invoke(
                 session, id: step(), tool: spec.tool.rawValue, command: inverse,
                 params: [:], phase: "phase_b.precondition")
-            let staged = try observedPlaying(
-                session, id: readStep(), phase: "phase_b.precondition_readback")
-            guard staged.playing != expectedPlaying else {
+            let staged = try observedTransportMotion(
+                session, nextID: &nextID, phase: "phase_b.precondition_readback")
+            guard staged.motion == (expected == .moving ? .stopped : .moving) else {
                 throw QualificationTransportError.protocolViolation(
-                    "phase_b.precondition: could not stage isPlaying != \(expectedPlaying)")
+                    "phase_b.precondition: could not stage independent transport motion")
             }
         }
+        needsRestore = true
         let mutation = try invoke(
             session, id: step(), tool: spec.tool.rawValue, command: spec.command,
             params: [:], phase: "phase_b.mutation",
@@ -2404,20 +2511,21 @@ struct QualificationTransport: Sendable {
                 "phase_b.mutation: \(spec.id.rawValue) refused the real request: "
                     + mutation.text.prefix(220))
         }
-        let after = try observedPlaying(session, id: readStep(), phase: "phase_b.readback")
-        guard after.playing == expectedPlaying else {
+        let after = try observedTransportMotion(session, nextID: &nextID, phase: "phase_b.readback")
+        guard after.motion == expected else {
             throw QualificationTransportError.protocolViolation(
-                "phase_b.readback: isPlaying is \(after.playing), expected \(expectedPlaying)")
+                "phase_b.readback: independent transport motion differs from requested mode")
         }
         let restore = try invoke(
             session, id: step(), tool: spec.tool.rawValue,
-            command: pre.playing ? "play" : "stop", params: [:], phase: "phase_b.restore")
-        let restored = try observedPlaying(
-            session, id: readStep(), phase: "phase_b.restore_readback")
-        guard restored.playing == pre.playing else {
+            command: pre.motion.restoreCommand, params: [:], phase: "phase_b.restore")
+        let restored = try observedTransportMotion(
+            session, nextID: &nextID, phase: "phase_b.restore_readback")
+        guard restored.motion == pre.motion else {
             throw QualificationTransportError.protocolViolation(
-                "phase_b.restore_readback: isPlaying is \(restored.playing), expected \(pre.playing)")
+                "phase_b.restore_readback: independent transport motion was not restored")
         }
+        needsRestore = false
         return (
             QualificationMutationRestoreRecord(
                 operationID: spec.id.rawValue,
@@ -4274,6 +4382,11 @@ struct QualificationTransport: Sendable {
             // as `analyze_file`. Reusing the measured system sound exercises the real analysis
             // path; omitting it merely tests that the dispatcher refuses missing input.
             return ["path": Self.qualificationAudioProbePath]
+        case .audioCompareSpectra:
+            // Same-file comparison exercises the shipped reader without editing either input.
+            // This supplies missing inputs; the shape-only oracle gains no numerical authority.
+            return ["before_path": Self.qualificationAudioProbePath,
+                    "after_path": Self.qualificationAudioProbePath]
         case .audioRecommendEQ:
             // Ping's measured level confidence is 0.538. Its default 0.6 recommendation threshold
             // correctly returns the safe `level_below_minimum` branch, but this probe needs to
@@ -4316,6 +4429,9 @@ struct QualificationTransport: Sendable {
     }
 
     static func readbackSource(for spec: OperationSpec) -> String {
+        // These existing recipes mutate and restore the exact track scalar. Their final
+        // independent read must use that same surface, not require a separately visible Mixer.
+        if valueRestoreReadbackField[spec.id] != nil { return "logic://tracks" }
         switch spec.tool {
         case .logicTransport:
             return "logic://transport/state"

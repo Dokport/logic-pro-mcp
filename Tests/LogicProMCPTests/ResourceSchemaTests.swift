@@ -207,7 +207,8 @@ private func normalizedHealthJSON(_ text: String) throws -> [String: Any] {
     let json = envelope["data"] as! [String: Any]
     let state = json["state"] as! [String: Any]
 
-    #expect(await channel.executedOperations() == ["transport.get_state"])
+    #expect(await channel.executedOperations() == ["transport.get_state", "transport.get_tempo"])
+    #expect(envelope["observed_tempo"] == nil, "the declined tempo read must not promote the model's tempo")
     #expect(envelope["source"] as? String == "ax_live")
     #expect(!((state["isPlaying"] as? Bool)!))
     #expect(state["tempo"] as? Double == 90.5)

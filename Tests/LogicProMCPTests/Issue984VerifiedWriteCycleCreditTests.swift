@@ -331,35 +331,60 @@ struct Issue984VerifiedWriteCycleCreditTests {
     }
 
     private static func transportRecord(
-        _ operation: OperationID, pre: Bool, readback: Bool, restored: Bool
-    ) -> QualificationMutationRestoreRecord {
-        func state(_ playing: Bool) -> String {
-            #"{"source":"ax_live","data":{"state":{"isPlaying":\#(playing)}}}"#
+        _ operation: OperationID,
+        pre: QualificationTransport.TransportMotion,
+        readback: QualificationTransport.TransportMotion,
+        restored: QualificationTransport.TransportMotion
+    ) throws -> QualificationMutationRestoreRecord {
+        func state(_ motion: QualificationTransport.TransportMotion) throws -> String {
+            func sample(_ position: String) -> [String: Any] {
+                ["source": "ax_live", "observed_tempo": 120,
+                 "data": ["state": ["isPlaying": motion != .stopped,
+                    "observedCycleEnabled": false, "position": position,
+                    "positionReadback": ["value": position,
+                        "observedComponents": ["bar", "beat"]]]]]
+            }
+            let first = sample("1.1")
+            var last = sample(motion == .moving ? "1.2" : "1.1")
+            if motion != .stopped {
+                last["qualification_motion_samples"] = [first, last]
+                last["qualification_motion_gap_ms"] = 1_000
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: last), as: UTF8.self)
         }
         return QualificationMutationRestoreRecord(
             operationID: operation.rawValue,
-            preState: state(pre),
+            preState: try state(pre),
             mutation: #"{"state":"A","success":true}"#,
-            readback: state(readback),
+            readback: try state(readback),
             restore: #"{"state":"A","success":true}"#,
-            restoreReadback: state(restored)
+            restoreReadback: try state(restored)
         )
     }
 
     /// `transportRestoreCycle` records its pre-state before its precondition stage, so a transport
     /// already where the operation puts it gives pre-state == readback on a genuine cycle.
-    @Test func aStagedTransportCycleEarnsCreditAndAMisplacedReadbackDoesNot() {
+    @Test func aStagedTransportCycleEarnsCreditAndAMisplacedReadbackDoesNot() throws {
         #expect(QualificationTransport.transportExpectedPlaying.count == 3)
-        for (operation, expected) in QualificationTransport.transportExpectedPlaying {
-            #expect(Self.transportRecord(
-                operation, pre: expected, readback: expected, restored: expected
-            ).verifiedCycleShape, "staged \(operation.rawValue)")
-            #expect(Self.transportRecord(
-                operation, pre: !expected, readback: expected, restored: !expected
-            ).verifiedCycleShape, "unstaged \(operation.rawValue)")
-            #expect(!Self.transportRecord(
-                operation, pre: expected, readback: !expected, restored: expected
-            ).verifiedCycleShape, "misplaced \(operation.rawValue)")
+        let modes: [QualificationTransport.TransportMotion] = [.stopped, .paused, .moving]
+        for (operation, expectedPlaying) in QualificationTransport.transportExpectedPlaying {
+            let expected: QualificationTransport.TransportMotion = operation == .transportPause
+                ? .paused : (expectedPlaying ? .moving : .stopped)
+            for original in modes {
+                #expect(try Self.transportRecord(
+                    operation, pre: original, readback: expected, restored: original
+                ).verifiedCycleShape, "\(operation.rawValue) from \(original)")
+            }
+            for misplaced in modes where misplaced != expected {
+                #expect(try !Self.transportRecord(
+                    operation, pre: expected, readback: misplaced, restored: expected
+                ).verifiedCycleShape, "misplaced \(operation.rawValue): \(misplaced)")
+            }
+            let playBitOnly = #"{"source":"ax_live","data":{"state":{"isPlaying":true}}}"#
+            #expect(!QualificationMutationRestoreRecord(operationID: operation.rawValue,
+                preState: playBitOnly, mutation: #"{"state":"A","success":true}"#,
+                readback: playBitOnly, restore: #"{"state":"A","success":true}"#,
+                restoreReadback: playBitOnly).verifiedCycleShape)
         }
     }
 

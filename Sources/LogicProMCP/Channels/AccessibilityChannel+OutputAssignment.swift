@@ -601,8 +601,9 @@ extension AccessibilityChannel {
     }
 
     /// Unknown routing evidence is not empty. Require one explicitly checked
-    /// No Send leaf, the retained raw mode checks, and every other routing leaf
-    /// and echo known unchecked. This grants no authority without source custody.
+    /// No Send leaf and every routing leaf/echo known unchecked. Empty Send menus
+    /// can disable the retained mode rows instead of checking them; final recreated
+    /// mode readback still must match the capsule. This grants no source authority.
     static func checkedRemovedSendMenu(in root: AXUIElement, nonRoutingChecks: [String],
         runtime: AXHelpers.Runtime) -> Bool {
         func mark(_ element: AXUIElement) -> String? {
@@ -635,7 +636,18 @@ extension AccessibilityChannel {
                 }
             }
         }
-        return checkedNoSend == 1 && checkedModes == nonRoutingChecks
+        guard checkedNoSend == 1 else { return false }
+        if checkedModes == nonRoutingChecks { return true }
+        guard checkedModes.isEmpty else { return false }
+        return nonRoutingChecks.allSatisfy { title in
+            let modes = items.filter { !$0.hasSubmenu && $0.title == title }
+            guard modes.count == 1, let mode = modes.first, mark(mode.element) == "" else { return false }
+            let enabled: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(mode.element,
+                kAXEnabledAttribute as String, runtime: runtime)
+            guard case .success(.some(let raw)) = enabled, CFGetTypeID(raw) == CFBooleanGetTypeID(),
+                  let value = raw as? Bool else { return false }
+            return !value
+        }
     }
 
     /// Reads the host's checked current-output echo and its matching checked routing leaf.

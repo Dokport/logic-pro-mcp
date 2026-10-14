@@ -32,6 +32,9 @@ struct TransportState: Sendable, Codable {
     var isPlaying: Bool = false
     var isRecording: Bool = false
     var isCycleEnabled: Bool = false
+    /// Only an observed unique own Control Bar checkbox sets this. The legacy flag's false
+    /// default is not evidence that an absent/unreadable Cycle control was observed off.
+    var observedCycleEnabled: Bool? = nil
     /// Nil means the metronome control was absent or its AX value could not be read.
     var isMetronomeEnabled: Bool? = nil
     var tempo: Double = 120.0
