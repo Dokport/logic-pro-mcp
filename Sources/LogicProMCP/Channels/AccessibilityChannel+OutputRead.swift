@@ -102,6 +102,7 @@ extension AccessibilityChannel {
         /// Request-local native proof only; never decoded from the wire receipt.
         var removedSend: RemovedSendObservation? = nil
         var restoredSend: RestoredSendObservation? = nil
+        var changedSend: ChangedSendObservation? = nil
     }
 
     static func setAssignedSendOutputVerified(params: [String: String],
@@ -129,12 +130,39 @@ extension AccessibilityChannel {
         /// nil is the explicitly scoped No Send action, never a No Output routing endpoint.
         let destination: OutputAssignment?
         var restoration: RemovedSendObservation? = nil
+        var occupiedInverse: ChangedSendObservation? = nil
     }
 
     static func readRestoredSendObservation(_ restored: CheckedOutputReading,
         original: AXMixerStripBinding.Binding, runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming = .live) async -> CheckedOutputReading {
-        guard let held = restored.restoredSend, held.source.original.matches(original), held.permits(runtime: runtime),
+        guard let held = restored.restoredSend else {
+            return .init(result: .error(HonestContract.encodeStateC(error: .staleTargetReference,
+                hint: "The exact restored source and occupied send control are no longer current.",
+                extras: ["write_attempted": false])), assignment: nil)
+        }
+        return await readOccupiedSendObservation(held, original: original, runtime: runtime, timing: timing)
+    }
+
+    static func readChangedSendObservation(_ changed: ChangedSendObservation,
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming = .live) async -> CheckedOutputReading {
+        guard changed.permits(runtime: runtime) else {
+            return .init(result: .error(HonestContract.encodeStateC(error: .staleTargetReference,
+                hint: "The exact changed source and occupied send control are no longer current.",
+                extras: ["write_attempted": false])), assignment: nil)
+        }
+        let reading = await readOccupiedSendObservation(.init(source: changed.source, control: changed.control,
+            population: changed.population), original: changed.source.original, runtime: runtime, timing: timing)
+        guard changed.permits(runtime: runtime), reading.sendNonRoutingChecks == changed.nonRoutingChecks else {
+            return .init(result: outputReadContextFailure(reading.result, operation: "mixer.get_send_destination_verified"), assignment: nil)
+        }
+        return reading
+    }
+
+    private static func readOccupiedSendObservation(_ held: RestoredSendObservation,
+        original: AXMixerStripBinding.Binding, runtime: AXLogicProElements.Runtime,
+        timing: OutputAssignmentTiming) async -> CheckedOutputReading {
+        guard held.source.original.matches(original), held.permits(runtime: runtime),
               let before = AXLogicProElements.sendSlotObservations(in: held.source.pair.strip.strip, runtime: runtime.ax) else {
             return .init(result: .error(HonestContract.encodeStateC(error: .staleTargetReference,
                 hint: "The exact restored source and occupied send control are no longer current.",
@@ -166,6 +194,21 @@ extension AccessibilityChannel {
                 await getCheckedRoutingDestination(params: [:], sendOrdinal: 0,
                     runtime: runtime, timing: timing, sendReplacement: .init(expected: removed.checkedDestination,
                         destination: removed.checkedDestination, restoration: removed))
+            }
+        }
+    }
+
+    static func restoreAssignedSendThroughRetainedOccupied(_ changed: ChangedSendObservation,
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming) async -> CheckedOutputReading {
+        guard changed.permits(runtime: runtime) else {
+            return .init(result: .error(HonestContract.encodeStateC(error: .staleTargetReference,
+                hint: "The exact changed occupied send is no longer owned.", extras: ["write_attempted": false])), assignment: nil)
+        }
+        return await AXMixerStripBinding.$current.withValue(changed.source.pair.strip) {
+            await AXMixerStripBinding.$outputAssociation.withValue(changed.source.pair) {
+                await getCheckedRoutingDestination(params: [:], sendOrdinal: changed.control.ordinal,
+                    runtime: runtime, timing: timing, sendReplacement: .init(expected: changed.checkedAfter,
+                        destination: changed.checkedBefore, occupiedInverse: changed))
             }
         }
     }
@@ -507,6 +550,12 @@ extension AccessibilityChannel {
                     return checkedRemovedSendMenu(in: root, nonRoutingChecks: restoration.nonRoutingChecks,
                         runtime: runtime.ax)
                 }
+                if let inverse = request.occupiedInverse {
+                    guard inverse.source.pair.strip.matches(physical),
+                          inverse.permits(runtime: runtime, ownedPopup: root),
+                          assigned.map({ inverse.control.matches($0) }) == true,
+                          sendChecks == inverse.nonRoutingChecks else { return false }
+                }
                 return first == request.expected && second == first && (!fresh || checkedChoice() == request.expected)
             }
             func normalized(_ slots: [SendSlotObservation]) -> [SendSlotObservation] {
@@ -569,6 +618,12 @@ extension AccessibilityChannel {
                       sameOriginalSendControl() else { return false }
                 if let restoration = request.restoration,
                    !restoration.source.permits(runtime: runtime, ownedPopup: root) { return false }
+                if let inverse = request.occupiedInverse {
+                    guard inverse.permits(runtime: runtime, ownedPopup: root),
+                          checkedChoice() == inverse.checkedAfter,
+                          sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == inverse.nonRoutingChecks,
+                          inverse.permits(runtime: runtime, ownedPopup: root) else { return false }
+                }
                 return writerMenuOwned()
             }
             func closeBeforeRefusal(_ error: HonestContract.FailureError, _ hint: String) -> CheckedOutputReading {
@@ -781,11 +836,14 @@ extension AccessibilityChannel {
                     return uncertain("The retired source did not renew through its exact original header with a verified inverse.")
                 }
                 let renewedOwner = source.pair.strip
+                var verifiedPopulation: [AXUIElement]?
                 func populationPreserved() -> Bool {
                     guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer,
                         runtime: runtime.ax)?.strips else { return false }
                     let expected = population.map { CFEqual($0, physical.strip) ? renewedOwner.strip : $0 }
-                    return current.count == expected.count && zip(current, expected).allSatisfy { CFEqual($0, $1) }
+                    guard current.count == expected.count && zip(current, expected).allSatisfy({ CFEqual($0, $1) }) else { return false }
+                    verifiedPopulation = current
+                    return true
                 }
                 guard let renewed = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax),
                       normalized(renewed.slots) == normalized(singleton.slots), populationPreserved(),
@@ -813,8 +871,26 @@ extension AccessibilityChannel {
                 extras["strip_count_after"] = population.count
                 extras["changed"] = true
                 extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
+                let change: ChangedSendObservation?
+                let observingChange = request.occupiedInverse != nil || (sendChangeObserver != nil
+                    && request.expected == .stereoOutput && request.destination.map {
+                        if case .bus = $0 { return true }; return false
+                    } == true)
+                if observingChange, let checkedAfter = after.assignment, let verifiedPopulation {
+                    let proof = ChangedSendObservation(source: source, control: final.control, footprint: final.slots,
+                        checkedBefore: request.expected, checkedAfter: checkedAfter,
+                        nonRoutingChecks: sendChecks, population: verifiedPopulation)
+                    guard proof.permits(runtime: runtime) else {
+                        return uncertain("The occupied change lost native custody before publication.")
+                    }
+                    change = proof
+                    if request.occupiedInverse == nil { sendChangeObserver?(proof) }
+                } else { change = nil }
                 return .init(result: .success(HonestContract.encodeStateA(extras: extras)),
-                    assignment: after.assignment, sendNonRoutingChecks: after.sendNonRoutingChecks)
+                    assignment: after.assignment, sendNonRoutingChecks: after.sendNonRoutingChecks,
+                    restoredSend: request.occupiedInverse == nil ? nil : change.map {
+                        .init(source: $0.source, control: $0.control, population: $0.population)
+                    }, changedSend: change)
             }
             let after = await getOutputObservation(runtime: runtime, sendOrdinal: sendOrdinal, timing: timing)
             if let data = after.result.message.data(using: .utf8), let receipt = try? JSONSerialization.jsonObject(with: data) {

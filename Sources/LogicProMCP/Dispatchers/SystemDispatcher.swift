@@ -296,6 +296,11 @@ struct SystemDispatcher: OperationTraceDispatching {
             separate from approved value targets and bound into plan_hash. Host display verifies forward \
             engineering targets; fresh raw state owns the raw_ax_value inverse. Q is not applied, \
             no raw/engineering conversion or automatic recommendation mapping is inferred. \
+            Selected Send Saga: one exact occupied Stereo Output send, Post Fader, raw level 0 and bypass off, \
+            may be removed or replaced by one existing Bus 1..256. Use its mix_ref and source-census ordinal, \
+            expected_current Stereo Output, replace_existing:true and confirmed_plan_hash. Native request-local \
+            custody plus independent checked reads govern compensation; no canonical physical-slot mapping, \
+            Aux creation, fresh-empty creation or general Send reversibility is inferred. \
             saga_status/saga_cancel -> { idempotency_key: String }; \
             setup_arm_key -> { consent: "true" } (one-time consent-gated Key Commands GUI \
             drive that assigns the coordinate-free record-arm chord; no mouse); \
@@ -918,7 +923,7 @@ struct SystemDispatcher: OperationTraceDispatching {
             let sendRemoval = SendRemovalSagaAdapter(plan: plan)
             if containsSend, sendRemoval == nil {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
-                    hint: "Only one exact occupied Stereo Output send removal is supported by this Saga adapter.",
+                    hint: "Only one exact occupied Stereo Output send removal or existing-bus replacement is supported by this Saga adapter.",
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             if pluginPlan || containsSend, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {

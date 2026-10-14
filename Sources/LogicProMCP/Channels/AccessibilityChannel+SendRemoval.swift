@@ -3,6 +3,42 @@ import Foundation
 
 extension AccessibilityChannel {
     @TaskLocal static var sendRemovalObserver: (@Sendable (RemovedSendObservation) -> Void)?
+    @TaskLocal static var sendChangeObserver: (@Sendable (ChangedSendObservation) -> Void)?
+
+    /// Native occupied-slot custody after one independently verified change.
+    /// The prior checked destination is inverse data, not permission to act.
+    struct ChangedSendObservation: @unchecked Sendable {
+        let source: OriginalHeaderSourceRenewal
+        let control: AXLogicProElements.AssignedSendMenuControl
+        let footprint: [SendSlotObservation]
+        let checkedBefore: OutputAssignment
+        let checkedAfter: OutputAssignment
+        let nonRoutingChecks: [String]
+        let population: [AXUIElement]
+
+        func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil) -> Bool {
+            func protected(_ slots: [SendSlotObservation]) -> [SendSlotObservation] {
+                slots.map { slot in
+                    var result = slot
+                    if result.ordinal == control.ordinal { result.destinationDisplay = nil }
+                    return result
+                }
+            }
+            guard source.permits(runtime: runtime, ownedPopup: ownedPopup),
+                  let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
+                    ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
+                  let slots = AXLogicProElements.sendSlotObservations(in: source.pair.strip.strip, runtime: runtime.ax),
+                  protected(slots) == protected(footprint),
+                  let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
+                  zip(census, population).allSatisfy({ CFEqual($0, $1) }) else { return false }
+            return source.permits(runtime: runtime, ownedPopup: ownedPopup)
+        }
+    }
+
+    static func restoreChangedSendObservation(_ changed: ChangedSendObservation,
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming = .live) async -> CheckedOutputReading {
+        await restoreAssignedSendThroughRetainedOccupied(changed, runtime: runtime, timing: timing)
+    }
 
     /// Immutable native handles for the source/control actually recreated by
     /// the owned inverse. Neither JSON nor a newly found singleton can recreate it.
