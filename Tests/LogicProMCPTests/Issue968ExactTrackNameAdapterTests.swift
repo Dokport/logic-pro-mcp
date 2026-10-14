@@ -43,6 +43,8 @@ private final class ExactNameFixture: @unchecked Sendable {
     var observedLogicPID: pid_t = 4242
     var observedFocusedPID: pid_t = 4242
     var logicIsFrontmost = true
+    var activationCalls = 0
+    var onActivation: (@Sendable () -> Bool)?
     var typingSleeps: [useconds_t] = []
     var onTypingSleep: (@Sendable (useconds_t) -> Void)?
     var legacyHeaderRoleFailureRead: Int?
@@ -258,7 +260,8 @@ private final class ExactNameFixture: @unchecked Sendable {
             ),
             processRuntime: ProcessUtils.Runtime(
                 logicProPID: { 4242 }, fallbackLogicProPID: { 4242 }, logicProRunning: { true },
-                activateLogicPro: { false }, logicIsFrontmost: { [self] in logicIsFrontmost }, logicProBundleURL: { nil }
+                activateLogicPro: { [self] in activationCalls += 1; return onActivation?() ?? false },
+                logicIsFrontmost: { [self] in logicIsFrontmost }, logicProBundleURL: { nil }
             )
         )
     }
@@ -456,6 +459,251 @@ private actor ExactNameChannel: Channel {
 
 @Suite("#968 exact-local track naming adapter")
 struct Issue968ExactTrackNameAdapterTests {
+    @Test func verifiedRenameKeepsItsFreshReferenceAfterObservedHistoryNameDrift() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture("Audio 1")
+            let (project, original) = try await f.prepare(typedProducer: true)
+            let first = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: original, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(first["state"] as? String == "A")
+            #expect(first["target_ref"] as? String == original.rawValue)
+            let held = try #require(await f.registry.resolve(original)?.physicalTrack)
+            // Model the independently read raw Undo effect. EditDispatcher does not
+            // rebind name identities, so this read must issue a genuinely fresh ref.
+            f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Audio 1")
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, "Audio 1")
+            let restoredRows = try #require(AccessibilityChannel.defaultGetTrackStates(runtime: f.runtime))
+        let restoredPhysicalOwnerMatches = try #require(restoredRows.first?.physicalBinding?.matches(held))
+        #expect(restoredPhysicalOwnerMatches)
+            await f.cache.updateTracks(restoredRows)
+            let snapshot = await f.registry.currentSnapshot
+            let observed = try #require(await TrackReferenceIssuance.issue(for: restoredRows,
+                registry: f.registry, snapshot: snapshot))
+            let fresh = try #require(observed.byTrackIndex[0])
+            #expect(fresh != original)
+            let second = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: fresh, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(second["state"] as? String == "A")
+            #expect(second["target_ref"] as? String == fresh.rawValue)
+            let published = try #require(await TrackReferenceIssuance.issue(for: await f.cache.getTracks(),
+                registry: f.registry, snapshot: snapshot))
+            #expect(published.byTrackIndex[0] == fresh,
+                "fresh publication must not select the historical alias by dictionary iteration")
+            #expect(await f.registry.resolve(original) == nil,
+                "the old name-drifted alias cannot regain authority after another ref's verified rename")
+            let writes = f.writes
+            let retired = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: original, expected: nil, desired: "Retired must not write"))))
+            #expect(retired["state"] as? String == "C")
+            #expect(f.writes == writes)
+            let inverse = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: fresh, expected: nil, desired: "Audio 1"))))
+            #expect(inverse["state"] as? String == "A")
+            #expect(await f.registry.resolve(fresh)?.descriptor.trackName == "Audio 1")
+        }
+    }
+
+    @Test(arguments: ["header", "window", "document", "name"])
+    func verifiedRenameDoesNotRetireAnotherOwnerOrNameAsAnAlias(_ difference: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture("Audio 1")
+            let (project, original) = try await f.prepare(typedProducer: true)
+            let first = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: original, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(first["state"] as? String == "A")
+            let held = try #require(await f.registry.resolve(original)?.physicalTrack)
+            f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Audio 1")
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, "Audio 1")
+            let rows = try #require(AccessibilityChannel.defaultGetTrackStates(runtime: f.runtime))
+            await f.cache.updateTracks(rows)
+            let snapshot = await f.registry.currentSnapshot
+            let refs = try #require(await TrackReferenceIssuance.issue(for: rows, registry: f.registry, snapshot: snapshot))
+            let fresh = try #require(refs.byTrackIndex[0])
+            #expect(fresh != original)
+            let otherPhysical = AXTrackBinding.Binding(
+                window: difference == "window" ? f.builder.element(968_321) : held.window,
+                header: difference == "header" ? f.builder.element(968_322) : held.header,
+                document: difference == "document" ? "file://localhost/tmp/ExactName.logicx" : held.document,
+                runtime: held.runtime)
+            let otherDescriptor = TargetDescriptor(trackIndex: 0,
+                trackName: difference == "name" ? "qualification_phase_b_probe " : "qualification_phase_b_probe")
+            let other = await f.registry.bind(kind: .track, descriptor: otherDescriptor,
+                fingerprint: otherDescriptor.fingerprint, physicalTrack: otherPhysical)
+            #expect(other != original && other != fresh)
+            #expect(await f.registry.resolve(other) != nil)
+            let second = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: fresh, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(second["state"] as? String == "A")
+            #expect(await f.registry.resolve(original) == nil)
+            #expect(await f.registry.resolve(other) != nil,
+                "a different physical scope or exact name is not a superseded alias")
+            let published = try #require(await TrackReferenceIssuance.issue(for: await f.cache.getTracks(),
+                registry: f.registry, snapshot: snapshot))
+            #expect(published.byTrackIndex[0] == fresh)
+            let writes = f.writes
+            let forbidden = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: other, expected: nil, desired: "Must not write"))))
+            #expect(forbidden["state"] as? String == "C")
+            #expect(f.writes == writes)
+        }
+    }
+
+    @Test func ambiguousPhysicalHeaderCannotAuthorizeRenameOrAliasRetirement() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture("Audio 1")
+            let (project, original) = try await f.prepare(typedProducer: true)
+            let first = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: original, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(first["state"] as? String == "A")
+            f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Audio 1")
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, "Audio 1")
+            let rows = try #require(AccessibilityChannel.defaultGetTrackStates(runtime: f.runtime))
+            await f.cache.updateTracks(rows)
+            let refs = try #require(await TrackReferenceIssuance.issue(for: rows, registry: f.registry,
+                snapshot: await f.registry.currentSnapshot))
+            let fresh = try #require(refs.byTrackIndex[0])
+            let writes = f.writes
+            f.builder.setChildren(f.rail, [f.header, f.header])
+            let result = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: fresh, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(result["state"] as? String == "C")
+            #expect(f.writes == writes)
+            #expect(await f.registry.resolve(original) != nil,
+                "no verified server rebind happened, so historical lookup is unchanged")
+            #expect(await f.registry.resolve(fresh)?.descriptor.trackName == "Audio 1")
+        }
+    }
+
+    @Test func verifiedPhysicalRenameRetiresItsOldAliasAfterAnObservedReorder() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture("Audio 1")
+            let (peer, _) = f.appendTrack(name: "Peer", selected: false)
+            let (project, original) = try await f.prepare(typedProducer: true)
+            let first = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: original, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(first["state"] as? String == "A")
+            let held = try #require(await f.registry.resolve(original)?.physicalTrack)
+            f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "Audio 1")
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, "Audio 1")
+            f.builder.setChildren(f.rail, [peer, f.header])
+            let rows = try #require(AccessibilityChannel.defaultGetTrackStates(runtime: f.runtime))
+            #expect(rows.count == 2)
+        let reorderedPhysicalOwnerMatches = try #require(rows[1].physicalBinding?.matches(held))
+        #expect(reorderedPhysicalOwnerMatches)
+            #expect(held.currentIndex() == 1)
+            await f.cache.updateTracks(rows)
+            let snapshot = await f.registry.currentSnapshot
+            let refs = try #require(await TrackReferenceIssuance.issue(for: rows, registry: f.registry, snapshot: snapshot))
+            let fresh = try #require(refs.byTrackIndex[1])
+            #expect(fresh != original)
+            let second = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: fresh, expected: nil, desired: "qualification_phase_b_probe"))))
+            #expect(second["state"] as? String == "A")
+            #expect(await f.registry.resolve(fresh)?.descriptor.trackIndex == 1)
+            #expect(await f.registry.resolve(original) == nil)
+            let writes = f.writes
+            let retired = try #require(sharedJSONObject(sharedToolText(
+                await f.rename(project: project, target: original, expected: nil, desired: "Retired must not write"))))
+            #expect(retired["state"] as? String == "C")
+            #expect(f.writes == writes)
+        }
+    }
+
+    @Test func registeredOrdinaryReferenceRenameAcquiresAndVerifiesForegroundBeforeItsMenu() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            f.passiveHeaderNameLabel = true
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setAttributeSettable(f.field, kAXValueAttribute as String, false)
+            let bar = f.builder.element(968_310), trackMenu = f.builder.element(968_311)
+            let menu = f.builder.element(968_312), rename = f.builder.element(968_313)
+            let editor = f.builder.element(968_314)
+            f.renameMenuItem = rename
+            f.menuFocusedEditor = editor
+            f.builder.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+            for (element, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                                   (menu, kAXMenuRole), (rename, kAXMenuItemRole), (editor, kAXTextFieldRole)] {
+                f.builder.setAttribute(element, kAXRoleAttribute as String, role as String)
+            }
+            f.builder.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+            f.builder.setAttribute(rename, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+            f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+            f.builder.setAttribute(editor, kAXValueAttribute as String, "A")
+            f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+            f.builder.setChildren(bar, [trackMenu]); f.builder.setChildren(trackMenu, [menu]); f.builder.setChildren(menu, [rename])
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.observedFocusedPID = 9001
+            f.logicIsFrontmost = false
+            f.onActivation = { f.observedFocusedPID = f.observedLogicPID; f.logicIsFrontmost = true; return true }
+            let runtime = f.runtime
+            let dependencies = HandlerDependencies(router: f.router, cache: f.cache, targetRegistry: f.registry,
+                poller: StatePoller(axChannel: AccessibilityChannel(), cache: f.cache,
+                    runtime: .init(hasVisibleWindow: { false })), dialogPresent: { false }, supportBundleExporter: nil,
+                liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) }, projectFileReader: .unavailable)
+            let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_tracks", command: "rename"))
+            let result = await handler(dependencies, ["project_ref": .string(project.rawValue),
+                "target_ref": .string(target.rawValue), "name": .string("C")])
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(f.activationCalls == 1)
+            #expect(body["state"] as? String == "A")
+            #expect(f.writes == ["C"])
+            #expect(f.events == ["rename_menu"])
+            #expect(f.menuEditorValueWrites == ["C"])
+            #expect(f.postedReturn)
+            #expect(await f.registry.resolve(target)?.descriptor.trackName == "C")
+        }
+    }
+
+    @Test(arguments: ["ack_only", "foreign_pid", "document", "gate", "false_ack_owned"])
+    func ordinaryForegroundAcquisitionRequiresActualOriginalCustody(_ outcome: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.observedFocusedPID = 9001
+            f.logicIsFrontmost = false
+            f.onActivation = {
+                if outcome == "ack_only" { return true }
+                f.observedFocusedPID = outcome == "foreign_pid" ? 9002 : f.observedLogicPID
+                f.logicIsFrontmost = true
+                if outcome == "document" {
+                    f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+                }
+                if outcome == "gate" { f.boundaryOwnership = false }
+                return outcome != "false_ack_owned"
+            }
+            let context = OperationTraceContext(ownsGate: { f.boundaryOwnership })
+            let result = await OperationTraceContext.$current.withValue(context) {
+                await f.rename(project: project, target: target, expected: nil, desired: "C")
+            }
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(f.activationCalls == 1)
+            if outcome == "false_ack_owned" {
+                #expect(body["state"] as? String == "A")
+                #expect(f.writes == ["C"])
+            } else {
+                #expect(body["state"] as? String == "C")
+                let attempted = try #require(body["write_attempted"] as? Bool)
+                #expect(!attempted)
+                #expect(f.writes.isEmpty)
+                #expect(f.events.isEmpty)
+                #expect(f.selectionWrites.isEmpty)
+                #expect(f.menuEditorValueWrites.isEmpty)
+            }
+        }
+    }
+
+    @Test func exactOwnedNameAdapterDoesNotBorrowOrdinaryActivation() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.onActivation = { Issue.record("Canonical owned naming must not activate through ordinary acquisition"); return false }
+            let receipt = await f.apply(project: project, target: target, before: "A", after: "C")
+            #expect(receipt.status == .applied)
+            #expect(f.writes == ["C"])
+            #expect(f.activationCalls == 0)
+        }
+    }
+
     @Test(arguments: ["multiple_selection", "unreadable_selection"])
     func canonicalNameBatchKeepsUnsupportedSelectionExplicit(_ kind: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {

@@ -323,6 +323,23 @@ actor TargetRegistry {
     /// a thinner fingerprint.
     func rebind(_ reference: TargetReference, to descriptor: TargetDescriptor) {
         guard let existing = resolve(reference), existing.physicalTrack?.exposure?.isCurrent ?? true else { return }
+        if existing.kind == .track, let physical = existing.physicalTrack {
+            // A fresh ref can be issued after raw history changes the name. If
+            // a verified rename through that fresh ref returns to an older name,
+            // the older alias must not win subsequent issuance or regain write
+            // authority. Retire only the exact same physical owner/scope; equal
+            // names or indices on another owner do not establish continuity.
+            let superseded = bindings.values.filter {
+                $0.reference != reference && $0.kind == .track
+                    && $0.serverSessionID == existing.serverSessionID
+                    && $0.projectEpoch == existing.projectEpoch
+                    && $0.topologyGeneration == existing.topologyGeneration
+                    && $0.physicalTrack?.matches(physical) == true
+                    && $0.descriptor.trackName.utf8.elementsEqual(descriptor.trackName.utf8)
+                    && $0.observedFingerprint.utf8.elementsEqual($0.descriptor.fingerprint.utf8)
+            }.map(\.reference)
+            for alias in superseded { bindings.removeValue(forKey: alias) }
+        }
         bindings[reference] = TargetBinding(
             reference: existing.reference,
             kind: existing.kind,

@@ -8,6 +8,66 @@ import Testing
 
 @Suite("ADR-001 qualification runner", .serialized)
 struct QualificationRunnerTests {
+    @Test(arguments: [OperationID.tracksRename, .editUndo, .editRedo], ["ref_changed", "reordered"])
+    func nameRecipesDoNotRestoreThroughANewlyIndexedRow(operation: OperationID, shape: String) throws {
+        let fixture = try SlowHandshakeFixture(nameRecipe: operation, nameIdentityFault: shape)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("identity-fault-consumed").path),
+            "the independently read row really changed identity while retaining the expected name")
+        let unsafe = fixture.directory.appendingPathComponent("unsafe-writes")
+        #expect(!FileManager.default.fileExists(atPath: unsafe.path),
+            "no inverse or cleanup may rename a newly indexed row, or run history after target continuity was lost")
+        #expect(result.operationResults[operation.rawValue]?.status != .passed)
+    }
+
+    @Test(arguments: [OperationID.tracksRename, .editUndo, .editRedo])
+    func healthyNameRecipesUseExactReferencesForEveryRename(operation: OperationID) throws {
+        let fixture = try SlowHandshakeFixture(nameRecipe: operation)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        let observed = try #require(result.operationResults[operation.rawValue])
+        #expect(observed.status == .passed)
+        let record = try #require(observed.mutationRestore)
+        #expect(record.verifiedCycleShape)
+        #expect(observed.mutationRestoreRefusal == nil)
+        let renames = try result.wireFrames.filter { $0.direction == .request && $0.operationID.hasPrefix("phase_b.") }.compactMap { frame -> [String: Any]? in
+            let request = try #require(sharedJSONObject(frame.payload))
+            let params = request["params"] as? [String: Any]
+            let arguments = params?["arguments"] as? [String: Any]
+            return arguments?["command"] as? String == "rename" ? arguments?["params"] as? [String: Any] : nil
+        }
+        #expect(!renames.isEmpty, "the healthy recipe must actually stage or rename its target")
+        for arguments in renames {
+            #expect(arguments["target_ref"] as? String == "held-track")
+            #expect(arguments["index"] == nil)
+        }
+        let restored = try #require(sharedJSONObject(record.restoreReadback)?["data"] as? [[String: Any]])
+        #expect(restored.first?["track_ref"] as? String == "held-track")
+    }
+
+    @Test(arguments: [OperationID.tracksRename, .editUndo, .editRedo], ["ref_changed", "reordered"])
+    func nameRecipeIdentityLossKeepsItsExplicitUncreditedCause(operation: OperationID, shape: String) throws {
+        let fixture = try SlowHandshakeFixture(nameRecipe: operation, nameIdentityFault: shape)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        let observed = try #require(result.operationResults[operation.rawValue])
+        #expect(observed.status == .notQualified)
+        #expect(observed.mutationRestore == nil)
+        let cause = try #require(observed.mutationRestoreRefusal)
+        #expect(cause.contains("track identity changed"))
+        #expect(cause.contains("inverse and cleanup withheld"))
+    }
+
     @Test(arguments: [OperationID.mixerSetPan, .mixerSetVolume])
     func mixerScalarRecipesUseTheirExactTrackReadback(operation: OperationID) throws {
         let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
@@ -6449,7 +6509,8 @@ struct QualificationRunnerTests {
         let executableURL: URL
 
         init(transportRefusal: Bool = false, transportNativePause: Bool = false,
-             initialTransportMotion: String = "stopped", cachedTransport: Bool = false) throws {
+             initialTransportMotion: String = "stopped", cachedTransport: Bool = false,
+             nameRecipe: OperationID? = nil, nameIdentityFault: String = "none") throws {
             directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("qualification-slow-handshake-\(UUID().uuidString)", isDirectory: true)
             executableURL = directory.appendingPathComponent("server.sh")
@@ -6484,7 +6545,7 @@ struct QualificationRunnerTests {
             IFS= read -r request_line || exit 0
             IFS= read -r request_line || exit 0
             """#
-            if transportRefusal || transportNativePause {
+            if transportRefusal || transportNativePause || nameRecipe != nil {
                 script = try #require(script.components(separatedBy: "# AFTER SEED").first) + #"""
                 cd "$(dirname "$0")" || exit 1
                 initial_playing=false
@@ -6495,6 +6556,14 @@ struct QualificationRunnerTests {
                 resource_unverified=false
                 moving=$initial_moving
                 position=1
+                name_recipe=none
+                name_fault=none
+                track_name='Before'
+                track_ref=held-track
+                peer_name='Other'
+                peer_ref=peer-track
+                fault_pending=false
+                fault_consumed=false
                 printf '%s\n' "$playing" > playing
                 printf '%s\n' "$moving" > moving
                 while IFS= read -r request; do
@@ -6504,6 +6573,28 @@ struct QualificationRunnerTests {
                     request=$(printf '%s' "$request" | /usr/bin/sed 's#\\/#/#g')
                     printf '%s\n' "$request" >> requests
                     case "$request" in
+                      *'"uri":"logic://tracks"'*)
+                        if [ "$fault_pending" = true ]; then
+                            fault_pending=false
+                            fault_consumed=true
+                            touch identity-fault-consumed
+                            if [ "$name_fault" = reordered ]; then
+                                peer_name=$track_name
+                                first_ref=$peer_ref; first_name=$peer_name
+                                second_ref=$track_ref; second_name=$track_name
+                            else
+                                track_ref=replaced-track
+                                first_ref=$track_ref; first_name=$track_name
+                                second_ref=$peer_ref; second_name=$peer_name
+                            fi
+                        elif [ "$fault_consumed" = true ] && [ "$name_fault" = reordered ]; then
+                            first_ref=$peer_ref; first_name=$peer_name
+                            second_ref=$track_ref; second_name=$track_name
+                        else
+                            first_ref=$track_ref; first_name=$track_name
+                            second_ref=$peer_ref; second_name=$peer_name
+                        fi
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://tracks","text":"{\\"source\\":\\"ax_live\\",\\"cache_age_sec\\":0,\\"readable\\":true,\\"ax_occluded\\":false,\\"data\\":[{\\"name\\":\\"%s\\",\\"track_ref\\":\\"%s\\"},{\\"name\\":\\"%s\\",\\"track_ref\\":\\"%s\\"}]}"}]}}\n' "$id" "$first_name" "$first_ref" "$second_name" "$second_ref" ;;
                       *'"uri":"logic://transport/state"'*)
                         if [ "$moving" = true ]; then position=$((position + 1)); fi
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://transport/state","text":"{\\"source\\":\\"%s\\",\\"unverified\\":%s,\\"cache_age_sec\\":0,\\"observed_tempo\\":120,\\"data\\":{\\"state\\":{\\"isPlaying\\":%s,\\"isRecording\\":false,\\"isCycleEnabled\\":false,\\"observedCycleEnabled\\":false,\\"tempo\\":120,\\"position\\":\\"%s.1\\",\\"positionReadback\\":{\\"value\\":\\"%s.1\\",\\"observedComponents\\":[\\"bar\\",\\"beat\\"]}}}}"}]}}\n' "$id" "$resource_source" "$resource_unverified" "$playing" "$position" "$position" ;;
@@ -6513,6 +6604,28 @@ struct QualificationRunnerTests {
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"logic_pro_running\\":true,\\"logic_pro_version\\":\\"11.2\\",\\"logic_pro_bundle_id\\":\\"com.apple.logic10\\",\\"logic_pro_variant\\":\\"desktop\\",\\"logic_pro_ui_locale\\":\\"en-US\\",\\"process_metadata_resolved\\":true,\\"logic_pro_variants\\":[{\\"variant\\":\\"desktop\\",\\"bundle_id\\":\\"com.apple.logic10\\",\\"installed\\":true,\\"running\\":true},{\\"variant\\":\\"creator_studio\\",\\"bundle_id\\":\\"com.apple.mobilelogic\\",\\"installed\\":false,\\"running\\":false}]}"}]}}\n' "$id" ;;
                       *'__adr001b_no_write_probe'*)
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"error\\":\\"invalid_params\\",\\"write_attempted\\":false}"}]}}\n' "$id" ;;
+                      *'"command":"rename"'*|*'"command":"undo"'*|*'"command":"redo"'*)
+                        if [ "$fault_consumed" = true ]; then
+                            case "$request" in
+                              *'"command":"rename"'*'"target_ref":"held-track"'*)
+                                if [ "$track_ref" != held-track ]; then
+                                    printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"error\\":\\"stale_target_reference\\",\\"write_attempted\\":false}"}]}}\n' "$id"
+                                    continue
+                                fi ;;
+                              *) printf '%s\n' "$request" >> unsafe-writes ;;
+                            esac
+                        fi
+                        case "$request" in
+                          *'"command":"rename"'*)
+                            if printf '%s' "$request" | grep -q 'qualification_phase_b_probe'; then track_name=qualification_phase_b_probe
+                            else track_name=Before; fi
+                            [ "$name_recipe" = tracks.rename ] && [ "$name_fault" != none ] && [ "$fault_consumed" = false ] && fault_pending=true ;;
+                          *'"command":"undo"'*) track_name=Before
+                            [ "$name_recipe" = edit.undo ] && [ "$name_fault" != none ] && [ "$fault_consumed" = false ] && fault_pending=true ;;
+                          *'"command":"redo"'*) track_name=qualification_phase_b_probe
+                            [ "$name_recipe" = edit.redo ] && [ "$name_fault" != none ] && [ "$fault_consumed" = false ] && fault_pending=true ;;
+                        esac
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"A\\",\\"verified\\":true}"}]}}\n' "$id" ;;
                       *'"command":"pause"'*)
                         if [ "$native_pause" = true ]; then
                             playing=true
@@ -6535,6 +6648,10 @@ struct QualificationRunnerTests {
                 done
                 """#
                 if transportNativePause { script = script.replacingOccurrences(of: "native_pause=false", with: "native_pause=true") }
+                if let nameRecipe {
+                    script = script.replacingOccurrences(of: "name_recipe=none", with: "name_recipe=\(nameRecipe.rawValue)")
+                        .replacingOccurrences(of: "name_fault=none", with: "name_fault=\(nameIdentityFault)")
+                }
                 if cachedTransport {
                     script = script.replacingOccurrences(of: "resource_source=ax_live", with: "resource_source=cache")
                         .replacingOccurrences(of: "resource_unverified=false", with: "resource_unverified=true")
