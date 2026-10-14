@@ -1432,6 +1432,16 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(existingBus: true)
     }
 
+    @Test func occupiedExistingBusSendRefusesExpiredOriginalPairBeforeAnyLeaf() async throws {
+        try await assertOccupiedSingleSendRenewal("expired_pair", existingBus: true)
+    }
+
+    @Test(arguments: [OutputAssignment.bus(1), .physical(3, 4), .stereoOutput])
+    func occupiedSendNoopRemainsObservedWithoutExpiredPair(destination: OutputAssignment) async throws {
+        try await assertOccupiedSingleSendRenewal("expired_noop", existingBus: destination == .bus(1),
+            noOpDestination: destination)
+    }
+
     @Test func registeredSingleSendRemovalProvesOwnedRetirementAndSoleEmptyAfter() async throws {
         try await assertOccupiedSingleSendRenewal(removing: true)
     }
@@ -1541,7 +1551,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                inverseFault: String? = nil, survivingSource: Bool = false,
                                                emptyModeMenu: Bool = false, observeRemoval: Bool = false,
                                                readRestored: String? = nil, sagaMode: String? = nil,
-                                               inspectSendWitness: String? = nil) async throws {
+                                               inspectSendWitness: String? = nil,
+                                               noOpDestination: OutputAssignment? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1626,6 +1637,11 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setAttribute(destination, kAXTitleAttribute as String, "Bus 1 → Existing")
                 b.setChildren(menu, [stereo]); b.setChildren(busMenu, [destination]); b.setChildren(busParent, [busMenu])
                 b.setChildren(root, [echo, mode, parent, busParent])
+            }
+            if let noOpDestination, noOpDestination != .stereoOutput {
+                b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : "Output 3-4")
+                b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
             }
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
@@ -1855,7 +1871,15 @@ struct Issue965HeldSelectionAssociationTests {
                 return
             }
             let initialSelections = f.selections
-            if fault == "missing_pair" { f.expireRetainedCapture = true }
+            if fault == "missing_pair" || fault == "expired_pair" || fault == "expired_noop" { f.expireRetainedCapture = true }
+            if fault == "expired_pair" || fault == "expired_noop" {
+                #expect(await cache.retainedInspection(id: id) == nil)
+                #expect(await cache.retainedMixerAssociation(reference: reference, source: originalPair.strip,
+                    snapshot: await registry.currentSnapshot) == nil)
+                let stillIssued = try #require(await registry.resolve(reference)?.physicalMixerStrip)
+                #expect(stillIssued.matches(originalPair.strip), "The physical ref outlives only the retained header tether")
+                #expect(f.routingDestinationPresses == 0 && f.routingReplacement == nil)
+            }
             f.routingRead = { element, attribute in
                 if readRestored != nil, f.routingDestinationPresses == 2,
                    CFEqual(element, b.element(1_965_2663)), attribute == kAXDescriptionAttribute as String {
@@ -1889,11 +1913,23 @@ struct Issue965HeldSelectionAssociationTests {
                     runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
                 dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate, liveTrackNames: { [:] })
             let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))
-            let params: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
+            var preparedParams: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
                 "destination": removing ? .object(["kind": .string("no_send")])
                     : existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
                     : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
                 "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
+            if let noOpDestination {
+                let value: Value = switch noOpDestination {
+                case .bus(let number): .object(["kind": .string("bus"), "number": .int(number)])
+                case .physical(let first, let second): .object(["kind": .string("physical"),
+                    "ports": .array([.int(first), .int(second)])])
+                case .stereoOutput: .object(["kind": .string("stereo_output")])
+                default: .null
+                }
+                preparedParams["destination"] = value
+                preparedParams["expected_current"] = value
+            }
+            let params = preparedParams
             if let sagaMode {
                 let journal = SagaJournal(maxRecords: 1)
                 if sagaMode == "raw_level" { b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 1) }
@@ -2093,6 +2129,26 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
             let body = try #require(sharedJSONObject(sharedToolText(result)))
+            if noOpDestination != nil {
+                #expect(body["state"] as? String == "A", "An observed no-op does not need retirement authority")
+                let verified = try #require(body["verified"] as? Bool)
+                #expect(verified)
+                let attempted = try #require(body["write_attempted"] as? Bool)
+                #expect(!attempted)
+                #expect(f.routingDestinationPresses == 0 && f.routingReplacement == nil)
+                #expect(f.selections == initialSelections)
+                #expect(!gate.isHeldByEntitledHolder())
+                return
+            }
+            if fault == "expired_pair" {
+                #expect(body["state"] as? String == "C", "An expired restoration tether must refuse before the send mutation")
+                let attempted = try #require(body["write_attempted"] as? Bool)
+                #expect(!attempted)
+                #expect(f.routingDestinationPresses == 0 && f.routingReplacement == nil)
+                #expect(f.selections == initialSelections)
+                #expect(!gate.isHeldByEntitledHolder())
+                return
+            }
             if lateRemovalChoice {
                 #expect(f.routingLateScopeInjected, "The actual second removal selector must reach the unknown read after strict checked/menu reads")
                 #expect(f.routingDestinationPresses == 0)

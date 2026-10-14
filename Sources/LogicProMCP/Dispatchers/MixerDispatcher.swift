@@ -80,6 +80,11 @@ struct MixerDispatcher: OperationTraceDispatching {
                 }
                 let pair = await cache.retainedMixerAssociation(reference: reference, source: physical,
                     snapshot: await targetRegistry.currentSnapshot)
+                if case .bus = destination, destination != expected, pair == nil {
+                    return toolTextResult(.error(HonestContract.encodeStateC(error: .staleSnapshot,
+                        hint: "A changed existing-bus send requires its retained original-header association; acquire a fresh selected-source inspection before retrying.",
+                        extras: ["operation": operation, "write_attempted": false])))
+                }
                 let traceID = await startTraceIfEnabled(command: command)
                 let routed = await withWriteBoundaryArmed(traceID) {
                     await AXMixerStripBinding.$current.withValue(physical) {
