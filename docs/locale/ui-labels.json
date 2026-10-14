@@ -8179,7 +8179,7 @@
     "預備拍"
    ],
    "rationale": "Derived from Apple's own StrTransportBtns|||Count In across all ten locales Logic ships (Logic 12.3 build 6674). Cited in docs/observations/2026-09-16-two-languages-was-the-whole-design.json.",
-   "match": "exact",
+   "match": "exact_strict",
    "coverage": {
     "en-US": "derived",
     "ko-KR": "derived",
