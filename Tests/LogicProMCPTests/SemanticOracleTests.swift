@@ -651,6 +651,44 @@ struct SemanticOracleCensusTests {
         #expect(SemanticOracleTable.byOperationID[.mixerSetInputBusVerified] == nil)
     }
 
+    @Test func sendBypassShapeReceiptCannotBecomeIndependentSemanticReadback() throws {
+        let id = OperationID.mixerGetSendBypassVerified
+        let oracle = try #require(SemanticOracleTable.byOperationID[id])
+        let fixture = try #require(SemanticOracleFixtures.byOperationID[id])
+        let accepted: Bool = try #require(oracle.evaluate(responseData: fixture.responseData,
+            readbackData: fixture.readbackData) as Bool?)
+        #expect(accepted)
+        let deferred: Bool = QualificationSemanticReadbackValidator.validate(operationID: id.rawValue,
+            responseData: fixture.responseData, readbackData: fixture.readbackData) == nil
+        #expect(deferred)
+        let reason = try #require(QualificationSemanticReadbackValidator.independentReadbackDeferral(for: id.rawValue))
+        #expect(reason.code == .semanticValidatorUnavailable)
+        #expect(reason.detail.contains("same-host"))
+        #expect(reason.detail.contains("independent"))
+        // A malformed receipt is a failure, not an excuse to return smoke.
+        let malformed: Bool = try #require(QualificationSemanticReadbackValidator.validate(operationID: id.rawValue,
+            responseData: Data("{}".utf8), readbackData: fixture.readbackData) as Bool?)
+        #expect(!malformed)
+        var receipt = try #require(JSONSerialization.jsonObject(with: fixture.responseData) as? [String: Any])
+        for wrongValue: Any in [0, "false", NSNull()] {
+            receipt["bypassed"] = wrongValue
+            let verdict: Bool = try #require(QualificationSemanticReadbackValidator.validate(operationID: id.rawValue,
+                responseData: try JSONSerialization.data(withJSONObject: receipt),
+                readbackData: fixture.readbackData) as Bool?)
+            #expect(!verdict)
+        }
+    }
+
+    @Test func boundedSendBypassNativeEvidenceKeepsItsSemanticQualificationPending() throws {
+        let reason = try #require(SemanticOracleTable.structurallyUnverifiedMutatingOperationIDs[.mixerSetSendBypassVerified])
+        #expect(reason.contains("semantic oracle pending"))
+        #expect(reason.contains("independent"))
+        #expect(SemanticOracleTable.mutatingSpecIDs.contains(.mixerSetSendBypassVerified))
+        #expect(!SemanticOracleTable.coveredMutatingOperationIDs.contains(.mixerSetSendBypassVerified))
+        #expect(SemanticOracleTable.byOperationID[.mixerSetSendBypassVerified] == nil)
+        #expect(SemanticOracleTable.coveredMutatingOperationIDs.count == 54)
+    }
+
     /// set_cycle_range is excluded a level EARLIER than the structural list: it is
     /// registry `.unsupported`, so `mutatingSpecIDs` (which filters `.unsupported`)
     /// never surfaces it, and it can carry no oracle. Its exclusion is documented
@@ -1340,7 +1378,7 @@ struct SemanticOracleMutationTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified, .pluginsPlanParameterChanges]))
+            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges]))
         let fixture = try #require(SemanticOracleFixtures.byOperationID[operationID])
         let routed = QualificationSemanticReadbackValidator.validate(
             operationID: operationID.rawValue,

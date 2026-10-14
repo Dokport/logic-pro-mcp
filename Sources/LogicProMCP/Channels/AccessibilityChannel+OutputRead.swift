@@ -105,6 +105,147 @@ extension AccessibilityChannel {
         var changedSend: ChangedSendObservation? = nil
     }
 
+    private struct SendBypassSnapshot {
+        let physical: AXMixerStripBinding.Binding
+        let control: AXLogicProElements.AssignedSendMenuControl
+        let slots: [SendSlotObservation]
+        let population: [AXUIElement]
+        let focus: AXUIElement
+        let value: Bool
+        let assignment: OutputAssignment
+        let checks: [String]
+    }
+
+    private static func sendBypassCustody(_ held: SendBypassSnapshot,
+        runtime: AXLogicProElements.Runtime, allowingChangedBypass: Bool = false) -> Bool {
+        guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+              let pid = runtime.logicProPID(), runtime.focusedApplicationPID() == pid,
+              let app = AXLogicProElements.appRoot(runtime: runtime), held.physical.currentIndex(runtime: runtime) != nil,
+              let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+              CFEqual(focus, held.focus) || CFEqual(focus, held.control.bypass),
+              let control = AXLogicProElements.assignedSendMenuControl(in: held.physical.strip,
+                ordinal: held.control.ordinal, runtime: runtime.ax), held.control.matches(control),
+              let slots = AXLogicProElements.sendSlotObservations(in: held.physical.strip, runtime: runtime.ax),
+              let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: held.physical.mixer, runtime: runtime.ax)?.strips,
+              census.count == held.population.count, zip(census, held.population).allSatisfy({ CFEqual($0, $1) }) else { return false }
+        var expected = held.slots
+        var current = slots
+        if allowingChangedBypass {
+            for index in expected.indices where expected[index].ordinal == held.control.ordinal { expected[index].bypassed = nil }
+            for index in current.indices where current[index].ordinal == held.control.ordinal { current[index].bypassed = nil }
+        }
+        return current == expected && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+    }
+
+    private static func readSendBypassSnapshot(ordinal: Int, runtime: AXLogicProElements.Runtime) async -> SendBypassSnapshot? {
+        guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+              let physical = AXMixerStripBinding.current, let app = AXLogicProElements.appRoot(runtime: runtime),
+              let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+              let control = AXLogicProElements.assignedSendMenuControl(in: physical.strip, ordinal: ordinal, runtime: runtime.ax),
+              let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
+              let slot = slots.first(where: { $0.ordinal == ordinal }), let value = slot.bypassed,
+              slot.levelRaw?.isFinite == true,
+              let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips else { return nil }
+        let reading = await getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
+        guard let assignment = reading.assignment, let checks = reading.sendNonRoutingChecks, !checks.isEmpty else { return nil }
+        let held = SendBypassSnapshot(physical: physical, control: control, slots: slots, population: population,
+            focus: focus, value: value, assignment: assignment, checks: checks)
+        return sendBypassCustody(held, runtime: runtime) ? held : nil
+    }
+
+    static func sendBypassVerified(params: [String: String], writing: Bool,
+        runtime: AXLogicProElements.Runtime = .production) async -> ChannelResult {
+        let operation = writing ? "mixer.set_send_bypass_verified" : "mixer.get_send_bypass_verified"
+        var extras: [String: Any] = ["operation": operation, "write_attempted": false, "snapshot_atomic": false]
+        func refuse(_ error: HonestContract.FailureError, _ hint: String) -> ChannelResult {
+            .error(HonestContract.encodeStateC(error: error, hint: hint, extras: extras))
+        }
+        let allowed = writing ? ["ordinal", "bypassed", "expected_current"] : ["ordinal"]
+        guard params.keys.allSatisfy({ allowed.contains($0) }), let ordinal = params["ordinal"].flatMap(Int.init), ordinal >= 0,
+              !writing || (["true", "false"].contains(params["bypassed"] ?? "")
+                && ["true", "false"].contains(params["expected_current"] ?? "")) else {
+            return refuse(.invalidParams, "An exact occupied-send census ordinal and literal Boolean request are required.")
+        }
+        extras["send_ordinal"] = ordinal
+        guard let before = await readSendBypassSnapshot(ordinal: ordinal, runtime: runtime) else {
+            return refuse(.readbackUnavailable, "The original checkbox, raw send state, checked route or protected source did not remain observed.")
+        }
+        extras["before"] = before.value; extras["bypassed"] = before.value
+        extras["checked_destination"] = before.assignment.json
+        extras["protected_nonrouting_titles"] = before.checks
+        let actions = AXHelpers.getActionNamesResult(before.control.bypass, runtime: runtime.ax)
+        switch actions {
+        case .success(let names): extras["ax_action_names"] = names; extras["ax_action_names_status"] = 0
+        case .failure(let error): extras["ax_action_names"] = NSNull(); extras["ax_action_names_status"] = error.raw
+        }
+        guard sendBypassCustody(before, runtime: runtime) else {
+            return refuse(.staleSnapshot, "The deciding checkbox capability read lost its original source or control.")
+        }
+        if !writing {
+            extras["verify_source"] = "ax_owned_send_checkbox"
+            return .success(HonestContract.encodeStateA(extras: extras))
+        }
+        let desired = params["bypassed"] == "true", expected = params["expected_current"] == "true"
+        guard expected == before.value else { return refuse(.staleSnapshot, "The actual bypass does not agree with expected_current.") }
+        if desired == before.value {
+            extras["changed"] = false; extras["verify_source"] = "ax_owned_send_checkbox"
+            return .success(HonestContract.encodeStateA(extras: extras))
+        }
+        let playing: Bool? = AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime)
+        let recording: Bool? = AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime)
+        guard let playing, let recording else { return refuse(.transportStateUnknown, "Stopped transport must be observed.") }
+        guard !playing && !recording else { return refuse(.unsupportedState, "Bypass changes require stopped transport.") }
+        guard case .success(let names) = actions, names.contains(kAXPressAction as String),
+              let deciding = await readSendBypassSnapshot(ordinal: ordinal, runtime: runtime),
+              before.control.matches(deciding.control), before.slots == deciding.slots,
+              before.assignment == deciding.assignment, before.checks == deciding.checks,
+              sendBypassCustody(before, runtime: runtime),
+              case .success(let finalActions) = AXHelpers.getActionNamesResult(before.control.bypass, runtime: runtime.ax),
+              finalActions.contains(kAXPressAction as String), sendBypassCustody(before, runtime: runtime) else {
+            return refuse(.staleSnapshot, "No supported AXPress and unchanged original send survived the final protected read.")
+        }
+        // Popup/capability reads can outlive the earlier stopped observation.
+        let finalPlaying: Bool? = AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime)
+        let finalRecording: Bool? = AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime)
+        guard let finalPlaying, let finalRecording else { return refuse(.transportStateUnknown, "Stopped transport must remain observed at the action boundary.") }
+        guard !finalPlaying && !finalRecording,
+              (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+            return refuse(.unsupportedState, "Bypass changes require stopped transport at the action boundary.")
+        }
+        guard sendBypassCustody(before, runtime: runtime) else {
+            return refuse(.staleSnapshot, "The final transport read lost the original source or checkbox custody.")
+        }
+        extras["write_attempted"] = true
+        let pressed = AXHelpers.performActionResult(before.control.bypass, kAXPressAction as String, runtime: runtime.ax)
+        if case .success = pressed { extras["press_succeeded"] = true; extras["press_status"] = 0 }
+        else if case .failure(let error) = pressed {
+            extras["press_succeeded"] = false; extras["press_error"] = error.diagnosticLabel
+            if case .status(let status) = error { extras["press_status"] = status.raw }
+            else { extras["press_status"] = NSNull() }
+        }
+        var settled = await readSendBypassSnapshot(ordinal: ordinal, runtime: runtime)
+        // One owned AXPress can acknowledge before its bit lands during the
+        // awaited menu read. Re-read once only while every non-bypass fact and
+        // the exact original control remain held; never repeat the press.
+        if settled == nil, sendBypassCustody(before, runtime: runtime, allowingChangedBypass: true) {
+            settled = await readSendBypassSnapshot(ordinal: ordinal, runtime: runtime)
+        }
+        guard let after = settled,
+              before.control.matches(after.control), before.assignment == after.assignment, before.checks == after.checks,
+              sendBypassCustody(before, runtime: runtime, allowingChangedBypass: true),
+              sendBypassCustody(after, runtime: runtime) else {
+            extras["bypassed"] = NSNull()
+            extras["hint"] = "The one attempted checkbox press lost independent protected readback; no inverse was guessed."
+            return .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras))
+        }
+        extras["bypassed"] = after.value
+        guard after.value == desired else {
+            return .success(HonestContract.encodeStateB(reason: .readbackMismatch, extras: extras))
+        }
+        extras["changed"] = true; extras["verify_source"] = "ax_owned_send_checkbox"
+        return .success(HonestContract.encodeStateA(extras: extras))
+    }
+
     static func setAssignedSendOutputVerified(params: [String: String],
         runtime: AXLogicProElements.Runtime = .production,
         timing: OutputAssignmentTiming = .live) async -> ChannelResult {

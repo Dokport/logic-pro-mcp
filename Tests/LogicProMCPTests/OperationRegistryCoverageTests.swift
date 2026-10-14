@@ -74,6 +74,7 @@ struct OperationRegistryCoverageTests {
             .mixerSetOutputVerified,
             .mixerSetInputBusVerified,
             .mixerSetSendOutputVerified,
+            .mixerSetSendBypassVerified,
             .pluginsSetParamVerified,
             .pluginsSetEQBandVerified,
             .pluginsInsertVerified,
@@ -89,7 +90,7 @@ struct OperationRegistryCoverageTests {
             .tracksSetInstrument,
         ]
 
-        #expect(mutating.count == 97)   // #291 adds physical-reference-only input and occupied-send replacements;
+        #expect(mutating.count == 98)   // #291 adds physical-reference-only input and occupied-send replacements;
                                         // #971 applies an approved Mixer view;
                                         // #448: sort_verified is a mutating structural verb;
                                         // #301 added plugins.set_eq_band_verified, which is
@@ -106,7 +107,7 @@ struct OperationRegistryCoverageTests {
         #expect(readOnly.count + mutating.count == OperationRegistry.specs.count)
         #expect(readOnly.contains { $0.id == .pluginsGetParamVerified })
         #expect(readOnly.allSatisfy {
-            [.pluginsGetParamVerified, .pluginsGetChannelEQStateVerified, .pluginsPlanParameterChanges, .mixerGetOutputVerified, .mixerGetInputBusVerified, .mixerGetSendDestinationVerified].contains($0.id)
+            [.pluginsGetParamVerified, .pluginsGetChannelEQStateVerified, .pluginsPlanParameterChanges, .mixerGetOutputVerified, .mixerGetInputBusVerified, .mixerGetSendDestinationVerified, .mixerGetSendBypassVerified].contains($0.id)
                 ? $0.target == .acceptsStableTarget : $0.target == .none
         })
     }

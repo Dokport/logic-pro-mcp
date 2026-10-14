@@ -66,18 +66,23 @@ struct IndexBindingCensusTests {
 
     // MARK: - (b) actual physical-reference-only production commands
 
-    @Test("census (b): refRequired exactly advertises the physical-reference-only input writer")
+    @Test("census (b): refRequired exactly advertises the physical-reference-only Mixer writers")
     func refRequiredIsPinned() throws {
-        // This new bounded writer never supported an ordinal path. Catalog
-        // metadata must describe its existing physical-only dispatcher contract;
-        // no legacy operation is promoted or loses an index compatibility path.
-        let expected: Set<OperationID> = [.mixerSetInputBusVerified, .mixerSetSendOutputVerified]
+        // Send ordinals address the source census, not a legacy track/index
+        // fallback. No legacy operation is promoted or loses compatibility.
+        let expected: Set<OperationID> = [
+            .mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendBypassVerified,
+        ]
         #expect(OperationRegistry.refRequiredOperationIDs == expected)
         #expect(Self.ids { $0.indexBinding == .refRequired } == expected)
-        let spec = try #require(OperationRegistry.specs.first { $0.id == .mixerSetInputBusVerified })
-        #expect(spec.allowedParams.contains("target_ref"))
-        #expect(!spec.allowedParams.contains("track"))
-        #expect(!spec.allowedParams.contains("index"))
+        for id in expected {
+            let spec = try #require(OperationRegistry.specs.first { $0.id == id })
+            #expect(spec.allowedParams.contains("target_ref"))
+            #expect(!spec.allowedParams.contains("track"))
+            #expect(!spec.allowedParams.contains("index"))
+            #expect(spec.target == .acceptsStableTarget)
+            #expect(spec.mutability == Mutability.`mutating`)
+        }
     }
 
     // MARK: - (c) the legacy deprecation census

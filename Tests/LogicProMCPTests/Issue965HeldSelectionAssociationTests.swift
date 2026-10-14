@@ -289,6 +289,14 @@ struct Issue965HeldSelectionAssociationTests {
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
         var routingDestinationPresses = 0
+        var routingBypassPresses = 0
+        var routingBypassMenuOpens = 0
+        var routingBypassMenuCancels = 0
+        var routingBypassFinalValueReads = 0
+        var routingBypassFinalCapabilityRead = false
+        var routingBypassPendingValue: Bool?
+        var routingActionNames: (@Sendable (AXUIElement) -> Result<[String], AXHelpers.AXStatusError>?)?
+        var routingChildrenRead: (@Sendable (AXUIElement) -> Void)?
         var routingRemovalPublications = 0
         var routingRemovedSend: AccessibilityChannel.RemovedSendObservation?
         var routingRemovalPermittedAtPublication: Bool?
@@ -508,6 +516,7 @@ struct Issue965HeldSelectionAssociationTests {
                     return nil
                 },
                 childrenResultHandler: { [self] element in
+                    routingChildrenRead?(element)
                     guard inputRetirementCensusLag, CFEqual(element, mixer) else { return nil }
                     inputRetirementCensusLag = false
                     inputRetirementCensusLagObserved = true
@@ -598,7 +607,9 @@ struct Issue965HeldSelectionAssociationTests {
                 ax = AXHelpers.Runtime(axApp: base.ax.axApp, attributeValue: base.ax.attributeValue,
                     attributeIsSettable: base.ax.attributeIsSettable, setAttributeValue: base.ax.setAttributeValue,
                     children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
-                    actionNames: base.ax.actionNames, actionNamesResult: base.ax.actionNamesResult,
+                    actionNames: base.ax.actionNames, actionNamesResult: { [self] element in
+                        routingActionNames?(element) ?? AXHelpers.getActionNamesResult(element, runtime: base.ax)
+                    },
                     childrenResult: base.ax.childrenResult, attributeValueResult: base.ax.attributeValueResult,
                     performActionResult: base.ax.performActionResult, elementAtPosition: base.ax.elementAtPosition,
                     attributeValuesResult: { [self] element, attributes in
@@ -1441,6 +1452,29 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal("expired_pair", existingBus: true)
     }
 
+    @Test func registeredSendBypassReadsCapabilityAndChangesOnlyItsExactCheckbox() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, bypassMode: "roundtrip")
+    }
+
+    @Test(arguments: [true, false])
+    func registeredSendBypassObservesDelayedOwnedBitLanding(desired: Bool) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true,
+            bypassMode: desired ? "delayed_on" : "delayed_off")
+    }
+
+    @Test(arguments: ["late_play", "late_record", "late_bit", "final_record_document"])
+    func registeredSendBypassRefusesLateTransportAndBitChanges(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, bypassMode: fault)
+    }
+
+    @Test(arguments: ["malformed_binary", "wrong_expected", "wrong_target", "wrong_project", "extra_param",
+                      "missing_target", "scalar_boolean", "negative_ordinal", "refs_disabled", "unsupported_press",
+                      "changed_route", "changed_mode", "changed_raw", "replaced_control", "foreign_document",
+                      "expired_deadline", "lost_gate", "malformed_after", "lost_source_after", "press_failed"])
+    func registeredSendBypassPreservesTypedAndProtectedRefusals(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, bypassMode: fault)
+    }
+
     @Test(arguments: ["failure", "cancel", "unverified"])
     func registeredExistingBusSendSagaCompensatesOnlyItsActualNativeChange(mode: String) async throws {
         try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
@@ -1582,7 +1616,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                emptyModeMenu: Bool = false, observeRemoval: Bool = false,
                                                readRestored: String? = nil, sagaMode: String? = nil,
                                                inspectSendWitness: String? = nil,
-                                               noOpDestination: OutputAssignment? = nil) async throws {
+                                               noOpDestination: OutputAssignment? = nil,
+                                               bypassMode: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1620,6 +1655,11 @@ struct Issue965HeldSelectionAssociationTests {
                 return [anchor, group, level]
             }
             let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
+            if bypassMode != nil {
+                f.useBulkReads = true
+                b.setActionNames(b.element(1_965_2622), [kAXPressAction as String])
+                b.setAttribute(b.element(1_965_2622), kAXEnabledAttribute as String, false)
+            }
             let originalList = b.element(1_965_2623), renewedList = b.element(1_965_2643)
             let originalChildren = b.makeAXRuntime().children(f.strips[1])
             b.setChildren(f.strips[1], originalChildren + originalSend)
@@ -1675,15 +1715,35 @@ struct Issue965HeldSelectionAssociationTests {
             }
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
+                if bypassMode != nil, CFEqual(element, b.element(1_965_2622)), action == kAXPressAction as String {
+                    f.routingBypassPresses += 1
+                    if bypassMode == "press_failed" { return false }
+                    let value: NSNumber? = AXHelpers.getAttribute(element, kAXValueAttribute as String, runtime: b.makeAXRuntime())
+                    if ["delayed_on", "delayed_off"].contains(bypassMode ?? "") {
+                        f.routingBypassPendingValue = value?.intValue == 0
+                        return true // Native ACK precedes the independent bit landing.
+                    }
+                    b.setAttribute(element, kAXValueAttribute as String, value?.intValue == 0 ? 1 : 0)
+                    if bypassMode == "malformed_after" { b.setAttribute(element, kAXValueAttribute as String, 2) }
+                    if bypassMode == "lost_source_after" { b.setChildren(f.mixer, [f.strips[0]]) }
+                    return true
+                }
                 let source = f.routingReplacement ?? f.strips[1]
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
+                    if bypassMode != nil { f.routingBypassMenuOpens += 1 }
+                    if f.routingBypassMenuOpens == 3, let pending = f.routingBypassPendingValue {
+                        f.routingLateScopeInjected = true
+                        b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, pending ? 1 : 0)
+                        f.routingBypassPendingValue = nil
+                    }
                     b.setChildren(f.mixer, [f.strips[0], source, root]); return true
                 }
                 if restoring, action == kAXPressAction as String, CFEqual(element, renewedSend[0]) {
                     b.setChildren(f.mixer, [f.strips[0], source, root]); return true
                 }
                 if action == kAXCancelAction as String, CFEqual(element, root) {
+                    if bypassMode != nil { f.routingBypassMenuCancels += 1 }
                     b.setChildren(f.mixer, [f.strips[0], source]); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, destination) {
@@ -1926,6 +1986,27 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.routingDestinationPresses == 0 && f.routingReplacement == nil)
             }
             f.routingRead = { element, attribute in
+                if bypassMode == "final_record_document", f.routingBypassFinalCapabilityRead,
+                   CFEqual(element, b.element(1_965_722)), attribute == kAXValueAttribute as String,
+                   !f.routingLateScopeInjected {
+                    f.routingLateScopeInjected = true
+                    b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                }
+                if ["changed_route", "changed_mode"].contains(bypassMode ?? ""),
+                   f.routingBypassMenuOpens == 2, CFEqual(element, echo),
+                   attribute == kAXTitleAttribute as String, !f.routingLateScopeInjected {
+                    f.routingLateScopeInjected = true
+                    if bypassMode == "changed_route" {
+                        b.setAttribute(echo, kAXTitleAttribute as String, "Output 3-4")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                    } else { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
+                }
+                if bypassMode == "late_bit", f.routingBypassMenuCancels == 3 {
+                    if CFEqual(element, b.element(1_965_2622)), attribute == kAXValueAttribute as String {
+                        f.routingBypassFinalValueReads += 1
+                    }
+                }
                 if sagaMode == "late_inverse_mode", f.routingDestinationPresses == 1,
                    CFEqual(element, stereo), attribute == kAXEnabledAttribute as String {
                     f.routingClassifierHelpReads = 1
@@ -1961,6 +2042,130 @@ struct Issue965HeldSelectionAssociationTests {
                 poller: StatePoller(axChannel: f.channel(), cache: cache,
                     runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
                 dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate, liveTrackNames: { [:] })
+            if bypassMode != nil {
+                let get = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "get_send_bypass_verified"))
+                let set = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_bypass_verified"))
+                let getterParams: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1)]
+                let beforeSlots = try #require(AXLogicProElements.sendSlotObservations(in: f.strips[1], runtime: f.logic().ax))
+                let read = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "get_send_bypass_verified",
+                    commandParams: getterParams, mutationGate: gate) {
+                    await FeatureFlags.withAdr002TargetRefForTests(true) { await get(dependencies, getterParams) }
+                }
+                let initial = try #require(sharedJSONObject(sharedToolText(read)))
+                #expect(initial["state"] as? String == "A", "Actual registered bypass read: \(sharedToolText(read))")
+                let initialBypass = try #require(initial["bypassed"] as? Bool)
+                #expect(!initialBypass)
+                #expect(initial["ax_action_names"] as? [String] == [kAXPressAction as String])
+                #expect(initial["ax_action_names_status"] as? Int == 0)
+                f.routingBypassMenuOpens = 0; f.routingBypassMenuCancels = 0
+                f.routingActionNames = { element in
+                    if bypassMode == "final_record_document", f.routingBypassMenuCancels == 2,
+                       CFEqual(element, b.element(1_965_2622)) {
+                        f.routingBypassFinalCapabilityRead = true
+                    }
+                    guard ["late_play", "late_record", "changed_raw", "replaced_control", "foreign_document"].contains(bypassMode ?? ""),
+                          f.routingBypassMenuCancels == 2, CFEqual(element, b.element(1_965_2622)),
+                          !f.routingLateScopeInjected else { return nil }
+                    f.routingLateScopeInjected = true
+                    switch bypassMode {
+                    case "changed_raw": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 1)
+                    case "foreign_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "replaced_control":
+                        let decoy = b.element(1_965_2797)
+                        b.setRole(decoy, kAXCheckBoxRole as String); b.setAttribute(decoy, kAXValueAttribute as String, 0)
+                        b.setChildren(decoy, []); b.setActionNames(decoy, [kAXPressAction as String])
+                        b.setChildren(b.element(1_965_2621), [decoy, originalList])
+                    default:
+                        b.setAttribute(b.element(bypassMode == "late_play" ? 1_965_721 : 1_965_722),
+                            kAXValueAttribute as String, 1)
+                    }
+                    return .success([kAXPressAction as String])
+                }
+                f.routingChildrenRead = { element in
+                    // Calibrated in the healthy actual registered path: twelve
+                    // strict checkbox reads after the third popup Cancel precede
+                    // the final custody census, after the after-snapshot corroboration.
+                    guard bypassMode == "late_bit", f.routingBypassMenuCancels == 3,
+                          f.routingBypassFinalValueReads == 12, CFEqual(element, f.mixer),
+                          !f.routingLateScopeInjected else { return }
+                    f.routingLateScopeInjected = true
+                    b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 0)
+                }
+                if bypassMode != "roundtrip" {
+                    var prepared: [String: Value] = getterParams.merging([
+                        "bypassed": .bool(true), "expected_current": .bool(false)]) { _, new in new }
+                    switch bypassMode {
+                    case "delayed_off":
+                        b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1)
+                        prepared["bypassed"] = .bool(false); prepared["expected_current"] = .bool(true)
+                    case "malformed_binary": b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 2)
+                    case "wrong_expected": prepared["expected_current"] = .bool(true)
+                    case "wrong_target": prepared["target_ref"] = .string(try #require(capture.issued?.byRow[0]).rawValue)
+                    case "wrong_project": prepared["project_ref"] = .string("prj_foreign")
+                    case "extra_param": prepared["destination"] = .object(["kind": .string("no_send")])
+                    case "missing_target": prepared.removeValue(forKey: "target_ref")
+                    case "scalar_boolean": prepared["bypassed"] = .int(1)
+                    case "negative_ordinal": prepared["ordinal"] = .int(-1)
+                    case "unsupported_press": b.setActionNames(b.element(1_965_2622), [])
+                    default: break
+                    }
+                    let setterParams = prepared
+                    let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_bypass_verified",
+                        commandParams: setterParams, mutationGate: gate) {
+                        await FeatureFlags.withAdr002TargetRefForTests(bypassMode != "refs_disabled") {
+                            if ["expired_deadline", "lost_gate"].contains(bypassMode ?? "") {
+                                let parent = OperationTraceContext.current
+                                let child = OperationTraceContext(mutationGateAcquired: parent?.mutationGateAcquired ?? false,
+                                    ownsGate: { bypassMode == "lost_gate" ? false : parent?.ownsGate() == true },
+                                    deadline: bypassMode == "expired_deadline" ? ContinuousClock.now : parent?.deadline,
+                                    cancellationRequested: { parent?.cancellationRequested() == true })
+                                return await OperationTraceContext.$current.withValue(child) { await set(dependencies, setterParams) }
+                            }
+                            return await set(dependencies, setterParams)
+                        }
+                    }
+                    let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if ["delayed_on", "delayed_off"].contains(bypassMode ?? "") {
+                        #expect(f.routingLateScopeInjected && f.routingBypassPendingValue == nil)
+                        #expect(f.routingBypassMenuOpens >= 3 && f.routingBypassPresses == 1)
+                        #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
+                        let observed = try #require(body["bypassed"] as? Bool)
+                        let observedBefore = try #require(body["before"] as? Bool)
+                        if bypassMode == "delayed_on" { #expect(observed); #expect(!observedBefore) }
+                        else { #expect(!observed); #expect(observedBefore) }
+                        #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
+                        return
+                    }
+                    if ["late_play", "late_record", "late_bit", "final_record_document", "changed_route", "changed_mode", "changed_raw", "replaced_control", "foreign_document"].contains(bypassMode ?? "") {
+                        #expect(f.routingLateScopeInjected, "The actual deciding boundary must be reached")
+                    }
+                    let afterAttempt = ["late_bit", "malformed_after", "lost_source_after", "press_failed"].contains(bypassMode ?? "")
+                    #expect(body["state"] as? String == (afterAttempt ? "B" : "C"), "\(sharedToolText(result))")
+                    #expect(f.routingBypassPresses == (afterAttempt ? 1 : 0))
+                    #expect(f.routingDestinationPresses == 0)
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
+                }
+                for desired in [true, false, false] {
+                    var prepared = getterParams
+                    prepared["bypassed"] = .bool(desired)
+                    prepared["expected_current"] = .bool(f.routingBypassPresses == 1)
+                    let setterParams = prepared
+                    let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_bypass_verified",
+                        commandParams: setterParams, mutationGate: gate) {
+                        await FeatureFlags.withAdr002TargetRefForTests(true) { await set(dependencies, setterParams) }
+                    }
+                    let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    #expect(body["state"] as? String == "A", "Actual exact checkbox mutation: \(sharedToolText(result))")
+                    let observed = try #require(body["bypassed"] as? Bool)
+                    if desired { #expect(observed) } else { #expect(!observed) }
+                }
+                #expect(f.routingBypassPresses == 2 && f.routingDestinationPresses == 0)
+                #expect(f.routingReplacement == nil && f.selections == initialSelections)
+                #expect(AXLogicProElements.sendSlotObservations(in: f.strips[1], runtime: f.logic().ax) == beforeSlots)
+                #expect(!gate.isHeldByEntitledHolder())
+                return
+            }
             let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))
             var preparedParams: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
                 "destination": removing ? .object(["kind": .string("no_send")])
