@@ -43,6 +43,8 @@ private final class ExactNameFixture: @unchecked Sendable {
     var observedLogicPID: pid_t = 4242
     var observedFocusedPID: pid_t = 4242
     var logicIsFrontmost = true
+    var activationCalls = 0
+    var onActivation: (@Sendable () -> Bool)?
     var typingSleeps: [useconds_t] = []
     var onTypingSleep: (@Sendable (useconds_t) -> Void)?
     var legacyHeaderRoleFailureRead: Int?
@@ -258,7 +260,8 @@ private final class ExactNameFixture: @unchecked Sendable {
             ),
             processRuntime: ProcessUtils.Runtime(
                 logicProPID: { 4242 }, fallbackLogicProPID: { 4242 }, logicProRunning: { true },
-                activateLogicPro: { false }, logicIsFrontmost: { [self] in logicIsFrontmost }, logicProBundleURL: { nil }
+                activateLogicPro: { [self] in activationCalls += 1; return onActivation?() ?? false },
+                logicIsFrontmost: { [self] in logicIsFrontmost }, logicProBundleURL: { nil }
             )
         )
     }
@@ -456,6 +459,101 @@ private actor ExactNameChannel: Channel {
 
 @Suite("#968 exact-local track naming adapter")
 struct Issue968ExactTrackNameAdapterTests {
+    @Test func registeredOrdinaryReferenceRenameAcquiresAndVerifiesForegroundBeforeItsMenu() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            f.passiveHeaderNameLabel = true
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setAttributeSettable(f.field, kAXValueAttribute as String, false)
+            let bar = f.builder.element(968_310), trackMenu = f.builder.element(968_311)
+            let menu = f.builder.element(968_312), rename = f.builder.element(968_313)
+            let editor = f.builder.element(968_314)
+            f.renameMenuItem = rename
+            f.menuFocusedEditor = editor
+            f.builder.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+            for (element, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                                   (menu, kAXMenuRole), (rename, kAXMenuItemRole), (editor, kAXTextFieldRole)] {
+                f.builder.setAttribute(element, kAXRoleAttribute as String, role as String)
+            }
+            f.builder.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+            f.builder.setAttribute(rename, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+            f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+            f.builder.setAttribute(editor, kAXValueAttribute as String, "A")
+            f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+            f.builder.setChildren(bar, [trackMenu]); f.builder.setChildren(trackMenu, [menu]); f.builder.setChildren(menu, [rename])
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.observedFocusedPID = 9001
+            f.logicIsFrontmost = false
+            f.onActivation = { f.observedFocusedPID = f.observedLogicPID; f.logicIsFrontmost = true; return true }
+            let runtime = f.runtime
+            let dependencies = HandlerDependencies(router: f.router, cache: f.cache, targetRegistry: f.registry,
+                poller: StatePoller(axChannel: AccessibilityChannel(), cache: f.cache,
+                    runtime: .init(hasVisibleWindow: { false })), dialogPresent: { false }, supportBundleExporter: nil,
+                liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) }, projectFileReader: .unavailable)
+            let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_tracks", command: "rename"))
+            let result = await handler(dependencies, ["project_ref": .string(project.rawValue),
+                "target_ref": .string(target.rawValue), "name": .string("C")])
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(f.activationCalls == 1)
+            #expect(body["state"] as? String == "A")
+            #expect(f.writes == ["C"])
+            #expect(f.events == ["rename_menu"])
+            #expect(f.menuEditorValueWrites == ["C"])
+            #expect(f.postedReturn)
+            #expect(await f.registry.resolve(target)?.descriptor.trackName == "C")
+        }
+    }
+
+    @Test(arguments: ["ack_only", "foreign_pid", "document", "gate", "false_ack_owned"])
+    func ordinaryForegroundAcquisitionRequiresActualOriginalCustody(_ outcome: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.observedFocusedPID = 9001
+            f.logicIsFrontmost = false
+            f.onActivation = {
+                if outcome == "ack_only" { return true }
+                f.observedFocusedPID = outcome == "foreign_pid" ? 9002 : f.observedLogicPID
+                f.logicIsFrontmost = true
+                if outcome == "document" {
+                    f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+                }
+                if outcome == "gate" { f.boundaryOwnership = false }
+                return outcome != "false_ack_owned"
+            }
+            let context = OperationTraceContext(ownsGate: { f.boundaryOwnership })
+            let result = await OperationTraceContext.$current.withValue(context) {
+                await f.rename(project: project, target: target, expected: nil, desired: "C")
+            }
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(f.activationCalls == 1)
+            if outcome == "false_ack_owned" {
+                #expect(body["state"] as? String == "A")
+                #expect(f.writes == ["C"])
+            } else {
+                #expect(body["state"] as? String == "C")
+                let attempted = try #require(body["write_attempted"] as? Bool)
+                #expect(!attempted)
+                #expect(f.writes.isEmpty)
+                #expect(f.events.isEmpty)
+                #expect(f.selectionWrites.isEmpty)
+                #expect(f.menuEditorValueWrites.isEmpty)
+            }
+        }
+    }
+
+    @Test func exactOwnedNameAdapterDoesNotBorrowOrdinaryActivation() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.onActivation = { Issue.record("Canonical owned naming must not activate through ordinary acquisition"); return false }
+            let receipt = await f.apply(project: project, target: target, before: "A", after: "C")
+            #expect(receipt.status == .applied)
+            #expect(f.writes == ["C"])
+            #expect(f.activationCalls == 0)
+        }
+    }
+
     @Test(arguments: ["multiple_selection", "unreadable_selection"])
     func canonicalNameBatchKeepsUnsupportedSelectionExplicit(_ kind: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {

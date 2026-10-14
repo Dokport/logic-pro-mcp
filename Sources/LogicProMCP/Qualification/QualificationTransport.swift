@@ -3018,7 +3018,7 @@ struct QualificationTransport: Sendable {
         }
         let mutation = try invoke(
             session, id: step(), tool: spec.tool.rawValue, command: spec.command,
-            params: ["index": 0, readbackField: probeValue], phase: "phase_b.mutation",
+            params: ["target_ref": pre.trackRef, readbackField: probeValue], phase: "phase_b.mutation",
             timeout: spec.deadline.seconds + 5)
         guard !Self.mutationSaysItFailed(mutation.text) else {
             throw QualificationTransportError.protocolViolation(
@@ -3026,42 +3026,61 @@ struct QualificationTransport: Sendable {
                     + mutation.text.prefix(220))
         }
         var needsRestore = true
+        var nameCustodyLost = false
         defer {
-            if needsRestore {
+            if needsRestore && !nameCustodyLost {
                 var cleanupID = nextID + 900
                 for _ in 0..<4 {
+                    guard let current = try? observedTrackString(
+                        session, id: cleanupID, trackIndex: 0, field: readbackField,
+                        phase: "phase_b.cleanup_preflight"),
+                        current.trackRef == pre.trackRef, current.value == probeValue else { break }
+                    cleanupID += 2
                     _ = try? invoke(
                         session, id: cleanupID, tool: spec.tool.rawValue, command: spec.command,
-                        params: ["index": 0, readbackField: pre.value], phase: "phase_b.cleanup",
+                        params: ["target_ref": pre.trackRef, readbackField: pre.value], phase: "phase_b.cleanup",
             timeout: spec.deadline.seconds + 5)
                     cleanupID += 1
                     guard let seen = try? observedTrackString(
                         session, id: cleanupID, trackIndex: 0, field: readbackField,
                         phase: "phase_b.cleanup_readback") else { break }
                     cleanupID += 2
+                    guard seen.trackRef == pre.trackRef else { break }
                     if seen.value == pre.value { break }
                 }
             }
         }
+        nameCustodyLost = true
         let after = try observedTrackString(
             session, id: readStep(), trackIndex: 0, field: readbackField,
             phase: "phase_b.readback")
+        guard after.trackRef == pre.trackRef else {
+            throw QualificationTransportError.protocolViolation(
+                "phase_b.readback: track identity changed; inverse and cleanup withheld")
+        }
+        nameCustodyLost = false
         guard after.value == probeValue else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.readback: \(readbackField) is \(after.value), expected the probe value")
         }
         let restore = try invoke(
             session, id: step(), tool: spec.tool.rawValue, command: spec.command,
-            params: ["index": 0, readbackField: pre.value], phase: "phase_b.restore",
+            params: ["target_ref": pre.trackRef, readbackField: pre.value], phase: "phase_b.restore",
             timeout: spec.deadline.seconds + 5)
         guard !Self.mutationSaysItFailed(restore.text) else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.restore: \(spec.id.rawValue) refused the restore: "
                     + restore.text.prefix(220))
         }
+        nameCustodyLost = true
         let restored = try observedTrackString(
             session, id: readStep(), trackIndex: 0, field: readbackField,
             phase: "phase_b.restore_readback")
+        guard restored.trackRef == pre.trackRef else {
+            throw QualificationTransportError.protocolViolation(
+                "phase_b.restore_readback: track identity changed; cleanup withheld")
+        }
+        nameCustodyLost = false
         guard restored.value == pre.value else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.restore_readback: \(readbackField) is \(restored.value), expected "
@@ -3087,7 +3106,7 @@ struct QualificationTransport: Sendable {
         trackIndex: Int,
         field: String,
         phase: String
-    ) throws -> (value: String, raw: String) {
+    ) throws -> (value: String, trackRef: String, raw: String) {
         _ = try? invoke(
             session, id: id, tool: "logic_system", command: "refresh_cache",
             params: [:], phase: "\(phase).refresh")
@@ -3096,11 +3115,13 @@ struct QualificationTransport: Sendable {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rows = object["data"] as? [[String: Any]],
               trackIndex < rows.count,
-              let value = rows[trackIndex][field] as? String else {
+              let value = rows[trackIndex][field] as? String,
+              let trackRef = rows[trackIndex]["track_ref"] as? String, !trackRef.isEmpty,
+              rows.filter({ $0["track_ref"] as? String == trackRef }).count == 1 else {
             throw QualificationTransportError.protocolViolation(
-                "\(phase): logic://tracks did not report \(field) for track \(trackIndex)")
+                "\(phase): logic://tracks did not report \(field) and a unique track_ref for track \(trackIndex)")
         }
-        return (value, raw)
+        return (value, trackRef, raw)
     }
 
     /// Which half of the undo stack a `historyRestoreCycle` run is exercising.
@@ -3145,7 +3166,7 @@ struct QualificationTransport: Sendable {
         }
         let staged = try invoke(
             session, id: step(), tool: "logic_tracks", command: "rename",
-            params: ["index": trackIndex, "name": probeName], phase: "phase_b.stage")
+            params: ["target_ref": original.trackRef, "name": probeName], phase: "phase_b.stage")
         guard !Self.mutationSaysItFailed(staged.text) else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.stage: rename refused, so there is no edit for \(spec.id.rawValue) to "
@@ -3159,26 +3180,35 @@ struct QualificationTransport: Sendable {
         // restore puts the probe name back rather than the original — so there is no exit that
         // clears it, and saying so in the type is more honest than a flag that never moves.
         let nameNeedsRestoring = true
+        var nameCustodyLost = false
         defer {
-            if nameNeedsRestoring {
+            if nameNeedsRestoring && !nameCustodyLost {
                 var cleanupID = nextID + 900
                 for _ in 0..<4 {
                     guard let seen = try? observedTrackString(
                         session, id: cleanupID, trackIndex: trackIndex, field: "name",
                         phase: "phase_b.cleanup_readback") else { break }
                     cleanupID += 2
+                    guard seen.trackRef == original.trackRef else { break }
                     if seen.value == original.value { break }
+                    guard seen.value == probeName else { break }
                     _ = try? invoke(
                         session, id: cleanupID, tool: "logic_tracks", command: "rename",
-                        params: ["index": trackIndex, "name": original.value],
+                        params: ["target_ref": original.trackRef, "name": original.value],
                         phase: "phase_b.cleanup")
                     cleanupID += 1
                 }
             }
         }
+        nameCustodyLost = true
         let renamed = try observedTrackString(
             session, id: readStep(), trackIndex: trackIndex, field: "name",
             phase: "phase_b.stage_readback")
+        guard renamed.trackRef == original.trackRef else {
+            throw QualificationTransportError.protocolViolation(
+                "phase_b.stage_readback: track identity changed; history and cleanup withheld")
+        }
+        nameCustodyLost = false
         guard renamed.value == probeName else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.stage_readback: track \(trackIndex) reads \(renamed.value), so the edit "
@@ -3191,9 +3221,15 @@ struct QualificationTransport: Sendable {
             _ = try invoke(
                 session, id: step(), tool: spec.tool.rawValue, command: "undo", params: [:],
                 phase: "phase_b.stage_undo")
+            nameCustodyLost = true
             let reverted = try observedTrackString(
                 session, id: readStep(), trackIndex: trackIndex, field: "name",
                 phase: "phase_b.stage_undo_readback")
+            guard reverted.trackRef == original.trackRef else {
+                throw QualificationTransportError.protocolViolation(
+                    "phase_b.stage_undo_readback: track identity changed; history and cleanup withheld")
+            }
+            nameCustodyLost = false
             guard reverted.value == original.value else {
                 throw QualificationTransportError.protocolViolation(
                     "phase_b.stage_undo_readback: track \(trackIndex) reads \(reverted.value), "
@@ -3205,9 +3241,15 @@ struct QualificationTransport: Sendable {
         let expectedRestored = direction == .undo ? probeName : original.value
         let restoreCommand = direction == .undo ? "redo" : "undo"
 
+        nameCustodyLost = true
         let pre = try observedTrackString(
             session, id: readStep(), trackIndex: trackIndex, field: "name",
             phase: "phase_b.pre_state")
+        guard pre.trackRef == original.trackRef else {
+            throw QualificationTransportError.protocolViolation(
+                "phase_b.pre_state: track identity changed; history and cleanup withheld")
+        }
+        nameCustodyLost = false
         let mutation = try invoke(
             session, id: step(), tool: spec.tool.rawValue, command: spec.command, params: [:],
             phase: "phase_b.mutation", timeout: spec.deadline.seconds + 5)
@@ -3216,9 +3258,15 @@ struct QualificationTransport: Sendable {
                 "phase_b.mutation: \(spec.id.rawValue) refused the real request: "
                     + mutation.text.prefix(220))
         }
+        nameCustodyLost = true
         let after = try observedTrackString(
             session, id: readStep(), trackIndex: trackIndex, field: "name",
             phase: "phase_b.readback")
+        guard after.trackRef == original.trackRef else {
+            throw QualificationTransportError.protocolViolation(
+                "phase_b.readback: track identity changed; inverse and cleanup withheld")
+        }
+        nameCustodyLost = false
         guard after.value == expectedAfter else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.readback: track \(trackIndex) reads \(after.value), expected "
@@ -3232,9 +3280,15 @@ struct QualificationTransport: Sendable {
                 "phase_b.restore: \(restoreCommand) refused the restore: "
                     + restore.text.prefix(220))
         }
+        nameCustodyLost = true
         let restored = try observedTrackString(
             session, id: readStep(), trackIndex: trackIndex, field: "name",
             phase: "phase_b.restore_readback")
+        guard restored.trackRef == original.trackRef else {
+            throw QualificationTransportError.protocolViolation(
+                "phase_b.restore_readback: track identity changed; cleanup withheld")
+        }
+        nameCustodyLost = false
         guard restored.value == expectedRestored else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.restore_readback: track \(trackIndex) reads \(restored.value), expected "

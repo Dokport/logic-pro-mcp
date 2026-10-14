@@ -3323,6 +3323,25 @@ extension AccessibilityChannel {
                 "before": before, "observed": before, "via": "no-op", "write_attempted": false,
             ]))
         }
+        if ordinaryAcquisition {
+            guard let heldPID, runtime.logicProPID() == heldPID else {
+                return refusal("Ordinary rename lost its original Logic process before acquisition")
+            }
+            if runtime.focusedApplicationPID() != heldPID || !processRuntime.logicIsFrontmost() {
+                guard targetStillHeld(), let current = readHeldName(),
+                      current.utf8.elementsEqual(expected.utf8) else {
+                    return refusal("Ordinary rename lost its held target before activation")
+                }
+                // AX menu presses do not establish the system's focused application.
+                // Reuse the legacy activation, but only actual ownership permits the menu.
+                _ = ProcessUtils.activateLogicPro(runtime: processRuntime)
+                guard runtime.logicProPID() == heldPID, runtime.focusedApplicationPID() == heldPID,
+                      processRuntime.logicIsFrontmost(), targetStillHeld(),
+                      let current = readHeldName(), current.utf8.elementsEqual(expected.utf8) else {
+                    return refusal("Ordinary rename could not verify foreground acquisition of its held target")
+                }
+            }
+        }
         if ordinaryAcquisition, !targetStillHeld(requiringExclusiveSelection: true) {
             guard let position = physical?.currentIndex(), targetStillHeld() else {
                 return refusal("Ordinary rename lost its held target before selection")
