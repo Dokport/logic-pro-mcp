@@ -4,6 +4,39 @@ import MCP
 import Testing
 @testable import LogicProMCP
 
+private actor SendRemovalSagaResultBoundary: Channel {
+    nonisolated let id: ChannelID = .accessibility
+    let base: AccessibilityChannel
+    let journal: SagaJournal
+    let mode: String
+    let afterForward: @Sendable () -> Void
+    init(base: AccessibilityChannel, journal: SagaJournal, mode: String,
+         afterForward: @escaping @Sendable () -> Void = {}) {
+        self.base = base; self.journal = journal; self.mode = mode; self.afterForward = afterForward
+    }
+    func start() async throws {}
+    func stop() async {}
+    func healthCheck() async -> ChannelHealth { await base.healthCheck() }
+    func execute(operation: String, params: [String: String]) async -> ChannelResult {
+        if operation == "mixer.set_send_output_verified", mode == "no_observer" {
+            return .success(HonestContract.encodeStateA(extras: ["verified": true, "write_attempted": true]))
+        }
+        let result = await base.execute(operation: operation, params: params)
+        if operation == "mixer.set_send_output_verified",
+           sharedJSONObject(result.message)?["state"] as? String == "A" {
+            afterForward()
+            if mode == "cancel" { _ = await journal.cancel(idempotencyKey: "owned-send-removal-saga") }
+            if mode == "failure" {
+                return .error(HonestContract.encodeStateC(error: .readbackUnavailable, extras: ["write_attempted": true]))
+            }
+            if mode == "unverified" {
+                return .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: ["write_attempted": true]))
+            }
+        }
+        return result
+    }
+}
+
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
     @Test("A held input popup may move focus without losing its original complete association",
@@ -1426,6 +1459,41 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(removing: true, survivingSource: surviving, observeRemoval: true)
     }
 
+    @Test(arguments: ["cancel", "failure", "unverified"])
+    func registeredSendRemovalSagaCompensatesOnlyItsActualNativeEffect(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test("Registered inspection preserves raw checked nonrouting titles without calling them a typed send mode")
+    func registeredInspectionPreservesItsCheckedSendNonroutingWitness() async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: "observed")
+    }
+
+    @Test(arguments: ["unsupported_mark", "unread_mark", "malformed_title", "changed_control"])
+    func registeredInspectionCannotPublishUnknownSendNonroutingWitness(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: fault)
+    }
+
+    @Test(arguments: ["decoded", "cached", "duplicate", "foreign", "unstable", "unqualified"])
+    func sendNonroutingProjectionClearsUnboundOrForgedWitness(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: "projection_" + fault)
+    }
+
+    @Test(arguments: ["preflight", "wrong_project", "foreign_document", "refs_disabled"])
+    func removalSagaPreflightRequiresItsActualProject(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["external_empty", "foreign_after", "no_observer"])
+    func removalSagaNeverInvertsNewerOrUnownedEmptyState(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple", "raw_level", "raw_bypass", "nondefault_mode"])
+    func removalSagaRejectsUnapprovedOrInvalidWholeRequestsBeforeAnyLeaf(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
     @Test(arguments: ["multiple_occupied", "foreign_project", "unreadable"])
     func unverifiedSendRemovalNeverPublishesNativeInverseAuthority(fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(fault, removing: true, observeRemoval: true)
@@ -1472,7 +1540,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
                                                emptyModeMenu: Bool = false, observeRemoval: Bool = false,
-                                               readRestored: String? = nil) async throws {
+                                               readRestored: String? = nil, sagaMode: String? = nil,
+                                               inspectSendWitness: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1635,6 +1704,23 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
             f.routingReadResult = { element, attribute in
+                if let inspectSendWitness, CFEqual(element, mode),
+                   b.makeAXRuntime().children(f.mixer).contains(where: { CFEqual($0, root) }) {
+                    if inspectSendWitness == "malformed_title", attribute == kAXTitleAttribute as String {
+                        f.routingLateScopeInjected = true; return .success(NSNumber(value: 123))
+                    }
+                    if attribute == "AXMenuItemMarkChar" {
+                        if ["unsupported_mark", "unread_mark"].contains(inspectSendWitness) {
+                            f.routingLateScopeInjected = true
+                            return .failure(.init(raw: inspectSendWitness == "unsupported_mark"
+                                ? AXError.noValue.rawValue : AXError.cannotComplete.rawValue))
+                        }
+                        if inspectSendWitness == "changed_control", !f.routingLateScopeInjected {
+                            f.routingLateScopeInjected = true
+                            b.setChildren(originalSend[1], [b.element(1_965_2622), renewedList])
+                        }
+                    }
+                }
                 if readRestored == "retired_source", f.routingLateScopeInjected, CFEqual(element, restoredSource) {
                     return .failure(.init(raw: AXError.invalidUIElement.rawValue))
                 }
@@ -1693,7 +1779,13 @@ struct Issue965HeldSelectionAssociationTests {
                 else { return nil }
                 return .failure(.init(raw: AXError.invalidUIElement.rawValue))
             }
-            let before = try await inspect(f, cache: cache, registry: registry)
+            let before = try await inspect(f, cache: cache, registry: registry,
+                domains: inspectSendWitness == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"])
+            if inspectSendWitness == "changed_control", before["snapshot_id"] == nil {
+                #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 0)
+                #expect(before["state"] as? String == "C")
+                return
+            }
             let id = try #require(before["snapshot_id"] as? String)
             let capture = try #require(await cache.retainedInspection(id: id)).capture
             let row = try #require(capture.channelStrips.indices.first {
@@ -1704,6 +1796,64 @@ struct Issue965HeldSelectionAssociationTests {
                 CFEqual($0.strip.strip, f.strips[1])
             })
             #expect(CFEqual(originalPair.track.header, f.headers[0]))
+            if inspectSendWitness != nil {
+                let checked = capture.freshPopulation?.checkedOutputs.filter {
+                    $0.source.matches(originalPair.strip) && $0.sendOrdinal == 1
+                } ?? []
+                let healthy = inspectSendWitness == "observed" || inspectSendWitness?.hasPrefix("projection_") == true
+                if healthy { #expect(checked.count == 1 && checked.first?.assignment == .stereoOutput) }
+                else { #expect(f.routingLateScopeInjected) }
+                let strips = try #require((before["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+                let target = try #require(strips.first { $0["mixer_strip_ref"] as? String == reference.rawValue })
+                let slots = try #require(target["send_slots"] as? [[String: Any]])
+                let send = try #require(slots.first { $0["ordinal"] as? Int == 1 })
+                if healthy {
+                    #expect(send["checked_nonrouting_titles"] as? [String] == ["Post Pan"])
+                    #expect(send["nonrouting_source"] as? String == "ax_send_menu_checkmark")
+                } else {
+                    #expect(send["checked_nonrouting_titles"] == nil && send["nonrouting_source"] == nil)
+                }
+                #expect(send["physical_slot"] == nil && send["mode"] == nil)
+                #expect(f.routingDestinationPresses == 0)
+                if inspectSendWitness != "changed_control" {
+                    #expect((before["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+                }
+                if let inspectSendWitness, inspectSendWitness.hasPrefix("projection_") {
+                    var forged = capture.channelStrips[row]
+                    forged.sendSlots = forged.sendSlots?.map { slot in
+                        var result = slot
+                        result.checkedNonRoutingTitles = ["forged mode"]
+                        result.nonRoutingSource = "forged source"
+                        return result
+                    }
+                    if inspectSendWitness == "projection_decoded" {
+                        forged = try JSONDecoder().decode(ChannelStripState.self, from: JSONEncoder().encode(forged))
+                        #expect(forged.physicalBinding == nil)
+                    }
+                    var fresh = capture.freshPopulation
+                    if inspectSendWitness == "projection_duplicate" { fresh?.checkedOutputs += checked }
+                    if inspectSendWitness == "projection_foreign", let witness = checked.first {
+                        fresh?.checkedOutputs = [.init(source: .init(window: witness.source.window, mixer: witness.source.mixer,
+                            strip: f.strips[0], document: witness.source.document), assignment: witness.assignment,
+                            sendOrdinal: 1, sendNonRoutingChecks: ["foreign mode"])]
+                    }
+                    if inspectSendWitness == "projection_cached" { fresh = nil }
+                    if inspectSendWitness == "projection_unstable" { fresh?.stable = false }
+                    let altered = SessionPopulationObservation.Capture(before: capture.before, after: capture.after,
+                        projectEpoch: capture.projectEpoch, project: capture.project, tracks: capture.tracks,
+                        tracksFetchedAt: capture.tracksFetchedAt, channelStrips: capture.channelStrips,
+                        mixerFetchedAt: capture.mixerFetchedAt, fileTrackCount: capture.fileTrackCount,
+                        projectFileNotBound: capture.projectFileNotBound, requestedProjectMatches: capture.requestedProjectMatches,
+                        referencesEnabled: capture.referencesEnabled, targetSnapshot: capture.targetSnapshot,
+                        issued: capture.issued, projectIssuance: capture.projectIssuance,
+                        beganAt: capture.beganAt, endedAt: capture.endedAt, captureID: capture.captureID,
+                        freshPopulation: fresh, mixerReferences: capture.mixerReferences)
+                    let projected = try #require(SessionPopulationObservation.reportedSendSlots(of: forged,
+                        capture: altered, qualified: inspectSendWitness != "projection_unqualified"))
+                    #expect(projected.allSatisfy { $0.checkedNonRoutingTitles == nil && $0.nonRoutingSource == nil })
+                }
+                return
+            }
             let initialSelections = f.selections
             if fault == "missing_pair" { f.expireRetainedCapture = true }
             f.routingRead = { element, attribute in
@@ -1744,6 +1894,113 @@ struct Issue965HeldSelectionAssociationTests {
                     : existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
                     : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
                 "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
+            if let sagaMode {
+                let journal = SagaJournal(maxRecords: 1)
+                if sagaMode == "raw_level" { b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 1) }
+                if sagaMode == "raw_bypass" { b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1) }
+                if sagaMode == "nondefault_mode" { b.setAttribute(mode, kAXTitleAttribute as String, "Post Pan") }
+                await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal, mode: sagaMode,
+                    afterForward: {
+                        if sagaMode == "external_empty" {
+                            b.setChildren(replacement, [name, extraSend[0]]); f.routingLateScopeInjected = true
+                        } else if sagaMode == "foreign_after" {
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            f.routingLateScopeInjected = true
+                        }
+                    }))
+                let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                    poller: StatePoller(axChannel: f.channel(), cache: cache,
+                        runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                    mutationGate: gate, liveTrackNames: { [:] })
+                var stepParams = params; stepParams.removeValue(forKey: "target_ref")
+                if sagaMode != "refs_disabled", case .issued(let project)? = capture.projectIssuance {
+                    stepParams["project_ref"] = .string(project.rawValue)
+                }
+                if sagaMode == "wrong_project" { stepParams["project_ref"] = .string("project_wrong_session") }
+                if sagaMode == "extra_param" { stepParams["native_proof"] = .object([:]) }
+                var wire: [String: Value] = ["idempotency_key": .string("owned-send-removal-saga"),
+                    "steps": .array([.object(["operation_id": .string(OperationID.mixerSetSendOutputVerified.rawValue),
+                        "target_ref": .string(reference.rawValue), "params": .object(stepParams),
+                        "expected_inverse": .object(["operation_id": .string(OperationID.mixerSetSendOutputVerified.rawValue),
+                            "value_parameter": .string("destination")])])])]
+                if sagaMode == "invalid_later" {
+                    wire["steps"] = .array((wire["steps"]?.arrayValue ?? []) + [.object([
+                        "operation_id": .string(OperationID.tracksMute.rawValue), "target_ref": .string(reference.rawValue),
+                        "params": .object(["enabled": .string("invalid")]),
+                        "expected_inverse": .object(["operation_id": .string(OperationID.tracksMute.rawValue),
+                            "value_parameter": .string("enabled")])])])
+                }
+                if sagaMode == "multiple", let steps = wire["steps"]?.arrayValue { wire["steps"] = .array(steps + steps) }
+                if sagaMode != "missing_confirmation" {
+                    wire["confirmed_plan_hash"] = .string(sagaMode == "wrong_confirmation" ? "wrong_hash"
+                        : (try? SagaWire.plan(from: wire)).map(SagaJournal.planHash) ?? "invalid_hash")
+                }
+                if sagaMode == "foreign_document" { b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
+                let preflight = ["preflight", "wrong_project", "foreign_document", "refs_disabled"].contains(sagaMode)
+                let sagaHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_system",
+                    command: preflight ? "saga_preflight" : "saga_execute"))
+                let result = await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                    await FeatureFlags.withAdr002TargetRefForTests(sagaMode != "refs_disabled") {
+                        await sagaHandler(dependencies, wire)
+                    }
+                }
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if preflight {
+                    let ready = try #require(body["ok"] as? Bool)
+                    if sagaMode == "preflight" { #expect(ready) }
+                    else { #expect(!ready, "Actual preflight: \(sharedToolText(result))") }
+                    #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
+                    return
+                }
+                if ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple", "raw_level", "raw_bypass", "nondefault_mode"].contains(sagaMode) {
+                    #expect(body["state"] as? String == "C" && f.routingDestinationPresses == 0)
+                    if ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple"].contains(sagaMode) {
+                        #expect(await journal.record(for: "owned-send-removal-saga") == nil)
+                    }
+                    return
+                }
+                if ["external_empty", "foreign_after", "no_observer"].contains(sagaMode) {
+                    if sagaMode == "no_observer" { #expect(f.routingDestinationPresses == 0) }
+                    else { #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 1) }
+                    #expect(body["saga_state"] as? String == "rollbackUncertain", "Actual lost-custody receipt: \(sharedToolText(result))")
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
+                }
+                #expect(f.routingDestinationPresses == 2, "Actual registered removal/inverse response: \(sharedToolText(result))")
+                let compensation = try #require(body["compensation"] as? [String: Any])
+                let fullyCompensated = try #require(compensation["fully_compensated"] as? Bool)
+                #expect(fullyCompensated)
+                let slots = try #require(AXLogicProElements.sendSlotObservations(in: restoredSource, runtime: f.logic().ax))
+                #expect(slots.filter { $0.state == .occupiedUnknownDestination }.count == 1)
+                #expect(!gate.isHeldByEntitledHolder())
+                let beforeReplay = f.routingDestinationPresses
+                let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await sagaHandler(dependencies, wire) }
+                let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                if sagaMode == "cancel" {
+                    #expect(replayBody["state"] as? String == "C")
+                    #expect(replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue)
+                    #expect(replayBody["duplicate"] == nil)
+                } else {
+                    let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                    #expect(duplicate)
+                }
+                #expect(f.routingDestinationPresses == beforeReplay, "Existing journal replay never reissues removal or inverse")
+                var conflicting = wire
+                var conflictingStep = try #require(wire["steps"]?.arrayValue?.first?.objectValue)
+                var conflictingParams = try #require(conflictingStep["params"]?.objectValue)
+                conflictingParams["ordinal"] = .int(0); conflictingStep["params"] = .object(conflictingParams)
+                conflicting["steps"] = .array([.object(conflictingStep)])
+                conflicting.removeValue(forKey: "confirmed_plan_hash")
+                conflicting["confirmed_plan_hash"] = .string(SagaJournal.planHash(try SagaWire.plan(from: conflicting)))
+                let conflict = await FeatureFlags.withAdr004MutationSagaForTests(true) { await sagaHandler(dependencies, conflicting) }
+                #expect(sharedJSONObject(sharedToolText(conflict))?["error"] as? String == HonestContract.FailureError.idempotencyKeyConflict.rawValue)
+                _ = await journal.begin(.init(steps: [], idempotencyKey: "body-pressure"))
+                let evicted = await FeatureFlags.withAdr004MutationSagaForTests(true) { await sagaHandler(dependencies, wire) }
+                #expect(sharedJSONObject(sharedToolText(evicted))?["error"] as? String == HonestContract.FailureError.sagaOutcomeUnavailable.rawValue)
+                #expect(f.routingDestinationPresses == beforeReplay)
+                return
+            }
             let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
                 commandParams: params, mutationGate: gate) {
                 await FeatureFlags.withAdr002TargetRefForTests(true) {

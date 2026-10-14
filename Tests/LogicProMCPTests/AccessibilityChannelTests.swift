@@ -2280,8 +2280,13 @@ private final class MarkerWindowReadSequence: @unchecked Sendable {
     builder.setChildren(controlBar, [autopunch])
     builder.setAttribute(autopunch, kAXRoleAttribute as String, kAXCheckBoxRole as String)
     builder.setAttribute(autopunch, kAXDescriptionAttribute as String, "Autopunch")
-
-    let channel = makeAXBackedAccessibilityChannel(builder: builder, app: app)
+    builder.setAttribute(autopunch, kAXValueAttribute as String, NSNumber(value: 0))
+    let runtime = builder.makeLogicRuntime(appElement: app, setAttributeHandler: nil, performActionHandler: { element, action in
+        guard CFEqual(element, autopunch), action == kAXPressAction as String else { return false }
+        builder.removeAttribute(autopunch, kAXValueAttribute as String)
+        return true
+    })
+    let channel = makeAXBackedAccessibilityChannel(builder: builder, app: app, logicRuntime: runtime)
 
     let result = await channel.execute(operation: "transport.toggle_autopunch", params: [:])
     let object = decodeAccessibilityJSON(result.message)

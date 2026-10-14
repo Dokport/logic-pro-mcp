@@ -831,6 +831,7 @@ struct SystemDispatcher: OperationTraceDispatching {
             } catch {
                 return SagaWire.invalidParams(error)
             }
+            let sendRemoval = SendRemovalSagaAdapter(plan: plan)
             let journalIssues: [[String: Any]]
             switch await sagaJournal.disposition(for: plan) {
             case .conflict:
@@ -863,13 +864,27 @@ struct SystemDispatcher: OperationTraceDispatching {
                 dialogPresent: dialogPresent,
                 liveReadback: sagaLiveReadback ?? .unavailable,
                 liveTrackName: liveTrackName,
-                liveTrackNames: liveTrackNames
+                liveTrackNames: liveTrackNames,
+                sendRemoval: sendRemoval
             )
             let preflight = await MutationSaga(
                 targetRegistry: targetRegistry,
                 routeAvailable: Self.sagaRouteProbe(router: router)
             ).preflight(plan)
-            let availability = await executor.captureBeforeStateAvailability(plan: plan)
+            let availability: [SagaBeforeStateAvailability]
+            if sendRemoval != nil {
+                guard let mutationGate, let claim = mutationGate.tryAcquire(operation: "saga.send_removal_observation") else {
+                    return toolStateCResult(.verifiedOpInProgress, extras: ["write_attempted": false])
+                }
+                defer { mutationGate.release(claim) }
+                let parent = OperationTraceContext.current
+                let context = OperationTraceContext(parentTraceID: parent?.traceID, mutationGateAcquired: true,
+                    ownsGate: { mutationGate.stillOwns(claim) && (parent?.ownsGate() ?? true) },
+                    deadline: parent?.deadline, cancellationRequested: { Task.isCancelled || parent?.cancellationRequested() == true })
+                availability = await OperationTraceContext.$current.withValue(context) {
+                    await executor.captureBeforeStateAvailability(plan: plan)
+                }
+            } else { availability = await executor.captureBeforeStateAvailability(plan: plan) }
             let availabilityIssues = SagaWire.availabilityIssues(availability, plan: plan)
             let issues = preflight.issues.map(SagaWire.preflightIssue)
                 + availabilityIssues
@@ -899,9 +914,16 @@ struct SystemDispatcher: OperationTraceDispatching {
             let compressorPlan = CompressorParameterSaga.containsPluginSteps(plan)
             let selectedEQPlan = SelectedEQParameterSaga.contains(plan)
             let pluginPlan = compressorPlan || selectedEQPlan
-            if pluginPlan, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+            let containsSend = plan.steps.contains { $0.operationID == .mixerSetSendOutputVerified }
+            let sendRemoval = SendRemovalSagaAdapter(plan: plan)
+            if containsSend, sendRemoval == nil {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
-                    hint: "Confirm this exact canonical plan_hash before applying the selected two plug-in parameters",
+                    hint: "Only one exact occupied Stereo Output send removal is supported by this Saga adapter.",
+                    extras: ["write_attempted": false]), traceID: traceID)
+            }
+            if pluginPlan || containsSend, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+                return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
+                    hint: "Confirm this exact plan_hash before applying the selected workflow",
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             switch await sagaJournal.begin(plan) {
@@ -1006,7 +1028,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     ?? ContinuousClock.now.advanced(by: .seconds(lifecycleBudgetSeconds))
                 let inherited = OperationTraceContext.current
                 let compressorCancellation = SagaAbandonFlag()
-                let approvedContext = (approvedSessionRepair != nil || pluginPlan) ?
+                let approvedContext = (approvedSessionRepair != nil || pluginPlan || sendRemoval != nil) ?
                     OperationTraceContext(parentTraceID: inherited?.traceID,
                         mutationGateAcquired: mutationClaim != nil,
                         ownsGate: {
@@ -1033,7 +1055,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                         environment: ProcessInfo.processInfo.environment,
                         stepCount: plan.steps.count
                     ), approvedSessionRepair: approvedSessionRepair, confirmedCompressorPlan: compressorPlan,
-                    confirmedSelectedEQPlan: selectedEQPlan
+                    confirmedSelectedEQPlan: selectedEQPlan, sendRemoval: sendRemoval
                 )
                 #else
                 let executor = ProductionSagaStepExecutor(
@@ -1044,7 +1066,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     liveReadback: sagaLiveReadback ?? .unavailable,
                     liveTrackName: liveTrackName,
                     liveTrackNames: liveTrackNames, approvedSessionRepair: approvedSessionRepair,
-                    confirmedCompressorPlan: compressorPlan, confirmedSelectedEQPlan: selectedEQPlan
+                    confirmedCompressorPlan: compressorPlan, confirmedSelectedEQPlan: selectedEQPlan, sendRemoval: sendRemoval
                 )
                 #endif
                 let saga = MutationSaga(

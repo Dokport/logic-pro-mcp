@@ -57,6 +57,8 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
     case axTrackName = "ax_track_name"
     case axTrackOrder = "ax_track_order"
     case axOutputMenuCheckmark = "ax_output_menu_checkmark"
+    case axSendMenuCheckmark = "ax_send_menu_checkmark"
+    case axSendSlotFootprint = "ax_send_slot_footprint"
     case axTrackToggle = "ax_track_toggle"
     case axProjectMixerVisibility = "ax_project_mixer_visibility"
     case axPluginParameter = "ax_plugin_parameter"
@@ -69,6 +71,8 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
         case .axTrackName: "track_name"
         case .axTrackOrder: "track_order"
         case .axOutputMenuCheckmark: "output_menu_checkmark"
+        case .axSendMenuCheckmark: "send_menu_checkmark"
+        case .axSendSlotFootprint: "send_slot_footprint"
         case .axTrackToggle: "track_toggle"
         case .axProjectMixerVisibility: "mixer_visibility"
         case .axPluginParameter: "plugin_parameter"
@@ -360,7 +364,9 @@ actor MutationSaga {
                 && step.operationID == .mixerSetOutputVerified
                 && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
                 && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
-            let definition = approvedSort ? ReversibleDefinition(tool: .logicTracks, command: "sort_verified",
+            let definition = SendRemovalSagaAdapter.accepts(plan)
+                ? ReversibleDefinition(tool: .logicMixer, command: "set_send_output_verified", valueParameter: "destination", tolerance: .exact)
+                : approvedSort ? ReversibleDefinition(tool: .logicTracks, command: "sort_verified",
                 valueParameter: "expected_order", tolerance: .exact)
                 : approvedOutput ? ReversibleDefinition(tool: .logicMixer, command: "set_output_verified",
                     valueParameter: "destination", tolerance: .exact)
@@ -507,7 +513,8 @@ actor MutationSaga {
             guard let beforeState = await executor.readState(step),
                   step.operationID != .pluginsSetParamVerified || CompressorParameterSaga.beforeMatches(beforeState, step),
                   step.operationID != .pluginsSetEQBandVerified || SelectedEQParameterSaga.beforeMatches(beforeState, step),
-                  let desiredValue = step.params[step.expectedInverse.valueParameter] else {
+                  let desiredValue = step.operationID == .mixerSetSendOutputVerified
+                    ? SendRemovalSagaAdapter.journalValue(step) : step.params[step.expectedInverse.valueParameter] else {
                 outcome.journal.append(CompensationJournalRecord(
                     stepIndex: index,
                     beforeState: nil,
@@ -934,7 +941,7 @@ actor MutationSaga {
         desiredValue: Value,
         step: SagaStep
     ) -> VerificationDisposition {
-        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified || step.operationID == .mixerSetOutputVerified ? .unknown : .applied }
+        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified || step.operationID == .mixerSetOutputVerified || step.operationID == .mixerSetSendOutputVerified ? .unknown : .applied }
         if step.operationID == .pluginsSetEQBandVerified {
             return SelectedEQParameterSaga.comparison(readback, desired: desiredValue, step: step).equal ? .applied : .unknown
         }
