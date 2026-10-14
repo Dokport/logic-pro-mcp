@@ -1700,6 +1700,7 @@
     "페이더": "strings_value",
     "편집": "strings_value",
     "편집기": "strings_value",
+    "포스트 페이더": "quickhelp_title",
     "폴더": "strings_value",
     "표시 모드": "strings_value",
     "프로젝트 또는 섹션...": "nowhere",
