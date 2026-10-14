@@ -109,6 +109,274 @@ func transportResourceCarriesActualTempoWithoutReplacingTheLegacyDefault(shape: 
     else { #expect(!envelope.keys.contains("observed_tempo")) }
 }
 
+@Test(arguments: ["off", "on", "missing", "unreadable", "text", "nonbinary", "fractional", "nonfinite",
+                  "duplicate", "wrong_role", "wrong_owner", "false_friend", "customization_popover"])
+func autopunchResourceRequiresOneObservedOwnBinaryCheckbox(shape: String) async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_610), window = builder.element(25_611), bar = builder.element(25_612)
+    let play = builder.element(25_613), record = builder.element(25_614), autopunch = builder.element(25_615)
+    let duplicate = builder.element(25_616), foreign = builder.element(25_617)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar, foreign])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setAttribute(foreign, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(foreign, kAXDescriptionAttribute as String, "Inspector")
+    builder.setChildren(bar, [play, record] + (["missing", "wrong_owner", "customization_popover"].contains(shape) ? [] : [autopunch])
+        + (shape == "duplicate" ? [duplicate] : []))
+    if shape == "wrong_owner" { builder.setChildren(foreign, [autopunch]) }
+    if shape == "customization_popover" {
+        let popover = builder.element(25_618)
+        builder.setAttribute(popover, kAXRoleAttribute as String, "AXPopover")
+        builder.setChildren(popover, [autopunch])
+        builder.setChildren(bar, [play, record, popover])
+    }
+    // Independent own-control spelling from Logic's existing transport-button row;
+    // these injected cases do not establish native visibility or locale qualification.
+    let title = shape == "false_friend" ? "Autopunch Settings" : "Autopunch"
+    for (element, label) in [(play, "Play"), (record, "Record"), (autopunch, title), (duplicate, "Autopunch")] {
+        builder.setAttribute(element, kAXRoleAttribute as String,
+            element == autopunch && shape == "wrong_role" ? kAXButtonRole as String : kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, label)
+        builder.setAttribute(element, kAXDescriptionAttribute as String, label)
+        if element != autopunch || shape != "unreadable" {
+            builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: element == autopunch && shape == "on"))
+        }
+    }
+    switch shape {
+    case "text": builder.setAttribute(autopunch, kAXValueAttribute as String, "1")
+    case "nonbinary": builder.setAttribute(autopunch, kAXValueAttribute as String, NSNumber(value: 2))
+    case "fractional": builder.setAttribute(autopunch, kAXValueAttribute as String, NSNumber(value: 0.5))
+    case "nonfinite": builder.setAttribute(autopunch, kAXValueAttribute as String, NSNumber(value: Double.nan))
+    default: break
+    }
+    let router = ChannelRouter()
+    await router.register(issue255Channel(logicRuntime: builder.makeLogicRuntime(appElement: app)))
+    let result = try await ResourceHandlers.read(uri: "logic://transport/state", cache: StateCache(), router: router)
+    let text = try #require(result.contents.first?.text)
+    let envelope = try #require(sharedJSONObject(text))
+    let data = try #require(envelope["data"] as? [String: Any])
+    let state = try #require(data["state"] as? [String: Any])
+    let playing = try #require(state["isPlaying"] as? Bool), recording = try #require(state["isRecording"] as? Bool)
+    #expect(!playing)
+    #expect(!recording)
+    if shape == "off" || shape == "on" {
+        let observed = try #require(state["isAutopunchEnabled"] as? Bool)
+        if shape == "on" { #expect(observed) } else { #expect(!observed) }
+    } else { #expect(!state.keys.contains("isAutopunchEnabled")) }
+}
+
+@Test func autopunchWriterDoesNotPressTheLoneCustomizationVisibilityOption() async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_620), window = builder.element(25_621), bar = builder.element(25_622)
+    let play = builder.element(25_623), record = builder.element(25_624)
+    let popover = builder.element(25_625), option = builder.element(25_626)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setAttribute(popover, kAXRoleAttribute as String, "AXPopover")
+    builder.setChildren(bar, [play, record, popover]); builder.setChildren(popover, [option])
+    for (element, label) in [(play, "Play"), (record, "Record"), (option, "Autopunch")] {
+        builder.setAttribute(element, kAXRoleAttribute as String, kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, label)
+        builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: 0))
+    }
+    final class Effects: @unchecked Sendable { var presses = 0 }
+    let effects = Effects()
+    let runtime = builder.makeLogicRuntime(appElement: app, setAttributeHandler: nil, performActionHandler: { element, action in
+        if CFEqual(element, option), action == kAXPressAction as String {
+            effects.presses += 1
+            builder.setAttribute(option, kAXValueAttribute as String, NSNumber(value: 1))
+            return true
+        }
+        Issue.record("No customization option or other control may be actuated"); return false
+    })
+    let result = await issue255Channel(logicRuntime: runtime).execute(operation: "transport.toggle_autopunch", params: [:])
+    let body = try #require(issue255Object(result.message))
+    #expect(effects.presses == 0)
+    #expect(body["state"] as? String == "C")
+    let value = try #require(builder.attributeValue(option, kAXValueAttribute as String) as? NSNumber)
+    #expect(value.doubleValue == 0)
+}
+
+@Test(arguments: ["missing_value", "text", "nonbinary", "fractional", "duplicate", "wrong_role"])
+func autopunchWriterRequiresOneOwnBinaryBaseline(shape: String) async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_630), window = builder.element(25_631), bar = builder.element(25_632)
+    let control = builder.element(25_633), duplicate = builder.element(25_634)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setChildren(bar, [control] + (shape == "duplicate" ? [duplicate] : []))
+    for element in [control, duplicate] {
+        builder.setAttribute(element, kAXRoleAttribute as String,
+            shape == "wrong_role" ? kAXButtonRole as String : kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, "Autopunch")
+        builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: 0))
+    }
+    switch shape {
+    case "missing_value": builder.removeAttribute(control, kAXValueAttribute as String)
+    case "text": builder.setAttribute(control, kAXValueAttribute as String, "1")
+    case "nonbinary": builder.setAttribute(control, kAXValueAttribute as String, NSNumber(value: 2))
+    case "fractional": builder.setAttribute(control, kAXValueAttribute as String, NSNumber(value: 0.5))
+    default: break
+    }
+    final class Effects: @unchecked Sendable { var presses = 0 }
+    let effects = Effects()
+    let runtime = builder.makeLogicRuntime(appElement: app, setAttributeHandler: nil, performActionHandler: { _, _ in
+        effects.presses += 1
+        return true
+    })
+    let result = await issue255Channel(logicRuntime: runtime).execute(operation: "transport.toggle_autopunch", params: [:])
+    let body = try #require(issue255Object(result.message))
+    #expect(effects.presses == 0)
+    #expect(body["state"] as? String == "C")
+}
+
+@Test(arguments: ["reader", "writer"])
+func autopunchUnreadableDirectCompetitorCannotEstablishUniqueness(surface: String) async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_640), window = builder.element(25_641), bar = builder.element(25_642)
+    let play = builder.element(25_643), record = builder.element(25_644)
+    let control = builder.element(25_645), competitor = builder.element(25_646)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setChildren(bar, [play, record, control, competitor])
+    for (element, title) in [(play, "Play"), (record, "Record"), (control, "Autopunch"), (competitor, "Autopunch")] {
+        builder.setAttribute(element, kAXRoleAttribute as String, kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, title)
+        builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: 0))
+    }
+    final class Effects: @unchecked Sendable { var presses = 0; var labelFailures = 0 }
+    let effects = Effects()
+    let runtime = builder.makeLogicRuntime(appElement: app, attributeValueHandler: { element, attribute in
+        if CFEqual(element, competitor), [kAXTitleAttribute as String, kAXDescriptionAttribute as String].contains(attribute) {
+            effects.labelFailures += 1
+            return .some(nil)
+        }
+        return nil
+    }, attributeValueResultHandler: { element, attribute in
+        if CFEqual(element, competitor), [kAXTitleAttribute as String, kAXDescriptionAttribute as String].contains(attribute) {
+            effects.labelFailures += 1
+            return .failure(AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue))
+        }
+        return nil
+    }, setAttributeHandler: nil, performActionHandler: { element, action in
+        guard CFEqual(element, control), action == kAXPressAction as String else { return false }
+        effects.presses += 1
+        builder.setAttribute(control, kAXValueAttribute as String, NSNumber(value: 1))
+        return true
+    })
+    let channel = issue255Channel(logicRuntime: runtime)
+    if surface == "reader" {
+        let router = ChannelRouter(); await router.register(channel)
+        let result = try await ResourceHandlers.read(uri: "logic://transport/state", cache: StateCache(), router: router)
+        let text = try #require(result.contents.first?.text)
+        let envelope = try #require(sharedJSONObject(text))
+        let data = try #require(envelope["data"] as? [String: Any])
+        let state = try #require(data["state"] as? [String: Any])
+        #expect(!state.keys.contains("isAutopunchEnabled"))
+    } else {
+        let result = await channel.execute(operation: "transport.toggle_autopunch", params: [:])
+        let body = try #require(issue255Object(result.message))
+        #expect(body["state"] as? String == "C")
+    }
+    #expect(effects.labelFailures > 0)
+    #expect(effects.presses == 0)
+}
+
+@Test func autopunchPostPressCustodyLossDiscardsEarlierReadback() async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_650), window = builder.element(25_651), bar = builder.element(25_652)
+    let control = builder.element(25_653)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setChildren(bar, [control])
+    builder.setAttribute(control, kAXRoleAttribute as String, kAXCheckBoxRole as String)
+    builder.setAttribute(control, kAXTitleAttribute as String, "Autopunch")
+    builder.setAttribute(control, kAXValueAttribute as String, NSNumber(value: 0))
+    final class Effects: @unchecked Sendable { var presses = 0; var postReads = 0 }
+    let effects = Effects()
+    let runtime = builder.makeLogicRuntime(appElement: app, childrenHandler: { element in
+        if CFEqual(element, bar), effects.presses > 0 {
+            effects.postReads += 1
+            return effects.postReads == 2 ? [] : [control]
+        }
+        return nil
+    }, childrenResultHandler: { element in
+        if CFEqual(element, bar), effects.presses > 0 {
+            effects.postReads += 1
+            if effects.postReads == 2 { return .failure(AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue)) }
+        }
+        return nil
+    }, setAttributeHandler: nil, performActionHandler: { _, _ in effects.presses += 1; return true })
+    let result = await issue255Channel(logicRuntime: runtime).execute(operation: "transport.toggle_autopunch", params: [:])
+    let body = try #require(issue255Object(result.message))
+    #expect(effects.presses == 1)
+    #expect(effects.postReads == 2)
+    #expect(body["state"] as? String == "B")
+    #expect(body["reason"] as? String == "readback_unavailable")
+    #expect(body["observed"] is NSNull)
+}
+
+@Test(arguments: ["replacement", "duplicate", "wrong_role"])
+func autopunchPostPressReadbackCannotBorrowAnotherControl(shape: String) async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_660), window = builder.element(25_661), bar = builder.element(25_662)
+    let control = builder.element(25_663), replacement = builder.element(25_664)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setChildren(bar, [control])
+    for element in [control, replacement] {
+        builder.setAttribute(element, kAXRoleAttribute as String, kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, "Autopunch")
+        builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: element == replacement ? 1 : 0))
+    }
+    final class Effects: @unchecked Sendable { var presses = 0 }
+    let effects = Effects()
+    let runtime = builder.makeLogicRuntime(appElement: app, setAttributeHandler: nil, performActionHandler: { element, action in
+        guard CFEqual(element, control), action == kAXPressAction as String else { return false }
+        effects.presses += 1
+        switch shape {
+        case "replacement": builder.setChildren(bar, [replacement])
+        case "duplicate": builder.setChildren(bar, [control, replacement])
+        default: builder.setAttribute(control, kAXRoleAttribute as String, kAXButtonRole as String)
+        }
+        return true
+    })
+    let result = await issue255Channel(logicRuntime: runtime).execute(operation: "transport.toggle_autopunch", params: [:])
+    let body = try #require(issue255Object(result.message))
+    #expect(effects.presses == 1)
+    #expect(body["state"] as? String == "B")
+    #expect(body["reason"] as? String == "readback_unavailable")
+    #expect(body["observed"] is NSNull)
+    let unchanged = try #require(builder.attributeValue(control, kAXValueAttribute as String) as? NSNumber)
+    #expect(unchanged.doubleValue == 0)
+}
+
+@Test func autopunchOptionalReadbackPreservesLegacyAndFuturePayloadCompatibility() throws {
+    var legacy = try #require(sharedJSONObject(String(decoding: try JSONEncoder().encode(TransportState()), as: UTF8.self)))
+    legacy.removeValue(forKey: "isAutopunchEnabled")
+    legacy["future_transport_observation"] = ["value": true]
+    let decoded = try JSONDecoder().decode(TransportState.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.isAutopunchEnabled == nil)
+    #expect(!decoded.isPlaying)
+    #expect(!decoded.isRecording)
+    #expect(decoded.tempo == 120)
+    #expect(decoded.position == "1.1.1.1")
+    let roundtrip = try #require(sharedJSONObject(String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self)))
+    #expect(!roundtrip.keys.contains("isAutopunchEnabled"))
+    #expect(!roundtrip.keys.contains("future_transport_observation"))
+}
+
 @Test(arguments: ["off", "on", "ko_off", "ko_on", "missing", "unreadable", "text", "mixed",
                   "fractional", "nonfinite", "duplicate", "wrong_role", "wrong_owner", "false_friend"])
 func countInResourceRequiresOneObservedOwnBinaryCheckbox(shape: String) async throws {

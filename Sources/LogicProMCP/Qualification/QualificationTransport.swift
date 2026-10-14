@@ -3415,6 +3415,7 @@ struct QualificationTransport: Sendable {
         .transportToggleCycle: "isCycleEnabled",
         .transportToggleMetronome: "isMetronomeEnabled",
         .transportToggleCountIn: "isCountInEnabled",
+        .transportToggleAutopunch: "isAutopunchEnabled",
     ]
 
     /// #373 Phase B for a CREATE, whose restore is a delete.

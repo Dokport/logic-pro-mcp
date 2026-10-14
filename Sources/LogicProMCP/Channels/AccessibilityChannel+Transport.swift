@@ -73,6 +73,7 @@ extension AccessibilityChannel {
                 state.isCountInEnabled = AXLogicProElements.readControlBarCheckboxValue(
                     among: countInControls, matching: AXLocalePolicy.transportCountInControl, runtime: runtime)
             }
+            state.isAutopunchEnabled = observedAutopunchControl(in: controlBar, runtime: runtime)?.value
         }
         return encodeResult(state)
     }
@@ -3260,18 +3261,41 @@ extension AccessibilityChannel {
 
     // MARK: - Control-bar checkbox helpers (Logic Pro 12 transport)
 
+    /// The bar's direct mode control, never the nested Customize Control Bar visibility option.
+    private static func observedAutopunchControl(
+        in controlBar: AXUIElement,
+        runtime: AXLogicProElements.Runtime
+    ) -> (element: AXUIElement, value: Bool)? {
+        guard case let .success(children) = AXHelpers.childrenResult(controlBar, runtime: runtime.ax) else { return nil }
+        var controls: [AXUIElement] = []
+        for child in children {
+            let roleRead: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                child, kAXRoleAttribute, runtime: runtime.ax)
+            guard case let .success(role?) = roleRead else { return nil }
+            guard role == kAXCheckBoxRole as String else { continue }
+            switch AXLocalePolicy.elementMatchesResult(child, AXLocalePolicy.transportAutopunchControl,
+                mode: .exactStrict, runtime: runtime.ax) {
+            case .success(true): controls.append(child)
+            case .success(false): continue
+            case .failure: return nil
+            }
+        }
+        guard controls.count == 1,
+              let value = AXLogicProElements.readControlBarCheckboxValue(
+                among: controls, matching: AXLocalePolicy.transportAutopunchControl, runtime: runtime)
+        else { return nil }
+        return (controls[0], value)
+    }
+
     static func defaultToggleAutopunch(
         runtime: AXLogicProElements.Runtime = .production,
         mouseRuntime: AXMouseHelper.Runtime = .production
     ) -> ChannelResult {
-        guard let button = AXLogicProElements.findControlBarCheckbox(
-            matching: AXLocalePolicy.transportAutopunchControl,
-            runtime: runtime
-        ) else {
-            let controlBar = AXLogicProElements.getControlBar(runtime: runtime)
+        let controlBar = AXLogicProElements.getControlBar(runtime: runtime)
+        guard let controlBar, let control = observedAutopunchControl(in: controlBar, runtime: runtime) else {
             return .error(HonestContract.encodeStateC(
                 error: .elementNotFound,
-                hint: "Autopunch was not found in Logic Pro's Control Bar. Customize the Control Bar to show Autopunch, then retry.",
+                hint: "A unique readable Autopunch mode checkbox was not found directly in Logic Pro's Control Bar. Customize the Control Bar to show Autopunch, then retry.",
                 extras: [
                     "button": "Autopunch",
                     "operation": "transport.toggle_autopunch",
@@ -3284,7 +3308,8 @@ extension AccessibilityChannel {
             ))
         }
 
-        let before = controlBarCheckboxValue(button, runtime: runtime)
+        let button = control.element
+        let before = control.value
         let pressed = AXHelpers.performAction(button, kAXPressAction, runtime: runtime.ax)
         guard pressed else {
             return .error(HonestContract.encodeStateC(
@@ -3299,15 +3324,13 @@ extension AccessibilityChannel {
             ))
         }
 
-        let after: Bool?
-        if let before {
-            after = waitForControlBarCheckboxValue(
-                button,
-                runtime: runtime,
-                matching: { $0 != before }
-            ) ?? controlBarCheckboxValue(button, runtime: runtime)
-        } else {
-            after = controlBarCheckboxValue(button, runtime: runtime)
+        var after: Bool?
+        for _ in 0..<12 {
+            usleep(50_000)
+            guard let observed = observedAutopunchControl(in: controlBar, runtime: runtime),
+                  CFEqual(observed.element, button) else { after = nil; break }
+            after = observed.value
+            if observed.value != before { break }
         }
 
         var extras: [String: Any] = [
@@ -3315,11 +3338,11 @@ extension AccessibilityChannel {
             "control": AXLocalePolicy.transportAutopunchControl.canonical,
             "operation": "transport.toggle_autopunch",
             "action": "axpress",
-            "previous": before as Any? ?? NSNull(),
+            "previous": before,
             "observed": after as Any? ?? NSNull()
         ]
 
-        guard let before, let after else {
+        guard let after else {
             return .success(HonestContract.encodeStateB(
                 reason: .readbackUnavailable,
                 extras: extras

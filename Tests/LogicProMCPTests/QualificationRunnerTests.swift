@@ -8,6 +8,55 @@ import Testing
 
 @Suite("ADR-001 qualification runner", .serialized)
 struct QualificationRunnerTests {
+    @Test func registeredAutopunchToggleRecordsAnObservedWriteAndRestoreCycle() throws {
+        let fixture = try SlowHandshakeFixture(autopunchCycle: "healthy")
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == .transportToggleAutopunch })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        let observed = try #require(result.operationResults[spec.id.rawValue])
+        #expect(observed.status == .passed)
+        let record = try #require(result.mutationRestoreRecords.first)
+        #expect(record.operationID == spec.id.rawValue)
+        #expect(record.verifiedCycleShape)
+        for (reading, enabled) in [(record.preState, false), (record.readback, true), (record.restoreReadback, false)] {
+            let envelope = try #require(sharedJSONObject(reading))
+            let data = try #require(envelope["data"] as? [String: Any])
+            let state = try #require(data["state"] as? [String: Any])
+            let actual = try #require(state["isAutopunchEnabled"] as? Bool)
+            if enabled { #expect(actual) } else { #expect(!actual) }
+        }
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.mutation", "phase_b.restore"].contains($0.operationID) }
+        #expect(effects.count == 2)
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("autopunch"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "false")
+    }
+
+    @Test(arguments: ["missing_pre", "malformed_pre", "cache_pre", "stale_pre", "unknown_age_pre",
+                      "unverified_pre", "missing_after", "cache_after", "refused_forward",
+                      "refused_restore", "mismatch_after", "mismatch_restore"])
+    func autopunchRecipeWithholdsDependentWritesAndCreditWhenEvidenceIsLost(shape: String) throws {
+        let fixture = try SlowHandshakeFixture(autopunchCycle: shape)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == .transportToggleAutopunch })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("autopunch-fault-consumed").path))
+        #expect(result.operationResults[spec.id.rawValue]?.status == .notQualified)
+        #expect(result.mutationRestoreRecords.isEmpty)
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.mutation", "phase_b.restore"].contains($0.operationID) }
+        let expectedAttempts = shape.hasSuffix("_pre") ? 0 : (["refused_restore", "mismatch_restore"].contains(shape) ? 2 : 1)
+        #expect(effects.count == expectedAttempts, "unobserved state cannot authorize a dependent toggle")
+        let residual = try String(contentsOf: fixture.directory.appendingPathComponent("autopunch"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedResidual = ["missing_after", "cache_after", "refused_restore", "mismatch_restore"].contains(shape)
+        #expect(residual == (expectedResidual ? "true" : "false"))
+    }
+
     @Test func registeredCountInToggleRecordsAnObservedWriteAndRestoreCycle() throws {
         let fixture = try SlowHandshakeFixture(countInCycle: "healthy")
         defer { fixture.remove() }
@@ -6560,7 +6609,7 @@ struct QualificationRunnerTests {
         init(transportRefusal: Bool = false, transportNativePause: Bool = false,
              initialTransportMotion: String = "stopped", cachedTransport: Bool = false,
              nameRecipe: OperationID? = nil, nameIdentityFault: String = "none",
-             countInCycle: String? = nil) throws {
+             countInCycle: String? = nil, autopunchCycle: String? = nil) throws {
             directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("qualification-slow-handshake-\(UUID().uuidString)", isDirectory: true)
             executableURL = directory.appendingPathComponent("server.sh")
@@ -6595,7 +6644,7 @@ struct QualificationRunnerTests {
             IFS= read -r request_line || exit 0
             IFS= read -r request_line || exit 0
             """#
-            if transportRefusal || transportNativePause || nameRecipe != nil || countInCycle != nil {
+            if transportRefusal || transportNativePause || nameRecipe != nil || countInCycle != nil || autopunchCycle != nil {
                 script = try #require(script.components(separatedBy: "# AFTER SEED").first) + #"""
                 cd "$(dirname "$0")" || exit 1
                 initial_playing=false
@@ -6732,8 +6781,14 @@ struct QualificationRunnerTests {
                 done
                 """#
                 if transportNativePause { script = script.replacingOccurrences(of: "native_pause=false", with: "native_pause=true") }
-                if let countInCycle {
+                if let countInCycle = countInCycle ?? autopunchCycle {
                     script = script.replacingOccurrences(of: "count_in_cycle=none", with: "count_in_cycle=\(countInCycle)")
+                }
+                if autopunchCycle != nil {
+                    script = script.replacingOccurrences(of: "toggle_count_in", with: "toggle_autopunch")
+                        .replacingOccurrences(of: "isCountInEnabled", with: "isAutopunchEnabled")
+                        .replacingOccurrences(of: "count_in", with: "autopunch")
+                        .replacingOccurrences(of: "count-in", with: "autopunch")
                 }
                 if let nameRecipe {
                     script = script.replacingOccurrences(of: "name_recipe=none", with: "name_recipe=\(nameRecipe.rawValue)")
