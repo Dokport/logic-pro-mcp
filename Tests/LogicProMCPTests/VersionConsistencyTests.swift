@@ -143,6 +143,7 @@ private func latestChangelogReleaseHeading() throws -> ChangelogReleaseHeading? 
     #expect(resources == [
         "logic://system/health",
         "logic://transport/state",
+        "logic://tempo/map",
         "logic://tracks",
         "logic://mixer",
         "logic://markers",
@@ -181,20 +182,20 @@ private func latestChangelogReleaseHeading() throws -> ChangelogReleaseHeading? 
     #expect(templates == Set(ResourceProvider.templates.map(\.uriTemplate)))
 
     let description = try #require(manifest["description"] as? String)
-    #expect(description.contains("10 tools + 18 resources + 12 templates"))
+    #expect(description.contains("10 tools + 19 resources + 12 templates"))
 }
 
 @Test func testReadmeAndAPIDocsMatchPublicSurfaceAndRouting() throws {
     let readme = try readRepoFile("README.md")
-    #expect(readme.contains("| Read resources | 18 static resources"))
+    #expect(readme.contains("| Read resources | 19 static resources"))
     #expect(readme.contains("| Resource templates | 12 templates"))
-    #expect(readme.contains("All 10 tools, 18 resources, 12 templates"))
+    #expect(readme.contains("All 10 tools, 19 resources, 12 templates"))
 
     let api = try readRepoFile("docs/API.md")
     // #983: the page's opening sentence carried a release summary nothing read, and it named
     // v3.15.0 two releases later. The history now lives in CHANGELOG alone; the counts stay, and
     // are pinned here as the README's are.
-    #expect(api.contains("exposes 10 tools, 18 static resources, and 12 resource templates"))
+    #expect(api.contains("exposes 10 tools, 19 static resources, and 12 resource templates"))
     #expect(api.contains("| `toggle_cycle` | — | text | Accessibility → MIDIKeyCommands → CGEvent → MCU |"))
     #expect(api.contains("| `toggle_autopunch` | — | State A/B/C contract envelope | Accessibility |"))
     #expect(api.contains("| `set_tempo` | `{ tempo: number }` (5–999, matches Logic's actual accepted range) | text | Accessibility |"))

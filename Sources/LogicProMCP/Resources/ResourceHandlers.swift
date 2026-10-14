@@ -102,6 +102,9 @@ extension ResourceHandlers {
                 targetRegistry: targetRegistry
             )
 
+        case "logic://tempo/map":
+            return try await readTempoMap(router: router, uri: uri)
+
         case "logic://tracks":
             return try await readTracks(
                 cache: cache,
