@@ -35,6 +35,7 @@ private let serverResourceText = sharedResourceText
         "logic://mcu/state",
         "logic://system/health",
         "logic://transport/state",
+        "logic://tempo/map",
         "logic://tracks",
         "logic://mixer",
         "logic://markers",
@@ -53,7 +54,7 @@ private let serverResourceText = sharedResourceText
     ]
     #expect(expectedResources.isSubset(of: resourceURIs))
     #expect(resourceURIs.contains("logic://mcu/state"))
-    #expect(resourceURIs.count == 18)
+    #expect(resourceURIs.count == 19)
     let templateURIs = Set(templates.templates.map(\.uriTemplate))
     let expectedTemplates: Set<String> = [
         "logic://tracks/{index}",
@@ -356,6 +357,7 @@ func testLogicProServerHandlersReadResourcesWithoutRegisteredTransport() async t
         "logic://mcu/state",
         "logic://system/health",
         "logic://transport/state",
+        "logic://tempo/map",
         "logic://tracks",
         "logic://mixer",
         "logic://markers",
@@ -374,7 +376,7 @@ func testLogicProServerHandlersReadResourcesWithoutRegisteredTransport() async t
     ]
     #expect(expectedResources.isSubset(of: uris))
     #expect(uris.contains("logic://mcu/state"))
-    #expect(uris.count == 18)
+    #expect(uris.count == 19)
     // server.start() runs serve() to completion then tears poller/channels/ports
     // down in reverse order. With serve recorded as a no-op, the tail section
     // executes immediately so stopPoller is captured too.
