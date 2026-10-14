@@ -3329,7 +3329,7 @@ struct QualificationTransport: Sendable {
         func step() -> Int { defer { nextID += 1 }; return nextID }
 
         let pre = try observedTransportFlag(
-            session, id: readStep(), field: readbackField, phase: "phase_b.pre_state")
+            session, id: readStep(), field: readbackField, phase: "phase_b.pre_state", deadline: spec.deadline)
         let mutation = try invoke(
             session, id: step(), tool: spec.tool.rawValue, command: spec.command,
             params: [:], phase: "phase_b.mutation",
@@ -3340,7 +3340,7 @@ struct QualificationTransport: Sendable {
                     + mutation.text.prefix(220))
         }
         let after = try observedTransportFlag(
-            session, id: readStep(), field: readbackField, phase: "phase_b.readback")
+            session, id: readStep(), field: readbackField, phase: "phase_b.readback", deadline: spec.deadline)
         guard after.value == !pre.value else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.readback: \(readbackField) is \(after.value), expected \(!pre.value)")
@@ -3354,7 +3354,7 @@ struct QualificationTransport: Sendable {
                 "phase_b.restore: \(spec.id.rawValue) refused the second call")
         }
         let restored = try observedTransportFlag(
-            session, id: readStep(), field: readbackField, phase: "phase_b.restore_readback")
+            session, id: readStep(), field: readbackField, phase: "phase_b.restore_readback", deadline: spec.deadline)
         guard restored.value == pre.value else {
             throw QualificationTransportError.protocolViolation(
                 "phase_b.restore_readback: \(readbackField) is \(restored.value), expected "
@@ -3377,7 +3377,8 @@ struct QualificationTransport: Sendable {
         _ session: QualificationSubprocessSession,
         id: Int,
         field: String,
-        phase: String
+        phase: String,
+        deadline: DeadlineClass
     ) throws -> (value: Bool, raw: String) {
         _ = try? invoke(
             session, id: id, tool: "logic_system", command: "refresh_cache",
@@ -3392,6 +3393,14 @@ struct QualificationTransport: Sendable {
             throw QualificationTransportError.protocolViolation(
                 "\(phase): logic://transport/state did not report \(field)")
         }
+        // A current observation is required before staging or reversing a toggle,
+        // even when the operation's ordinary verification policy is best effort.
+        let freshness = QualificationReadbackFreshness.verdict(
+            for: data, uri: "logic://transport/state", verification: .readbackRequired, deadline: deadline)
+        guard object["unverified"] as? Bool != true, freshness.isAdmissible else {
+            throw QualificationTransportError.protocolViolation(
+                "\(phase): transport flag observation refused: \(freshness.refusalReason ?? "readback_unverified")")
+        }
         return (value, raw)
     }
 
@@ -3405,6 +3414,7 @@ struct QualificationTransport: Sendable {
     static let parameterlessToggleField: [OperationID: String] = [
         .transportToggleCycle: "isCycleEnabled",
         .transportToggleMetronome: "isMetronomeEnabled",
+        .transportToggleCountIn: "isCountInEnabled",
     ]
 
     /// #373 Phase B for a CREATE, whose restore is a delete.
