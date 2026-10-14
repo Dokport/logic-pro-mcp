@@ -345,6 +345,10 @@ enum SemanticOracleTable {
             "semantic oracle pending — bounded native round trips verify one occupied send's "
             + "checked destination and unchanged strip count, but no independent typed-source "
             + "readback oracle exists; the writer's same-host menu receipt is not promotion evidence",
+        .mixerSetSendBypassVerified:
+            "semantic oracle pending — a bounded native occupied-send bypass round trip exists, "
+            + "but no audited qualification write-and-restore recipe or independent readback "
+            + "oracle exists; the handler's checkbox receipt is not promotion evidence",
         .pluginsSetEQBandVerified:
             "live 2026-08-30 evidence establishes the Channel EQ raw AXValue ranges and "
             + "one-step increment-walk behavior only; no end-to-end write/readback round "
@@ -548,6 +552,7 @@ enum SemanticOracleTable {
         audioCompareSpectra,
         mixerGetOutputVerified,
         mixerGetSendDestinationVerified,
+        mixerGetSendBypassVerified,
         mixerGetInputBusVerified,
         midiListPorts,
         tracksListLibrary,
@@ -1398,6 +1403,33 @@ enum SemanticOracleTable {
         independentReadbackDeferral: QualificationDeferral(
             code: .semanticValidatorUnavailable,
             detail: "Two owned send-menu checkmarks are same-host observations, not independent typed endpoint or graph-edge readback"
+        )
+    )
+
+    // AccessibilityChannel.sendBypassVerified's getter receipt only. The held checkbox and
+    // checked route are same-host observations; raw resource witnesses are not independent
+    // current bypass authority. The explicit deferral prevents this shape check granting credit.
+    static let mixerGetSendBypassVerified = OperationOracle(
+        .mixerGetSendBypassVerified,
+        strength: .shapeAndDomain,
+        constraints: [
+            .valueEquals(key: "state", expected: .string("A")),
+            .valueEquals(key: "success", expected: .bool(true)),
+            .valueEquals(key: "verified", expected: .bool(true)),
+            .valueEquals(key: "operation", expected: .string("mixer.get_send_bypass_verified")),
+            .valueEquals(key: "write_attempted", expected: .bool(false)),
+            .valueEquals(key: "snapshot_atomic", expected: .bool(false)),
+            .valueEquals(key: "verify_source", expected: .string("ax_owned_send_checkbox")),
+            .typedField(key: "send_ordinal", type: .number),
+            .typedField(key: "before", type: .bool),
+            .typedField(key: "bypassed", type: .bool),
+            .fieldsEqual(keyA: "before", keyB: "bypassed"),
+            .enumMember(key: "checked_destination.kind", allowed: ["bus", "physical", "stereo_output"]),
+            .nonEmptyArray(key: "protected_nonrouting_titles"),
+        ],
+        independentReadbackDeferral: QualificationDeferral(
+            code: .semanticValidatorUnavailable,
+            detail: "The owned send-checkbox and checked-route receipt contains same-host observations, not an independent typed bypass readback"
         )
     )
 

@@ -114,6 +114,8 @@ struct OperationCatalogTests {
         .mixerSetInputBusVerified: ["destination", "expected_current", "replace_existing"],
         .mixerSetSendOutputVerified: ["ordinal", "destination", "expected_current", "replace_existing"],
         .mixerGetSendDestinationVerified: ["ordinal"],
+        .mixerGetSendBypassVerified: ["ordinal"],
+        .mixerSetSendBypassVerified: ["ordinal", "bypassed", "expected_current"],
         .mixerSetMasterVolume: ["value", "volume"],
         .mixerBank: ["count", "direction"],
         .mixerSetPluginParam: ["insert", "param", "value"],

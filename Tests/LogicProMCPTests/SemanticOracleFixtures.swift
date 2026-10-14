@@ -589,6 +589,17 @@ enum SemanticOracleFixtures {
                 """,
             readback: "{}"
         ),
+        .mixerGetSendBypassVerified: SemanticOracleFixture(
+            response: """
+                {"state":"A","success":true,"verified":true,"operation":"mixer.get_send_bypass_verified",\
+                "write_attempted":false,"snapshot_atomic":false,"verify_source":"ax_owned_send_checkbox",\
+                "send_ordinal":0,"before":false,"bypassed":false,\
+                "checked_destination":{"kind":"stereo_output"},\
+                "protected_nonrouting_titles":["Post Fader"],"ax_action_names":["AXPress"],"ax_action_names_status":0}
+                """,
+            // No independent typed bypass field is supplied by the resource.
+            readback: "{}"
+        ),
         .midiListPorts: SemanticOracleFixture(
             response: """
                 {"sources":["IAC Driver Bus 1","Logic Pro Virtual In"],\
