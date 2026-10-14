@@ -1464,6 +1464,21 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
     }
 
+    @Test("Registered inspection preserves raw checked nonrouting titles without calling them a typed send mode")
+    func registeredInspectionPreservesItsCheckedSendNonroutingWitness() async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: "observed")
+    }
+
+    @Test(arguments: ["unsupported_mark", "unread_mark", "malformed_title", "changed_control"])
+    func registeredInspectionCannotPublishUnknownSendNonroutingWitness(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: fault)
+    }
+
+    @Test(arguments: ["decoded", "cached", "duplicate", "foreign", "unstable", "unqualified"])
+    func sendNonroutingProjectionClearsUnboundOrForgedWitness(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: "projection_" + fault)
+    }
+
     @Test(arguments: ["preflight", "wrong_project", "foreign_document", "refs_disabled"])
     func removalSagaPreflightRequiresItsActualProject(mode: String) async throws {
         try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
@@ -1525,7 +1540,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
                                                emptyModeMenu: Bool = false, observeRemoval: Bool = false,
-                                               readRestored: String? = nil, sagaMode: String? = nil) async throws {
+                                               readRestored: String? = nil, sagaMode: String? = nil,
+                                               inspectSendWitness: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1688,6 +1704,23 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
             f.routingReadResult = { element, attribute in
+                if let inspectSendWitness, CFEqual(element, mode),
+                   b.makeAXRuntime().children(f.mixer).contains(where: { CFEqual($0, root) }) {
+                    if inspectSendWitness == "malformed_title", attribute == kAXTitleAttribute as String {
+                        f.routingLateScopeInjected = true; return .success(NSNumber(value: 123))
+                    }
+                    if attribute == "AXMenuItemMarkChar" {
+                        if ["unsupported_mark", "unread_mark"].contains(inspectSendWitness) {
+                            f.routingLateScopeInjected = true
+                            return .failure(.init(raw: inspectSendWitness == "unsupported_mark"
+                                ? AXError.noValue.rawValue : AXError.cannotComplete.rawValue))
+                        }
+                        if inspectSendWitness == "changed_control", !f.routingLateScopeInjected {
+                            f.routingLateScopeInjected = true
+                            b.setChildren(originalSend[1], [b.element(1_965_2622), renewedList])
+                        }
+                    }
+                }
                 if readRestored == "retired_source", f.routingLateScopeInjected, CFEqual(element, restoredSource) {
                     return .failure(.init(raw: AXError.invalidUIElement.rawValue))
                 }
@@ -1746,7 +1779,13 @@ struct Issue965HeldSelectionAssociationTests {
                 else { return nil }
                 return .failure(.init(raw: AXError.invalidUIElement.rawValue))
             }
-            let before = try await inspect(f, cache: cache, registry: registry)
+            let before = try await inspect(f, cache: cache, registry: registry,
+                domains: inspectSendWitness == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"])
+            if inspectSendWitness == "changed_control", before["snapshot_id"] == nil {
+                #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 0)
+                #expect(before["state"] as? String == "C")
+                return
+            }
             let id = try #require(before["snapshot_id"] as? String)
             let capture = try #require(await cache.retainedInspection(id: id)).capture
             let row = try #require(capture.channelStrips.indices.first {
@@ -1757,6 +1796,64 @@ struct Issue965HeldSelectionAssociationTests {
                 CFEqual($0.strip.strip, f.strips[1])
             })
             #expect(CFEqual(originalPair.track.header, f.headers[0]))
+            if inspectSendWitness != nil {
+                let checked = capture.freshPopulation?.checkedOutputs.filter {
+                    $0.source.matches(originalPair.strip) && $0.sendOrdinal == 1
+                } ?? []
+                let healthy = inspectSendWitness == "observed" || inspectSendWitness?.hasPrefix("projection_") == true
+                if healthy { #expect(checked.count == 1 && checked.first?.assignment == .stereoOutput) }
+                else { #expect(f.routingLateScopeInjected) }
+                let strips = try #require((before["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+                let target = try #require(strips.first { $0["mixer_strip_ref"] as? String == reference.rawValue })
+                let slots = try #require(target["send_slots"] as? [[String: Any]])
+                let send = try #require(slots.first { $0["ordinal"] as? Int == 1 })
+                if healthy {
+                    #expect(send["checked_nonrouting_titles"] as? [String] == ["Post Pan"])
+                    #expect(send["nonrouting_source"] as? String == "ax_send_menu_checkmark")
+                } else {
+                    #expect(send["checked_nonrouting_titles"] == nil && send["nonrouting_source"] == nil)
+                }
+                #expect(send["physical_slot"] == nil && send["mode"] == nil)
+                #expect(f.routingDestinationPresses == 0)
+                if inspectSendWitness != "changed_control" {
+                    #expect((before["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+                }
+                if let inspectSendWitness, inspectSendWitness.hasPrefix("projection_") {
+                    var forged = capture.channelStrips[row]
+                    forged.sendSlots = forged.sendSlots?.map { slot in
+                        var result = slot
+                        result.checkedNonRoutingTitles = ["forged mode"]
+                        result.nonRoutingSource = "forged source"
+                        return result
+                    }
+                    if inspectSendWitness == "projection_decoded" {
+                        forged = try JSONDecoder().decode(ChannelStripState.self, from: JSONEncoder().encode(forged))
+                        #expect(forged.physicalBinding == nil)
+                    }
+                    var fresh = capture.freshPopulation
+                    if inspectSendWitness == "projection_duplicate" { fresh?.checkedOutputs += checked }
+                    if inspectSendWitness == "projection_foreign", let witness = checked.first {
+                        fresh?.checkedOutputs = [.init(source: .init(window: witness.source.window, mixer: witness.source.mixer,
+                            strip: f.strips[0], document: witness.source.document), assignment: witness.assignment,
+                            sendOrdinal: 1, sendNonRoutingChecks: ["foreign mode"])]
+                    }
+                    if inspectSendWitness == "projection_cached" { fresh = nil }
+                    if inspectSendWitness == "projection_unstable" { fresh?.stable = false }
+                    let altered = SessionPopulationObservation.Capture(before: capture.before, after: capture.after,
+                        projectEpoch: capture.projectEpoch, project: capture.project, tracks: capture.tracks,
+                        tracksFetchedAt: capture.tracksFetchedAt, channelStrips: capture.channelStrips,
+                        mixerFetchedAt: capture.mixerFetchedAt, fileTrackCount: capture.fileTrackCount,
+                        projectFileNotBound: capture.projectFileNotBound, requestedProjectMatches: capture.requestedProjectMatches,
+                        referencesEnabled: capture.referencesEnabled, targetSnapshot: capture.targetSnapshot,
+                        issued: capture.issued, projectIssuance: capture.projectIssuance,
+                        beganAt: capture.beganAt, endedAt: capture.endedAt, captureID: capture.captureID,
+                        freshPopulation: fresh, mixerReferences: capture.mixerReferences)
+                    let projected = try #require(SessionPopulationObservation.reportedSendSlots(of: forged,
+                        capture: altered, qualified: inspectSendWitness != "projection_unqualified"))
+                    #expect(projected.allSatisfy { $0.checkedNonRoutingTitles == nil && $0.nonRoutingSource == nil })
+                }
+                return
+            }
             let initialSelections = f.selections
             if fault == "missing_pair" { f.expireRetainedCapture = true }
             f.routingRead = { element, attribute in

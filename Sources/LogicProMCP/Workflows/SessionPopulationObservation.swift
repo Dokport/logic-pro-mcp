@@ -67,6 +67,9 @@ enum SessionPopulationObservation {
         let assignment: OutputAssignment
         /// The reader's retained send census ordinal, never a physical write-slot number.
         var sendOrdinal: Int? = nil
+        /// Raw checked nonrouting root titles from that owned menu observation.
+        /// Historical preservation evidence, not a typed mode or current write authority.
+        var sendNonRoutingChecks: [String]? = nil
     }
 
     struct HeldDisclosureExposure: Sendable {
@@ -1048,6 +1051,7 @@ enum SessionPopulationObservation {
         return slots.map { slot in
             var result = slot
             result.checkedDestination = nil; result.destinationSource = nil
+            result.checkedNonRoutingTitles = nil; result.nonRoutingSource = nil
             if result.state == .occupiedKnownDestination { result.state = .occupiedUnknownDestination }
             guard qualified, capture.freshPopulation?.stable == true,
                   let owner = strip.physicalBinding,
@@ -1063,6 +1067,10 @@ enum SessionPopulationObservation {
             result.state = .occupiedKnownDestination
             result.checkedDestination = assignment.token
             result.destinationSource = "ax_send_menu_checkmark"
+            if let titles = checked.first?.sendNonRoutingChecks, !titles.isEmpty {
+                result.checkedNonRoutingTitles = titles
+                result.nonRoutingSource = "ax_send_menu_checkmark"
+            }
             return result
         }
     }

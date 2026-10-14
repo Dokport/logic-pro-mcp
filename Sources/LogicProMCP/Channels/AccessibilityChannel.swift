@@ -643,7 +643,8 @@ actor AccessibilityChannel: Channel {
                                     }
                                 }
                             } else {
-                                checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal))
+                                checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal,
+                                    sendNonRoutingChecks: read.sendNonRoutingChecks))
                             }
                         }
                     }

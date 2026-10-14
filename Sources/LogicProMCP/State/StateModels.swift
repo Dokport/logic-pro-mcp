@@ -304,6 +304,12 @@ struct SendSlotObservation: Sendable, Codable, Equatable {
     /// Historical report data only; it conveys neither receiving-strip nor write authority.
     var checkedDestination: String? = nil
     var destinationSource: String? = nil
+    /// Raw checked nonrouting menu titles for this capture's exact held source/ordinal.
+    /// Only actually checked titles are projected; no observed title leaves this nil.
+    /// This is not a complete mode census, typed mode, current authority, physical
+    /// slot number, or an absent send; cached/decoded fields are not proof.
+    var checkedNonRoutingTitles: [String]? = nil
+    var nonRoutingSource: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case ordinal, state
@@ -313,6 +319,8 @@ struct SendSlotObservation: Sendable, Codable, Equatable {
         case destinationDisplay = "destination_display"
         case checkedDestination = "checked_destination"
         case destinationSource = "destination_source"
+        case checkedNonRoutingTitles = "checked_nonrouting_titles"
+        case nonRoutingSource = "nonrouting_source"
     }
 }
 
