@@ -1511,9 +1511,11 @@ struct Issue965HeldSelectionAssociationTests {
             if observeRemoval {
                 #expect(f.routingRemovalPublications == 1)
                 let observed = try #require(f.routingRemovedSend)
-                #expect(f.routingRemovalPermittedAtPublication == true)
+                let permittedAtPublication = try #require(f.routingRemovalPermittedAtPublication)
+                #expect(permittedAtPublication)
                 #expect(!observed.permits(runtime: f.logic()), "Native authority expires with the request's actual operation claim")
-                #expect(observed.checkedDestination == .stereoOutput && observed.before.levelRaw == 0 && observed.before.bypassed == false)
+                let beforeBypassed = try #require(observed.before.bypassed)
+                #expect(observed.checkedDestination == .stereoOutput && observed.before.levelRaw == 0 && !beforeBypassed)
             }
             #expect(body["before"] as? [String: String] == ["kind": "stereo_output"])
             let verified = try #require(body["verified"] as? Bool)
