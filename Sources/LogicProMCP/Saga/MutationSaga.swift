@@ -934,7 +934,7 @@ actor MutationSaga {
         desiredValue: Value,
         step: SagaStep
     ) -> VerificationDisposition {
-        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified ? .unknown : .applied }
+        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified || step.operationID == .mixerSetOutputVerified ? .unknown : .applied }
         if step.operationID == .pluginsSetEQBandVerified {
             return SelectedEQParameterSaga.comparison(readback, desired: desiredValue, step: step).equal ? .applied : .unknown
         }

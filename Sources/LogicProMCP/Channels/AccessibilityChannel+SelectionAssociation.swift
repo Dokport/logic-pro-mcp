@@ -583,14 +583,17 @@ extension AccessibilityChannel {
         }
 
         private func select(_ index: Int, referenceIsCurrent: @Sendable () async -> Bool,
-                            stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
+                            stoppingWhen stop: @Sendable () -> Bool,
+                            requiresNonStackHeader: Bool = false) async -> Bool {
             guard !lost, !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   AXHelpers.isAttributeSettable(rail, kAXSelectedChildrenAttribute as String,
                 runtime: logic.ax) == true,
                   let beforeViewport = currentViewport(), Self.sameViewport(beforeViewport, expectedViewport),
                   permitsRead(), !stop(),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
-                  owned(), selectedChildCustodyMatches() else { return false }
+                  owned(), selectedChildCustodyMatches(),
+                  !requiresNonStackHeader || (AXValueExtractors.extractTrackStackState(from: headers[index],
+                    runtime: logic.ax).isStackHeader == false && owned() && selectedChildCustodyMatches()) else { return false }
             // The selected-child read is a new deciding read. Renew the request
             // reference after it, then check the pure lease without another AX
             // read before the selection write.
@@ -755,20 +758,29 @@ extension AccessibilityChannel {
         func observe(referenceIsCurrent: @Sendable () async -> Bool,
                      stoppingWhen stop: @Sendable () -> Bool,
                      allHeldHeaders: Bool = false,
+                     narrowChallengeHeaders: [AXTrackBinding.Binding] = [],
                      populationReadDuration: Duration = .zero,
                      collectionNow: @Sendable () -> ContinuousClock.Instant = { .now }) async -> [Pair] {
+            let firstChallenge = headers.indices.first { index in
+                guard index != originalIndex else { return false }
+                return allHeldHeaders || narrowChallengeHeaders.filter { binding in
+                    CFEqual(binding.header, headers[index]) && CFEqual(binding.window, window)
+                        && binding.document.utf8.elementsEqual(document.utf8)
+                        && binding.exposure?.hasEnded != true
+                }.count == 1
+            }
+            guard let firstChallenge else {
+                effects.reason = "association_selection_unverified"; return []
+            }
             guard allHeldHeaders || originalRailFocus == nil,
-                  let firstChallenge = headers.indices.first(where: { $0 != originalIndex }),
                   await referenceIsCurrent(), permitsRead(), !stop() else { return [] }
-            if allHeldHeaders {
-                switch selectedChildRead() {
-                case .observed(let child):
-                    originalSelectedChild = child; expectedSelectedChild = child
-                    guard permitsRead(), !stop() else { return [] }
-                case .unavailable: break
-                case .unverified:
-                    effects.reason = "association_selection_unverified"; return []
-                }
+            switch selectedChildRead() {
+            case .observed(let child):
+                originalSelectedChild = child; expectedSelectedChild = child
+                guard permitsRead(), !stop() else { return [] }
+            case .unavailable: break
+            case .unverified:
+                effects.reason = "association_selection_unverified"; return []
             }
             let originalAssociationStrip = originalSelectedChild ?? originalFocus
             let challenges = allHeldHeaders ? headers.indices.filter { $0 != originalIndex } : [firstChallenge]
@@ -797,6 +809,10 @@ extension AccessibilityChannel {
             // witness. Whole-held collection needs its own changed-strip return
             // to that header, just as it does for every challenged header.
             var originalPairVerified = !allHeldHeaders
+            func selectedChildRestored() -> Bool {
+                guard let originalSelectedChild, let expectedSelectedChild else { return true }
+                return CFEqual(originalSelectedChild, expectedSelectedChild)
+            }
             for challenge in challenges {
                 if let collectionEnd, collectionNow() >= collectionEnd { break }
                 // select() renews selection/focus and the complete scoped
@@ -804,8 +820,8 @@ extension AccessibilityChannel {
                 // before the action. Do not repeat that census here.
                 guard await referenceIsCurrent(), !stop() else { restored = false; break }
                 let precedingStrip = associationStrip
-                let advanced = await select(challenge, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
-                let challengeFocus = expectedFocus
+                let advanced = await select(challenge, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop,
+                    requiresNonStackHeader: !allHeldHeaders)
                 let challengeStrip = associationStrip
                 if allHeldHeaders {
                     guard advanced else { selectionsVerified = false; break }
@@ -839,23 +855,20 @@ extension AccessibilityChannel {
                     continue
                 }
                 if expectedIndex == originalIndex {
-                    restored = permitsRead() && CFEqual(expectedFocus, originalFocus)
+                    restored = permitsRead() && CFEqual(expectedFocus, originalFocus) && selectedChildRestored()
                 } else if await referenceIsCurrent() {
-                    restored = await select(originalIndex, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop) && CFEqual(expectedFocus, originalFocus)
+                    restored = await select(originalIndex, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
+                        && CFEqual(expectedFocus, originalFocus) && selectedChildRestored()
                 } else { restored = false }
                 // Each proof starts at the same original selection/focus. A
                 // previous challenge's passive focus cannot identify this header.
                 guard restored else { break }
-                guard advanced, !CFEqual(challengeFocus, originalFocus) else {
+                guard advanced, !CFEqual(challengeStrip, originalAssociationStrip) else {
                     selectionsVerified = false; break
                 }
-                observed.append((challenge, challengeFocus))
+                observed.append((challenge, challengeStrip))
             }
             if allHeldHeaders {
-                func selectedChildRestored() -> Bool {
-                    guard let originalSelectedChild, let expectedSelectedChild else { return true }
-                    return CFEqual(originalSelectedChild, expectedSelectedChild)
-                }
                 if expectedIndex == originalIndex {
                     restored = permitsRead() && CFEqual(expectedFocus, originalFocus) && selectedChildRestored()
                 } else if await referenceIsCurrent() {
@@ -885,7 +898,9 @@ extension AccessibilityChannel {
             guard selectionsVerified, !observed.isEmpty else {
                 effects.reason = "association_selection_unverified"; return []
             }
-            return (observed + (originalPairVerified ? [(originalIndex, originalAssociationStrip)] : [])).map { index, strip in
+            // A narrow challenge corroborates the requested selection; it does
+            // not authorize later routing acquisition on that unselected peer.
+            return ((allHeldHeaders ? observed : []) + (originalPairVerified ? [(originalIndex, originalAssociationStrip)] : [])).map { index, strip in
                 Pair(track: retainedTrackBindings?[index]
                         ?? .init(window: window, header: headers[index], document: document, runtime: logic),
                      strip: .init(window: window, mixer: mixer, strip: strip, document: document),

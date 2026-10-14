@@ -140,7 +140,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                       }) else { return false }
                   }
                   return source.channelStrips.filter { $0.physicalBinding?.matches(binding) == true }.count == 1
-              }), fresh.checkedOutputs.contains(where: { $0.sendOrdinal == nil && $0.assignment == desired }) else { return nil }
+              }) else { return nil }
         return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair, before: before, desired: desired,
             capture: source, handle: target.handle)
     }
@@ -304,6 +304,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private let sortTask: SortTask?
     private let outputTask: OutputTask?
     private var outputPair: AccessibilityChannel.HeldSelectionAssociation.Pair?
+    private var outputRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
     private var outputProof: AccessibilityChannel.HeldSelectionAssociation?
     private var outputAttempted = false
     private var outputApplied = false
@@ -828,6 +829,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 && (popup.map { proof.permitsOwnedPopupRead($0) } ?? proof.permitsRead())
         }
         guard permitted(), pair.track.matches(task.pair.track),
+              outputRenewal.map { renewal in
+                  renewal.pair.strip.matches(pair.strip) && renewal.pair.track.matches(task.pair.track)
+                      && renewal.permits(runtime: runtime, ownedPopup: popup)
+              } ?? true,
               proof.headers.count == task.capture.tracks.count,
               zip(proof.headers, task.capture.tracks).allSatisfy({ header, row in
                   row.physicalBinding.map { CFEqual($0.header, header) } == true
@@ -846,8 +851,19 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               let index = task.capture.channelStrips.firstIndex(where: { $0.physicalBinding?.matches(task.pair.strip) == true }),
               strips[index].physicalBinding?.matches(pair.strip) == true,
               strips[index].output.flatMap(OutputAssignment.observed(slotLabel:)) == assignment else { return false }
+        if let renewal = outputRenewal {
+            // This owned original-header receipt holds the entire new census.
+            // It corroborates aggregate preserved values; it neither rebinds
+            // retired peer references nor grants any peer mutation authority.
+            guard strips.count == renewal.observation.strips.count,
+                  zip(strips, renewal.observation.strips).allSatisfy({ row, held in
+                      row.physicalBinding?.matches(.init(window: renewal.pair.strip.window,
+                          mixer: renewal.pair.strip.mixer, strip: held, document: renewal.pair.strip.document)) == true
+                  }) else { return false }
+        }
         for row in strips.indices {
-            if row != index, strips[row].physicalBinding?.matches(task.capture.channelStrips[row].physicalBinding ?? pair.strip) != true { return false }
+            if outputRenewal == nil, row != index,
+               strips[row].physicalBinding?.matches(task.capture.channelStrips[row].physicalBinding ?? pair.strip) != true { return false }
             guard strips[row].volumeReadback == task.capture.channelStrips[row].volumeReadback,
                   strips[row].panReadback == task.capture.channelStrips[row].panReadback,
                   strips[row].volumeReadback != nil, strips[row].panReadback != nil,
@@ -860,6 +876,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               let currentTracks = try? encoder.encode(tracks), expectedTracks == currentTracks,
               let expectedStrips = try? encoder.encode(expected), let currentStrips = try? encoder.encode(strips),
               expectedStrips == currentStrips, permitted(),
+              outputRenewal.map { $0.permits(runtime: runtime, ownedPopup: popup) } ?? true,
               pair.strip.currentIndex(runtime: runtime) == index,
               case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(pair.strip.window, runtime: runtime),
               finalDocument.utf8.elementsEqual(document.utf8) else { return false }
@@ -926,6 +943,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 return toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: ["write_attempted": true]), isError: true)
             }
             outputPair = owned.pair
+            outputRenewal = owned
         }
         if let after = await outputReading(), after == desired { outputApplied = !inverse }
         return response

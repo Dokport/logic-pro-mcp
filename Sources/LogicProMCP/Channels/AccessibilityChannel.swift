@@ -725,6 +725,8 @@ actor AccessibilityChannel: Channel {
                 population.selectionAssociations = await association.observe(
                     referenceIsCurrent: navigationReferenceIsCurrent, stoppingWhen: stop,
                     allHeldHeaders: request.scope == .wholeProject,
+                    narrowChallengeHeaders: (population.tracks ?? []).filter { $0.isStackHeader == false }
+                        .compactMap(\.physicalBinding),
                     populationReadDuration: populationReadDuration)
                 population.uiEffects = association.effects
                 if association.effects.reason != nil { population.stable = false }
