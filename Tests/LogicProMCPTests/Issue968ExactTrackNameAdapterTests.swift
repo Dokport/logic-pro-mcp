@@ -25,6 +25,7 @@ private final class ExactNameFixture: @unchecked Sendable {
     var onPress: (@Sendable () -> Void)?
     var onConfirm: (@Sendable () -> Void)?
     var onNameReadAfterWrite: (@Sendable () -> Void)?
+    var onUnwrittenNameRead: (@Sendable () -> Void)?
     var nameReadsAfterWrite = 0
     var permitsSelection = false
     var exposeFieldWhenSelected = false
@@ -45,6 +46,12 @@ private final class ExactNameFixture: @unchecked Sendable {
     var logicIsFrontmost = true
     var activationCalls = 0
     var onActivation: (@Sendable () -> Bool)?
+    var onWindowRaise: (@Sendable () -> Bool)?
+    var raisedWindows: [AXUIElement] = []
+    var windowRaiseFaultConsumed = false
+    var windowNameReadArmed = false
+    var windowNameReadFaultConsumed = false
+    var renameMenuRequiresOriginalWindow = false
     var typingSleeps: [useconds_t] = []
     var onTypingSleep: (@Sendable (useconds_t) -> Void)?
     var legacyHeaderRoleFailureRead: Int?
@@ -92,6 +99,7 @@ private final class ExactNameFixture: @unchecked Sendable {
         builder.setChildren(app, [window])
         builder.setAttribute(app, kAXWindowsAttribute as String, [window])
         builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+        builder.setAttribute(app, kAXFocusedWindowAttribute as String, window)
     }
 
     var runtime: AXLogicProElements.Runtime {
@@ -114,6 +122,9 @@ private final class ExactNameFixture: @unchecked Sendable {
                     if !writes.isEmpty, CFEqual(element, field), attribute == kAXDescriptionAttribute as String {
                         nameReadsAfterWrite += 1
                         onNameReadAfterWrite?()
+                    }
+                    if writes.isEmpty, CFEqual(element, field), attribute == kAXDescriptionAttribute as String {
+                        onUnwrittenNameRead?()
                     }
                     if hideReadbackAfterSet, !writes.isEmpty, CFEqual(element, field),
                        attribute == kAXDescriptionAttribute as String { return .some(nil) }
@@ -162,8 +173,17 @@ private final class ExactNameFixture: @unchecked Sendable {
                     return true
                 },
                 performActionHandler: { [self] element, action in
+                    if action == kAXRaiseAction as String, let onWindowRaise {
+                        raisedWindows.append(element)
+                        return onWindowRaise()
+                    }
                     if let renameMenuItem, CFEqual(element, renameMenuItem), action == kAXPressAction as String {
                         events.append("rename_menu")
+                        if renameMenuRequiresOriginalWindow,
+                           let focused: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String,
+                                runtime: builder.makeAXRuntime()), !CFEqual(focused, window) {
+                            return true // Acknowledgement is not acquisition of the held window's editor.
+                        }
                         if let menuFocusedEditor {
                             builder.setAttribute(app, kAXFocusedUIElementAttribute as String, menuFocusedEditor)
                         } else {
@@ -459,6 +479,156 @@ private actor ExactNameChannel: Channel {
 
 @Suite("#968 exact-local track naming adapter")
 struct Issue968ExactTrackNameAdapterTests {
+    @Test func registeredOrdinaryRenameAcquiresItsRetainedWindowBeforeOpeningTheEditor() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture("Audio 1")
+            f.passiveHeaderNameLabel = true
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setAttributeSettable(f.field, kAXValueAttribute as String, false)
+            let bar = f.builder.element(968_410), trackMenu = f.builder.element(968_411)
+            let menu = f.builder.element(968_412), rename = f.builder.element(968_413)
+            let editor = f.builder.element(968_414)
+            let otherWindow = f.builder.element(968_415), otherGroup = f.builder.element(968_416)
+            f.renameMenuItem = rename; f.menuFocusedEditor = editor
+            f.renameMenuRequiresOriginalWindow = true
+            f.builder.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+            for (element, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                                   (menu, kAXMenuRole), (rename, kAXMenuItemRole),
+                                   (editor, kAXTextFieldRole), (otherWindow, kAXWindowRole), (otherGroup, kAXGroupRole)] {
+                f.builder.setAttribute(element, kAXRoleAttribute as String, role as String)
+            }
+            f.builder.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+            f.builder.setAttribute(rename, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+            f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+            f.builder.setAttribute(editor, kAXValueAttribute as String, "Audio 1")
+            f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+            f.builder.setAttribute(otherGroup, kAXWindowAttribute as String, otherWindow)
+            f.builder.setChildren(bar, [trackMenu]); f.builder.setChildren(trackMenu, [menu]); f.builder.setChildren(menu, [rename])
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, otherWindow)
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, otherGroup)
+            f.onWindowRaise = {
+                guard f.raisedWindows.count == 1, CFEqual(f.raisedWindows[0], f.window) else {
+                    Issue.record("Only the retained original window may be raised"); return false
+                }
+                f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.window)
+                return true
+            }
+            let runtime = f.runtime
+            let dependencies = HandlerDependencies(router: f.router, cache: f.cache, targetRegistry: f.registry,
+                poller: StatePoller(axChannel: AccessibilityChannel(), cache: f.cache,
+                    runtime: .init(hasVisibleWindow: { false })), dialogPresent: { false }, supportBundleExporter: nil,
+                liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) }, projectFileReader: .unavailable)
+            let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_tracks", command: "rename"))
+            let result = await handler(dependencies, ["project_ref": .string(project.rawValue),
+                "target_ref": .string(target.rawValue), "name": .string("Probe")])
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(f.observedFocusedPID == f.observedLogicPID && f.logicIsFrontmost)
+            #expect(f.activationCalls == 0)
+            #expect(f.raisedWindows.count == 1)
+            #expect(body["state"] as? String == "A")
+            #expect(f.menuEditorValueWrites == ["Probe"])
+            #expect(f.writes == ["Probe"])
+            #expect(f.events == ["rename_menu"])
+            #expect(await f.registry.resolve(target)?.descriptor.trackName == "Probe")
+        }
+    }
+
+    @Test(arguments: ["ack_only", "header_loss", "ownership_loss", "document_loss", "name_loss", "pid_loss",
+                      "foreign_editor", "missing_focus_window", "before_menu_loss", "final_name_window_loss", "false_ack_owned"])
+    func ordinaryWindowAcquisitionCannotBorrowAnAcknowledgementOrLostCustody(_ fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture("Audio 1")
+            f.passiveHeaderNameLabel = true
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setAttributeSettable(f.field, kAXValueAttribute as String, false)
+            let bar = f.builder.element(968_420), trackMenu = f.builder.element(968_421)
+            let menu = f.builder.element(968_422), rename = f.builder.element(968_423)
+            let editor = f.builder.element(968_424)
+            let otherWindow = f.builder.element(968_425), otherGroup = f.builder.element(968_426)
+            f.renameMenuItem = rename; f.menuFocusedEditor = editor
+            f.renameMenuRequiresOriginalWindow = true
+            f.builder.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+            for (element, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                                   (menu, kAXMenuRole), (rename, kAXMenuItemRole),
+                                   (editor, kAXTextFieldRole), (otherWindow, kAXWindowRole), (otherGroup, kAXGroupRole)] {
+                f.builder.setAttribute(element, kAXRoleAttribute as String, role as String)
+            }
+            f.builder.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+            f.builder.setAttribute(rename, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+            f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+            f.builder.setAttribute(editor, kAXValueAttribute as String, "Audio 1")
+            f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+            f.builder.setAttribute(otherGroup, kAXWindowAttribute as String, otherWindow)
+            f.builder.setChildren(bar, [trackMenu]); f.builder.setChildren(trackMenu, [menu]); f.builder.setChildren(menu, [rename])
+            let (project, target) = try await f.prepare(typedProducer: true)
+            f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, otherWindow)
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, otherGroup)
+            if fault == "foreign_editor" {
+                f.builder.setAttribute(otherGroup, kAXRoleAttribute as String, kAXTextFieldRole as String)
+                f.builder.setAttribute(otherGroup, kAXValueAttribute as String, "Unrelated editing")
+            }
+            if fault == "missing_focus_window" { f.builder.removeAttribute(f.app, kAXFocusedWindowAttribute as String) }
+            f.onWindowRaise = {
+                f.windowRaiseFaultConsumed = true
+                guard f.raisedWindows.count == 1, CFEqual(f.raisedWindows[0], f.window) else {
+                    Issue.record("A changed target cannot redirect the retained-window raise"); return false
+                }
+                if fault == "ack_only" { return true }
+                f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.window)
+                switch fault {
+                case "header_loss": f.builder.setChildren(f.rail, [])
+                case "ownership_loss": f.boundaryOwnership = false
+                case "document_loss": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+                case "name_loss": f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "User edit")
+                case "pid_loss": f.observedLogicPID = 9002
+                default: break
+                }
+                return fault != "false_ack_owned"
+            }
+            if fault == "before_menu_loss" {
+                f.onRenameMenuRead = { f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, otherWindow) }
+            }
+            if fault == "final_name_window_loss" {
+                f.onRenameMenuRead = { f.windowNameReadArmed = true }
+                f.onUnwrittenNameRead = {
+                    if f.windowNameReadArmed, !f.windowNameReadFaultConsumed {
+                        f.windowNameReadFaultConsumed = true
+                        f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, otherWindow)
+                    }
+                }
+            }
+            let context = OperationTraceContext(ownsGate: { f.boundaryOwnership })
+            let result = await OperationTraceContext.$current.withValue(context) {
+                await f.rename(project: project, target: target, expected: nil, desired: "Probe")
+            }
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            #expect(f.activationCalls == 0)
+            if fault == "false_ack_owned" {
+                #expect(body["state"] as? String == "A")
+                #expect(f.writes == ["Probe"])
+                #expect(f.events == ["rename_menu"])
+            } else {
+                #expect(body["state"] as? String == (fault == "foreign_editor" || fault == "missing_focus_window" ? "C" : "B"))
+                #expect(f.writes.isEmpty)
+                #expect(f.events.isEmpty)
+                #expect(f.menuEditorValueWrites.isEmpty)
+                #expect(!f.postedReturn)
+                #expect(await f.registry.resolve(target)?.descriptor.trackName == "Audio 1")
+            }
+            let mayRaise = fault != "foreign_editor" && fault != "missing_focus_window"
+            #expect(f.raisedWindows.count == (mayRaise ? 1 : 0))
+            if mayRaise { #expect(f.windowRaiseFaultConsumed) }
+            else { #expect(!f.windowRaiseFaultConsumed) }
+            if fault == "final_name_window_loss" { #expect(f.windowNameReadFaultConsumed) }
+            if fault == "name_loss" {
+                let current: String? = AXHelpers.getAttribute(f.field, kAXDescriptionAttribute as String,
+                    runtime: f.builder.makeAXRuntime())
+                #expect(current == "User edit")
+            }
+        }
+    }
+
     @Test func verifiedRenameKeepsItsFreshReferenceAfterObservedHistoryNameDrift() async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = ExactNameFixture("Audio 1")
