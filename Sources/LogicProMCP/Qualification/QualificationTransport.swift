@@ -50,6 +50,9 @@ struct QualificationMutationRestoreRecord: Codable, Equatable, Sendable {
     let readback: String
     let restore: String
     let restoreReadback: String
+    /// Actual precondition write and independent observation, absent for legacy/unstaged cycles.
+    var stagingMutation: String? = nil
+    var stagingReadback: String? = nil
 
     /// The name of the first reading in this record that says it did not HAPPEN, or nil when all
     /// three report a real one.
@@ -75,8 +78,9 @@ struct QualificationMutationRestoreRecord: Codable, Equatable, Sendable {
     /// What it checks is whether a reading OCCURRED, never whether it is fresh: staleness is a
     /// different complaint and has its own verdict.
     var readingThatDidNotHappen: String? {
-        for (name, raw) in [("pre_state", preState), ("readback", readback),
-                            ("restore_readback", restoreReadback)] {
+        var readings = [("pre_state", preState), ("readback", readback), ("restore_readback", restoreReadback)]
+        if let stagingReadback { readings.append(("staging_readback", stagingReadback)) }
+        for (name, raw) in readings {
             guard let data = raw.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return "\(name): not readable as a JSON envelope"
@@ -145,6 +149,29 @@ struct QualificationMutationRestoreRecord: Codable, Equatable, Sendable {
             return QualificationTransport.recordedTransportMotion(readback)
                 == (operation == .transportPause ? .paused : (expected ? .moving : .stopped))
         }
+        if let direction = QualificationTransport.playheadStepDirections[operation] {
+            guard !QualificationTransport.playheadStepWriteWasIndeterminate(mutation),
+                  !QualificationTransport.playheadStepWriteWasIndeterminate(restore),
+                  let old = QualificationTransport.recordedExactStepPosition(before),
+                  let observed = QualificationTransport.recordedExactStepPosition(after) else { return false }
+            let stepOrigin: String
+            switch (stagingMutation, stagingReadback) {
+            case (nil, nil): stepOrigin = old
+            case let (write?, reading?):
+                guard QualificationTransport.verifiedPlayheadGotoReply(write),
+                      QualificationTransport.verifiedPlayheadGotoReply(restore),
+                      let stage = Self.envelope(reading),
+                      let position = QualificationTransport.recordedExactStepPosition(stage),
+                      position == QualificationTransport.barBoundary(from: old), position != old,
+                      let bytes = reading.data(using: .utf8),
+                      QualificationReadbackFreshness.verdict(for: bytes, uri: "logic://transport/state",
+                        verification: .readbackRequired, deadline: .short).isAdmissible
+                else { return false }
+                stepOrigin = position
+            default: return false
+            }
+            return QualificationTransport.stepPosition(from: stepOrigin, direction: direction) == observed
+        }
         return Self.sameRecipeValue(operation, before, after) == false
     }
 
@@ -211,6 +238,11 @@ struct QualificationMutationRestoreRecord: Codable, Equatable, Sendable {
         if operation == .transportSetTempo {
             guard let old = Self.transportState(before)?["tempo"] as? Double,
                   let observed = Self.transportState(after)?["tempo"] as? Double else { return nil }
+            return old == observed
+        }
+        if QualificationTransport.playheadStepDirections[operation] != nil {
+            guard let old = QualificationTransport.recordedExactStepPosition(before),
+                  let observed = QualificationTransport.recordedExactStepPosition(after) else { return nil }
             return old == observed
         }
         if QualificationTransport.playheadRestoreOperations.contains(operation)
@@ -290,6 +322,8 @@ struct QualificationMutationRestoreRecord: Codable, Equatable, Sendable {
         case readback
         case restore
         case restoreReadback = "restore_readback"
+        case stagingMutation = "staging_mutation"
+        case stagingReadback = "staging_readback"
     }
 }
 
@@ -1420,6 +1454,18 @@ struct QualificationTransport: Sendable {
                                 nextID += 14
                             }
                         }
+                        if let direction = Self.playheadStepDirections[spec.id] {
+                            do {
+                                let cycle = try playheadStepRestoreCycle(
+                                    session, startingAt: nextID, spec: spec, direction: direction)
+                                mutationRestoreRecords.append(cycle.record)
+                                phaseBRecord = cycle.record
+                                nextID = cycle.nextID
+                            } catch {
+                                phaseBRefusal = Self.observedFailureReason(from: error, during: "phase_b recipe")
+                                nextID += 24
+                            }
+                        }
                         if let field = Self.parameterlessToggleField[spec.id] {
                             do {
                                 let cycle = try parameterlessToggleRestoreCycle(
@@ -1935,6 +1981,10 @@ struct QualificationTransport: Sendable {
     static let playheadRestoreOperations: Set<OperationID> = [
         .navigateGotoBar,
         .transportGotoPosition,
+    ]
+
+    static let playheadStepDirections: [OperationID: Int] = [
+        .transportRewind: -1, .transportFastForward: 1,
     ]
 
     /// #373 Phase B: the mutating operations whose recipe is a reversible boolean toggle, and the
@@ -2976,6 +3026,190 @@ struct QualificationTransport: Sendable {
             ),
             nextID
         )
+    }
+
+    /// Complete observed musical position only: never append unobserved subdivision or ticks.
+    static func recordedExactStepPosition(_ envelope: [String: Any]) -> String? {
+        guard let data = envelope["data"] as? [String: Any],
+              let fields = data["state"] as? [String: Any],
+              fields["isPlaying"] as? Bool == false, fields["isRecording"] as? Bool == false,
+              fields["observedCycleEnabled"] as? Bool == false,
+              let raw = fields["positionReadback"] as? [String: Any],
+              let bytes = try? JSONSerialization.data(withJSONObject: raw),
+              let readback = try? JSONDecoder().decode(TransportPositionReadback.self, from: bytes)
+        else { return nil }
+        var state = TransportState()
+        state.positionReadback = readback
+        guard let complete = TransportDispatcher.completeObservedMusicalPosition(state),
+              !complete.value.contains(":"), TransportDispatcher.isValidPositionString(complete.value)
+        else { return nil }
+        return complete.value
+    }
+
+    static func stepPosition(from position: String, direction: Int) -> String? {
+        var components = position.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        // Off-boundary keyboard stepping snaps differently; its exact formula is not qualified.
+        guard components.count == 4, components.dropFirst().allSatisfy({ $0 == "1" }),
+              let bar = Int(components[0]) else { return nil }
+        components[0] = String(bar + direction)
+        let target = components.joined(separator: ".")
+        return TransportDispatcher.isValidPositionString(target) ? target : nil
+    }
+
+    static func barBoundary(from position: String) -> String {
+        String(position.split(separator: ".")[0]) + ".1.1.1"
+    }
+
+    static func verifiedPlayheadGotoReply(_ raw: String) -> Bool {
+        guard let bytes = raw.data(using: .utf8),
+              let fields = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return false }
+        return fields["state"] as? String == "A" && fields["verified"] as? Bool == true
+            && !playheadStepWriteWasIndeterminate(raw)
+    }
+
+    /// A coincident landing cannot qualify input whose own target was explicitly unknown.
+    static func playheadStepWriteWasIndeterminate(_ raw: String) -> Bool {
+        guard let bytes = raw.data(using: .utf8),
+              let fields = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return true }
+        return fields["fallback_unsafe"] as? Bool == true
+            || fields["write_attempted_indeterminate"] as? Bool == true
+            || fields["dialog_input_target"] as? String == "unknown"
+            || ["fallback_unsafe", "write_attempted_indeterminate", "dialog_input_target"]
+                .contains(fields["verification_withheld"] as? String ?? "")
+    }
+
+    /// Independent project-reference bookends and a fresh full position precede each dependent write.
+    private func playheadStepRestoreCycle(
+        _ session: QualificationSubprocessSession,
+        startingAt id: Int,
+        spec: OperationSpec,
+        direction: Int
+    ) throws -> (record: QualificationMutationRestoreRecord, nextID: Int) {
+        var nextID = id
+        var ownedStagedPosition: String?
+        func step() -> Int { defer { nextID += 1 }; return nextID }
+        func project(_ phase: String) throws -> (ref: String, path: String) {
+            let bytes = try resourceReadback(session, id: step(), uri: "logic://project/info", phase: phase)
+            guard let envelope = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  let data = envelope["data"] as? [String: Any],
+                  let ref = data["project_ref"] as? String, ref.hasPrefix("prj_"),
+                  let path = data["filePath"] as? String, !path.isEmpty,
+                  envelope["identity_source"] as? String == "current_document_project_file",
+                  let fetched = envelope["identity_fetched_at"] as? String,
+                  let date = ISO8601DateFormatter.cacheFormatter.date(from: fetched),
+                  Date().timeIntervalSince(date) >= 0, Date().timeIntervalSince(date) <= spec.deadline.seconds,
+                  QualificationReadbackFreshness.verdict(for: bytes, uri: "logic://project/info",
+                    verification: .readbackRequired, deadline: spec.deadline).isAdmissible
+            else { throw QualificationTransportError.protocolViolation("\(phase): current project identity unavailable") }
+            return (ref, path)
+        }
+        func read(_ phase: String, expectedProject: (ref: String, path: String)? = nil) throws
+            -> (raw: String, position: String, project: (ref: String, path: String)) {
+            // A failed deciding read cannot renew an earlier precondition's inverse authority.
+            ownedStagedPosition = nil
+            _ = try? invoke(session, id: step(), tool: "logic_system", command: "refresh_cache",
+                params: [:], phase: "\(phase).refresh")
+            let before = try project("\(phase).project_before")
+            if let expectedProject, before != expectedProject {
+                throw QualificationTransportError.protocolViolation("\(phase): project changed; dependent write withheld")
+            }
+            let bytes = try resourceReadback(session, id: step(), uri: "logic://transport/state", phase: phase)
+            guard let envelope = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  envelope["unverified"] as? Bool != true,
+                  QualificationReadbackFreshness.verdict(for: bytes, uri: "logic://transport/state",
+                    verification: .readbackRequired, deadline: spec.deadline).isAdmissible,
+                  let position = Self.recordedExactStepPosition(envelope)
+            else { throw QualificationTransportError.protocolViolation("\(phase): fresh stopped full position unavailable") }
+            let after = try project("\(phase).project_after")
+            guard before == after else {
+                throw QualificationTransportError.protocolViolation("\(phase): project changed during read; dependent write withheld")
+            }
+            return (String(decoding: bytes, as: UTF8.self), position, after)
+        }
+        let pre = try read("phase_b.pre_state")
+        let boundary = Self.barBoundary(from: pre.position)
+        guard let target = Self.stepPosition(from: boundary, direction: direction) else {
+            throw QualificationTransportError.protocolViolation("phase_b.pre_state: current bar's step leaves the supported range; staging withheld")
+        }
+        var stageWrite: String?
+        var stageReading: String?
+        do {
+            if pre.position != boundary {
+                let stage = try invoke(session, id: step(), tool: "logic_transport", command: "goto_position",
+                    params: ["position": boundary], phase: "phase_b.stage", timeout: spec.deadline.seconds + 5)
+                guard !stage.isError, Self.verifiedPlayheadGotoReply(stage.text) else {
+                    throw QualificationTransportError.protocolViolation("phase_b.stage: exact boundary staging was not verified A")
+                }
+                let staged = try read("phase_b.stage_readback", expectedProject: pre.project)
+                guard staged.position == boundary else {
+                    throw QualificationTransportError.protocolViolation("phase_b.stage_readback: boundary was not observed")
+                }
+                stageWrite = stage.text; stageReading = staged.raw
+                ownedStagedPosition = boundary
+            }
+            // Dispatch can throw without telling us whether the step was issued. Retire the
+            // staged inverse before crossing that boundary, not only after parsing a reply.
+            ownedStagedPosition = nil
+            let mutation = try invoke(session, id: step(), tool: spec.tool.rawValue, command: spec.command,
+                params: [:], phase: "phase_b.mutation", timeout: spec.deadline.seconds + 5)
+            if stageWrite != nil, Self.mutationSaysItFailed(mutation.text),
+               !Self.playheadStepWriteWasIndeterminate(mutation.text),
+               let bytes = mutation.text.data(using: .utf8),
+               let reply = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+               reply["write_attempted"] as? Bool == false {
+                let current = try read("phase_b.refused_step_readback", expectedProject: pre.project)
+                if current.position == boundary { ownedStagedPosition = boundary }
+            }
+            guard !Self.mutationSaysItFailed(mutation.text), !Self.playheadStepWriteWasIndeterminate(mutation.text) else {
+                throw QualificationTransportError.protocolViolation("phase_b.mutation: step refused")
+            }
+            let after = try read("phase_b.readback", expectedProject: pre.project)
+            if stageWrite != nil, after.position == boundary || after.position == target {
+                ownedStagedPosition = after.position
+            }
+            guard after.position == target else {
+                throw QualificationTransportError.protocolViolation("phase_b.readback: exact directional step mismatch")
+            }
+            let lastOwned = ownedStagedPosition
+            ownedStagedPosition = nil
+            let restore = try invoke(session, id: step(), tool: "logic_transport", command: "goto_position",
+                params: ["position": pre.position], phase: "phase_b.restore", timeout: spec.deadline.seconds + 5)
+            if Self.mutationSaysItFailed(restore.text), !Self.playheadStepWriteWasIndeterminate(restore.text) {
+                ownedStagedPosition = lastOwned
+            }
+            guard !Self.mutationSaysItFailed(restore.text), !Self.playheadStepWriteWasIndeterminate(restore.text),
+                  stageWrite == nil || (!restore.isError && Self.verifiedPlayheadGotoReply(restore.text)) else {
+                throw QualificationTransportError.protocolViolation("phase_b.restore: exact position restore refused or unverified")
+            }
+            let restored = try read("phase_b.restore_readback", expectedProject: pre.project)
+            guard restored.position == pre.position else {
+                throw QualificationTransportError.protocolViolation("phase_b.restore_readback: exact position was not restored")
+            }
+            return (.init(operationID: spec.id.rawValue, preState: pre.raw, mutation: mutation.text,
+                readback: after.raw, restore: restore.text, restoreReadback: restored.raw,
+                stagingMutation: stageWrite, stagingReadback: stageReading), nextID)
+        } catch {
+            guard let owned = ownedStagedPosition else { throw error }
+            let cause = String(describing: error)
+            do {
+                let current = try read("phase_b.cleanup_pre_state", expectedProject: pre.project)
+                guard current.position == owned else {
+                    throw QualificationTransportError.protocolViolation("staged cleanup withheld: position no longer owned")
+                }
+                let cleanup = try invoke(session, id: step(), tool: "logic_transport", command: "goto_position",
+                    params: ["position": pre.position], phase: "phase_b.cleanup", timeout: spec.deadline.seconds + 5)
+                guard !cleanup.isError, Self.verifiedPlayheadGotoReply(cleanup.text) else {
+                    throw QualificationTransportError.protocolViolation("staged cleanup was not verified A")
+                }
+                let restored = try read("phase_b.cleanup_readback", expectedProject: pre.project)
+                guard restored.position == pre.position else {
+                    throw QualificationTransportError.protocolViolation("staged cleanup did not restore original position")
+                }
+            } catch {
+                throw QualificationTransportError.protocolViolation(cause + " | " + String(describing: error))
+            }
+            throw QualificationTransportError.protocolViolation(cause + " | staged cleanup independently restored original position")
+        }
     }
 
     private func observedTransportPosition(

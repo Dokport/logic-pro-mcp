@@ -8,6 +8,218 @@ import Testing
 
 @Suite("ADR-001 qualification runner", .serialized)
 struct QualificationRunnerTests {
+    @Test(arguments: [OperationID.transportFastForward, .transportRewind])
+    func registeredOffBoundaryStepRetainsActualStagingAndRestoresOriginalPosition(operation: OperationID) throws {
+        let fixture = try SlowHandshakeFixture(playheadStep: operation)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(result.operationResults[operation.rawValue]?.status == .passed)
+        let record = try #require(result.mutationRestoreRecords.first)
+        #expect(record.verifiedCycleShape)
+        let encoded = try #require(sharedJSONObject(String(decoding: try JSONEncoder().encode(record), as: UTF8.self)))
+        let stage = try #require(encoded["staging_mutation"] as? String)
+        let stageBody = try #require(sharedJSONObject(stage))
+        #expect(stageBody["state"] as? String == "A")
+        let verified = try #require(stageBody["verified"] as? Bool)
+        #expect(verified)
+        let stageRead = try #require(encoded["staging_readback"] as? String)
+        let expectedAfter = operation == .transportFastForward ? "10.1.1.1" : "8.1.1.1"
+        for (raw, expected) in [(record.preState, "9.3.2.120"), (stageRead, "9.1.1.1"),
+                                (record.readback, expectedAfter), (record.restoreReadback, "9.3.2.120")] {
+            let envelope = try #require(sharedJSONObject(raw))
+            let data = try #require(envelope["data"] as? [String: Any])
+            let state = try #require(data["state"] as? [String: Any])
+            let readback = try #require(state["positionReadback"] as? [String: Any])
+            #expect(readback["value"] as? String == expected)
+            #expect(readback["observedComponents"] as? [String] == ["bar", "beat", "subdivision", "tick"])
+        }
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.stage", "phase_b.mutation", "phase_b.restore", "phase_b.cleanup"].contains($0.operationID) }
+        #expect(effects.map(\.operationID) == ["phase_b.stage", "phase_b.mutation", "phase_b.restore"])
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("step-position"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "9.3.2.120")
+    }
+
+    @Test func stagedStepTimeoutCannotRenewCleanupFromAnUnchangedPosition() throws {
+        let fixture = try SlowHandshakeFixture(playheadStep: .transportFastForward, playheadFault: "stage_lost_step_reply")
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == .transportFastForward })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("step-fault-consumed").path))
+        #expect(result.operationResults[spec.id.rawValue]?.status == .notQualified)
+        #expect(result.mutationRestoreRecords.isEmpty)
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.stage", "phase_b.mutation", "phase_b.restore", "phase_b.cleanup"].contains($0.operationID) }
+        #expect(effects.map(\.operationID) == ["phase_b.stage", "phase_b.mutation"])
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("step-position"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "9.1.1.1")
+    }
+
+    @Test(arguments: [OperationID.transportFastForward, .transportRewind])
+    func playheadStepRefusesAnObservedNonBoundaryPositionBeforeAnyWrite(operation: OperationID) throws {
+        // Staging now supports ordinary off-boundary positions, but never invents an adjacent
+        // bar outside the existing parser's range (nor clamps a rewind to a special bar).
+        let origin = operation == .transportFastForward ? "9999.3.2.120" : "1.3.2.120"
+        let fixture = try SlowHandshakeFixture(playheadStep: operation, playheadOrigin: origin)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(result.operationResults[operation.rawValue]?.status == .notQualified)
+        #expect(result.mutationRestoreRecords.isEmpty)
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.stage", "phase_b.mutation", "phase_b.restore", "phase_b.cleanup"].contains($0.operationID) }
+        #expect(effects.isEmpty)
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("step-position"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == origin)
+    }
+
+    @Test(arguments: [OperationID.transportFastForward, .transportRewind],
+          ["stage_refused", "stage_unverified", "stage_no_effect", "stage_missing_read",
+           "stage_cache_read", "stage_stale_read", "stage_project_loss", "refused_forward",
+           "stage_unknown_step", "stage_step_no_effect", "stage_foreign_position",
+           "stage_cleanup_project_loss", "stage_cleanup_position_loss", "stage_refused_restore",
+           "unsafe_restore"])
+    func stagedStepKeepsCleanupConditionalOnActualOwnedEvidence(operation: OperationID, shape: String) throws {
+        let fixture = try SlowHandshakeFixture(playheadStep: operation, playheadFault: shape)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("step-fault-consumed").path))
+        #expect(result.operationResults[operation.rawValue]?.status == .notQualified)
+        #expect(result.mutationRestoreRecords.isEmpty)
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.stage", "phase_b.mutation", "phase_b.restore", "phase_b.cleanup"].contains($0.operationID) }
+        let cleanupOwned = ["refused_forward", "stage_step_no_effect", "stage_refused_restore"].contains(shape)
+        let expectedPhases = shape.hasPrefix("stage_") &&
+            ["stage_refused", "stage_unverified", "stage_no_effect", "stage_missing_read",
+             "stage_cache_read", "stage_stale_read", "stage_project_loss"].contains(shape)
+            ? ["phase_b.stage"]
+            : shape == "stage_refused_restore"
+                ? ["phase_b.stage", "phase_b.mutation", "phase_b.restore", "phase_b.cleanup"]
+                : shape == "unsafe_restore"
+                    ? ["phase_b.stage", "phase_b.mutation", "phase_b.restore"]
+                    : cleanupOwned
+                        ? ["phase_b.stage", "phase_b.mutation", "phase_b.cleanup"]
+                        : ["phase_b.stage", "phase_b.mutation"]
+        #expect(effects.map(\.operationID) == expectedPhases)
+        let residual = try String(contentsOf: fixture.directory.appendingPathComponent("step-position"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedResidual = cleanupOwned || ["stage_refused", "stage_no_effect", "unsafe_restore"].contains(shape)
+            ? "9.3.2.120"
+            : ["stage_foreign_position", "stage_cleanup_position_loss"].contains(shape) ? "7.2.2.99" : "9.1.1.1"
+        #expect(residual == expectedResidual)
+    }
+
+    @Test func unstagedMutationRecordPreservesItsLegacyWireBytes() throws {
+        let raw = #"{"mutation":"m","operation_id":"transport.fast_forward","pre_state":"p","readback":"r","restore":"s","restore_readback":"t"}"#
+        let record = try JSONDecoder().decode(QualificationMutationRestoreRecord.self, from: Data(raw.utf8))
+        #expect(record.stagingMutation == nil)
+        #expect(record.stagingReadback == nil)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        #expect(String(decoding: try encoder.encode(record), as: UTF8.self) == raw)
+    }
+
+    @Test(arguments: ["missing_write", "missing_read", "unverified_stage", "cache_stage",
+                      "stale_stage", "partial_stage", "wrong_boundary", "unchanged_stage", "unsafe_restore"])
+    func stagedRecordCannotCreditMissingOrUnobservedPreconditions(shape: String) throws {
+        func reading(_ position: String, components: [String] = ["bar", "beat", "subdivision", "tick"],
+                     source: String = "ax_live", age: Int = 0) throws -> String {
+            let object: [String: Any] = ["source": source, "cache_age_sec": age,
+                "data": ["state": ["isPlaying": false, "isRecording": false, "observedCycleEnabled": false,
+                    "positionReadback": ["value": position, "observedComponents": components]]]]
+            return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        }
+        let verified = #"{"state":"A","verified":true}"#
+        var record = QualificationMutationRestoreRecord(operationID: OperationID.transportFastForward.rawValue,
+            preState: try reading("9.3.2.120"), mutation: #"{"state":"B","success":true}"#,
+            readback: try reading("10.1.1.1"), restore: verified, restoreReadback: try reading("9.3.2.120"),
+            stagingMutation: verified, stagingReadback: try reading("9.1.1.1"))
+        #expect(record.verifiedCycleShape)
+        switch shape {
+        case "missing_write": record.stagingMutation = nil
+        case "missing_read": record.stagingReadback = nil
+        case "unverified_stage": record.stagingMutation = #"{"state":"B","success":true,"verified":false}"#
+        case "cache_stage": record.stagingReadback = try reading("9.1.1.1", source: "cache")
+        case "stale_stage": record.stagingReadback = try reading("9.1.1.1", age: 1000)
+        case "partial_stage": record.stagingReadback = try reading("9.1", components: ["bar", "beat"])
+        case "wrong_boundary": record.stagingReadback = try reading("8.1.1.1")
+        case "unchanged_stage": record.stagingReadback = try reading("9.3.2.120")
+        default:
+            record = .init(operationID: record.operationID, preState: record.preState, mutation: record.mutation,
+                readback: record.readback, restore: #"{"state":"B","success":true,"fallback_unsafe":true}"#,
+                restoreReadback: record.restoreReadback, stagingMutation: record.stagingMutation,
+                stagingReadback: record.stagingReadback)
+        }
+        #expect(!record.verifiedCycleShape)
+    }
+
+    @Test(arguments: [OperationID.transportFastForward, .transportRewind])
+    func registeredPlayheadStepRestoresItsExactObservedPosition(operation: OperationID) throws {
+        let fixture = try SlowHandshakeFixture(playheadStep: operation, playheadAtBoundary: true)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(result.operationResults[operation.rawValue]?.status == .passed)
+        let record = try #require(result.mutationRestoreRecords.first)
+        #expect(record.verifiedCycleShape)
+        #expect(record.operationID == operation.rawValue)
+        let expectedAfter = operation == .transportFastForward ? "10.1.1.1" : "8.1.1.1"
+        for (raw, expected) in [(record.preState, "9.1.1.1"), (record.readback, expectedAfter),
+                                (record.restoreReadback, "9.1.1.1")] {
+            let envelope = try #require(sharedJSONObject(raw))
+            let data = try #require(envelope["data"] as? [String: Any])
+            let state = try #require(data["state"] as? [String: Any])
+            let readback = try #require(state["positionReadback"] as? [String: Any])
+            #expect(readback["value"] as? String == expected)
+            #expect(readback["observedComponents"] as? [String] == ["bar", "beat", "subdivision", "tick"])
+        }
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.mutation", "phase_b.restore"].contains($0.operationID) }
+        #expect(effects.count == 2)
+        let restoreRequest = try #require(effects.last.flatMap { sharedJSONObject($0.payload) })
+        let params = try #require(restoreRequest["params"] as? [String: Any])
+        let arguments = try #require(params["arguments"] as? [String: Any])
+        #expect(arguments["command"] as? String == "goto_position")
+        #expect(arguments["params"] as? [String: String] == ["position": "9.1.1.1"])
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("step-position"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "9.1.1.1")
+    }
+
+    @Test(arguments: [OperationID.transportFastForward, .transportRewind],
+          ["partial2_pre", "partial3_pre", "missing_pre", "malformed_pre", "playing_pre", "recording_pre",
+           "unknown_stop_pre", "missing_cycle_pre", "cycle_pre", "cache_pre", "stale_pre", "unverified_pre",
+           "unknown_age_pre", "project_pre", "project_after", "project_during_after", "partial_after",
+           "stale_after", "wrong_components_after", "refused_forward", "refused_restore", "missing_restore",
+           "mismatch_restore", "unsafe_restore"])
+    func playheadStepWithholdsWritesAndCreditWhenExactObservationIsLost(operation: OperationID, shape: String) throws {
+        let fixture = try SlowHandshakeFixture(playheadStep: operation, playheadFault: shape, playheadAtBoundary: true)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == operation })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("step-fault-consumed").path))
+        #expect(result.operationResults[operation.rawValue]?.status == .notQualified)
+        #expect(result.mutationRestoreRecords.isEmpty)
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.mutation", "phase_b.restore", "phase_b.cleanup"].contains($0.operationID) }
+        let expectedAttempts = shape.hasSuffix("_pre") ? 0
+            : (["refused_restore", "missing_restore", "mismatch_restore", "unsafe_restore"].contains(shape) ? 2 : 1)
+        #expect(effects.count == expectedAttempts, "unknown source or position cannot authorize a dependent inverse")
+        #expect(!effects.contains { $0.operationID == "phase_b.cleanup" })
+    }
+
     @Test func registeredAutopunchToggleRecordsAnObservedWriteAndRestoreCycle() throws {
         let fixture = try SlowHandshakeFixture(autopunchCycle: "healthy")
         defer { fixture.remove() }
@@ -6609,7 +6821,9 @@ struct QualificationRunnerTests {
         init(transportRefusal: Bool = false, transportNativePause: Bool = false,
              initialTransportMotion: String = "stopped", cachedTransport: Bool = false,
              nameRecipe: OperationID? = nil, nameIdentityFault: String = "none",
-             countInCycle: String? = nil, autopunchCycle: String? = nil) throws {
+             countInCycle: String? = nil, autopunchCycle: String? = nil,
+             playheadStep: OperationID? = nil, playheadFault: String = "none", playheadAtBoundary: Bool = false,
+             playheadOrigin: String? = nil) throws {
             directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("qualification-slow-handshake-\(UUID().uuidString)", isDirectory: true)
             executableURL = directory.appendingPathComponent("server.sh")
@@ -6644,7 +6858,7 @@ struct QualificationRunnerTests {
             IFS= read -r request_line || exit 0
             IFS= read -r request_line || exit 0
             """#
-            if transportRefusal || transportNativePause || nameRecipe != nil || countInCycle != nil || autopunchCycle != nil {
+            if transportRefusal || transportNativePause || nameRecipe != nil || countInCycle != nil || autopunchCycle != nil || playheadStep != nil {
                 script = try #require(script.components(separatedBy: "# AFTER SEED").first) + #"""
                 cd "$(dirname "$0")" || exit 1
                 initial_playing=false
@@ -6661,6 +6875,16 @@ struct QualificationRunnerTests {
                 count_in=false
                 count_in_reads=0
                 count_in_attempts=0
+                playhead_step=none
+                step_position=9.3.2.120
+                step_origin=9.3.2.120
+                step_boundary=false
+                step_fault=none
+                step_reads=0
+                step_project_reads=0
+                step_project_ref=prj_step
+                step_restore_attempts=0
+                printf '%s\n' "$step_position" > step-position
                 track_name='Before'
                 track_ref=held-track
                 peer_name='Other'
@@ -6677,6 +6901,14 @@ struct QualificationRunnerTests {
                     request=$(printf '%s' "$request" | /usr/bin/sed 's#\\/#/#g')
                     printf '%s\n' "$request" >> requests
                     case "$request" in
+                      *'"uri":"logic://project/info"'*)
+                        step_project_reads=$((step_project_reads + 1))
+                        case "$step_fault:$step_project_reads" in
+                          project_pre:1) step_project_ref=unobserved; touch step-fault-consumed ;;
+                          project_after:3|project_during_after:4) step_project_ref=prj_foreign; touch step-fault-consumed ;;
+                          stage_project_loss:3|stage_cleanup_project_loss:7) step_project_ref=prj_foreign; touch step-fault-consumed ;;
+                        esac
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://project/info","text":"{\\"source\\":\\"ax_live\\",\\"cache_age_sec\\":0,\\"identity_source\\":\\"current_document_project_file\\",\\"identity_fetched_at\\":\\"%s\\",\\"data\\":{\\"project_ref\\":\\"%s\\",\\"filePath\\":\\"/tmp/qualification-step.logicx\\"}}"}]}}\n' "$id" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$step_project_ref" ;;
                       *'"uri":"logic://tracks"'*)
                         if [ "$fault_pending" = true ]; then
                             fault_pending=false
@@ -6700,6 +6932,36 @@ struct QualificationRunnerTests {
                         fi
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://tracks","text":"{\\"source\\":\\"ax_live\\",\\"cache_age_sec\\":0,\\"readable\\":true,\\"ax_occluded\\":false,\\"data\\":[{\\"name\\":\\"%s\\",\\"track_ref\\":\\"%s\\"},{\\"name\\":\\"%s\\",\\"track_ref\\":\\"%s\\"}]}"}]}}\n' "$id" "$first_name" "$first_ref" "$second_name" "$second_ref" ;;
                       *'"uri":"logic://transport/state"'*)
+                        if [ "$playhead_step" != none ]; then
+                            step_reads=$((step_reads + 1))
+                            step_value=$step_position
+                            step_components='[\"bar\",\"beat\",\"subdivision\",\"tick\"]'
+                            step_source=ax_live; step_age=0; step_unverified=false
+                            step_playing=false; step_recording=false; step_cycle=false
+                            case "$step_fault:$step_reads" in
+                              partial2_pre:1) step_value=9.3; step_components='[\"bar\",\"beat\"]'; touch step-fault-consumed ;;
+                              partial3_pre:1) step_value=9.3.2; step_components='[\"bar\",\"beat\",\"subdivision\"]'; touch step-fault-consumed ;;
+                              missing_pre:1|partial_after:2|missing_restore:3) step_components='[]'; touch step-fault-consumed ;;
+                              malformed_pre:1) step_value=9.bad.2.120; touch step-fault-consumed ;;
+                              playing_pre:1) step_playing=true; touch step-fault-consumed ;;
+                              recording_pre:1) step_recording=true; touch step-fault-consumed ;;
+                              unknown_stop_pre:1) step_playing=null; touch step-fault-consumed ;;
+                              missing_cycle_pre:1) step_cycle=null; touch step-fault-consumed ;;
+                              cycle_pre:1) step_cycle=true; touch step-fault-consumed ;;
+                              cache_pre:1) step_source=cache; touch step-fault-consumed ;;
+                              stale_pre:1|stale_after:2) step_age=1000; touch step-fault-consumed ;;
+                              unverified_pre:1) step_unverified=true; touch step-fault-consumed ;;
+                              unknown_age_pre:1) step_age=null; touch step-fault-consumed ;;
+                              wrong_components_after:2) step_position=${step_position%.*}.121; step_value=$step_position; touch step-fault-consumed ;;
+                              stage_missing_read:2) step_components='[]'; touch step-fault-consumed ;;
+                              stage_cache_read:2) step_source=cache; touch step-fault-consumed ;;
+                              stage_stale_read:2) step_age=1000; touch step-fault-consumed ;;
+                              stage_cleanup_position_loss:4) step_position=7.2.2.99; step_value=$step_position; touch step-fault-consumed ;;
+                            esac
+                            printf '%s\n' "$step_position" > step-position
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://transport/state","text":"{\\"source\\":\\"%s\\",\\"unverified\\":%s,\\"cache_age_sec\\":%s,\\"data\\":{\\"state\\":{\\"isPlaying\\":%s,\\"isRecording\\":%s,\\"observedCycleEnabled\\":%s,\\"position\\":\\"%s\\",\\"positionReadback\\":{\\"value\\":\\"%s\\",\\"observedComponents\\":%s}}}}"}]}}\n' "$id" "$step_source" "$step_unverified" "$step_age" "$step_playing" "$step_recording" "$step_cycle" "$step_value" "$step_value" "$step_components"
+                            continue
+                        fi
                         if [ "$count_in_cycle" != none ]; then
                             count_in_reads=$((count_in_reads + 1))
                             count_in_source=$resource_source
@@ -6725,6 +6987,83 @@ struct QualificationRunnerTests {
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"logic_pro_running\\":true,\\"logic_pro_version\\":\\"11.2\\",\\"logic_pro_bundle_id\\":\\"com.apple.logic10\\",\\"logic_pro_variant\\":\\"desktop\\",\\"logic_pro_ui_locale\\":\\"en-US\\",\\"process_metadata_resolved\\":true,\\"logic_pro_variants\\":[{\\"variant\\":\\"desktop\\",\\"bundle_id\\":\\"com.apple.logic10\\",\\"installed\\":true,\\"running\\":true},{\\"variant\\":\\"creator_studio\\",\\"bundle_id\\":\\"com.apple.mobilelogic\\",\\"installed\\":false,\\"running\\":false}]}"}]}}\n' "$id" ;;
                       *'__adr001b_no_write_probe'*)
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"error\\":\\"invalid_params\\",\\"write_attempted\\":false}"}]}}\n' "$id" ;;
+                      *'"command":"fast_forward"'*|*'"command":"rewind"'*)
+                        if [ "$step_fault" = stage_lost_step_reply ]; then
+                            touch step-fault-consumed
+                            continue
+                        fi
+                        case "$step_fault" in
+                          stage_unknown_step)
+                            touch step-fault-consumed
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"B\\",\\"success\\":true,\\"fallback_unsafe\\":true}"}]}}\n' "$id"
+                            continue ;;
+                          stage_step_no_effect)
+                            touch step-fault-consumed
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"B\\",\\"success\\":true}"}]}}\n' "$id"
+                            continue ;;
+                          stage_foreign_position)
+                            touch step-fault-consumed; step_position=7.2.2.99
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"B\\",\\"success\\":true}"}]}}\n' "$id"
+                            continue ;;
+                        esac
+                        if [ "$step_fault" = refused_forward ] || [ "$step_fault" = stage_cleanup_project_loss ] || [ "$step_fault" = stage_cleanup_position_loss ]; then
+                            touch step-fault-consumed
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"write_attempted\\":false}"}]}}\n' "$id"
+                            continue
+                        fi
+                        case "$request" in
+                          *'"command":"fast_forward"'*)
+                            if [ "$step_boundary" = true ]; then step_position=10.1.1.1; else step_position=10.3.2.120; fi ;;
+                          *) if [ "$step_boundary" = true ]; then step_position=8.1.1.1; else step_position=8.3.2.120; fi ;;
+                        esac
+                        printf '%s\n' "$step_position" > step-position
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"B\\",\\"success\\":true,\\"verified\\":false,\\"reason\\":\\"readback_unavailable\\"}"}]}}\n' "$id" ;;
+                      *'"command":"goto_position"'*)
+                        if [ "$step_fault" = refused_restore ] && [ "$step_position" != "$step_origin" ]; then
+                            touch step-fault-consumed
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"write_attempted\\":false}"}]}}\n' "$id"
+                            continue
+                        fi
+                        case "$request" in
+                          *'"position":"9.3.2.120"'*|*'"position":"9.1.1.1"'*)
+                            if [ "$step_origin" != 9.1.1.1 ] && printf '%s' "$request" | grep -q '"position":"9.1.1.1"'; then
+                                case "$step_fault" in
+                                  stage_refused)
+                                    touch step-fault-consumed
+                                    printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"write_attempted\\":false}"}]}}\n' "$id"
+                                    continue ;;
+                                  stage_no_effect)
+                                    touch step-fault-consumed
+                                    printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"A\\",\\"verified\\":true}"}]}}\n' "$id"
+                                    continue ;;
+                                esac
+                                step_position=9.1.1.1; step_boundary=true
+                                printf '%s\n' "$step_position" > step-position
+                                if [ "$step_fault" = stage_unverified ]; then
+                                    touch step-fault-consumed
+                                    printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"B\\",\\"success\\":true,\\"verified\\":false}"}]}}\n' "$id"
+                                    continue
+                                fi
+                                printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"A\\",\\"verified\\":true}"}]}}\n' "$id"
+                                continue
+                            fi
+                            step_restore_attempts=$((step_restore_attempts + 1))
+                            if [ "$step_fault" = stage_refused_restore ] && [ "$step_restore_attempts" = 1 ]; then
+                                touch step-fault-consumed
+                                printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"write_attempted\\":false}"}]}}\n' "$id"
+                                continue
+                            fi
+                            if [ "$step_fault" = mismatch_restore ]; then touch step-fault-consumed
+                            else step_position=$step_origin; fi
+                            printf '%s\n' "$step_position" > step-position
+                            if [ "$step_fault" = unsafe_restore ]; then
+                                touch step-fault-consumed
+                                printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"B\\",\\"success\\":true,\\"verified\\":false,\\"fallback_unsafe\\":true,\\"verification_withheld\\":\\"fallback_unsafe\\"}"}]}}\n' "$id"
+                                continue
+                            fi
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"A\\",\\"verified\\":true}"}]}}\n' "$id" ;;
+                          *) printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"write_attempted\\":false}"}]}}\n' "$id" ;;
+                        esac ;;
                       *'"command":"toggle_count_in"'*)
                         count_in_attempts=$((count_in_attempts + 1))
                         case "$count_in_cycle:$count_in_attempts" in
@@ -6789,6 +7128,19 @@ struct QualificationRunnerTests {
                         .replacingOccurrences(of: "isCountInEnabled", with: "isAutopunchEnabled")
                         .replacingOccurrences(of: "count_in", with: "autopunch")
                         .replacingOccurrences(of: "count-in", with: "autopunch")
+                }
+                if let playheadStep {
+                    script = script.replacingOccurrences(of: "playhead_step=none", with: "playhead_step=\(playheadStep.rawValue)")
+                        .replacingOccurrences(of: "step_fault=none", with: "step_fault=\(playheadFault)")
+                }
+                if playheadAtBoundary {
+                    script = script.replacingOccurrences(of: "step_position=9.3.2.120", with: "step_position=9.1.1.1")
+                        .replacingOccurrences(of: "step_origin=9.3.2.120", with: "step_origin=9.1.1.1")
+                        .replacingOccurrences(of: "step_boundary=false", with: "step_boundary=true")
+                }
+                if let playheadOrigin {
+                    script = script.replacingOccurrences(of: "step_position=9.3.2.120", with: "step_position=\(playheadOrigin)")
+                        .replacingOccurrences(of: "step_origin=9.3.2.120", with: "step_origin=\(playheadOrigin)")
                 }
                 if let nameRecipe {
                     script = script.replacingOccurrences(of: "name_recipe=none", with: "name_recipe=\(nameRecipe.rawValue)")
