@@ -2,6 +2,25 @@
 import Foundation
 
 extension AccessibilityChannel {
+    @TaskLocal static var sendRemovalObserver: (@Sendable (RemovedSendObservation) -> Void)?
+
+    /// Immutable native handles for the source/control actually recreated by
+    /// the owned inverse. Neither JSON nor a newly found singleton can recreate it.
+    struct RestoredSendObservation: @unchecked Sendable {
+        let source: OriginalHeaderSourceRenewal
+        let control: AXLogicProElements.AssignedSendMenuControl
+        let population: [AXUIElement]
+
+        func permits(runtime: AXLogicProElements.Runtime) -> Bool {
+            guard source.permits(runtime: runtime),
+                  let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
+                    ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
+                  let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
+                  zip(census, population).allSatisfy({ CFEqual($0, $1) }) else { return false }
+            return source.permits(runtime: runtime)
+        }
+    }
+
     /// Immutable native handles confined to the existing owned request's
     /// lifetime. Sendability is not action authority: every use must renew the
     /// source and exact empty control. No JSON receipt can construct this proof.
@@ -97,6 +116,7 @@ extension AccessibilityChannel {
         guard proof.permits(runtime: runtime) else {
             return uncertain("The removal proof lost its current native empty binding before publication.")
         }
+        sendRemovalObserver?(proof)
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: nil,
             removedSend: proof)
     }
@@ -160,6 +180,7 @@ extension AccessibilityChannel {
         extras["source_index_after"] = source.index; extras["verify_source"] = "ax_send_menu_checkmark"
         extras["snapshot_atomic"] = false
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: after.assignment,
-            sendNonRoutingChecks: after.sendNonRoutingChecks)
+            sendNonRoutingChecks: after.sendNonRoutingChecks,
+            restoredSend: .init(source: source, control: final, population: finalPopulation))
     }
 }

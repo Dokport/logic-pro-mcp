@@ -250,6 +250,10 @@ struct Issue965HeldSelectionAssociationTests {
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
         var routingDestinationPresses = 0
+        var routingRemovalPublications = 0
+        var routingRemovedSend: AccessibilityChannel.RemovedSendObservation?
+        var routingRemovalPermittedAtPublication: Bool?
+        var routingIndependentSendReads = 0
         var routingClassifierHelpReads = 0
         var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
@@ -1028,6 +1032,25 @@ struct Issue965HeldSelectionAssociationTests {
             survivingSource: true, emptyModeMenu: true)
     }
 
+    @Test(arguments: [false, true])
+    func registeredSendRemovalPublishesOnlyItsRequestLocalNativeProof(surviving: Bool) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, survivingSource: surviving, observeRemoval: true)
+    }
+
+    @Test(arguments: ["multiple_occupied", "foreign_project", "unreadable"])
+    func unverifiedSendRemovalNeverPublishesNativeInverseAuthority(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(fault, removing: true, observeRemoval: true)
+    }
+
+    @Test func restoredSendSourceSupportsAnIndependentChangedDestinationRead() async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, readRestored: "changed_destination")
+    }
+
+    @Test(arguments: ["wrong_original", "foreign_project", "retired_source", "replaced_control"])
+    func restoredSendReaderRefusesWrongOrLostNativeCustody(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, readRestored: fault)
+    }
+
     @Test(arguments: ["empty_mode_mark_unreadable", "empty_mode_still_enabled", "empty_mode_enabled_unreadable", "after_mode"])
     func typedRemovedSendInverseRefusesUnknownOrEnabledEmptyModes(fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, inverseFault: fault,
@@ -1059,7 +1082,8 @@ struct Issue965HeldSelectionAssociationTests {
     private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
-                                               emptyModeMenu: Bool = false) async throws {
+                                               emptyModeMenu: Bool = false, observeRemoval: Bool = false,
+                                               readRestored: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1222,6 +1246,9 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
             f.routingReadResult = { element, attribute in
+                if readRestored == "retired_source", f.routingLateScopeInjected, CFEqual(element, restoredSource) {
+                    return .failure(.init(raw: AXError.invalidUIElement.rawValue))
+                }
                 if emptyModeMenu, f.routingDestinationPresses == 1, CFEqual(element, mode) {
                     if attribute == "AXMenuItemMarkChar" {
                         f.routingClassifierHelpReads += 1
@@ -1291,6 +1318,10 @@ struct Issue965HeldSelectionAssociationTests {
             let initialSelections = f.selections
             if fault == "missing_pair" { f.expireRetainedCapture = true }
             f.routingRead = { element, attribute in
+                if readRestored != nil, f.routingDestinationPresses == 2,
+                   CFEqual(element, b.element(1_965_2663)), attribute == kAXDescriptionAttribute as String {
+                    f.routingIndependentSendReads += 1
+                }
                 // Legacy getRole uses the untyped attribute channel, whereas
                 // the strict selector uses the typed result channel above.
                 if lateRemovalChoice, fault == "late_child_role", f.routingClassifierHelpReads == 5,
@@ -1367,9 +1398,50 @@ struct Issue965HeldSelectionAssociationTests {
                                 }
                                 let restored = await AccessibilityChannel.restoreRemovedSendObservation(proof,
                                     runtime: f.logic(), timing: .immediate)
+                                if let readRestored {
+                                    #expect(restored.assignment == .stereoOutput)
+                                    #expect(restored.restoredSend != nil, "Successful restoration must retain its native renewed source and control")
+                                    let expectedOriginal = readRestored == "wrong_original"
+                                        ? AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+                                            strip: f.strips[0], document: proof.source.pair.strip.document)
+                                        : proof.source.pair.strip
+                                    f.routingIndependentSendReads = 0
+                                    switch readRestored {
+                                    case "changed_destination":
+                                        b.setAttribute(echo, kAXTitleAttribute as String, "Output 3-4")
+                                        b.setAttribute(stereo, kAXTitleAttribute as String, "Output 3-4")
+                                    case "foreign_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                                    case "retired_source":
+                                        f.routingLateScopeInjected = true
+                                        b.setChildren(f.mixer, [f.strips[0], replacement])
+                                    case "replaced_control": b.setChildren(restoredSource, [name] + renewedSend)
+                                    case "wrong_original": break
+                                    default: Issue.record("Unknown renewed send read fixture")
+                                    }
+                                    let reading = await AccessibilityChannel.readRestoredSendObservation(restored,
+                                        original: expectedOriginal, runtime: f.logic(), timing: .immediate)
+                                    let readBody = try? sharedJSONObject(reading.result.message)
+                                    if readRestored == "changed_destination" {
+                                        #expect(reading.assignment == OutputAssignment.physical(3, 4))
+                                        #expect(readBody?["state"] as? String == "A")
+                                        #expect(readBody?["output_checkmark_reads_observed"] as? Int == 2)
+                                        #expect(f.routingIndependentSendReads > 0)
+                                    } else {
+                                        #expect(reading.assignment == nil && readBody?["state"] as? String == "C")
+                                        #expect(f.routingIndependentSendReads == 0)
+                                    }
+                                    #expect(f.routingDestinationPresses == 2, "The independent reader never selects a routing destination")
+                                }
                                 return toolTextResult(restored.result)
                             }
                         }
+                    }
+                    if observeRemoval {
+                        return await AccessibilityChannel.$sendRemovalObserver.withValue({ proof in
+                            f.routingRemovalPublications += 1
+                            f.routingRemovedSend = proof
+                            f.routingRemovalPermittedAtPublication = proof.permits(runtime: f.logic())
+                        }) { await handler(dependencies, params) }
                     }
                     return await handler(dependencies, params)
                 }
@@ -1425,6 +1497,7 @@ struct Issue965HeldSelectionAssociationTests {
                 return
             }
             if let fault {
+                if observeRemoval { #expect(f.routingRemovalPublications == 0 && f.routingRemovedSend == nil) }
                 #expect(body["state"] as? String == "B", "Actual uncertain retired-send response: \(sharedToolText(result))")
                 let verified = try #require(body["verified"] as? Bool)
                 #expect(!verified)
@@ -1435,6 +1508,13 @@ struct Issue965HeldSelectionAssociationTests {
                 return
             }
             #expect(body["state"] as? String == "A", "Actual retired-send response: \(sharedToolText(result))")
+            if observeRemoval {
+                #expect(f.routingRemovalPublications == 1)
+                let observed = try #require(f.routingRemovedSend)
+                #expect(f.routingRemovalPermittedAtPublication == true)
+                #expect(!observed.permits(runtime: f.logic()), "Native authority expires with the request's actual operation claim")
+                #expect(observed.checkedDestination == .stereoOutput && observed.before.levelRaw == 0 && observed.before.bypassed == false)
+            }
             #expect(body["before"] as? [String: String] == ["kind": "stereo_output"])
             let verified = try #require(body["verified"] as? Bool)
             #expect(verified)

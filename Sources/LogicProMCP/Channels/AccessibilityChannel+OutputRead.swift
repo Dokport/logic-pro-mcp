@@ -101,6 +101,7 @@ extension AccessibilityChannel {
         var sendNonRoutingChecks: [String]? = nil
         /// Request-local native proof only; never decoded from the wire receipt.
         var removedSend: RemovedSendObservation? = nil
+        var restoredSend: RestoredSendObservation? = nil
     }
 
     static func setAssignedSendOutputVerified(params: [String: String],
@@ -128,6 +129,29 @@ extension AccessibilityChannel {
         /// nil is the explicitly scoped No Send action, never a No Output routing endpoint.
         let destination: OutputAssignment?
         var restoration: RemovedSendObservation? = nil
+    }
+
+    static func readRestoredSendObservation(_ restored: CheckedOutputReading,
+        original: AXMixerStripBinding.Binding, runtime: AXLogicProElements.Runtime,
+        timing: OutputAssignmentTiming = .live) async -> CheckedOutputReading {
+        guard let held = restored.restoredSend, held.source.original.matches(original), held.permits(runtime: runtime),
+              let before = AXLogicProElements.sendSlotObservations(in: held.source.pair.strip.strip, runtime: runtime.ax) else {
+            return .init(result: .error(HonestContract.encodeStateC(error: .staleTargetReference,
+                hint: "The exact restored source and occupied send control are no longer current.",
+                extras: ["write_attempted": false])), assignment: nil)
+        }
+        let reading = await AXMixerStripBinding.$current.withValue(held.source.pair.strip) {
+            await AXMixerStripBinding.$outputAssociation.withValue(held.source.pair) {
+                await getOutputObservation(runtime: runtime, sendOrdinal: held.control.ordinal, timing: timing)
+            }
+        }
+        guard held.permits(runtime: runtime),
+              AXLogicProElements.sendSlotObservations(in: held.source.pair.strip.strip, runtime: runtime.ax) == before,
+              held.permits(runtime: runtime) else {
+            return .init(result: outputReadContextFailure(reading.result, operation: "mixer.get_send_destination_verified"),
+                assignment: nil)
+        }
+        return reading
     }
 
     static func restoreAssignedSendThroughRetainedEmpty(_ removed: RemovedSendObservation,
