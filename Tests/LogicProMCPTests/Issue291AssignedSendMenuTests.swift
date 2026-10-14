@@ -608,10 +608,18 @@ struct Issue291AssignedSendMenuTests {
                 allowUINavigation: true), fileReader: .unavailable, stoppingWhen: { false })
         }
         #expect(population.stable)
-        #expect(population.checkedOutputs.count == 1)
-        #expect(population.checkedOutputs.first?.assignment == .bus(1))
-        #expect(population.checkedOutputs.first?.sendOrdinal == 1)
-        #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+        #expect(population.checkedOutputs.count == 2)
+        let send = try #require(population.checkedOutputs.first { $0.sendOrdinal == 1 })
+        #expect(send.assignment == .bus(1))
+        #expect(CFEqual(send.source.strip, f.strips[0]))
+        let output = try #require(population.checkedOutputs.first { $0.sendOrdinal == nil })
+        #expect(output.assignment == .bus(1))
+        #expect(f.b.attributeValue(f.outputs[1], kAXDescriptionAttribute as String) as? String == "Stereo Output")
+        #expect(CFEqual(output.source.strip, f.strips[1]))
+        #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel", "AXPress", "AXCancel"])
+        let presses = f.mutations.filter { $0.1 == kAXPressAction as String }
+        try #require(presses.count == 2)
+        #expect(CFEqual(presses[0].0, f.outputs[0]) && CFEqual(presses[1].0, f.outputs[1]))
         #expect(population.uiEffects.restoration == "restored")
     }
     @Test("Registered routing capture permits only its original nonediting physical or header focus under its Help guard",
@@ -672,9 +680,19 @@ struct Issue291AssignedSendMenuTests {
             }
             #expect(fault == "healthy")
             #expect(population.stable)
-            #expect(population.checkedOutputs.first?.sendOrdinal == 1)
-            #expect(population.checkedOutputs.first?.assignment == .bus(1))
-            #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel"])
+            #expect(population.checkedOutputs.count == 2)
+            let send = try #require(population.checkedOutputs.first { $0.sendOrdinal == 1 })
+            #expect(send.assignment == .bus(1))
+            #expect(CFEqual(send.source.strip, f.strips[0]))
+            let output = try #require(population.checkedOutputs.first { $0.sendOrdinal == nil })
+            #expect(output.assignment == .bus(1))
+            #expect(f.b.attributeValue(f.outputs[1], kAXDescriptionAttribute as String) as? String == "Stereo Output")
+            #expect(CFEqual(output.source.strip, f.strips[1]))
+            #expect(f.mutations.map { $0.1 } == ["AXPress", "AXCancel", "AXPress", "AXCancel"])
+            let presses = f.mutations.filter { $0.1 == kAXPressAction as String }
+            try #require(presses.count == 2)
+            #expect(CFEqual(presses[0].0, f.outputs[0]) && CFEqual(presses[1].0, f.outputs[1]))
+            #expect(population.uiEffects.restoration == "restored")
             let currentFocus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
                 kAXFocusedUIElementAttribute as String, runtime: f.logic.ax))
             #expect(CFEqual(currentFocus, focus))

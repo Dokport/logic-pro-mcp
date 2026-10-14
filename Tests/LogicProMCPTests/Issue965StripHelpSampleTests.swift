@@ -5,7 +5,7 @@ import Testing
 
 @Suite("#965 one native Help sample per strip extraction", .serialized)
 struct Issue965StripHelpSampleTests {
-    @Test("the actual owned strip reader reaches metadata batching without changing failure-noting runtimes",
+    @Test("the actual owned strip reader retains failure-noting plugin provenance over both input runtimes",
           arguments: [false, true])
     func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool) throws {
         final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0 }
@@ -54,8 +54,9 @@ struct Issue965StripHelpSampleTests {
                     readingRouting: false, readingScalarHelp: false, stoppingWhen: { guardian.stopped }))
                 #expect(states.first?.pluginsSource == "ax" && states.first?.plugins.first?.name == "Gain")
                 #expect(states.first?.physicalBinding != nil)
-                if noting { #expect(calls.metadataBatches == 0) }
-                else { #expect(calls.metadataBatches > 0) }
+                let fullyObserved = try #require(states.first?.pluginsFullyObserved)
+                #expect(fullyObserved)
+                #expect(calls.metadataBatches == 0)
                 #expect(calls.helpGuardCalls > 0 && !guardian.stopped && !failures.any)
             }
         }
