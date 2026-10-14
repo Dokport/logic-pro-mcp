@@ -1916,7 +1916,7 @@ extension AXLogicProElements {
 
     /// The existing bounded walk, refusing unread roles/children and unseen boundary descendants.
     /// Physical scalar selectors share this enumeration; legacy selectors keep their old walk.
-    private static func completelyReadSliders(in strip: AXUIElement, runtime: AXHelpers.Runtime) -> [AXUIElement]? {
+    static func completelyReadSliders(in strip: AXUIElement, runtime: AXHelpers.Runtime) -> [AXUIElement]? {
         guard let walk = preOrderDescendants(of: strip, maxDepth: 4, runtime: runtime) else { return nil }
         var observed: [AXUIElement] = []
         for visit in walk {

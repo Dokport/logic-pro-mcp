@@ -339,6 +339,13 @@ extension AccessibilityChannel {
                 cleanup.merging(more.merging(["read_with_popup_open": true]) { _, new in new }) { _, new in new })
         }
 
+        if let permission = ApprovedSessionRepair.outputLeafPermission, !permission(root) {
+            let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: false,
+                                                 cleaner: popupCleaner, permittingCleanup: popupSourceStillCurrent)
+            return refusal(.staleTargetReference,
+                "The approved output's retained footprint changed; nothing was selected.", cleanup)
+        }
+
         if physical != nil {
             // Source-slot and bus deciding reads can coincide with a project
             // transition after currentIndex's earlier Document sample. Renew

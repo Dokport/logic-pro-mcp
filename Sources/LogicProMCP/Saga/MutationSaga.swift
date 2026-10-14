@@ -56,6 +56,7 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
     case axTrackHeaderPan = "ax_track_header_pan"
     case axTrackName = "ax_track_name"
     case axTrackOrder = "ax_track_order"
+    case axOutputMenuCheckmark = "ax_output_menu_checkmark"
     case axTrackToggle = "ax_track_toggle"
     case axProjectMixerVisibility = "ax_project_mixer_visibility"
     case axPluginParameter = "ax_plugin_parameter"
@@ -67,6 +68,7 @@ enum SagaReadSource: String, Codable, Equatable, Sendable {
         case .axTrackHeaderPan: "header_pan"
         case .axTrackName: "track_name"
         case .axTrackOrder: "track_order"
+        case .axOutputMenuCheckmark: "output_menu_checkmark"
         case .axTrackToggle: "track_toggle"
         case .axProjectMixerVisibility: "mixer_visibility"
         case .axPluginParameter: "plugin_parameter"
@@ -354,8 +356,14 @@ actor MutationSaga {
                 && step.operationID == .navigateToggleView
                 && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
                 && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
+            let approvedOutput = approvedSessionRepair?.supports(step) == true
+                && step.operationID == .mixerSetOutputVerified
+                && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
+                && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
             let definition = approvedSort ? ReversibleDefinition(tool: .logicTracks, command: "sort_verified",
                 valueParameter: "expected_order", tolerance: .exact)
+                : approvedOutput ? ReversibleDefinition(tool: .logicMixer, command: "set_output_verified",
+                    valueParameter: "destination", tolerance: .exact)
                 : approvedView ? ReversibleDefinition(tool: .logicNavigate, command: "toggle_view",
                 valueParameter: "visible", tolerance: .exact)
                 : (step.operationID == .pluginsSetParamVerified && (try? CompressorParameterSaga.validate(plan)) != nil
@@ -926,7 +934,7 @@ actor MutationSaga {
         desiredValue: Value,
         step: SagaStep
     ) -> VerificationDisposition {
-        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified ? .unknown : .applied }
+        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified || step.operationID == .mixerSetOutputVerified ? .unknown : .applied }
         if step.operationID == .pluginsSetEQBandVerified {
             return SelectedEQParameterSaga.comparison(readback, desired: desiredValue, step: step).equal ? .applied : .unknown
         }

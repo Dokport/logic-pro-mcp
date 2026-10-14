@@ -902,7 +902,8 @@ enum OperationRegistry {
             Mutability.readOnly,
             ConfirmationPolicy.none,
             VerificationPolicy.none,
-            DeadlineClass.short,
+            // A routing observation may read several owned menus and restore their UI.
+            DeadlineClass.medium,
             ["allow_ui_navigation", "domains", "project_ref", "scope", "snapshot_id"]
         ),
         (.projectPlanSessionRepair, "plan_session_repair", Mutability.readOnly, ConfirmationPolicy.none, VerificationPolicy.none, DeadlineClass.short, ["snapshot_id", "policy", "names", "plan_id", "digest", "on_ambiguity", "allow_create_aux", "allow_stack_membership_change", "allow_replace_send"]),

@@ -230,6 +230,37 @@ struct OperationRegistryTests {
         #expect(!gate.isHeldByEntitledHolder())
     }
 
+    @Test("Requested routing inspection receives one medium deadline without changing observation ownership")
+    func routingInspectionReceivesCompoundDeadlineUnderRealOwnedGate() async throws {
+        let spec = try #require(OperationRegistry.spec(tool: "logic_project", command: "inspect_session"))
+        #expect(spec.deadline == .medium)
+        #expect(spec.mutability == .readOnly)
+        #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_project", command: "inspect_session") == 90)
+        for command in ["audit", "cleanup_plan", "plan_session_repair"] {
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_project", command: command) == 25)
+        }
+        let gate = LogicMutationGate()
+        let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
+            commandParams: ["domains": .array([.string("routing")]), "allow_ui_navigation": .bool(true)],
+            mutationGate: gate) {
+            guard let context = OperationTraceContext.current, let deadline = context.deadline else {
+                Issue.record("Fresh routing inspection must receive its existing owned absolute deadline")
+                return toolTextResult(.error("missing owned inspection deadline"))
+            }
+            #expect(context.mutationGateAcquired)
+            #expect(context.ownsGate())
+            #expect(gate.tryAcquire(operation: "unrelated mutation") == nil)
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            #expect(remaining > .seconds(DeadlineClass.short.seconds))
+            #expect(remaining <= .seconds(DeadlineClass.medium.seconds))
+            do { try SessionPopulationObservation.requireOwnedAcquisition() }
+            catch { Issue.record("Inspection must retain its original acquisition guards: \(error)") }
+            return toolTextResult(.success("owned inspection deadline observed without AX"))
+        }
+        #expect(sharedToolText(result) == "owned inspection deadline observed without AX")
+        #expect(!gate.isHeldByEntitledHolder())
+    }
+
     @Test("validation rejects a mixer command assigned to transport")
     func mixerWrongToolValidation() throws {
         var entries = OperationRegistry.specs.map {
@@ -643,7 +674,7 @@ struct OperationRegistryTests {
         ("project.cleanup_plan", "cleanup_plan", .readOnly, .short, .none),
         ("project.plan_session_repair", "plan_session_repair", .readOnly, .short, .none),
         ("project.apply_session_repair", "apply_session_repair", .mutating, .long, .readbackRequired),
-        ("project.inspect_session", "inspect_session", .readOnly, .short, .none),
+        ("project.inspect_session", "inspect_session", .readOnly, .medium, .none),
         ("project.cleanup_apply", "cleanup_apply", .mutating, .medium, .readbackRequired),
     ]
 
@@ -730,8 +761,8 @@ struct OperationRegistryTests {
 
     @Test("project deadlines exactly match registry short medium and long tiers")
     func projectDeadlineParity() {
-        #expect(Self.projectCommands.filter { $0.deadline == .short }.count == 8)
-        #expect(Self.projectCommands.filter { $0.deadline == .medium }.count == 5)
+        #expect(Self.projectCommands.filter { $0.deadline == .short }.count == 7)
+        #expect(Self.projectCommands.filter { $0.deadline == .medium }.count == 6)
         #expect(Self.projectCommands.filter { $0.deadline == .long }.count == 6)
 
         for entry in Self.projectCommands {

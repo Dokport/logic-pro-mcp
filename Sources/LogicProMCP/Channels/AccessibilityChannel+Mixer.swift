@@ -65,16 +65,48 @@ extension AccessibilityChannel {
             let samples = (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
                 ? AXHelpers.StripHelpSamples() : nil
             let state = AXHelpers.StripHelpSamples.$current.withValue(samples) {
-                func readScalars() -> (volume: Double, pan: Double) {
-                    let volume = AXLogicProElements.findVolumeFader(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
-                        .flatMap { AXValueExtractors.extractLogicMixerFaderValue($0, runtime: runtime.ax) }
-                        ?? 0.0
-                    let pan = AXLogicProElements.findPanControl(in: strip, runtime: runtime.ax, requireUnique: window != nil && mixer != nil)
-                        .flatMap { AXValueExtractors.extractCenteredSliderValue($0, runtime: runtime.ax) }
-                        ?? 0.0
-                    return (volume, pan)
+                func readScalars() -> (volume: Double?, pan: Double?, observedVolume: ChannelStripState.ScalarReadback?, observedPan: ChannelStripState.ScalarReadback?) {
+                    func observed(_ control: AXUIElement?, failures: AXPluginInstanceIdentity.FailedReads) -> ChannelStripState.ScalarReadback? {
+                        guard let control, !failures.any else { return nil }
+                        let readings = AXHelpers.getNonHelpAttributes(control,
+                            [kAXValueAttribute, kAXMinValueAttribute, kAXMaxValueAttribute] as [String], runtime: runtime.ax)
+                        let numbers = readings.compactMap { reading -> Double? in
+                            guard case .success(.some(let value)) = reading,
+                                  CFGetTypeID(value) == CFNumberGetTypeID(), let number = value as? NSNumber,
+                                  number.doubleValue.isFinite else { return nil }
+                            return number.doubleValue
+                        }
+                        guard numbers.count == 3, numbers[2] > numbers[1],
+                              (numbers[1]...numbers[2]).contains(numbers[0]),
+                              case .success(.some(let role)) = AXHelpers.getAttributeResult(control,
+                                kAXRoleAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
+                              role == kAXSliderRole as String else { return nil }
+                        return .observed(raw: numbers[0], minimum: numbers[1], maximum: numbers[2])
+                    }
+                    let volumeFailures = AXPluginInstanceIdentity.FailedReads()
+                    let volumeAX = AXPluginInstanceIdentity.noting(volumeFailures, over: runtime.ax)
+                    let volumeControl = AXLogicProElements.findVolumeFader(in: strip, runtime: volumeAX, requireUnique: window != nil && mixer != nil)
+                    let volume = volumeControl.flatMap { AXValueExtractors.extractLogicMixerFaderValue($0, runtime: volumeAX) }
+                    let panFailures = AXPluginInstanceIdentity.FailedReads()
+                    let panAX = AXPluginInstanceIdentity.noting(panFailures, over: runtime.ax)
+                    let panControl = AXLogicProElements.findPanControl(in: strip, runtime: panAX, requireUnique: window != nil && mixer != nil)
+                    let pan = panControl.flatMap { AXValueExtractors.extractCenteredSliderValue($0, runtime: panAX) }
+                    var observedVolume = observed(volumeControl, failures: volumeFailures)
+                    var observedPan = observed(panControl, failures: panFailures)
+                    // A missing value is unknown. Only the existing complete owned census
+                    // can distinguish an absent control (Master/VCA pan) from a failed read.
+                    if window != nil, mixer != nil, !volumeFailures.any, !panFailures.any,
+                       volumeControl == nil || panControl == nil,
+                       let sliders = AXLogicProElements.completelyReadSliders(in: strip, runtime: runtime.ax) {
+                        if sliders.isEmpty, volumeControl == nil, panControl == nil {
+                            observedVolume = .noControl; observedPan = .noControl
+                        }
+                        else if panControl == nil, sliders.count == 1, let volumeControl,
+                                CFEqual(sliders[0], volumeControl) { observedPan = .noControl }
+                    }
+                    return (volume, pan, observedVolume, observedPan)
                 }
-                let scalars: (volume: Double, pan: Double)
+                let scalars: (volume: Double?, pan: Double?, observedVolume: ChannelStripState.ScalarReadback?, observedPan: ChannelStripState.ScalarReadback?)
                 if readingScalarHelp {
                     scalars = readScalars()
                 } else {
@@ -88,9 +120,11 @@ extension AccessibilityChannel {
 
                 var state = ChannelStripState(
                     trackIndex: index,
-                    volume: scalars.volume,
-                    pan: scalars.pan
+                    volume: scalars.volume ?? 0,
+                    pan: scalars.pan ?? 0
                 )
+                state.volumeReadback = scalars.observedVolume
+                state.panReadback = scalars.observedPan
                 if let window, let mixer, let document {
                     state.physicalBinding = .init(window: window, mixer: mixer, strip: strip, document: document)
                 }
@@ -153,7 +187,15 @@ extension AccessibilityChannel {
     private static func readPluginChain(
         of strip: AXUIElement, into state: inout ChannelStripState, runtime: AXLogicProElements.Runtime
     ) {
-        if let plugins = AXLogicProElements.pluginSlots(in: strip, runtime: runtime.ax) {
+        let failures = AXPluginInstanceIdentity.FailedReads()
+        let ax = AXPluginInstanceIdentity.noting(failures, over: runtime.ax)
+        let plugins = AXLogicProElements.pluginSlots(in: strip, runtime: ax, observingSlots: { slots in
+            state.pluginsFullyObserved = slots.allSatisfy {
+                $0.readStatus == .empty || ($0.readStatus == .occupiedReadable && $0.isBypassed != nil)
+            }
+        })
+        if failures.any { state.pluginsFullyObserved = false }
+        if let plugins {
             state.plugins = plugins
             state.pluginsSource = "ax"
         } else if AXLogicProElements.childrenIfRead(strip, runtime: runtime.ax) != nil {

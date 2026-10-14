@@ -66,12 +66,16 @@ extension ProjectSessionAudit {
     enum IntentMainOutput: Hashable, Sendable {
         case bus(Int)
         case noOutput
+        case physical(Int, Int)
+        case stereoOutput
 
         /// The wire form a conflict is reported and sorted by.
         var token: String {
             switch self {
             case .bus(let number): return "bus_\(number)"
             case .noOutput: return RoutingOutputClassification.noOutput.rawValue
+            case .physical(let first, let second): return "physical:\(first)-\(second)"
+            case .stereoOutput: return "stereo_output"
             }
         }
 
@@ -80,8 +84,9 @@ extension ProjectSessionAudit {
             outputs.sorted { lhs, rhs in
                 switch (lhs, rhs) {
                 case (.noOutput, .bus): return true
+                case (.bus, .noOutput): return false
                 case (.bus(let left), .bus(let right)): return left < right
-                default: return false
+                default: return lhs.token < rhs.token
                 }
             }
         }
@@ -345,12 +350,14 @@ extension ProjectSessionAudit {
         let displayName: String?
         let busNumber: Int?
         let output: RoutingOutputClassification
+        var kind: String? = nil
+        var ports: [Int]? = nil
 
         enum CodingKeys: String, CodingKey {
             case nodeId = "node_id"
             case displayName = "display_name"
             case busNumber = "bus_number"
-            case output
+            case output, kind, ports
         }
 
         static func expected(_ destination: IntentMainOutput) -> IntentEndpoint {
@@ -359,6 +366,12 @@ extension ProjectSessionAudit {
                 return IntentEndpoint(nodeId: nil, displayName: nil, busNumber: number, output: .bus)
             case .noOutput:
                 return IntentEndpoint(nodeId: nil, displayName: nil, busNumber: nil, output: .noOutput)
+            case .physical(let first, let second):
+                return IntentEndpoint(nodeId: nil, displayName: nil, busNumber: nil, output: .physicalOutput,
+                    kind: "physical", ports: [first, second])
+            case .stereoOutput:
+                return IntentEndpoint(nodeId: nil, displayName: nil, busNumber: nil, output: .physicalOutput,
+                    kind: "stereo_output")
             }
         }
     }
@@ -892,6 +905,16 @@ extension ProjectSessionAudit {
             guard let bus = requiredInt(entry, key: "bus", path: path, into: &rejections) else { return nil }
             guard validateIntentBus(bus, path: "\(path).bus", into: &rejections) else { return nil }
             return .bus(bus)
+        }
+        if let value = entry["output"], value.objectValue != nil {
+            let parsed = MixerDispatcher.outputAssignmentParam(value, field: "\(path).output")
+            switch parsed.assignment {
+            case .physical(let first, let second)?: return .physical(first, second)
+            case .stereoOutput?: return .stereoOutput
+            default:
+                rejections.append(.unsupportedOutput(path: "\(path).output", value: parsed.problem ?? "unsupported typed output"))
+                return nil
+            }
         }
         guard let output = optionalString(entry, key: "output", path: path, into: &rejections) else { return nil }
         guard output == RoutingOutputClassification.noOutput.rawValue else {
@@ -1538,6 +1561,10 @@ extension ProjectSessionAudit {
                 return finding(.compliant, observation, trackIndex: trackIndex, reasons: [])
             }
             return finding(.violation, observation, trackIndex: trackIndex, reasons: [])
+        case .physical, .stereoOutput:
+            // A physical classification has no checked port/kind identity in this graph.
+            // The local retained output task consumes the request-held typed reader instead.
+            return finding(.unverified, observation, trackIndex: trackIndex, reasons: [.outputUnclassified])
         }
     }
 

@@ -3355,14 +3355,45 @@ extension AccessibilityChannel {
                     return refusal("Ordinary rename could not acquire exclusive held-track selection")
                 }
         }
+        func ordinaryWindowIsFocused() -> Bool {
+            guard ordinaryAcquisition else { return true }
+            guard let heldApp, let heldPID, runtime.logicProPID() == heldPID,
+                  runtime.focusedApplicationPID() == heldPID, processRuntime.logicIsFrontmost(),
+                  let app = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, heldApp),
+                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(
+                    heldApp, kAXFocusedWindowAttribute, runtime: runtime.ax) else { return false }
+            return CFEqual(focusedWindow, window)
+        }
+        if ordinaryAcquisition, !ordinaryWindowIsFocused() {
+            guard let heldApp, let heldPID, runtime.logicProPID() == heldPID,
+                  runtime.focusedApplicationPID() == heldPID, processRuntime.logicIsFrontmost(),
+                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(
+                    heldApp, kAXFocusedWindowAttribute, runtime: runtime.ax), !CFEqual(focusedWindow, window),
+                  case .notTextEditing = readLogicKeyboardFocus(runtime: runtime),
+                  targetStillHeld(requiringExclusiveSelection: true),
+                  let current = readHeldName(), current.utf8.elementsEqual(expected.utf8),
+                  ExactTrackNameAdapter.coupledWritePermitted() else {
+                return refusal("Ordinary rename could not acquire its original window without losing custody")
+            }
+            // Activation establishes the app, not this window. Raise only the
+            // retained physical owner and require its observed focus, not an ack.
+            attempted = true
+            _ = AXHelpers.performAction(window, kAXRaiseAction, runtime: runtime.ax)
+            guard ordinaryWindowIsFocused(), targetStillHeld(requiringExclusiveSelection: true),
+                  let current = readHeldName(), current.utf8.elementsEqual(expected.utf8),
+                  ExactTrackNameAdapter.coupledWritePermitted(), ordinaryWindowIsFocused() else {
+                return refusal("Ordinary rename could not verify focus of its retained window")
+            }
+        }
         if acquire, field == nil { field = nameField() }
         if acquire, field == nil {
             // The legacy acquisition remains available, but its menu action is bound to the
             // retained track before actuation; never retry after an uncertain name write.
             let menu = clickTrackMenu(AXLocalePolicy.renameTrackMenuItem.labels, runtime: runtime,
                 permittingWrite: {
-                    guard targetStillHeld(requiringExclusiveSelection: true),
-                          let current = readHeldName(), current.utf8.elementsEqual(expected.utf8) else { return false }
+                    guard ordinaryWindowIsFocused(), targetStillHeld(requiringExclusiveSelection: true),
+                          let current = readHeldName(), current.utf8.elementsEqual(expected.utf8),
+                          ordinaryWindowIsFocused() else { return false }
                     attempted = true
                     return true
                 })
