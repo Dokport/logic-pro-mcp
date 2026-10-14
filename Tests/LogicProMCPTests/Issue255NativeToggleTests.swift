@@ -109,6 +109,62 @@ func transportResourceCarriesActualTempoWithoutReplacingTheLegacyDefault(shape: 
     else { #expect(!envelope.keys.contains("observed_tempo")) }
 }
 
+@Test(arguments: ["off", "on", "ko_off", "ko_on", "missing", "unreadable", "text", "mixed",
+                  "fractional", "nonfinite", "duplicate", "wrong_role", "wrong_owner", "false_friend"])
+func countInResourceRequiresOneObservedOwnBinaryCheckbox(shape: String) async throws {
+    let builder = FakeAXRuntimeBuilder()
+    let app = builder.element(25_590)
+    let window = builder.element(25_591)
+    let bar = builder.element(25_592)
+    let play = builder.element(25_593)
+    let record = builder.element(25_594)
+    let countIn = builder.element(25_595)
+    let duplicate = builder.element(25_596)
+    let foreign = builder.element(25_597)
+    builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+    builder.setChildren(window, [bar, foreign])
+    builder.setAttribute(bar, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+    builder.setAttribute(foreign, kAXRoleAttribute as String, kAXGroupRole as String)
+    builder.setAttribute(foreign, kAXDescriptionAttribute as String, "Inspector")
+    builder.setChildren(bar, [play, record] + (["missing", "wrong_owner"].contains(shape) ? [] : [countIn])
+        + (shape == "duplicate" ? [duplicate] : []))
+    if shape == "wrong_owner" { builder.setChildren(foreign, [countIn]) }
+    // Retained own Control Bar names, not a test expectation generated from the policy.
+    let countInTitle = shape.hasPrefix("ko_") ? "카운트 인" : (shape == "false_friend" ? "Count In Settings" : "Count In")
+    for (element, title) in [(play, "Play"), (record, "Record"), (countIn, countInTitle), (duplicate, "Count In")] {
+        builder.setAttribute(element, kAXRoleAttribute as String,
+            element == countIn && shape == "wrong_role" ? kAXButtonRole as String : kAXCheckBoxRole as String)
+        builder.setAttribute(element, kAXTitleAttribute as String, title)
+        builder.setAttribute(element, kAXDescriptionAttribute as String, title)
+        if element != countIn || shape != "unreadable" {
+            builder.setAttribute(element, kAXValueAttribute as String, NSNumber(value: element == countIn && ["on", "ko_on"].contains(shape)))
+        }
+    }
+    switch shape {
+    case "text": builder.setAttribute(countIn, kAXValueAttribute as String, "1")
+    case "mixed": builder.setAttribute(countIn, kAXValueAttribute as String, NSNumber(value: 2))
+    case "fractional": builder.setAttribute(countIn, kAXValueAttribute as String, NSNumber(value: 0.5))
+    case "nonfinite": builder.setAttribute(countIn, kAXValueAttribute as String, NSNumber(value: Double.nan))
+    default: break
+    }
+    let router = ChannelRouter()
+    await router.register(issue255Channel(logicRuntime: builder.makeLogicRuntime(appElement: app)))
+    let result = try await ResourceHandlers.read(uri: "logic://transport/state", cache: StateCache(), router: router)
+    let text = try #require(result.contents.first?.text)
+    let envelope = try #require(sharedJSONObject(text))
+    let data = try #require(envelope["data"] as? [String: Any])
+    let state = try #require(data["state"] as? [String: Any])
+    let playing = try #require(state["isPlaying"] as? Bool)
+    let recording = try #require(state["isRecording"] as? Bool)
+    #expect(!playing)
+    #expect(!recording)
+    if ["off", "on", "ko_off", "ko_on"].contains(shape) {
+        let observed = try #require(state["isCountInEnabled"] as? Bool)
+        if ["on", "ko_on"].contains(shape) { #expect(observed) } else { #expect(!observed) }
+    } else { #expect(!state.keys.contains("isCountInEnabled")) }
+}
+
 @Test(arguments: ["Metronome Click", "메트로놈 클릭"])
 func measuredMetronomeClickCheckboxPublishesItsObservedState(metronomeLabel: String) async throws {
     let builder = FakeAXRuntimeBuilder()
@@ -141,6 +197,21 @@ func measuredMetronomeClickCheckboxPublishesItsObservedState(metronomeLabel: Str
     #expect(!metronomeEnabled)
     #expect(!playing)
     #expect(!recording)
+}
+
+@Test func countInOptionalReadbackDecodesLegacyStateAndIgnoresUnrelatedFutureFields() throws {
+    var legacy = try #require(sharedJSONObject(String(decoding: try JSONEncoder().encode(TransportState()), as: UTF8.self)))
+    legacy.removeValue(forKey: "isCountInEnabled")
+    legacy["future_transport_observation"] = ["value": true]
+    let decoded = try JSONDecoder().decode(TransportState.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.isCountInEnabled == nil)
+    #expect(!decoded.isPlaying)
+    #expect(!decoded.isRecording)
+    #expect(decoded.tempo == 120)
+    #expect(decoded.position == "1.1.1.1")
+    let roundtrip = try #require(sharedJSONObject(String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self)))
+    #expect(!roundtrip.keys.contains("isCountInEnabled"))
+    #expect(!roundtrip.keys.contains("future_transport_observation"))
 }
 
 @Test func issue255CountInMatchesLogic123ControlBarTitle() async throws {

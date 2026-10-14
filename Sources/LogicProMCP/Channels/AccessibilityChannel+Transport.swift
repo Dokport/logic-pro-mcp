@@ -64,6 +64,15 @@ extension AccessibilityChannel {
             ) {
                 state.isMetronomeEnabled = isMetronomeEnabled
             }
+            let countInControls = checkboxes.filter {
+                AXLocalePolicy.transportCountInControl.matches(AXHelpers.getTitle($0, runtime: runtime.ax), mode: .exactStrict)
+                    || AXLocalePolicy.transportCountInControl.matches(AXHelpers.getDescription($0, runtime: runtime.ax), mode: .exactStrict)
+            }
+            if countInControls.count == 1,
+               AXHelpers.getRole(countInControls[0], runtime: runtime.ax) == kAXCheckBoxRole as String {
+                state.isCountInEnabled = AXLogicProElements.readControlBarCheckboxValue(
+                    among: countInControls, matching: AXLocalePolicy.transportCountInControl, runtime: runtime)
+            }
         }
         return encodeResult(state)
     }

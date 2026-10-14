@@ -37,6 +37,9 @@ struct TransportState: Sendable, Codable {
     var observedCycleEnabled: Bool? = nil
     /// Nil means the metronome control was absent or its AX value could not be read.
     var isMetronomeEnabled: Bool? = nil
+    /// Only a unique own Control Bar checkbox observed at 0 or 1 sets this.
+    /// Missing, ambiguous, malformed and unreadable Count-In controls remain nil.
+    var isCountInEnabled: Bool? = nil
     var tempo: Double = 120.0
     /// The control bar's raw key-signature display value (#1117), not a parsed musical key.
     /// Nil means absent, ambiguous or unreadable; historical payloads decode without this field.

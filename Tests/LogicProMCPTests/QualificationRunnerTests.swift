@@ -8,6 +8,55 @@ import Testing
 
 @Suite("ADR-001 qualification runner", .serialized)
 struct QualificationRunnerTests {
+    @Test func registeredCountInToggleRecordsAnObservedWriteAndRestoreCycle() throws {
+        let fixture = try SlowHandshakeFixture(countInCycle: "healthy")
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == .transportToggleCountIn })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        let observed = try #require(result.operationResults[spec.id.rawValue])
+        #expect(observed.status == .passed)
+        let record = try #require(result.mutationRestoreRecords.first)
+        #expect(record.operationID == spec.id.rawValue)
+        #expect(record.verifiedCycleShape)
+        for (reading, enabled) in [(record.preState, false), (record.readback, true), (record.restoreReadback, false)] {
+            let envelope = try #require(sharedJSONObject(reading))
+            let data = try #require(envelope["data"] as? [String: Any])
+            let state = try #require(data["state"] as? [String: Any])
+            let actual = try #require(state["isCountInEnabled"] as? Bool)
+            if enabled { #expect(actual) } else { #expect(!actual) }
+        }
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.mutation", "phase_b.restore"].contains($0.operationID) }
+        #expect(effects.count == 2)
+        #expect(try String(contentsOf: fixture.directory.appendingPathComponent("count_in"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "false")
+    }
+
+    @Test(arguments: ["missing_pre", "malformed_pre", "cache_pre", "stale_pre", "unknown_age_pre",
+                      "unverified_pre", "missing_after", "cache_after", "refused_forward",
+                      "refused_restore", "mismatch_after", "mismatch_restore"])
+    func countInRecipeWithholdsDependentWritesAndCreditWhenEvidenceIsLost(shape: String) throws {
+        let fixture = try SlowHandshakeFixture(countInCycle: shape)
+        defer { fixture.remove() }
+        let spec = try #require(OperationRegistry.specs.first { $0.id == .transportToggleCountIn })
+        let result = try QualificationTransport(handshakeTimeout: 2, requestTimeout: 2, shutdownGrace: 2)
+            .drive(.init(executableURL: fixture.executableURL,
+                environment: ["HANDSHAKE_DELAY": "0"], expectedOperationCount: 0, operations: [spec]))
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("count-in-fault-consumed").path))
+        #expect(result.operationResults[spec.id.rawValue]?.status == .notQualified)
+        #expect(result.mutationRestoreRecords.isEmpty)
+        let effects = result.wireFrames.filter { $0.direction == .request &&
+            ["phase_b.mutation", "phase_b.restore"].contains($0.operationID) }
+        let expectedAttempts = shape.hasSuffix("_pre") ? 0 : (["refused_restore", "mismatch_restore"].contains(shape) ? 2 : 1)
+        #expect(effects.count == expectedAttempts, "unobserved state cannot authorize a dependent toggle")
+        let residual = try String(contentsOf: fixture.directory.appendingPathComponent("count_in"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedResidual = ["missing_after", "cache_after", "refused_restore", "mismatch_restore"].contains(shape)
+        #expect(residual == (expectedResidual ? "true" : "false"))
+    }
+
     @Test(arguments: [OperationID.tracksRename, .editUndo, .editRedo], ["ref_changed", "reordered"])
     func nameRecipesDoNotRestoreThroughANewlyIndexedRow(operation: OperationID, shape: String) throws {
         let fixture = try SlowHandshakeFixture(nameRecipe: operation, nameIdentityFault: shape)
@@ -6510,7 +6559,8 @@ struct QualificationRunnerTests {
 
         init(transportRefusal: Bool = false, transportNativePause: Bool = false,
              initialTransportMotion: String = "stopped", cachedTransport: Bool = false,
-             nameRecipe: OperationID? = nil, nameIdentityFault: String = "none") throws {
+             nameRecipe: OperationID? = nil, nameIdentityFault: String = "none",
+             countInCycle: String? = nil) throws {
             directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("qualification-slow-handshake-\(UUID().uuidString)", isDirectory: true)
             executableURL = directory.appendingPathComponent("server.sh")
@@ -6545,7 +6595,7 @@ struct QualificationRunnerTests {
             IFS= read -r request_line || exit 0
             IFS= read -r request_line || exit 0
             """#
-            if transportRefusal || transportNativePause || nameRecipe != nil {
+            if transportRefusal || transportNativePause || nameRecipe != nil || countInCycle != nil {
                 script = try #require(script.components(separatedBy: "# AFTER SEED").first) + #"""
                 cd "$(dirname "$0")" || exit 1
                 initial_playing=false
@@ -6558,6 +6608,10 @@ struct QualificationRunnerTests {
                 position=1
                 name_recipe=none
                 name_fault=none
+                count_in_cycle=none
+                count_in=false
+                count_in_reads=0
+                count_in_attempts=0
                 track_name='Before'
                 track_ref=held-track
                 peer_name='Other'
@@ -6567,6 +6621,7 @@ struct QualificationRunnerTests {
                 printf '%s\n' "$playing" > playing
                 printf '%s\n' "$moving" > moving
                 while IFS= read -r request; do
+                    printf '%s\n' "$count_in" > count_in
                     id=$(printf '%s' "$request" | /usr/bin/sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
                     [ -n "$id" ] || continue
                     [ "$id" -ge 10 ] || continue
@@ -6596,6 +6651,23 @@ struct QualificationRunnerTests {
                         fi
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://tracks","text":"{\\"source\\":\\"ax_live\\",\\"cache_age_sec\\":0,\\"readable\\":true,\\"ax_occluded\\":false,\\"data\\":[{\\"name\\":\\"%s\\",\\"track_ref\\":\\"%s\\"},{\\"name\\":\\"%s\\",\\"track_ref\\":\\"%s\\"}]}"}]}}\n' "$id" "$first_name" "$first_ref" "$second_name" "$second_ref" ;;
                       *'"uri":"logic://transport/state"'*)
+                        if [ "$count_in_cycle" != none ]; then
+                            count_in_reads=$((count_in_reads + 1))
+                            count_in_source=$resource_source
+                            count_in_unverified=$resource_unverified
+                            count_in_age=0
+                            count_in_value=$count_in
+                            case "$count_in_cycle:$count_in_reads" in
+                              missing_pre:1|missing_after:2) count_in_value=null; touch count-in-fault-consumed ;;
+                              malformed_pre:1) count_in_value='\"unreadable\"'; touch count-in-fault-consumed ;;
+                              cache_pre:1|cache_after:2) count_in_source=cache; touch count-in-fault-consumed ;;
+                              stale_pre:1) count_in_age=1000; touch count-in-fault-consumed ;;
+                              unknown_age_pre:1) count_in_age=null; touch count-in-fault-consumed ;;
+                              unverified_pre:1) count_in_unverified=true; touch count-in-fault-consumed ;;
+                            esac
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://transport/state","text":"{\\"source\\":\\"%s\\",\\"unverified\\":%s,\\"cache_age_sec\\":%s,\\"data\\":{\\"state\\":{\\"isCountInEnabled\\":%s}}}"}]}}\n' "$id" "$count_in_source" "$count_in_unverified" "$count_in_age" "$count_in_value"
+                            continue
+                        fi
                         if [ "$moving" = true ]; then position=$((position + 1)); fi
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"logic://transport/state","text":"{\\"source\\":\\"%s\\",\\"unverified\\":%s,\\"cache_age_sec\\":0,\\"observed_tempo\\":120,\\"data\\":{\\"state\\":{\\"isPlaying\\":%s,\\"isRecording\\":false,\\"isCycleEnabled\\":false,\\"observedCycleEnabled\\":false,\\"tempo\\":120,\\"position\\":\\"%s.1\\",\\"positionReadback\\":{\\"value\\":\\"%s.1\\",\\"observedComponents\\":[\\"bar\\",\\"beat\\"]}}}}"}]}}\n' "$id" "$resource_source" "$resource_unverified" "$playing" "$position" "$position" ;;
                       *'"uri":"logic://system/operations"'*)
@@ -6604,6 +6676,18 @@ struct QualificationRunnerTests {
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"logic_pro_running\\":true,\\"logic_pro_version\\":\\"11.2\\",\\"logic_pro_bundle_id\\":\\"com.apple.logic10\\",\\"logic_pro_variant\\":\\"desktop\\",\\"logic_pro_ui_locale\\":\\"en-US\\",\\"process_metadata_resolved\\":true,\\"logic_pro_variants\\":[{\\"variant\\":\\"desktop\\",\\"bundle_id\\":\\"com.apple.logic10\\",\\"installed\\":true,\\"running\\":true},{\\"variant\\":\\"creator_studio\\",\\"bundle_id\\":\\"com.apple.mobilelogic\\",\\"installed\\":false,\\"running\\":false}]}"}]}}\n' "$id" ;;
                       *'__adr001b_no_write_probe'*)
                         printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"error\\":\\"invalid_params\\",\\"write_attempted\\":false}"}]}}\n' "$id" ;;
+                      *'"command":"toggle_count_in"'*)
+                        count_in_attempts=$((count_in_attempts + 1))
+                        case "$count_in_cycle:$count_in_attempts" in
+                          refused_forward:1|refused_restore:2)
+                            touch count-in-fault-consumed
+                            printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"{\\"state\\":\\"C\\",\\"success\\":false,\\"write_attempted\\":false}"}]}}\n' "$id"
+                            continue ;;
+                          mismatch_after:1|mismatch_restore:2) touch count-in-fault-consumed ;;
+                          *) if [ "$count_in" = false ]; then count_in=true; else count_in=false; fi ;;
+                        esac
+                        printf '%s\n' "$count_in" > count_in
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"{\\"state\\":\\"A\\",\\"verified\\":true}"}]}}\n' "$id" ;;
                       *'"command":"rename"'*|*'"command":"undo"'*|*'"command":"redo"'*)
                         if [ "$fault_consumed" = true ]; then
                             case "$request" in
@@ -6648,6 +6732,9 @@ struct QualificationRunnerTests {
                 done
                 """#
                 if transportNativePause { script = script.replacingOccurrences(of: "native_pause=false", with: "native_pause=true") }
+                if let countInCycle {
+                    script = script.replacingOccurrences(of: "count_in_cycle=none", with: "count_in_cycle=\(countInCycle)")
+                }
                 if let nameRecipe {
                     script = script.replacingOccurrences(of: "name_recipe=none", with: "name_recipe=\(nameRecipe.rawValue)")
                         .replacingOccurrences(of: "name_fault=none", with: "name_fault=\(nameIdentityFault)")
