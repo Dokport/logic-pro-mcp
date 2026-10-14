@@ -77,6 +77,7 @@ struct Issue291AssignedSendMenuTests {
         var current = "Stereo Output"
         var open = false
         var pressed: [String] = []
+        var menuOpens = 0
         var cancels = 0
         var closeWindowReads = 0
         var foregroundLost = false
@@ -138,6 +139,7 @@ struct Issue291AssignedSendMenuTests {
                 return fault != "cancel_failed_ack"
             }
             if action == kAXPressAction as String, CFEqual(node,f.outputs[0]) {
+                menuOpens += 1
                 open = true; refresh(); f.b.setChildren(f.mixer,f.strips + [f.root]); return true
             }
             if action == kAXPressAction as String, open, CFEqual(node,pair) || CFEqual(node,stereo) || CFEqual(node,bus) {
@@ -446,7 +448,8 @@ struct Issue291AssignedSendMenuTests {
         #expect(!probe.open)
         #expect(dependencies.mutationGate?.currentOperation() == nil)
     }
-    @Test func registeredOccupiedSendExistingBusRoundtrip() async throws {
+    @Test("A resource-only Bus Send change requires its actual retained original-header pair")
+    func registeredOccupiedSendExistingBusRequiresRetainedPair() async throws {
         let p = try prepare(), probe = SendWriterProbe(p, withBus: true)
         let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter()
         let channel = p.f.channel(logicOverride: probe.runtime)
@@ -465,6 +468,9 @@ struct Issue291AssignedSendMenuTests {
         }
         #expect(references.count == 1)
         let reference = try #require(references.first)
+        let source = try #require(await registry.resolve(.init(rawValue: reference))?.physicalMixerStrip)
+        #expect(await cache.retainedMixerAssociation(reference: .init(rawValue: reference), source: source,
+            snapshot: await registry.currentSnapshot) == nil)
         let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
             poller: poller, dialogPresent: { false }, supportBundleExporter: nil, mutationGate: LogicMutationGate(),
             liveTrackNames: { [:] }, projectFileReader: .unavailable)
@@ -472,17 +478,19 @@ struct Issue291AssignedSendMenuTests {
         let before = AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax)
         let bus: Value = .object(["kind": .string("bus"), "number": .int(1)])
         let stereo: Value = .object(["kind": .string("stereo_output")])
-        for (destination, expected) in [(bus, stereo), (stereo, bus)] {
-            let params: [String: Value] = ["target_ref": .string(reference), "ordinal": .int(1),
-                "destination": destination, "expected_current": expected, "replace_existing": .bool(true)]
-            let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
-                commandParams: params, mutationGate: dependencies.mutationGate) {
-                await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
-            }
-            let body = try #require(sharedJSONObject(sharedToolText(result)))
-            #expect(body["state"] as? String == "A", "Actual registered Bus replacement: \(sharedToolText(result))")
+        let params: [String: Value] = ["target_ref": .string(reference), "ordinal": .int(1),
+            "destination": bus, "expected_current": stereo, "replace_existing": .bool(true)]
+        let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
+            commandParams: params, mutationGate: dependencies.mutationGate) {
+            await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
         }
-        #expect(probe.pressed == ["Bus 1 → Aux 1", "Stereo Output"])
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(body["state"] as? String == "C", "Actual resource-only Bus refusal: \(sharedToolText(result))")
+        #expect(body["error"] as? String == "stale_snapshot")
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(probe.menuOpens == 0 && probe.cancels == 0 && probe.pressed.isEmpty)
+        #expect(probe.current == "Stereo Output")
         #expect(AXLogicProElements.sendSlotObservations(in: p.f.strips[0], runtime: probe.runtime.ax) == before)
         #expect(!probe.open)
         #expect(dependencies.mutationGate?.currentOperation() == nil)
