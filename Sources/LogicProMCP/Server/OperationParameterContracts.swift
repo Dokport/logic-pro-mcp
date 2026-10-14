@@ -241,6 +241,15 @@ extension OperationRegistry {
                 "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
                 "ordinal": index(1),
             ], required: [["target_ref"],["ordinal"]]),
+            "mixer.get_send_bypass_verified": .init(params: [
+                "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
+                "ordinal": index(1),
+            ], required: [["target_ref"], ["ordinal"]]),
+            "mixer.set_send_bypass_verified": .init(params: [
+                "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
+                "ordinal": index(1), "bypassed": .enforced(.boolean, .bool(true)),
+                "expected_current": .enforced(.boolean, .bool(false)),
+            ], required: [["target_ref"], ["ordinal"], ["bypassed"], ["expected_current"]]),
             "mixer.set_send_output_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
                 "ordinal": .enforced(.integer, .int(1)),

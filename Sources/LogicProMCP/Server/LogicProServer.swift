@@ -870,7 +870,7 @@ actor LogicProServer {
         let freshPopulationRead = tool == "logic_project" && command == "inspect_session"
             && commandParams["snapshot_id"] == nil
         let ownedObservationRead = freshPopulationRead
-            || (tool == "logic_mixer" && command == "get_input_bus_verified")
+            || (tool == "logic_mixer" && (command == "get_input_bus_verified" || command == "get_send_bypass_verified"))
         if ownedObservationRead && Task.isCancelled {
             return toolStateCResult(.cancelled,
                 extras: ["write_attempted": false, "navigation_performed": false])
