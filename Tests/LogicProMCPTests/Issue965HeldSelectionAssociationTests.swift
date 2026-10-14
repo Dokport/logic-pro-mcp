@@ -4,6 +4,39 @@ import MCP
 import Testing
 @testable import LogicProMCP
 
+private actor SendRemovalSagaResultBoundary: Channel {
+    nonisolated let id: ChannelID = .accessibility
+    let base: AccessibilityChannel
+    let journal: SagaJournal
+    let mode: String
+    let afterForward: @Sendable () -> Void
+    init(base: AccessibilityChannel, journal: SagaJournal, mode: String,
+         afterForward: @escaping @Sendable () -> Void = {}) {
+        self.base = base; self.journal = journal; self.mode = mode; self.afterForward = afterForward
+    }
+    func start() async throws {}
+    func stop() async {}
+    func healthCheck() async -> ChannelHealth { await base.healthCheck() }
+    func execute(operation: String, params: [String: String]) async -> ChannelResult {
+        if operation == "mixer.set_send_output_verified", mode == "no_observer" {
+            return .success(HonestContract.encodeStateA(extras: ["verified": true, "write_attempted": true]))
+        }
+        let result = await base.execute(operation: operation, params: params)
+        if operation == "mixer.set_send_output_verified",
+           sharedJSONObject(result.message)?["state"] as? String == "A" {
+            afterForward()
+            if mode == "cancel" { _ = await journal.cancel(idempotencyKey: "owned-send-removal-saga") }
+            if mode == "failure" {
+                return .error(HonestContract.encodeStateC(error: .readbackUnavailable, extras: ["write_attempted": true]))
+            }
+            if mode == "unverified" {
+                return .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: ["write_attempted": true]))
+            }
+        }
+        return result
+    }
+}
+
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
     @Test("A held input popup may move focus without losing its original complete association",
@@ -1426,6 +1459,26 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(removing: true, survivingSource: surviving, observeRemoval: true)
     }
 
+    @Test(arguments: ["cancel", "failure", "unverified"])
+    func registeredSendRemovalSagaCompensatesOnlyItsActualNativeEffect(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["preflight", "wrong_project", "foreign_document", "refs_disabled"])
+    func removalSagaPreflightRequiresItsActualProject(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["external_empty", "foreign_after", "no_observer"])
+    func removalSagaNeverInvertsNewerOrUnownedEmptyState(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple", "raw_level", "raw_bypass", "nondefault_mode"])
+    func removalSagaRejectsUnapprovedOrInvalidWholeRequestsBeforeAnyLeaf(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
+    }
+
     @Test(arguments: ["multiple_occupied", "foreign_project", "unreadable"])
     func unverifiedSendRemovalNeverPublishesNativeInverseAuthority(fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(fault, removing: true, observeRemoval: true)
@@ -1472,7 +1525,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
                                                emptyModeMenu: Bool = false, observeRemoval: Bool = false,
-                                               readRestored: String? = nil) async throws {
+                                               readRestored: String? = nil, sagaMode: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1744,6 +1797,113 @@ struct Issue965HeldSelectionAssociationTests {
                     : existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
                     : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
                 "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
+            if let sagaMode {
+                let journal = SagaJournal(maxRecords: 1)
+                if sagaMode == "raw_level" { b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 1) }
+                if sagaMode == "raw_bypass" { b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1) }
+                if sagaMode == "nondefault_mode" { b.setAttribute(mode, kAXTitleAttribute as String, "Post Pan") }
+                await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal, mode: sagaMode,
+                    afterForward: {
+                        if sagaMode == "external_empty" {
+                            b.setChildren(replacement, [name, extraSend[0]]); f.routingLateScopeInjected = true
+                        } else if sagaMode == "foreign_after" {
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            f.routingLateScopeInjected = true
+                        }
+                    }))
+                let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                    poller: StatePoller(axChannel: f.channel(), cache: cache,
+                        runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                    mutationGate: gate, liveTrackNames: { [:] })
+                var stepParams = params; stepParams.removeValue(forKey: "target_ref")
+                if sagaMode != "refs_disabled", case .issued(let project)? = capture.projectIssuance {
+                    stepParams["project_ref"] = .string(project.rawValue)
+                }
+                if sagaMode == "wrong_project" { stepParams["project_ref"] = .string("project_wrong_session") }
+                if sagaMode == "extra_param" { stepParams["native_proof"] = .object([:]) }
+                var wire: [String: Value] = ["idempotency_key": .string("owned-send-removal-saga"),
+                    "steps": .array([.object(["operation_id": .string(OperationID.mixerSetSendOutputVerified.rawValue),
+                        "target_ref": .string(reference.rawValue), "params": .object(stepParams),
+                        "expected_inverse": .object(["operation_id": .string(OperationID.mixerSetSendOutputVerified.rawValue),
+                            "value_parameter": .string("destination")])])])]
+                if sagaMode == "invalid_later" {
+                    wire["steps"] = .array((wire["steps"]?.arrayValue ?? []) + [.object([
+                        "operation_id": .string(OperationID.tracksMute.rawValue), "target_ref": .string(reference.rawValue),
+                        "params": .object(["enabled": .string("invalid")]),
+                        "expected_inverse": .object(["operation_id": .string(OperationID.tracksMute.rawValue),
+                            "value_parameter": .string("enabled")])])])
+                }
+                if sagaMode == "multiple", let steps = wire["steps"]?.arrayValue { wire["steps"] = .array(steps + steps) }
+                if sagaMode != "missing_confirmation" {
+                    wire["confirmed_plan_hash"] = .string(sagaMode == "wrong_confirmation" ? "wrong_hash"
+                        : (try? SagaWire.plan(from: wire)).map(SagaJournal.planHash) ?? "invalid_hash")
+                }
+                if sagaMode == "foreign_document" { b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
+                let preflight = ["preflight", "wrong_project", "foreign_document", "refs_disabled"].contains(sagaMode)
+                let sagaHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_system",
+                    command: preflight ? "saga_preflight" : "saga_execute"))
+                let result = await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                    await FeatureFlags.withAdr002TargetRefForTests(sagaMode != "refs_disabled") {
+                        await sagaHandler(dependencies, wire)
+                    }
+                }
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if preflight {
+                    let ready = try #require(body["ok"] as? Bool)
+                    if sagaMode == "preflight" { #expect(ready) }
+                    else { #expect(!ready, "Actual preflight: \(sharedToolText(result))") }
+                    #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
+                    return
+                }
+                if ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple", "raw_level", "raw_bypass", "nondefault_mode"].contains(sagaMode) {
+                    #expect(body["state"] as? String == "C" && f.routingDestinationPresses == 0)
+                    if ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple"].contains(sagaMode) {
+                        #expect(await journal.record(for: "owned-send-removal-saga") == nil)
+                    }
+                    return
+                }
+                if ["external_empty", "foreign_after", "no_observer"].contains(sagaMode) {
+                    if sagaMode == "no_observer" { #expect(f.routingDestinationPresses == 0) }
+                    else { #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 1) }
+                    #expect(body["saga_state"] as? String == "rollbackUncertain", "Actual lost-custody receipt: \(sharedToolText(result))")
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
+                }
+                #expect(f.routingDestinationPresses == 2, "Actual registered removal/inverse response: \(sharedToolText(result))")
+                let compensation = try #require(body["compensation"] as? [String: Any])
+                let fullyCompensated = try #require(compensation["fully_compensated"] as? Bool)
+                #expect(fullyCompensated)
+                let slots = try #require(AXLogicProElements.sendSlotObservations(in: restoredSource, runtime: f.logic().ax))
+                #expect(slots.filter { $0.state == .occupiedUnknownDestination }.count == 1)
+                #expect(!gate.isHeldByEntitledHolder())
+                let beforeReplay = f.routingDestinationPresses
+                let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await sagaHandler(dependencies, wire) }
+                let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                if sagaMode == "cancel" {
+                    #expect(replayBody["state"] as? String == "C")
+                    #expect(replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue)
+                    #expect(replayBody["duplicate"] == nil)
+                } else {
+                    let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                    #expect(duplicate)
+                }
+                #expect(f.routingDestinationPresses == beforeReplay, "Existing journal replay never reissues removal or inverse")
+                var conflicting = wire
+                var conflictingStep = try #require(wire["steps"]?.arrayValue?.first?.objectValue)
+                var conflictingParams = try #require(conflictingStep["params"]?.objectValue)
+                conflictingParams["ordinal"] = .int(0); conflictingStep["params"] = .object(conflictingParams)
+                conflicting["steps"] = .array([.object(conflictingStep)])
+                conflicting.removeValue(forKey: "confirmed_plan_hash")
+                conflicting["confirmed_plan_hash"] = .string(SagaJournal.planHash(try SagaWire.plan(from: conflicting)))
+                let conflict = await FeatureFlags.withAdr004MutationSagaForTests(true) { await sagaHandler(dependencies, conflicting) }
+                #expect(sharedJSONObject(sharedToolText(conflict))?["error"] as? String == HonestContract.FailureError.idempotencyKeyConflict.rawValue)
+                _ = await journal.begin(.init(steps: [], idempotencyKey: "body-pressure"))
+                let evicted = await FeatureFlags.withAdr004MutationSagaForTests(true) { await sagaHandler(dependencies, wire) }
+                #expect(sharedJSONObject(sharedToolText(evicted))?["error"] as? String == HonestContract.FailureError.sagaOutcomeUnavailable.rawValue)
+                #expect(f.routingDestinationPresses == beforeReplay)
+                return
+            }
             let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
                 commandParams: params, mutationGate: gate) {
                 await FeatureFlags.withAdr002TargetRefForTests(true) {

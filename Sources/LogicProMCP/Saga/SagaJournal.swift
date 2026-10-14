@@ -550,8 +550,8 @@ enum SagaWire {
         let plan = SagaPlan(steps: steps, idempotencyKey: idempotencyKey)
         try CompressorParameterSaga.validate(plan)
         try SelectedEQParameterSaga.validate(plan)
-        if params["confirmed_plan_hash"] != nil && !CompressorParameterSaga.containsPluginSteps(plan) && !SelectedEQParameterSaga.contains(plan) {
-            throw SagaWireError.invalid("confirmed_plan_hash belongs only to the selected plug-in workflows")
+        if params["confirmed_plan_hash"] != nil && !CompressorParameterSaga.containsPluginSteps(plan) && !SelectedEQParameterSaga.contains(plan) && !SendRemovalSagaAdapter.accepts(plan) {
+            throw SagaWireError.invalid("confirmed_plan_hash belongs only to a supported confirmed workflow")
         }
         return plan
     }

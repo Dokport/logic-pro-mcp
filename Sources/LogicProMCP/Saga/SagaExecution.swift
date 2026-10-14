@@ -172,6 +172,153 @@ final class SagaPartialStateFaultSeam: @unchecked Sendable {
 }
 #endif
 
+/// One execution's native removal custody, never persisted in the journal.
+/// The journal records checked scalar facts; those facts cannot recreate this capsule.
+final class SendRemovalSagaAdapter: @unchecked Sendable {
+    let forward: SagaStep
+    private var pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
+    private var footprint: [SendSlotObservation]?
+    private var removal: AccessibilityChannel.RemovedSendObservation?
+    private var restored: AccessibilityChannel.CheckedOutputReading?
+    private var attempted = false
+    private var inverseConsumed = false
+
+    static func accepts(_ plan: SagaPlan) -> Bool {
+        guard plan.steps.count == 1, plan.canonicalPlanID == nil, plan.canonicalDigest == nil,
+              let step = plan.steps.first, step.operationID == .mixerSetSendOutputVerified,
+              step.targetRef != nil,
+              Set(step.params.keys).subtracting(["ordinal", "destination", "expected_current", "replace_existing", "project_ref"]).isEmpty,
+              step.params["ordinal"]?.intValue.map({ $0 >= 0 }) == true,
+              step.params["destination"] == .object(["kind": .string("no_send")]),
+              step.params["expected_current"] == .object(["kind": .string("stereo_output")]),
+              step.params["replace_existing"] == .bool(true),
+              step.expectedInverse == .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination") else { return false }
+        if let project = step.params["project_ref"] {
+            guard let value = project.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        }
+        return true
+    }
+
+    init?(plan: SagaPlan) {
+        guard Self.accepts(plan), let forward = plan.steps.first else { return nil }
+        self.forward = forward
+    }
+
+    /// Only an internally constructed inverse may carry the checked scalar.
+    func supports(_ step: SagaStep) -> Bool {
+        if step == forward { return true }
+        var inverse = forward.params
+        inverse["destination"] = .string("stereo_output")
+        return removal != nil && step.operationID == forward.operationID
+            && step.targetRef == forward.targetRef && step.params == inverse
+            && step.expectedInverse == forward.expectedInverse
+    }
+
+    static func journalValue(_ step: SagaStep) -> Value? {
+        step.params["destination"] == .object(["kind": .string("no_send")]) ? .string("no_send") : nil
+    }
+
+    private func scope<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
+        let parent = OperationTraceContext.current
+        let deadline = min(parent?.deadline ?? ContinuousClock.now.advanced(by: .seconds(25)),
+            ContinuousClock.now.advanced(by: .seconds(OperationRegistry.spec(tool: "logic_mixer", command: "set_send_output_verified")!.deadline.seconds)))
+        let child = OperationTraceContext(parentTraceID: parent?.traceID,
+            mutationGateAcquired: parent?.mutationGateAcquired ?? false,
+            ownsGate: { parent?.ownsGate() ?? false }, deadline: deadline,
+            cancellationRequested: { Task.isCancelled || parent?.cancellationRequested() == true })
+        return await OperationTraceContext.$current.withValue(child) { await body() }
+    }
+
+    func read(_ step: SagaStep, cache: StateCache, registry: TargetRegistry) async -> ObservedState? {
+        await scope {
+            guard FeatureFlags.adr002TargetRef, self.supports(step), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
+                    operation: "saga.send_removal") == nil else { return nil }
+            let token: String
+            let source: SagaReadSource
+            if let restored = self.restored, let removed = self.removal, let pair = self.pair {
+                let checked = await AccessibilityChannel.readRestoredSendObservation(restored,
+                    original: removed.source.pair.strip, runtime: pair.track.runtime)
+                guard let assignment = checked.assignment else { return nil }
+                token = assignment.token; source = .axSendMenuCheckmark
+            } else if let removed = self.removal {
+                guard !self.inverseConsumed, removed.permits(runtime: removed.source.pair.track.runtime) else { return nil }
+                token = "no_send"; source = .axSendSlotFootprint
+            } else {
+                guard !self.attempted, let reference = step.targetRef,
+                      let binding = await registry.resolve(reference), binding.kind == .mixerStrip,
+                      let physical = binding.physicalMixerStrip,
+                      let held = await cache.retainedMixerAssociation(reference: reference, source: physical,
+                        snapshot: await registry.currentSnapshot),
+                      self.pair.map({ $0.strip.matches(held.strip) && $0.track.matches(held.track) }) ?? true,
+                      let ordinal = self.forward.params["ordinal"]?.intValue else { return nil }
+                let runtime = held.track.runtime
+                let checked = await AXMixerStripBinding.$current.withValue(physical) {
+                    await AXMixerStripBinding.$outputAssociation.withValue(held) {
+                        await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
+                    }
+                }
+                guard checked.assignment == .stereoOutput,
+                      checked.sendNonRoutingChecks == ["Post Fader"] || checked.sendNonRoutingChecks == ["포스트 페이더"],
+                      let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
+                      slots.count == 2, slots.filter({ $0.state == .observedEmpty }).count == 1,
+                      let occupied = slots.first(where: { $0.state == .occupiedUnknownDestination }),
+                      occupied.ordinal == ordinal, occupied.levelRaw == 0, occupied.bypassed == false,
+                      self.footprint.map({ $0 == slots }) ?? true,
+                      physical.currentIndex(runtime: runtime) != nil else { return nil }
+                self.pair = held; self.footprint = slots
+                token = "stereo_output"; source = .axSendMenuCheckmark
+            }
+            let evidence = SagaReadEvidence(readSource: source, provenance: .liveIndependent,
+                trackIndex: self.pair?.track.currentIndex(), field: "send_destination",
+                observed: .string(token), sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
+            return .init(read: evidence)
+        }
+    }
+
+    func run(_ step: SagaStep, router: ChannelRouter, cache: StateCache, registry: TargetRegistry) async -> StepResult {
+        await scope {
+            guard FeatureFlags.adr002TargetRef, self.supports(step), let held = self.pair,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Native removal custody unavailable")
+            }
+            let response: CallTool.Result
+            if let removed = self.removal {
+                guard !self.inverseConsumed, removed.permits(runtime: held.track.runtime) else {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned empty send is no longer current")
+                }
+                self.inverseConsumed = true
+                let restored = await AccessibilityChannel.restoreRemovedSendObservation(removed, runtime: held.track.runtime)
+                self.restored = restored
+                response = toolTextResult(restored.result)
+            } else {
+                guard !self.attempted, await self.read(self.forward, cache: cache, registry: registry) != nil else {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Before send footprint changed")
+                }
+                self.attempted = true
+                var params = self.forward.params
+                params["target_ref"] = .string(self.forward.targetRef!.rawValue)
+                let upstream = AccessibilityChannel.sendRemovalObserver
+                response = await AccessibilityChannel.$sendRemovalObserver.withValue({ proof in
+                    if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track) {
+                        self.removal = proof
+                        upstream?(proof)
+                    }
+                }) {
+                    await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                        router: router, cache: cache, targetRegistry: registry)
+                }
+            }
+            let mapped = ProductionSagaStepExecutor.mapResponse(response, operationID: step.operationID)
+            if case .text(let text, _, _) = response.content.first,
+               let body = decodedJSONObject(text), let attempted = body["write_attempted"] as? Bool {
+                return .init(state: mapped.state, writeBoundaryCrossed: attempted, detail: mapped.detail)
+            }
+            return mapped
+        }
+    }
+}
+
 struct ProductionSagaStepExecutor: SagaStepExecutor {
     private static let allowlist: Set<OperationID> = [
         .tracksRename,
@@ -207,6 +354,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     private let approvedSessionRepair: ApprovedSessionRepair?
     private let confirmedCompressorPlan: Bool
     private let confirmedSelectedEQPlan: Bool
+    private let sendRemoval: SendRemovalSagaAdapter?
     /// ADR-004 / issue #287 — qualification-only fault seam. nil in all normal
     /// operation (env unset); non-nil ONLY when the operator explicitly set
     /// `LOGIC_PRO_MCP_FAULT_INJECT=partial_state` to qualify compensation. A
@@ -230,7 +378,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         faultSeam: SagaPartialStateFaultSeam? = nil,
         approvedSessionRepair: ApprovedSessionRepair? = nil,
         confirmedCompressorPlan: Bool = false,
-        confirmedSelectedEQPlan: Bool = false
+        confirmedSelectedEQPlan: Bool = false,
+        sendRemoval: SendRemovalSagaAdapter? = nil
     ) {
         self.router = router
         self.cache = cache
@@ -244,6 +393,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         self.approvedSessionRepair = approvedSessionRepair
         self.confirmedCompressorPlan = confirmedCompressorPlan
         self.confirmedSelectedEQPlan = confirmedSelectedEQPlan
+        self.sendRemoval = sendRemoval
     }
     #else
     init(
@@ -257,7 +407,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         now: @escaping @Sendable () -> Date = { Date() },
         approvedSessionRepair: ApprovedSessionRepair? = nil,
         confirmedCompressorPlan: Bool = false,
-        confirmedSelectedEQPlan: Bool = false
+        confirmedSelectedEQPlan: Bool = false,
+        sendRemoval: SendRemovalSagaAdapter? = nil
     ) {
         self.router = router
         self.cache = cache
@@ -270,6 +421,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         self.approvedSessionRepair = approvedSessionRepair
         self.confirmedCompressorPlan = confirmedCompressorPlan
         self.confirmedSelectedEQPlan = confirmedSelectedEQPlan
+        self.sendRemoval = sendRemoval
     }
     #endif
 
@@ -293,7 +445,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         let parentTraceID = OperationTraceContext.current?.traceID
         let parent = OperationTraceContext.current
         let child: OperationTraceContext
-        if approvedSessionRepair == nil && step.operationID != .pluginsSetParamVerified && step.operationID != .pluginsSetEQBandVerified {
+        if approvedSessionRepair == nil && sendRemoval == nil && step.operationID != .pluginsSetParamVerified && step.operationID != .pluginsSetEQBandVerified {
             child = OperationTraceContext(parentTraceID: parentTraceID)
         }
         else {
@@ -308,6 +460,9 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     }
 
     private func runInChildTraceScope(_ step: SagaStep) async -> StepResult {
+        if let sendRemoval, sendRemoval.supports(step) {
+            return await sendRemoval.run(step, router: router, cache: cache, registry: targetRegistry)
+        }
         guard Self.allowlist.contains(step.operationID) || approvedSessionRepair?.supports(step) == true
             || (step.operationID == .pluginsSetParamVerified && confirmedCompressorPlan)
             || (step.operationID == .pluginsSetEQBandVerified && confirmedSelectedEQPlan) else {
@@ -479,6 +634,9 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     /// returns nil, which the engine treats as `unknown` (fail-closed), rather
     /// than a mirror value that could be stale by a poll interval.
     func readState(_ step: SagaStep) async -> ObservedState? {
+        if let sendRemoval, sendRemoval.supports(step) {
+            return await sendRemoval.read(step, cache: cache, registry: targetRegistry)
+        }
         if step.operationID == .pluginsSetEQBandVerified {
             return await SelectedEQParameterSaga.read(step, router: router, cache: cache,
                 registry: targetRegistry, now: now())
@@ -562,7 +720,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         ))
     }
 
-    private static func mapResponse(
+    fileprivate static func mapResponse(
         _ response: CallTool.Result,
         operationID: OperationID
     ) -> StepResult {
