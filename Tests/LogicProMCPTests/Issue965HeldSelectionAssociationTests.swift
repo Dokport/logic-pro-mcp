@@ -21,12 +21,17 @@ private actor SendRemovalSagaResultBoundary: Channel {
         if operation == "mixer.set_send_output_verified", mode == "no_observer" {
             return .success(HonestContract.encodeStateA(extras: ["verified": true, "write_attempted": true]))
         }
-        let result = await base.execute(operation: operation, params: params)
+        let result: ChannelResult
+        if operation == "mixer.set_send_output_verified", mode == "lost_observer" {
+            result = await AccessibilityChannel.$sendChangeObserver.withValue(nil) {
+                await base.execute(operation: operation, params: params)
+            }
+        } else { result = await base.execute(operation: operation, params: params) }
         if operation == "mixer.set_send_output_verified",
            sharedJSONObject(result.message)?["state"] as? String == "A" {
             afterForward()
             if mode == "cancel" { _ = await journal.cancel(idempotencyKey: "owned-send-removal-saga") }
-            if mode == "failure" {
+            if mode == "failure" || mode.hasPrefix("late_inverse_") {
                 return .error(HonestContract.encodeStateC(error: .readbackUnavailable, extras: ["write_attempted": true]))
             }
             if mode == "unverified" {
@@ -1436,6 +1441,31 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal("expired_pair", existingBus: true)
     }
 
+    @Test(arguments: ["failure", "cancel", "unverified"])
+    func registeredExistingBusSendSagaCompensatesOnlyItsActualNativeChange(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
+            emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["external_destination", "external_level", "external_mode", "replaced_control",
+                      "unknown_after", "foreign_after", "no_observer", "lost_observer"])
+    func registeredExistingBusSendSagaCannotInvertUnobservedOrNewerState(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
+            emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test func registeredExistingBusSendInverseRefusesModeChangedAtFinalOfferedLeaf() async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
+            emptyModeMenu: true, sagaMode: "late_inverse_mode")
+    }
+
+    @Test(arguments: ["wrong_project", "wrong_target", "missing_confirmation", "wrong_confirmation", "invalid_later",
+                      "multiple", "raw_level", "raw_bypass", "nondefault_mode", "expired_pair"])
+    func registeredExistingBusSendSagaRefusesInvalidRequestsBeforeAnyLeaf(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
+            emptyModeMenu: true, sagaMode: mode)
+    }
+
     @Test(arguments: [OutputAssignment.bus(1), .physical(3, 4), .stereoOutput])
     func occupiedSendNoopRemainsObservedWithoutExpiredPair(destination: OutputAssignment) async throws {
         try await assertOccupiedSingleSendRenewal("expired_noop", existingBus: destination == .bus(1),
@@ -1720,6 +1750,21 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
             f.routingReadResult = { element, attribute in
+                if sagaMode == "late_inverse_mode", f.routingDestinationPresses == 1, CFEqual(element, stereo) {
+                    if attribute == kAXTitleAttribute as String, f.routingClassifierHelpReads > 0 {
+                        f.routingClassifierHelpReads += 1
+                        // The fresh checked-current scan is followed by the
+                        // final offered-leaf lookup; mutate only that later read.
+                        if f.routingClassifierHelpReads == 3 {
+                            b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader")
+                            f.routingLateScopeInjected = true
+                        }
+                    }
+                }
+                if sagaMode == "unknown_after", f.routingLateScopeInjected,
+                   CFEqual(element, renewedList), attribute == kAXDescriptionAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
                 if let inspectSendWitness, CFEqual(element, mode),
                    b.makeAXRuntime().children(f.mixer).contains(where: { CFEqual($0, root) }) {
                     if inspectSendWitness == "malformed_title", attribute == kAXTitleAttribute as String {
@@ -1740,7 +1785,7 @@ struct Issue965HeldSelectionAssociationTests {
                 if readRestored == "retired_source", f.routingLateScopeInjected, CFEqual(element, restoredSource) {
                     return .failure(.init(raw: AXError.invalidUIElement.rawValue))
                 }
-                if emptyModeMenu, f.routingDestinationPresses == 1, CFEqual(element, mode) {
+                if emptyModeMenu, removing, f.routingDestinationPresses == 1, CFEqual(element, mode) {
                     if attribute == "AXMenuItemMarkChar" {
                         f.routingClassifierHelpReads += 1
                         if inverseFault == "empty_mode_mark_unreadable" {
@@ -1881,6 +1926,10 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.routingDestinationPresses == 0 && f.routingReplacement == nil)
             }
             f.routingRead = { element, attribute in
+                if sagaMode == "late_inverse_mode", f.routingDestinationPresses == 1,
+                   CFEqual(element, stereo), attribute == kAXEnabledAttribute as String {
+                    f.routingClassifierHelpReads = 1
+                }
                 if readRestored != nil, f.routingDestinationPresses == 2,
                    CFEqual(element, b.element(1_965_2663)), attribute == kAXDescriptionAttribute as String {
                     f.routingIndependentSendReads += 1
@@ -1935,12 +1984,29 @@ struct Issue965HeldSelectionAssociationTests {
                 if sagaMode == "raw_level" { b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 1) }
                 if sagaMode == "raw_bypass" { b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1) }
                 if sagaMode == "nondefault_mode" { b.setAttribute(mode, kAXTitleAttribute as String, "Post Pan") }
+                if sagaMode == "expired_pair" { f.expireRetainedCapture = true }
                 await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal, mode: sagaMode,
                     afterForward: {
                         if sagaMode == "external_empty" {
                             b.setChildren(replacement, [name, extraSend[0]]); f.routingLateScopeInjected = true
                         } else if sagaMode == "foreign_after" {
                             b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            f.routingLateScopeInjected = true
+                        } else if existingBus {
+                            switch sagaMode {
+                            case "external_destination":
+                                b.setAttribute(echo, kAXTitleAttribute as String, "Bus 2 → Existing")
+                                b.setAttribute(destination, kAXTitleAttribute as String, "Bus 2 → Existing")
+                            case "external_level": b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1)
+                            case "external_mode": b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader")
+                            case "replaced_control":
+                                let decoy = b.element(1_965_2799)
+                                b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
+                                b.setChildren(decoy, []); b.setActionNames(decoy, [kAXPressAction as String])
+                                b.setChildren(b.element(1_965_2641), [b.element(1_965_2642), decoy])
+                            case "unknown_after", "lost_observer": break
+                            default: return
+                            }
                             f.routingLateScopeInjected = true
                         }
                     }))
@@ -1960,6 +2026,15 @@ struct Issue965HeldSelectionAssociationTests {
                         "target_ref": .string(reference.rawValue), "params": .object(stepParams),
                         "expected_inverse": .object(["operation_id": .string(OperationID.mixerSetSendOutputVerified.rawValue),
                             "value_parameter": .string("destination")])])])]
+                if sagaMode == "wrong_target" {
+                    let otherRow = try #require(capture.channelStrips.indices.first {
+                        capture.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, f.strips[0]) } == true
+                    })
+                    let otherReference = try #require(capture.mixerReference(at: otherRow))
+                    var wrongStep = try #require(wire["steps"]?.arrayValue?.first?.objectValue)
+                    wrongStep["target_ref"] = .string(otherReference.rawValue)
+                    wire["steps"] = .array([.object(wrongStep)])
+                }
                 if sagaMode == "invalid_later" {
                     wire["steps"] = .array((wire["steps"]?.arrayValue ?? []) + [.object([
                         "operation_id": .string(OperationID.tracksMute.rawValue), "target_ref": .string(reference.rawValue),
@@ -1989,17 +2064,22 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
                     return
                 }
-                if ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple", "raw_level", "raw_bypass", "nondefault_mode"].contains(sagaMode) {
+                if ["wrong_target", "missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple", "raw_level", "raw_bypass", "nondefault_mode", "expired_pair"].contains(sagaMode) {
                     #expect(body["state"] as? String == "C" && f.routingDestinationPresses == 0)
                     if ["missing_confirmation", "wrong_confirmation", "extra_param", "invalid_later", "multiple"].contains(sagaMode) {
                         #expect(await journal.record(for: "owned-send-removal-saga") == nil)
                     }
                     return
                 }
-                if ["external_empty", "foreign_after", "no_observer"].contains(sagaMode) {
+                if ["external_empty", "foreign_after", "no_observer", "external_destination", "external_level",
+                    "external_mode", "replaced_control", "unknown_after", "late_inverse_mode", "lost_observer"].contains(sagaMode) {
                     if sagaMode == "no_observer" { #expect(f.routingDestinationPresses == 0) }
                     else { #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 1) }
-                    #expect(body["saga_state"] as? String == "rollbackUncertain", "Actual lost-custody receipt: \(sharedToolText(result))")
+                    if sagaMode == "late_inverse_mode" {
+                        #expect(body["saga_state"] as? String == "compensationFailed", "Known protected-state conflict refuses the inverse before its leaf")
+                    } else {
+                        #expect(body["saga_state"] as? String == "rollbackUncertain", "Actual lost-custody receipt: \(sharedToolText(result))")
+                    }
                     #expect(!gate.isHeldByEntitledHolder())
                     return
                 }
