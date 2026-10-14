@@ -1823,7 +1823,13 @@ func testTransportDispatcherStillnessRefusalsBeforeTheKeyAreStateC(
     #expect(description.contains("set_input_bus_verified"))
     #expect(!description.replacingOccurrences(of: "set_input_bus_verified", with: "").contains("set_input"))
     #expect(description.contains("set_send_output_verified"))
-    #expect(!description.replacingOccurrences(of: "set_send_output_verified", with: "").contains("set_send"))
+    #expect(description.contains("get_send_bypass_verified"))
+    #expect(description.contains("set_send_bypass_verified"))
+    #expect(description.contains("bypassed: literal Bool"))
+    let withoutPublicSendSetters = description
+        .replacingOccurrences(of: "set_send_output_verified", with: "")
+        .replacingOccurrences(of: "set_send_bypass_verified", with: "")
+    #expect(!withoutPublicSendSetters.contains("set_send"))
 }
 
 // MARK: - TrackDispatcher
