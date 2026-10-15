@@ -592,6 +592,8 @@ actor AccessibilityChannel: Channel {
                                 }
                             }
                             return await Self.getOutputObservation(runtime: runtime.logicRuntime, sendOrdinal: candidate.ordinal,
+                                observingSendMode: candidate.ordinal != nil,
+                                requiringSendMode: false,
                                 observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) })
                         }
                         let receipt = read.result.message.data(using: .utf8).flatMap {
@@ -644,7 +646,7 @@ actor AccessibilityChannel: Channel {
                                 }
                             } else {
                                 checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal,
-                                    sendNonRoutingChecks: read.sendNonRoutingChecks))
+                                    sendNonRoutingChecks: read.sendNonRoutingChecks, sendMode: read.sendMode))
                             }
                         }
                     }

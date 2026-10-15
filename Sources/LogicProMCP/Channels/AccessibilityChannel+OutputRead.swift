@@ -450,9 +450,11 @@ extension AccessibilityChannel {
     static func getOutputObservation(runtime: AXLogicProElements.Runtime, sendOrdinal: Int? = nil,
                                      timing: OutputAssignmentTiming = .live,
                                      observingSendMode: Bool = false,
+                                     requiringSendMode: Bool = true,
                                      observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in }) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: sendOrdinal, runtime: runtime, timing: timing,
-            observingPopupFocus: observingPopupFocus, observingSendMode: observingSendMode)
+            observingPopupFocus: observingPopupFocus, observingSendMode: observingSendMode,
+            requiringSendMode: requiringSendMode)
     }
 
     private static func getCheckedRoutingDestination(
@@ -460,7 +462,8 @@ extension AccessibilityChannel {
         timing: OutputAssignmentTiming,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
-        sendReplacement: SendReplacement? = nil, observingSendMode: Bool = false
+        sendReplacement: SendReplacement? = nil, observingSendMode: Bool = false,
+        requiringSendMode: Bool = true
     ) async -> CheckedOutputReading {
         let operation = sendReplacement?.modeChange != nil ? "mixer.set_send_mode_verified" : sendReplacement != nil ? "mixer.set_send_output_verified" :
             (inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified"))
@@ -1347,7 +1350,7 @@ extension AccessibilityChannel {
         guard dataOwned, sourceAfter, let first, second == first else {
             return refuse(.readbackUnavailable, "The checked output was unreadable, contradictory, or lost its original source/menu custody; no destination was selected.")
         }
-        guard !observingSendMode || modeEvidence != nil else {
+        guard !observingSendMode || !requiringSendMode || modeEvidence != nil else {
             return refuse(.readbackUnavailable, "The complete checked Send mode census was missing, ambiguous or changed.")
         }
         guard sendOrdinal == nil || first != .noOutput else {

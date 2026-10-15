@@ -310,6 +310,12 @@ struct SendSlotObservation: Sendable, Codable, Equatable {
     /// slot number, or an absent send; cached/decoded fields are not proof.
     var checkedNonRoutingTitles: [String]? = nil
     var nonRoutingSource: String? = nil
+    /// Historical typed mode token and Independent Pan bit from one complete,
+    /// agreeing native menu census. Missing/unknown stays nil, never a default.
+    /// This supplies no physical-slot, receiver or current write authority.
+    var mode: String? = nil
+    var independentPan: Bool? = nil
+    var modeSource: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case ordinal, state
@@ -321,6 +327,9 @@ struct SendSlotObservation: Sendable, Codable, Equatable {
         case destinationSource = "destination_source"
         case checkedNonRoutingTitles = "checked_nonrouting_titles"
         case nonRoutingSource = "nonrouting_source"
+        case mode
+        case independentPan = "independent_pan"
+        case modeSource = "mode_source"
     }
 }
 

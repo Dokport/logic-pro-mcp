@@ -333,6 +333,7 @@ struct Issue965HeldSelectionAssociationTests {
         var associationStopReads = 0
         var associationStopReadsAtWrite = 0
         var routingLateScopeInjected = false
+        var routingModeInspectionReads = 0
         var inputMenuPresses = 0
         var inputMenuCancels = 0
         var inputRetirementCensusLag = false
@@ -1637,6 +1638,17 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(inspectSendWitness: "observed")
     }
 
+    @Test func registeredInspectionCarriesItsCompleteNativeSendMode() async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: "typed_mode")
+    }
+
+    @Test(arguments: ["missing", "duplicate", "unreadable", "conflict", "disagree", "changed_control",
+                      "projection_cached", "projection_decoded", "projection_foreign", "projection_duplicate",
+                      "projection_unqualified", "projection_unstable", "projection_duplicate_ordinal"])
+    func registeredInspectionCannotInventTypedSendMode(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(inspectSendWitness: "typed_mode_" + fault)
+    }
+
     @Test(arguments: ["unsupported_mark", "unread_mark", "malformed_title", "changed_control"])
     func registeredInspectionCannotPublishUnknownSendNonroutingWitness(fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(inspectSendWitness: fault)
@@ -1793,6 +1805,10 @@ struct Issue965HeldSelectionAssociationTests {
                                                modePeerBoundary: ModePeerBoundary? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
+            let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
+            let projectionWitness = inspectSendWitness.map {
+                $0.hasPrefix("typed_mode_projection_") ? String($0.dropFirst("typed_mode_".count)) : $0
+            }
             let mixerOwner = b.element(1_965_2599)
             b.setRole(mixerOwner, kAXGroupRole as String); b.setAttribute(mixerOwner, kAXDescriptionAttribute as String, "Mixer")
             b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
@@ -1829,7 +1845,7 @@ struct Issue965HeldSelectionAssociationTests {
                 return [anchor, group, level]
             }
             let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
-            if freshEmpty != nil || modeCommand != nil { f.useBulkReads = true }
+            if freshEmpty != nil || modeCommand != nil || inspectTypedMode { f.useBulkReads = true }
             if levelMode != nil {
                 f.useBulkReads = true
                 let knob = b.element(1_965_2624), editor = b.element(1_965_2800), field = b.element(1_965_2801)
@@ -1947,7 +1963,7 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(restoredSource, [name] + extraSend)
             b.setActionNames(renewedSend[0], [kAXPressAction as String])
             for container in [root, menu] { b.setRole(container, kAXMenuRole as String) }
-            for (item, title) in [(echo, "Stereo Output"), (mode, emptyModeMenu || modeCommand != nil ? "Post Fader" : "Post Pan"), (parent, "Output"),
+            for (item, title) in [(echo, "Stereo Output"), (mode, emptyModeMenu || modeCommand != nil || inspectTypedMode ? "Post Fader" : "Post Pan"), (parent, "Output"),
                                   (stereo, "Stereo Output"), (destination, "Output 3-4")] {
                 b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
                 b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
@@ -1955,7 +1971,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             for item in [echo, mode, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
             b.setChildren(menu, [stereo, destination]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, mode, parent])
-            if modeCommand != nil {
+            if modeCommand != nil || inspectTypedMode {
                 for (item, title) in [(preFader, "Pre Fader"), (postPan, "Post Pan"), (independentPan, "Independent Pan")] {
                     b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
                     b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
@@ -1963,6 +1979,21 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 b.setChildren(root, [echo, independentPan, postPan, mode, preFader, parent])
                 if modeCommand == "independent_pan" { b.setAttribute(independentPan, "AXMenuItemMarkChar", "✓") }
+                if inspectTypedMode {
+                    b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                    b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                    b.setAttribute(independentPan, "AXMenuItemMarkChar", "✓")
+                    switch inspectSendWitness {
+                    case "typed_mode_missing": b.setChildren(root, [echo, independentPan, mode, preFader, parent])
+                    case "typed_mode_duplicate":
+                        b.setRole(competitor, kAXMenuItemRole as String)
+                        b.setAttribute(competitor, kAXTitleAttribute as String, "Pre Fader")
+                        b.setAttribute(competitor, "AXMenuItemMarkChar", ""); b.setChildren(competitor, [])
+                        b.setChildren(root, [echo, independentPan, postPan, mode, preFader, competitor, parent])
+                    case "typed_mode_conflict": b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
+                    default: break
+                    }
+                }
             }
             if freshEmpty != nil {
                 b.setAttribute(echo, kAXTitleAttribute as String, "No Send")
@@ -2164,12 +2195,24 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingLateScopeInjected = true; return .success(NSNumber(value: 123))
                     }
                     if attribute == "AXMenuItemMarkChar" {
+                        if inspectTypedMode {
+                            f.routingModeInspectionReads += 1
+                            if inspectSendWitness == "typed_mode_unreadable" {
+                                f.routingLateScopeInjected = true
+                                return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                            }
+                            if inspectSendWitness == "typed_mode_disagree", f.routingModeInspectionReads == 4 {
+                                f.routingLateScopeInjected = true
+                                b.setAttribute(preFader, "AXMenuItemMarkChar", "")
+                                b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
+                            }
+                        }
                         if ["unsupported_mark", "unread_mark"].contains(inspectSendWitness) {
                             f.routingLateScopeInjected = true
                             return .failure(.init(raw: inspectSendWitness == "unsupported_mark"
                                 ? AXError.noValue.rawValue : AXError.cannotComplete.rawValue))
                         }
-                        if inspectSendWitness == "changed_control", !f.routingLateScopeInjected {
+                        if ["changed_control", "typed_mode_changed_control"].contains(inspectSendWitness), !f.routingLateScopeInjected {
                             f.routingLateScopeInjected = true
                             b.setChildren(originalSend[1], [b.element(1_965_2622), renewedList])
                         }
@@ -2235,7 +2278,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let before = try await inspect(f, cache: cache, registry: registry,
                 domains: inspectSendWitness == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"])
-            if inspectSendWitness == "changed_control", before["snapshot_id"] == nil {
+            if ["changed_control", "typed_mode_changed_control"].contains(inspectSendWitness ?? ""), before["snapshot_id"] == nil {
                 #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 0)
                 #expect(before["state"] as? String == "C")
                 return
@@ -2254,31 +2297,58 @@ struct Issue965HeldSelectionAssociationTests {
                 let checked = capture.freshPopulation?.checkedOutputs.filter {
                     $0.source.matches(originalPair.strip) && $0.sendOrdinal == 1
                 } ?? []
-                let healthy = inspectSendWitness == "observed" || inspectSendWitness?.hasPrefix("projection_") == true
+                let healthy = inspectSendWitness == "typed_mode" || inspectSendWitness == "observed"
+                    || projectionWitness?.hasPrefix("projection_") == true
                 if healthy { #expect(checked.count == 1 && checked.first?.assignment == .stereoOutput) }
-                else { #expect(f.routingLateScopeInjected) }
+                else if !inspectTypedMode { #expect(f.routingLateScopeInjected) }
                 let strips = try #require((before["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
                 let target = try #require(strips.first { $0["mixer_strip_ref"] as? String == reference.rawValue })
                 let slots = try #require(target["send_slots"] as? [[String: Any]])
                 let send = try #require(slots.first { $0["ordinal"] as? Int == 1 })
-                if healthy {
+                if inspectTypedMode {
+                    if healthy {
+                        #expect(send["mode"] as? String == "pre_fader")
+                        let observedPan = try #require(send["independent_pan"] as? Bool)
+                        #expect(observedPan)
+                        #expect(send["mode_source"] as? String == "ax_send_mode_menu_census")
+                        #expect(send["checked_destination"] as? String == OutputAssignment.stereoOutput.token)
+                    } else {
+                        #expect(send["mode"] == nil && send["independent_pan"] == nil && send["mode_source"] == nil)
+                        #expect(f.routingModeInspectionReads > 0)
+                        if ["typed_mode_unreadable", "typed_mode_disagree", "typed_mode_changed_control"].contains(inspectSendWitness ?? "") {
+                            #expect(f.routingLateScopeInjected)
+                        }
+                    }
+                    #expect(send["level_raw"] as? Double == 0)
+                    let observedBypass = try #require(send["bypassed"] as? Bool)
+                    #expect(!observedBypass)
+                    #expect(send["physical_slot"] == nil)
+                    #expect(f.routingDestinationPresses == 0 && f.routingModePresses == 0)
+                    if projectionWitness?.hasPrefix("projection_") != true { return }
+                }
+                if healthy && !inspectTypedMode {
                     #expect(send["checked_nonrouting_titles"] as? [String] == ["Post Pan"])
                     #expect(send["nonrouting_source"] as? String == "ax_send_menu_checkmark")
-                } else {
+                } else if !inspectTypedMode {
                     #expect(send["checked_nonrouting_titles"] == nil && send["nonrouting_source"] == nil)
                 }
-                #expect(send["physical_slot"] == nil && send["mode"] == nil)
+                #expect(send["physical_slot"] == nil)
+                if !inspectTypedMode { #expect(send["mode"] == nil) }
                 #expect(f.routingDestinationPresses == 0)
                 if inspectSendWitness != "changed_control" {
                     #expect((before["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
                 }
-                if let inspectSendWitness, inspectSendWitness.hasPrefix("projection_") {
+                if let inspectSendWitness = projectionWitness, inspectSendWitness.hasPrefix("projection_") {
                     var forged = capture.channelStrips[row]
                     forged.sendSlots = forged.sendSlots?.map { slot in
                         var result = slot
                         result.checkedNonRoutingTitles = ["forged mode"]
                         result.nonRoutingSource = "forged source"
+                        result.mode = "forged mode"; result.independentPan = false; result.modeSource = "forged source"
                         return result
+                    }
+                    if inspectSendWitness == "projection_duplicate_ordinal", let slot = forged.sendSlots?.first(where: { $0.ordinal == 1 }) {
+                        forged.sendSlots?.append(slot)
                     }
                     if inspectSendWitness == "projection_decoded" {
                         forged = try JSONDecoder().decode(ChannelStripState.self, from: JSONEncoder().encode(forged))
@@ -2289,7 +2359,7 @@ struct Issue965HeldSelectionAssociationTests {
                     if inspectSendWitness == "projection_foreign", let witness = checked.first {
                         fresh?.checkedOutputs = [.init(source: .init(window: witness.source.window, mixer: witness.source.mixer,
                             strip: f.strips[0], document: witness.source.document), assignment: witness.assignment,
-                            sendOrdinal: 1, sendNonRoutingChecks: ["foreign mode"])]
+                            sendOrdinal: 1, sendNonRoutingChecks: ["foreign mode"], sendMode: witness.sendMode)]
                     }
                     if inspectSendWitness == "projection_cached" { fresh = nil }
                     if inspectSendWitness == "projection_unstable" { fresh?.stable = false }
@@ -2305,6 +2375,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let projected = try #require(SessionPopulationObservation.reportedSendSlots(of: forged,
                         capture: altered, qualified: inspectSendWitness != "projection_unqualified"))
                     #expect(projected.allSatisfy { $0.checkedNonRoutingTitles == nil && $0.nonRoutingSource == nil })
+                    #expect(projected.allSatisfy { $0.mode == nil && $0.independentPan == nil && $0.modeSource == nil })
                 }
                 return
             }
