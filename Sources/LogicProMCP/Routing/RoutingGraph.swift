@@ -4,7 +4,7 @@ let routingPhysicalSendSlots = 0..<12
 
 enum RoutingNodeKind: String, Codable, Sendable {
     case track
-    /// An independently observed Mixer strip; its Arrange association/type remains unknown.
+    /// An independently observed Mixer strip; its Arrange association remains unknown.
     case physicalStrip = "physical_strip"
     case aux
     case bus
@@ -41,12 +41,15 @@ struct RoutingNode: Codable, Equatable, Sendable {
     let outputClassification: RoutingOutputClassification?
     /// Captured own input-control display evidence, not a bus/port identity or an edge.
     let observedInputSlot: InputSlotObservation?
+    /// Historical fixed-label observation, independently bound to this physical owner.
+    let observedTypeLabel: StripTypeLabelObservation?
 
     enum CodingKeys: String, CodingKey {
         case id, kind, displayName, busNumber, targetRef
         case observedOutputLabel = "observed_output_label"
         case outputClassification = "output_classification"
         case observedInputSlot = "observed_input_slot"
+        case observedTypeLabel = "observed_type_label"
     }
 
     init(
@@ -57,7 +60,8 @@ struct RoutingNode: Codable, Equatable, Sendable {
         targetRef: TargetReference?,
         observedOutputLabel: String? = nil,
         outputClassification: RoutingOutputClassification? = nil,
-        observedInputSlot: InputSlotObservation? = nil
+        observedInputSlot: InputSlotObservation? = nil,
+        observedTypeLabel: StripTypeLabelObservation? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -67,6 +71,7 @@ struct RoutingNode: Codable, Equatable, Sendable {
         self.observedOutputLabel = observedOutputLabel
         self.outputClassification = outputClassification
         self.observedInputSlot = observedInputSlot
+        self.observedTypeLabel = observedTypeLabel
     }
 
     init(from decoder: Decoder) throws {
@@ -82,6 +87,7 @@ struct RoutingNode: Codable, Equatable, Sendable {
             forKey: .outputClassification
         )
         observedInputSlot = try container.decodeIfPresent(InputSlotObservation.self, forKey: .observedInputSlot)
+        observedTypeLabel = try container.decodeIfPresent(StripTypeLabelObservation.self, forKey: .observedTypeLabel)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -94,6 +100,7 @@ struct RoutingNode: Codable, Equatable, Sendable {
         try container.encodeIfPresent(observedOutputLabel, forKey: .observedOutputLabel)
         try container.encodeIfPresent(outputClassification, forKey: .outputClassification)
         try container.encodeIfPresent(observedInputSlot, forKey: .observedInputSlot)
+        try container.encodeIfPresent(observedTypeLabel, forKey: .observedTypeLabel)
     }
 }
 

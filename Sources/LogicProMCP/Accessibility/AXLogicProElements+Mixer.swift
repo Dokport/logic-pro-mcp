@@ -66,7 +66,55 @@ struct AXMixerInputSlotBinding: @unchecked Sendable {
     }
 }
 
+/// Native custody for the optional, fixed Type and Number Label; never decoded.
+struct AXMixerTypeLabelBinding: @unchecked Sendable {
+    let owner: AXMixerStripBinding.Binding
+    let control: AXUIElement
+    let label: String
+
+    func matches(_ other: Self) -> Bool {
+        owner.matches(other.owner) && CFEqual(control, other.control)
+            && label.utf8.elementsEqual(other.label.utf8)
+    }
+}
+
 extension AXLogicProElements {
+    /// Direct static Type and Number Label observed on Logic 12.3 (EN).
+    /// The editable Name field and Inspector slot Help are deliberately unrelated.
+    static func typeNumberLabel(in strip: AXUIElement,
+        runtime: AXHelpers.Runtime = .production) -> (control: AXUIElement, label: String)? {
+        func string(_ element: AXUIElement, _ attribute: String) -> String? {
+            guard case .success(.some(let value)) = AXHelpers.getAttributeResult(element, attribute,
+                runtime: runtime) as Result<AnyObject?, AXHelpers.AXStatusError>,
+                  CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
+            return value as? String
+        }
+        func candidate() -> AXUIElement? {
+            guard case .success(let children) = AXHelpers.childrenResult(strip, runtime: runtime) else { return nil }
+            var labels: [AXUIElement] = []
+            for child in children {
+                guard let role = string(child, kAXRoleAttribute as String) else { return nil }
+                if role == kAXStaticTextRole as String {
+                    guard let description = string(child, kAXDescriptionAttribute as String) else { return nil }
+                    if description == "label" { labels.append(child) }
+                }
+            }
+            return labels.count == 1 ? labels.first : nil
+        }
+        func parentMatches(_ control: AXUIElement) -> Bool {
+            guard let parent: AXUIElement = AXHelpers.getAttribute(control,
+                kAXParentAttribute as String, runtime: runtime) else { return false }
+            return CFEqual(parent, strip)
+        }
+        guard let control = candidate(), parentMatches(control),
+              let first = string(control, kAXValueAttribute as String),
+              !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let second = string(control, kAXValueAttribute as String),
+              first.utf8.elementsEqual(second.utf8),
+              let current = candidate(), CFEqual(control, current), parentMatches(control) else { return nil }
+        return (control, first)
+    }
+
     /// Ephemeral read-only control custody from the existing complete send census.
     /// Neither the displayed destination nor a knob level supplies endpoint identity.
     // Copied AX identity values contain no shared mutable Swift storage.

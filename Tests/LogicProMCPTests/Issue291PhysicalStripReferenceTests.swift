@@ -38,6 +38,7 @@ struct Issue291PhysicalStripReferenceTests {
         var onActionNamesRead: (@Sendable (AXUIElement) -> Void)?
         var outputPressFailure: AXHelpers.AXStatusError?
         var outputPressOpensMenu = true
+        var typeLabelReplacementCount = 0
         private(set) var mutations: [(AXUIElement, String)] = []
 
         init(aux: Bool = false, duplicateNames: Bool = false, secondAux: Bool = false) throws {
@@ -310,6 +311,155 @@ struct Issue291PhysicalStripReferenceTests {
         let result = try await ResourceHandlers.read(uri: "logic://mixer", cache: cache, router: router,
                                                    targetRegistry: registry, fileReader: .unavailable)
         return try #require(sharedJSONObject(sharedResourceText(result))?["strips"] as? [[String: Any]])
+    }
+
+    private func addTypeLabel(_ fixture: Fixture, strip: AXUIElement, id: Int, label: String) -> AXUIElement {
+        let control = fixture.b.element(id)
+        fixture.b.setRole(control, kAXStaticTextRole as String)
+        fixture.b.setAttribute(control, kAXDescriptionAttribute as String, "label")
+        fixture.b.setAttribute(control, kAXValueAttribute as String, label)
+        fixture.b.setChildren(control, [])
+        fixture.b.setChildren(strip, fixture.b.makeAXRuntime().children(strip) + [control])
+        return control
+    }
+
+    private func inspectTypeLabels(_ fixture: Fixture) async throws -> (body: [String: Any], cache: StateCache,
+        registry: TargetRegistry, router: ChannelRouter) {
+        let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter()
+        let channel = fixture.channel(); await router.register(channel)
+        let poller = StatePoller(axChannel: channel, cache: cache,
+            runtime: .init(hasVisibleWindow: { true }, dialogPresent: { false }, blockingDialogInfo: { nil },
+                projectFileReader: .unavailable, keyboardFocus: { .notTextEditing }))
+        let gate = LogicMutationGate()
+        let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry, poller: poller,
+            dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
+            liveTrackNames: { [0: "A", 1: "B"] }, projectFileReader: .unavailable)
+        let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
+        let params: [String: Value] = ["domains": .array([.string("strips"), .string("routing")]),
+            "allow_ui_navigation": .bool(false)]
+        let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
+            commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
+        return (try #require(sharedJSONObject(sharedToolText(result))), cache, registry, router)
+    }
+
+    @Test(arguments: ["renamed_aux", "audio_named_aux", "hidden"])
+    func registeredPhysicalTypeLabelDoesNotGuessFromTheMutableName(shape: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let fixture = try Fixture(aux: true)
+            let strip = fixture.strips[2]
+            let name = fixture.b.element(2_910_124)
+            fixture.b.setAttribute(name, kAXValueAttribute as String,
+                shape == "renamed_aux" ? "LPM Receiver Proof" : "Aux 1")
+            if shape != "hidden" {
+                _ = addTypeLabel(fixture, strip: strip, id: 2_919_100,
+                    label: shape == "renamed_aux" ? "Aux 1" : "Audio 2")
+            }
+            let inspected = try await inspectTypeLabels(fixture)
+            let rows = try #require((inspected.body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+            let graph = try #require(inspected.body["routing"] as? [String: Any])
+            let nodes = try #require(graph["nodes"] as? [[String: Any]])
+            let row = try #require(rows.first { $0["name"] as? String ==
+                (shape == "renamed_aux" ? "LPM Receiver Proof" : "Aux 1") })
+            let reference = try #require(row["mixer_strip_ref"] as? String)
+            let node = try #require(nodes.first { $0["id"] as? String == reference })
+            #expect(node["kind"] as? String == (shape == "renamed_aux" ? "aux" : "physical_strip"))
+            #expect(node["busNumber"] == nil)
+            let observed = node["observed_type_label"] as? [String: Any]
+            let rowLabel = row["observed_type_label"] as? [String: Any]
+            if shape == "hidden" { #expect(observed == nil && rowLabel == nil) }
+            else {
+                #expect(observed?["label"] as? String == (shape == "renamed_aux" ? "Aux 1" : "Audio 2"))
+                #expect(observed?["source"] as? String == "ax_type_number_label")
+                #expect(rowLabel?["label"] as? String == observed?["label"] as? String)
+                #expect(rowLabel?["source"] as? String == "ax_type_number_label")
+            }
+            #expect(graph["coverage"] as? String == "partial")
+            let coverage = try #require(graph["graph"] as? [String: Any])
+            let receivers = try #require(coverage["bus_to_aux_input"] as? [String: Any])
+            #expect(receivers["state"] as? String == "not_observed")
+            let edges = try #require(graph["edges"] as? [[String: Any]])
+            #expect(edges.isEmpty)
+            let historical = try await inputGraph(inspected.cache, inspected.registry, inspected.router)
+            #expect(historical.graph.nodes.allSatisfy { $0.kind == .physicalStrip })
+            #expect(historical.graph.coverage.busToAuxInput.state == .notObserved)
+            #expect(fixture.mutations.isEmpty)
+        }
+    }
+
+    @Test(arguments: ["Aux 1️⃣", "Aux 1́", "Aux ١", "Aux １", "Aux 0", "Aux 01", "Aux1", "Aux 1 ", "Aux 1 Bus 1"])
+    func fixedTypeLabelRequiresTheMeasuredASCIIDecimalForm(label: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let fixture = try Fixture(aux: true)
+            _ = addTypeLabel(fixture, strip: fixture.strips[2], id: 2_919_110, label: label)
+            let inspected = try await inspectTypeLabels(fixture)
+            let nodes = try #require((inspected.body["routing"] as? [String: Any])?["nodes"] as? [[String: Any]])
+            #expect(!nodes.contains { $0["kind"] as? String == "aux" })
+            #expect(fixture.mutations.isEmpty)
+        }
+    }
+
+    @Test(arguments: ["duplicate", "wrong_role", "nonstring", "description_unread", "value_unread", "role_unread", "foreign_parent", "replaced_control"])
+    func registeredTypeLabelRefusesIncompleteOrChangedOwnControl(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let fixture = try Fixture(aux: true), b = fixture.b
+            let strip = fixture.strips[2]
+            let label = addTypeLabel(fixture, strip: strip, id: 2_919_120, label: "Aux 1")
+            if fault == "duplicate" { _ = addTypeLabel(fixture, strip: strip, id: 2_919_121, label: "Audio 2") }
+            if fault == "wrong_role" { b.setRole(label, kAXTextFieldRole as String) }
+            if fault == "nonstring" { b.setAttribute(label, kAXValueAttribute as String, true) }
+            if fault == "foreign_parent" { b.setAttribute(label, kAXParentAttribute as String, fixture.strips[0]) }
+            fixture.attributeReadResult = { element, attribute in
+                guard CFEqual(element, label) else { return nil }
+                let refused: String? = fault == "description_unread" ? kAXDescriptionAttribute as String
+                    : fault == "value_unread" ? kAXValueAttribute as String
+                    : fault == "role_unread" ? kAXRoleAttribute as String : nil
+                return attribute == refused ? .failure(.init(raw: AXError.cannotComplete.rawValue)) : nil
+            }
+            if fault == "replaced_control" {
+                fixture.onAttributeRead = { element, attribute in
+                    guard attribute == kAXValueAttribute as String,
+                          b.attributeValue(element, kAXDescriptionAttribute as String) as? String == "label",
+                          b.makeAXRuntime().children(strip).contains(where: { CFEqual($0, element) }) else { return }
+                    fixture.typeLabelReplacementCount += 1
+                    let replacement = b.element(2_919_800 + fixture.typeLabelReplacementCount)
+                    b.setRole(replacement, kAXStaticTextRole as String)
+                    b.setAttribute(replacement, kAXDescriptionAttribute as String, "label")
+                    b.setAttribute(replacement, kAXValueAttribute as String, "Aux 1")
+                    b.setChildren(replacement, [])
+                    b.setChildren(strip, b.makeAXRuntime().children(strip).map { CFEqual($0, element) ? replacement : $0 })
+                }
+            }
+            let inspected = try await inspectTypeLabels(fixture)
+            let nodes = try #require((inspected.body["routing"] as? [String: Any])?["nodes"] as? [[String: Any]])
+            #expect(!nodes.contains { $0["kind"] as? String == "aux" || $0["observed_type_label"] != nil })
+            if fault == "replaced_control" { #expect(fixture.typeLabelReplacementCount > 0) }
+            #expect(fixture.mutations.isEmpty)
+        }
+    }
+
+    @Test(arguments: ["decoded", "foreign_owner"])
+    func typeLabelDisplayCannotImportNativeAuxCustody(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let fixture = try Fixture(aux: true)
+            _ = addTypeLabel(fixture, strip: fixture.strips[2], id: 2_919_130, label: "Aux 1")
+            let inspected = try await inspectTypeLabels(fixture)
+            let native = await inspected.cache.getChannelStrips()
+            var changed = fault == "decoded"
+                ? try JSONDecoder().decode([ChannelStripState].self, from: JSONEncoder().encode(native)) : native
+            if fault == "decoded" {
+                for index in changed.indices { changed[index].physicalBinding = native[index].physicalBinding }
+                #expect(changed[2].typeLabelObservation?.label == "Aux 1")
+                #expect(changed[2].typeLabelBinding == nil)
+            } else {
+                changed[0].typeLabelObservation = changed[2].typeLabelObservation
+                changed[0].typeLabelBinding = changed[2].typeLabelBinding
+                changed[2].typeLabelObservation = nil; changed[2].typeLabelBinding = nil
+            }
+            await inspected.cache.updateChannelStrips(changed)
+            let historical = try await inputGraph(inspected.cache, inspected.registry, inspected.router)
+            #expect(historical.graph.nodes.allSatisfy { $0.kind == .physicalStrip && $0.observedTypeLabel == nil })
+            #expect(fixture.mutations.isEmpty)
+        }
     }
 
     @Test(arguments: ["fresh", "mixer_first", "tracks_first", "aux_only"])
