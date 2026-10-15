@@ -78,12 +78,15 @@ extension AXLogicProElements {
         let bypass: AXUIElement
         let sourcePath: [AXUIElement]
         let parentProxy: AXUIElement
+        /// The already-sampled sibling knob, never selected by a displayed slot number.
+        var level: AXUIElement? = nil
 
         func matches(_ other: Self) -> Bool {
             ordinal == other.ordinal && CFEqual(group, other.group) && CFEqual(list, other.list)
                 && CFEqual(bypass, other.bypass) && CFEqual(parentProxy, other.parentProxy)
                 && sourcePath.count == other.sourcePath.count
                 && zip(sourcePath, other.sourcePath).allSatisfy { CFEqual($0, $1) }
+                && ((level == nil && other.level == nil) || (level != nil && other.level != nil && CFEqual(level!, other.level!)))
         }
     }
 
@@ -1232,7 +1235,7 @@ extension AXLogicProElements {
             recognizedControls.append(contentsOf: controls)
             return true
         }
-        func retainMenuControl(at index: Int, ordinal: Int, bypass: AXUIElement) {
+        func retainMenuControl(at index: Int, ordinal: Int, bypass: AXUIElement, level: AXUIElement? = nil) {
             guard observingAssignedGroup != nil, let path = sourcePath(at: index),
                   let children = childrenIfRead(walk[index].element, runtime: runtime), children.count == 2,
                   CFEqual(children[0], bypass),
@@ -1240,7 +1243,7 @@ extension AXLogicProElements {
                   let peers = childrenIfRead(proxy, runtime: runtime),
                   peers.filter({ CFEqual($0, walk[index].element) }).count == 1 else { return }
             assignedControls.append(AssignedSendMenuControl(ordinal: ordinal, group: walk[index].element,
-                list: children[1], bypass: bypass, sourcePath: path, parentProxy: proxy))
+                list: children[1], bypass: bypass, sourcePath: path, parentProxy: proxy, level: level))
         }
         func sendAnchor(before index: Int) -> Bool? {
             var previous = index - 1
@@ -1335,7 +1338,7 @@ extension AXLogicProElements {
                     var observation = occupiedSendSlot(ordinal: observations.count, knob: walk[sibling].element, runtime: runtime)
                     observation.bypassed = bypassControl.flatMap { observedSendBypass(group: visit.element, control: $0, runtime: runtime) }
                     observation.destinationDisplay = bypassControl.flatMap { observedSendDisplay(group: visit.element, control: $0, sourcePath: sourcePath(at: index), originalParent: originalParent, runtime: runtime) }
-                    if let bypassControl { retainMenuControl(at: index, ordinal: observations.count, bypass: bypassControl) }
+                    if let bypassControl { retainMenuControl(at: index, ordinal: observations.count, bypass: bypassControl, level: walk[sibling].element) }
                     observations.append(observation)
                 }
                 continue

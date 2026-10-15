@@ -337,6 +337,19 @@ struct Issue965HeldSelectionAssociationTests {
         var routingBypassFinalCapabilityRead = false
         var routingBypassPendingValue: Bool?
         var routingActionNames: (@Sendable (AXUIElement) -> Result<[String], AXHelpers.AXStatusError>?)?
+        var routingLevelMouse: AXMouseHelper.Runtime?
+        var routingLevelHit: AXUIElement?
+        var routingLevelHitEffect: (@Sendable () -> Void)?
+        var routingLevelClicks: [Int64] = []
+        var routingLevelWrites: [String] = []
+        var routingLevelCommits = 0
+        var routingLevelCommitPending = false
+        var routingLevelCancelled = false
+        var routingLevelWaits = 0
+        var routingLevelPendingFieldReads = 0
+        var routingLevelReturnTransitions = 0
+        var routingLevelTransientSourceLost = false
+        var routingLevelTransientGateLost = false
         var routingChildrenRead: (@Sendable (AXUIElement) -> Void)?
         var routingRemovalPublications = 0
         var routingRemovedSend: AccessibilityChannel.RemovedSendObservation?
@@ -646,6 +659,10 @@ struct Issue965HeldSelectionAssociationTests {
                 executeAppleScript: { _ in Issue.record("no scripts"); return .error("forbidden") })
             let ax: AXHelpers.Runtime
             if useBulkReads {
+                let levelHit: (@Sendable (AXUIElement, CGPoint) -> Result<AXUIElement?, AXHelpers.AXStatusError>)?
+                if routingLevelMouse != nil {
+                    levelHit = { [self] _, _ in routingLevelHitEffect?(); return .success(routingLevelHit) }
+                } else { levelHit = base.ax.elementAtPosition }
                 ax = AXHelpers.Runtime(axApp: base.ax.axApp, attributeValue: base.ax.attributeValue,
                     attributeIsSettable: base.ax.attributeIsSettable, setAttributeValue: base.ax.setAttributeValue,
                     children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
@@ -653,7 +670,8 @@ struct Issue965HeldSelectionAssociationTests {
                         routingActionNames?(element) ?? AXHelpers.getActionNamesResult(element, runtime: base.ax)
                     },
                     childrenResult: base.ax.childrenResult, attributeValueResult: base.ax.attributeValueResult,
-                    performActionResult: base.ax.performActionResult, elementAtPosition: base.ax.elementAtPosition,
+                    performActionResult: base.ax.performActionResult,
+                    elementAtPosition: levelHit,
                     attributeValuesResult: { [self] element, attributes in
                         batchReadCalls += 1
                         activeBulkAttributes = attributes
@@ -786,7 +804,12 @@ struct Issue965HeldSelectionAssociationTests {
         }
 
         func channel() -> AccessibilityChannel {
-            AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
+            if let routingLevelMouse {
+                return AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
+                isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic(),
+                observationMouseRuntime: routingLevelMouse, canPostEvents: { true }))
+            }
+            return AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
                 isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic(),
                 trackRenameMouseRuntime: routingFocusMouse ?? (routingMenuRename ? .init(
                     postMouseEvent: { _, _, _ in Issue.record("No rename mouse fallback"); return false },
@@ -1950,6 +1973,55 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, bypassMode: "roundtrip")
     }
 
+    @Test func registeredSendLevelUsesItsOwnedSemanticEditor() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "roundtrip")
+    }
+
+    @Test func registeredSendLevelCannotAdoptAPreexistingNumericWindow() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "preexisting_editor")
+    }
+
+    @Test func registeredSendLevelFinalHitCannotAuthorizeAnotherDocument() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "late_hit_document")
+    }
+
+    @Test(arguments: ["boolean_raw", "wrong_expected", "unsupported_level", "wrong_target", "wrong_project", "extra_param",
+                      "scalar_level", "expired_deadline", "lost_gate", "wrong_hit", "editor_foreign", "editor_window",
+                      "editor_value", "late_play", "late_record", "late_document", "changed_raw", "replaced_control"])
+    func registeredSendLevelRefusesUnownedOrUnqualifiedEditor(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: fault)
+    }
+
+    @Test(arguments: ["noop", "minus95"])
+    func registeredSendLevelKeepsQualifiedNormalizationAndNoop(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
+    }
+
+    @Test(arguments: ["setter_ack_only", "commit_ack_only", "source_lost_after", "route_changed_after", "no_editor", "incomplete_up"])
+    func registeredSendLevelDoesNotInventReadbackOrInverse(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
+    }
+
+    @Test(arguments: ["deferred", "deferred_minus95"])
+    func registeredSendLevelWaitsForOnlyItsExactDeferredEditor(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
+    }
+
+    @Test(arguments: ["deferred_foreign", "deferred_window", "deferred_source", "deferred_cancel", "deferred_never"])
+    func registeredSendLevelDeferredCommitKeepsOwnershipAndBounds(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
+    }
+
+    @Test(arguments: ["return_window", "return_window_minus95"])
+    func registeredSendLevelAcceptsOnlyItsObservedWindowReturn(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
+    }
+
+    @Test(arguments: ["return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate"])
+    func registeredSendLevelWindowReturnCannotReviveLostCustody(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
+    }
+
     @Test(arguments: [true, false])
     func registeredSendBypassObservesDelayedOwnedBitLanding(desired: Bool) async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true,
@@ -2111,7 +2183,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                readRestored: String? = nil, sagaMode: String? = nil,
                                                inspectSendWitness: String? = nil,
                                                noOpDestination: OutputAssignment? = nil,
-                                               bypassMode: String? = nil) async throws {
+                                               bypassMode: String? = nil, levelMode: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -2149,6 +2221,95 @@ struct Issue965HeldSelectionAssociationTests {
                 return [anchor, group, level]
             }
             let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
+            if levelMode != nil {
+                f.useBulkReads = true
+                let knob = b.element(1_965_2624), editor = b.element(1_965_2800), field = b.element(1_965_2801)
+                b.setFrame(knob, x: 20, y: 30, width: 40, height: 20)
+                b.setAttribute(knob, kAXValueDescriptionAttribute as String, "-∞")
+                b.setRole(editor, kAXWindowRole as String); b.setChildren(editor, [field])
+                b.setRole(field, kAXTextFieldRole as String); b.setChildren(field, [])
+                b.setAttribute(field, kAXWindowAttribute as String, editor)
+                b.setAttributeSettable(field, kAXValueAttribute as String, true)
+                b.setAttribute(field, kAXValueAttribute as String, "-∞")
+                b.setAttribute(editor, kAXTitleAttribute as String, "")
+                f.routingLevelHit = knob
+                f.routingSetter = { element, attribute, value in
+                    guard CFEqual(element, field), attribute == kAXValueAttribute as String else { return nil }
+                    guard let text = value as? String else { Issue.record("No raw knob setter"); return false }
+                    f.routingLevelWrites.append(text)
+                    if levelMode != "setter_ack_only" { b.setAttribute(field, attribute, text) }
+                    return true
+                }
+                @Sendable func finishLevelCommit() {
+                    let text = b.attributeValue(field, kAXValueAttribute as String) as? String ?? ""
+                    if levelMode != "commit_ack_only" {
+                        b.setAttribute(knob, kAXValueAttribute as String, text == "-∞" ? 0 : 123456)
+                        b.setAttribute(knob, kAXValueDescriptionAttribute as String, text)
+                    }
+                    if levelMode == "source_lost_after" { b.setChildren(f.mixer, [f.strips[0]]) }
+                    if levelMode == "route_changed_after" {
+                        b.setAttribute(echo, kAXTitleAttribute as String, "Output 3-4")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                    }
+                    b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window])
+                    b.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.window)
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                    f.routingLevelCommitPending = false
+                }
+                f.routingLevelMouse = .init(postMouseEvent: { type, _, count in
+                    guard type == .leftMouseDown || type == .leftMouseUp else { Issue.record("Only paired click"); return false }
+                    if type == .leftMouseUp {
+                        f.routingLevelClicks.append(count)
+                        if levelMode == "incomplete_up" { return false }
+                        if count == 2, levelMode != "no_editor" {
+                            let display = b.attributeValue(knob, kAXValueDescriptionAttribute as String) as? String ?? ""
+                            b.setAttribute(field, kAXValueAttribute as String, display == "-6.0" ? "-6" : display == "-95.0" ? "-95" : display)
+                            b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, editor])
+                            b.setAttribute(f.app, kAXFocusedWindowAttribute as String, editor)
+                            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, field)
+                            switch levelMode {
+                            case "editor_foreign":
+                                f.routingLateScopeInjected = true
+                                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, b.element(1_965_2899))
+                            case "editor_window":
+                                f.routingLateScopeInjected = true
+                                b.setAttribute(field, kAXWindowAttribute as String, f.window)
+                            case "editor_value":
+                                f.routingLateScopeInjected = true
+                                b.setAttribute(field, kAXValueAttribute as String, "-95")
+                            default: break
+                            }
+                        }
+                    }
+                    return true
+                }, postKeyEvent: { key in
+                    guard key == 36 else { Issue.record("No fallback key"); return false }
+                    f.routingLevelCommits += 1
+                    if levelMode?.hasPrefix("deferred") == true || levelMode?.hasPrefix("return_window") == true {
+                        f.routingLevelCommitPending = true
+                        f.routingLevelPendingFieldReads = 0
+                        switch levelMode {
+                        case "deferred_foreign":
+                            let foreign = b.element(1_965_2896)
+                            b.setRole(foreign, kAXTextFieldRole as String)
+                            b.setAttribute(foreign, kAXWindowAttribute as String, editor)
+                            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                        case "deferred_window": b.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.window)
+                        case "deferred_source": b.setChildren(f.mixer, [f.strips[0]])
+                        case "deferred_cancel": f.routingLevelCancelled = true
+                        default: break
+                        }
+                        return true // A real Return ACK need not synchronously close its own editor.
+                    }
+                    finishLevelCommit()
+                    return true
+                }, postUnicodeScalar: { _ in Issue.record("No Unicode typing fallback"); return false }, sleepMicros: { delay in
+                    guard delay == 25_000, f.routingLevelCommitPending else { return }
+                    f.routingLevelWaits += 1
+                    if levelMode == "deferred" || levelMode == "deferred_minus95" { finishLevelCommit() }
+                })
+            }
             if bypassMode != nil {
                 f.useBulkReads = true
                 b.setActionNames(b.element(1_965_2622), [kAXPressAction as String])
@@ -2536,6 +2697,175 @@ struct Issue965HeldSelectionAssociationTests {
                 poller: StatePoller(axChannel: f.channel(), cache: cache,
                     runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
                 dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate, liveTrackNames: { [:] })
+            if levelMode != nil {
+                let set = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_level_verified"))
+                let knob = b.element(1_965_2624), field = b.element(1_965_2801)
+                let minus95 = ["minus95", "deferred_minus95", "return_window_minus95"].contains(levelMode ?? "")
+                let desired = minus95 ? "-95.0" : "-6.0"
+                if levelMode == "preexisting_editor" {
+                    b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, b.element(1_965_2800)])
+                }
+                var prepared: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
+                    "level_db": .string(desired), "expected_current": .string("-∞")]
+                switch levelMode {
+                case "boolean_raw": b.setAttribute(knob, kAXValueAttribute as String, true)
+                case "wrong_expected": prepared["expected_current"] = .string("-95")
+                case "unsupported_level": prepared["level_db"] = .string("-12")
+                case "wrong_target": prepared["target_ref"] = .string(try #require(capture.issued?.byRow[0]).rawValue)
+                case "wrong_project": prepared["project_ref"] = .string("prj_foreign")
+                case "extra_param": prepared["value"] = .double(0.5)
+                case "scalar_level": prepared["level_db"] = .double(-6)
+                case "noop": prepared["level_db"] = .string("-∞")
+                case "wrong_hit": f.routingLevelHit = f.strips[0]
+                default: break
+                }
+                if levelMode == "late_hit_document" {
+                    f.routingLevelHitEffect = {
+                        f.routingLateScopeInjected = true
+                        b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                }
+                let priorRead = f.routingRead
+                @Sendable func returnedWindow() {
+                    let text = b.attributeValue(field, kAXValueAttribute as String) as? String ?? ""
+                    b.setAttribute(knob, kAXValueAttribute as String, text == "-∞" ? 0 : 123456)
+                    b.setAttribute(knob, kAXValueDescriptionAttribute as String, text)
+                    b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window])
+                    b.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.window)
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                    f.routingLevelReturnTransitions += 1
+                    f.routingLevelCommitPending = false
+                    if levelMode == "return_window_foreign_focus" {
+                        let foreign = b.element(1_965_2895)
+                        b.setRole(foreign, kAXTextFieldRole as String)
+                        b.setAttribute(foreign, kAXWindowAttribute as String, f.window)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                    }
+                    if levelMode == "return_window_foreign_window" {
+                        b.setAttribute(f.app, kAXFocusedWindowAttribute as String, b.element(1_965_2894))
+                    }
+                }
+                let priorResult = f.routingReadResult
+                f.routingReadResult = { element, attribute in
+                    if levelMode == "return_window_source", f.routingLevelCommitPending,
+                       f.routingLevelPendingFieldReads > 0, CFEqual(element, f.window),
+                       attribute == kAXDocumentAttribute as String, !f.routingLevelTransientSourceLost {
+                        returnedWindow()
+                        f.routingLevelTransientSourceLost = true
+                        return .success("file:///tmp/Foreign.logicx" as NSString)
+                        // Subsequent source reads are healthy: a failed owner must still stay lost.
+                    }
+                    return priorResult?(element, attribute)
+                }
+                f.routingRead = { element, attribute in
+                    priorRead?(element, attribute)
+                    if levelMode?.hasPrefix("return_window") == true, f.routingLevelCommitPending {
+                        if CFEqual(element, field), attribute == kAXValueAttribute as String {
+                            f.routingLevelPendingFieldReads += 1
+                        }
+                        if !["return_window_source", "return_window_gate"].contains(levelMode ?? ""),
+                           f.routingLevelPendingFieldReads > 0, CFEqual(element, f.app),
+                           attribute == kAXFocusedWindowAttribute as String { returnedWindow() }
+                    }
+                    guard ["late_play", "late_record", "late_document", "changed_raw", "replaced_control"].contains(levelMode ?? ""),
+                          CFEqual(element, field), attribute == kAXValueAttribute as String,
+                          f.routingLevelWrites.isEmpty, !f.routingLateScopeInjected else { return }
+                    f.routingLateScopeInjected = true
+                    switch levelMode {
+                    case "late_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "changed_raw": b.setAttribute(knob, kAXValueAttribute as String, 99)
+                    case "replaced_control":
+                        let replacementKnob = b.element(1_965_2898)
+                        b.setRole(replacementKnob, kAXSliderRole as String)
+                        b.setAttribute(replacementKnob, kAXHelpAttribute as String, "Send Level knob. Set level.")
+                        b.setAttribute(replacementKnob, kAXValueAttribute as String, 0)
+                        b.setAttribute(replacementKnob, kAXValueDescriptionAttribute as String, "-∞")
+                        b.setChildren(replacementKnob, [])
+                        b.setChildren(f.strips[1], (b.makeAXRuntime().children(f.strips[1])).map { CFEqual($0, knob) ? replacementKnob : $0 })
+                    default: b.setAttribute(b.element(levelMode == "late_play" ? 1_965_721 : 1_965_722), kAXValueAttribute as String, 1)
+                    }
+                }
+                let params = prepared
+                let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_level_verified",
+                    commandParams: params, mutationGate: gate) {
+                    if ["expired_deadline", "lost_gate", "deferred_cancel", "return_window_gate"].contains(levelMode ?? "") {
+                        let parent = OperationTraceContext.current
+                        let child = OperationTraceContext(mutationGateAcquired: parent?.mutationGateAcquired ?? false,
+                            ownsGate: {
+                                if levelMode == "return_window_gate", f.routingLevelCommitPending,
+                                   f.routingLevelPendingFieldReads > 0, !f.routingLevelTransientGateLost {
+                                    returnedWindow(); f.routingLevelTransientGateLost = true; return false
+                                }
+                                return levelMode == "lost_gate" ? false : parent?.ownsGate() == true
+                            },
+                            deadline: levelMode == "expired_deadline" ? ContinuousClock.now : parent?.deadline,
+                            cancellationRequested: { f.routingLevelCancelled || parent?.cancellationRequested() == true })
+                        return await OperationTraceContext.$current.withValue(child) { await set(dependencies, params) }
+                    }
+                    return await set(dependencies, params)
+                }
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if !["roundtrip", "minus95", "noop", "deferred", "deferred_minus95", "return_window", "return_window_minus95"].contains(levelMode ?? "") {
+                    if ["setter_ack_only", "commit_ack_only", "source_lost_after", "route_changed_after",
+                        "deferred_foreign", "deferred_window", "deferred_source", "deferred_cancel", "deferred_never",
+                        "return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate"].contains(levelMode ?? "") {
+                        #expect(body["state"] as? String == "B", "\(sharedToolText(result))")
+                        let attempted = try #require(body["write_attempted"] as? Bool)
+                        #expect(attempted)
+                        #expect(f.routingLevelWrites.count == 1 && f.routingLevelCommits <= 1)
+                        #expect(f.routingDestinationPresses == 0)
+                        if levelMode?.hasPrefix("deferred") == true {
+                            #expect(f.routingLevelCommits == 1 && f.routingLevelCommitPending)
+                            if levelMode == "deferred_never" { #expect(f.routingLevelWaits <= 2) }
+                            else { #expect(f.routingLevelWaits == 0) }
+                        }
+                        if levelMode?.hasPrefix("return_window") == true {
+                            #expect(f.routingLevelReturnTransitions == 1 && f.routingLevelWaits == 0)
+                            if levelMode == "return_window_source" { #expect(f.routingLevelTransientSourceLost) }
+                            if levelMode == "return_window_gate" { #expect(f.routingLevelTransientGateLost) }
+                        }
+                        return
+                    }
+                    #expect(body["state"] as? String == "C", "\(sharedToolText(result))")
+                    #expect(f.routingLevelWrites.isEmpty && f.routingLevelCommits == 0)
+                    if levelMode == "preexisting_editor" { #expect(f.routingLevelClicks == [1, 2]) }
+                    if levelMode == "late_hit_document" {
+                        #expect(f.routingLateScopeInjected && f.routingLevelClicks.isEmpty)
+                    }
+                    if ["late_play", "late_record", "late_document", "changed_raw", "replaced_control", "editor_foreign", "editor_window", "editor_value"].contains(levelMode ?? "") {
+                        #expect(f.routingLateScopeInjected, "Reach the actual owned editor boundary")
+                    }
+                    return
+                }
+                #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
+                guard body["state"] as? String == "A" else {
+                    if levelMode?.hasPrefix("return_window") == true {
+                        #expect(f.routingLevelCommits == 1 && f.routingLevelReturnTransitions == 1 && !f.routingLevelCommitPending)
+                    } else {
+                        #expect(f.routingLevelCommits == 1 && f.routingLevelCommitPending,
+                            "The real registered Return must reach the deferred owned editor before refusing its after-state")
+                    }
+                    return // Never send a dependent inverse after an unverified forward.
+                }
+                if levelMode == "noop" {
+                    #expect(f.routingLevelWrites.isEmpty && f.routingLevelClicks.isEmpty && f.routingLevelCommits == 0)
+                    return
+                }
+                #expect(f.routingLevelWrites == [desired] && f.routingLevelClicks == [1, 2] && f.routingLevelCommits == 1)
+                #expect(f.routingDestinationPresses == 0 && f.routingBypassPresses == 0)
+                let inverse = params.merging(["level_db": Value.string("-∞"), "expected_current": .string(minus95 ? "-95" : "-6")]) { _, new in new }
+                let restored = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_level_verified",
+                    commandParams: inverse, mutationGate: gate) { await set(dependencies, inverse) }
+                #expect(sharedJSONObject(sharedToolText(restored))?["state"] as? String == "A", "\(sharedToolText(restored))")
+                #expect(f.routingLevelWrites == [desired, "-∞"] && f.routingLevelCommits == 2)
+                if levelMode == "deferred" || levelMode == "deferred_minus95" {
+                    #expect(f.routingLevelWaits == 2 && !f.routingLevelCommitPending)
+                }
+                if levelMode?.hasPrefix("return_window") == true {
+                    #expect(f.routingLevelReturnTransitions == 2 && f.routingLevelWaits == 0)
+                }
+                return
+            }
             if bypassMode != nil {
                 let get = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "get_send_bypass_verified"))
                 let set = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_bypass_verified"))
