@@ -632,13 +632,17 @@ struct Issue291AssignedSendMenuTests {
     }
 
     @Test("Registered inspection publishes checked physical and host Stereo output endpoints",
-          arguments: ["physical", "stereo", "missing_checked", "conflicting_checked"])
+          arguments: ["physical", "stereo", "send_physical", "send_stereo", "missing_checked", "conflicting_checked"])
     func registeredCheckedPhysicalOutputReachesItsGraphEndpoint(_ destination: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
-            let f = try Issue291PhysicalStripReferenceTests.Fixture()
+            let isSend = destination.hasPrefix("send_")
+            let prepared = isSend ? try prepare() : nil
+            let f: Issue291PhysicalStripReferenceTests.Fixture
+            if let prepared { f = prepared.f } else { f = try .init() }
             defer { try? FileManager.default.removeItem(at: f.bundle) }
-            let title = destination == "physical" ? "Output 3-4" : "Stereo Output"
-            let assignment: OutputAssignment = destination == "physical" ? .physical(3, 4) : .stereoOutput
+            let isPhysical = destination == "physical" || destination == "send_physical"
+            let title = isPhysical ? "Output 3-4" : "Stereo Output"
+            let assignment: OutputAssignment = isPhysical ? .physical(3, 4) : .stereoOutput
             let echo = f.b.element(291_990)
             f.b.setRole(echo, kAXMenuItemRole as String)
             f.b.setAttribute(echo, kAXTitleAttribute as String, title)
@@ -646,7 +650,7 @@ struct Issue291AssignedSendMenuTests {
             f.b.setChildren(echo, [])
             f.b.setAttribute(f.pair, kAXTitleAttribute as String, title)
             f.b.setAttribute(f.pair, "AXMenuItemMarkChar", "✓")
-            f.b.setChildren(f.root, [echo] + f.b.makeAXRuntime().children(f.root))
+            f.b.setChildren(f.root, [echo, f.b.element(2_910_202)])
             if destination == "conflicting_checked" {
                 let competitor = f.b.element(291_991)
                 f.b.setRole(competitor, kAXMenuItemRole as String)
@@ -657,7 +661,9 @@ struct Issue291AssignedSendMenuTests {
             }
             for output in f.outputs {
                 // A source caption is deliberately not the checked destination's identity.
-                f.b.setAttribute(output, kAXDescriptionAttribute as String, "Bus 256")
+                if !isSend || !CFEqual(output, f.outputs[0]) {
+                    f.b.setAttribute(output, kAXDescriptionAttribute as String, "Bus 256")
+                }
                 f.b.setActionNames(output, [kAXPressAction as String])
             }
             let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter(), channel = f.channel()
@@ -678,8 +684,9 @@ struct Issue291AssignedSendMenuTests {
             let snapshot = try #require(body["snapshot_id"] as? String)
             let retained = try #require(await cache.retainedInspection(id: snapshot))
             let owner = try #require(retained.capture.channelStrips.first?.physicalBinding)
+            let ordinal: Int? = isSend ? 1 : nil
             let checked = try #require(retained.capture.freshPopulation?.checkedOutputs.filter {
-                $0.source.matches(owner) && $0.sendOrdinal == nil
+                $0.source.matches(owner) && $0.sendOrdinal == ordinal
             })
             let source = try #require(retained.capture.mixerReference(at: 0))
             let graph = try #require(body["routing"] as? [String: Any])
@@ -694,11 +701,16 @@ struct Issue291AssignedSendMenuTests {
             }
             #expect(checked.count == 1 && checked.first?.assignment == assignment,
                 "Reach the actual registered native checked-menu producer before testing its consumer")
-            let endpointID = destination == "physical" ? "output_physical_3_4" : "output_stereo"
-            let outgoing = edges.filter { $0["source"] as? String == source.rawValue && $0["kind"] as? String == "mainOutput" }
+            let endpointID = isPhysical ? "output_physical_3_4" : "output_stereo"
+            let outgoing = edges.filter { $0["source"] as? String == source.rawValue
+                && $0["kind"] as? String == (isSend ? "send" : "mainOutput") }
             #expect(outgoing.count == 1)
             #expect(outgoing.first?["destination"] as? String == endpointID)
-            #expect(outgoing.first?["provenance"] as? String == "axOutputMenuCheckmark")
+            #expect(outgoing.first?["provenance"] as? String == (isSend ? "axSendMenuCheckmark" : "axOutputMenuCheckmark"))
+            if isSend {
+                #expect(outgoing.first?["observedSendOrdinal"] as? Int == 1)
+                #expect(outgoing.first?["send"] == nil || outgoing.first?["send"] is NSNull)
+            }
             let endpoint = try #require(nodes.first { $0["id"] as? String == endpointID })
             #expect(endpoint["kind"] as? String == "output")
             #expect(endpoint["displayName"] as? String == assignment.token)
@@ -706,8 +718,8 @@ struct Issue291AssignedSendMenuTests {
             #expect(nodes.filter { $0["kind"] as? String == "output" }.count == 1,
                 "Two separately held sources share one typed sink, not two invented output identities")
             let mainOutputs = edges.filter { $0["kind"] as? String == "mainOutput" }
-            #expect(mainOutputs.count == 2)
-            #expect(Set(mainOutputs.compactMap { $0["source"] as? String }).count == 2)
+            #expect(mainOutputs.count == (isSend ? 1 : 2))
+            #expect(Set(mainOutputs.compactMap { $0["source"] as? String }).count == (isSend ? 1 : 2))
             #expect(!nodes.contains { $0["id"] as? String == "output_physical_1_2" })
             #expect(graph["coverage"] as? String == "partial")
             #expect(f.mutations.count == 4)
@@ -917,15 +929,17 @@ struct Issue291AssignedSendMenuTests {
             let graph = fault == "moved" ? RoutingGraphPublication.publish(capture: capture, project: .moved)
                 : SessionPopulationObservation.routingGraph(capture: capture)
             let edges = graph.edges.filter { $0.source == source.rawValue && $0.kind == .send }
-            if fault == "held" {
+            if ["held", "stereo", "physical"].contains(fault) {
                 #expect(edges.count == 1)
                 let edge = try #require(edges.first)
-                #expect(edge.destination == "bus_1")
+                let endpoint = fault == "stereo" ? "output_stereo" : fault == "physical" ? "output_physical_3_4" : "bus_1"
+                #expect(edge.destination == endpoint)
                 #expect(edge.send == nil)
                 #expect(edge.observedSendOrdinal == 1)
                 #expect(edge.provenance.rawValue == "axSendMenuCheckmark")
-                #expect(graph.nodes.first { $0.id == "bus_1" }?.targetRef == nil)
+                #expect(graph.nodes.first { $0.id == endpoint }?.targetRef == nil)
                 #expect(graph.coverage.sends.state == .partial)
+                #expect(routingPath(from: source, to: endpoint, in: graph) == .unverified)
             } else { #expect(edges.isEmpty) }
             if fault != "moved" {
                 let report = SessionPopulationObservation.build(request: .init(domains: [.routing, .strips]), capture: capture)

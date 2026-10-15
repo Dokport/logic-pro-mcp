@@ -28,7 +28,7 @@ enum RoutingProjectBinding: Sendable {
 /// track association, bus/port identity or edge is derived from their ordinal or labels.
 /// Request-held, checked output menus can additionally publish physical-source bus or output
 /// endpoint edges. A host Stereo Output endpoint is not a hardware 1-2 port assignment.
-/// Checked send menus publish physical-source bus edges;
+/// Checked send menus can publish those same endpoints from their exact physical source;
 /// a send retains its census ordinal but no physical write-slot payload. Neither establishes
 /// receiving-strip identity or complete graph coverage.
 /// Checked input menus bind a bus to its request-held physical receiver only;
@@ -181,38 +181,22 @@ enum RoutingGraphPublication {
                         let checked = capture.freshPopulation?.checkedOutputs.filter {
                             $0.source.matches(owner) && $0.sendOrdinal == nil
                         } ?? []
-                        if checked.count == 1 {
-                            let assignment = checked[0].assignment
-                            let endpoint: (id: String, kind: RoutingNodeKind, name: String, bus: Int?)?
-                            switch assignment {
-                            case .bus(let number) where OutputAssignment.busNumbers.contains(number):
-                                endpoint = ("bus_\(number)", .bus, "Bus \(number)", number)
-                            case .physical(let first, let second) where
-                                OutputAssignment.make(kind: "physical", number: nil, ports: [first, second]).value == assignment:
-                                endpoint = ("output_physical_\(first)_\(second)", .output, assignment.token, nil)
-                            case .stereoOutput:
-                                endpoint = ("output_stereo", .output, assignment.token, nil)
-                            default: endpoint = nil
-                            }
-                            if let endpoint {
-                                nodesByID[endpoint.id] = RoutingNode(id: endpoint.id, kind: endpoint.kind,
-                                    displayName: endpoint.name, busNumber: endpoint.bus, targetRef: nil)
-                                edges.append(RoutingEdge(kind: .mainOutput, source: reference.rawValue,
-                                    destination: endpoint.id, send: nil, provenance: .axOutputMenuCheckmark))
-                            }
+                        if checked.count == 1, let endpoint = checkedEndpoint(checked[0].assignment) {
+                            nodesByID[endpoint.id] = RoutingNode(id: endpoint.id, kind: endpoint.kind,
+                                displayName: endpoint.name, busNumber: endpoint.bus, targetRef: nil)
+                            edges.append(RoutingEdge(kind: .mainOutput, source: reference.rawValue,
+                                destination: endpoint.id, send: nil, provenance: .axOutputMenuCheckmark))
                         }
                         for slot in strip.sendSlots ?? [] where slot.state == .occupiedUnknownDestination && slot.ordinal >= 0 {
                             guard strip.sendSlots?.filter({ $0.ordinal == slot.ordinal }).count == 1 else { continue }
                             let sends = capture.freshPopulation?.checkedOutputs.filter {
                                 $0.source.matches(owner) && $0.sendOrdinal == slot.ordinal
                             } ?? []
-                            guard sends.count == 1, case .bus(let number) = sends[0].assignment,
-                                  OutputAssignment.busNumbers.contains(number) else { continue }
-                            let busID = "bus_\(number)"
-                            nodesByID[busID] = RoutingNode(id: busID, kind: .bus,
-                                displayName: "Bus \(number)", busNumber: number, targetRef: nil)
+                            guard sends.count == 1, let endpoint = checkedEndpoint(sends[0].assignment) else { continue }
+                            nodesByID[endpoint.id] = RoutingNode(id: endpoint.id, kind: endpoint.kind,
+                                displayName: endpoint.name, busNumber: endpoint.bus, targetRef: nil)
                             edges.append(RoutingEdge(kind: .send, source: reference.rawValue,
-                                destination: busID, send: nil, provenance: .axSendMenuCheckmark,
+                                destination: endpoint.id, send: nil, provenance: .axSendMenuCheckmark,
                                 observedSendOrdinal: slot.ordinal))
                         }
                     }
@@ -295,7 +279,8 @@ enum RoutingGraphPublication {
                 + ["only request-held main outputs have checked-menu evidence"])
             : mainOutput.coverage
         let checkedOutputEndpointObserved = edges.contains {
-            $0.provenance == .axOutputMenuCheckmark && nodesByID[$0.destination]?.kind == .output
+            ($0.provenance == .axOutputMenuCheckmark || $0.provenance == .axSendMenuCheckmark)
+                && nodesByID[$0.destination]?.kind == .output
         }
         let physicalOutputCoverage = checkedOutputEndpointObserved
             ? RoutingDomainCoverage(state: .partial, reasons: physicalOutput.coverage.reasons.filter {
@@ -306,7 +291,7 @@ enum RoutingGraphPublication {
         let checkedInputObserved = edges.contains { $0.provenance == .axInputMenuCheckmark }
         let sendCoverage = checkedSendObserved
             ? RoutingDomainCoverage(state: .partial, reasons: sends.coverage.reasons.filter { $0 != sendDestinationReason }
-                + ["only request-held bus sends have checked-menu evidence; source census ordinals do not establish physical write slots or receiving-strip identity"])
+                + ["only request-held sends have checked-menu evidence; source census ordinals do not establish physical write slots or receiving-strip identity"])
             : sends.coverage
         let coverage = RoutingCoverage(
             population: population.coverage,
@@ -339,6 +324,22 @@ enum RoutingGraphPublication {
             snapshotId: snapshotId,
             coverage: coverage
         )
+    }
+
+    /// Endpoint identity comes from the caller's held checked assignment, not its display label.
+    /// This pure projection does not grant a destination reference or physical Send slot authority.
+    private static func checkedEndpoint(_ assignment: OutputAssignment)
+        -> (id: String, kind: RoutingNodeKind, name: String, bus: Int?)? {
+        switch assignment {
+        case .bus(let number) where OutputAssignment.busNumbers.contains(number):
+            return ("bus_\(number)", .bus, "Bus \(number)", number)
+        case .physical(let first, let second) where
+            OutputAssignment.make(kind: "physical", number: nil, ports: [first, second]).value == assignment:
+            return ("output_physical_\(first)_\(second)", .output, assignment.token, nil)
+        case .stereoOutput:
+            return ("output_stereo", .output, assignment.token, nil)
+        default: return nil
+        }
     }
 
     /// Classifies an output-slot description by the canon-derived sets in `AXLocalePolicy`.
