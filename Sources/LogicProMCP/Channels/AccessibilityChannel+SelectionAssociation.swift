@@ -664,11 +664,27 @@ extension AccessibilityChannel {
                         continue
                     }
                     guard let afterViewport = currentViewport() else { return false }
+                    // The viewport read may coincide with our selected child's
+                    // delayed focus landing. Admit only that exact transition,
+                    // not another held strip or an unrelated editor. Unchanged
+                    // preceding focus remains valid when Logic retains it.
+                    guard let settledFocus: AXUIElement = AXHelpers.getAttribute(app,
+                        kAXFocusedUIElementAttribute as String, runtime: logic.ax) else {
+                        lost = true; return false
+                    }
+                    if !CFEqual(settledFocus, focus) {
+                        guard CFEqual(focus, precedingFocus),
+                              let selectedChild, let precedingSelectedChild,
+                              !CFEqual(selectedChild, precedingSelectedChild),
+                              CFEqual(settledFocus, selectedChild) else {
+                            lost = true; return false
+                        }
+                    }
                     // Logic can select our exact held header while retaining its
                     // original Mixer relationship. Retain that owned transition
                     // for inverse cleanup; observe() still requires a different
                     // challenge strip before publishing any association pair.
-                    expectedIndex = index; expectedFocus = focus
+                    expectedIndex = index; expectedFocus = settledFocus
                     expectedSelectedChild = selectedChild
                     expectedViewport = afterViewport
                     return permitsRead() && !stop() && accepted

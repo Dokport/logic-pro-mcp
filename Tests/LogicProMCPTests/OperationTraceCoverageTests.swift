@@ -347,7 +347,7 @@ extension OperationTraceTests {
         let mutatingSpecs = OperationRegistry.specs.filter {
             $0.mutability == Mutability.`mutating`
         }
-        #expect(mutatingSpecs.count == 99)
+        #expect(mutatingSpecs.count == 100)
 
         // A mutating op that refuses BEFORE dispatch starts its trace starts no trace with the
         // coverage params (which carry no consent), so it is asserted to claim NO trace coverage
@@ -851,6 +851,20 @@ private func dispatchOperationTraceCoverageSpec(
             sleep: { _ in }
         )
     case .logicMixer:
+        if spec.id == .mixerSetSendModeVerified {
+            do {
+                let context = try await Issue965HeldSelectionAssociationTests().modeMetadataCapture()
+                var request = params
+                request["target_ref"] = .string(context.reference)
+                return await FeatureFlags.withAdr002TargetRefForTests(true) {
+                    await MixerDispatcher.handle(command: spec.command, params: request,
+                        router: router, cache: context.cache, targetRegistry: context.registry)
+                }
+            } catch {
+                Issue.record("Retained Send mode trace fixture failed: \(error)")
+                return toolInvalidParamsResult("Retained Send mode trace fixture unavailable")
+            }
+        }
         if [.mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendBypassVerified, .mixerSetSendLevelVerified].contains(spec.id) {
             // Issue an actual physical reference from the injected host census,
             // not a track/index stand-in. Keep this snapshot separate from the
@@ -1001,6 +1015,8 @@ private func operationTraceCoverageParams(
         return ["ordinal": .int(1), "bypassed": .bool(true), "expected_current": .bool(false)]
     case .mixerSetSendLevelVerified:
         return ["ordinal": .int(1), "level_db": .string("-6"), "expected_current": .string("-∞")]
+    case .mixerSetSendModeVerified:
+        return ["ordinal": .int(1), "mode": .string("pre_fader"), "expected_current": .string("post_fader")]
     case .mixerSetPluginParam:
         return ["track": .int(0), "insert": .int(0), "param": .int(0), "value": .double(0.5)]
     case .mixerInsertPlugin:

@@ -70,6 +70,9 @@ enum SessionPopulationObservation {
         /// Raw checked nonrouting root titles from that owned menu observation.
         /// Historical preservation evidence, not a typed mode or current write authority.
         var sendNonRoutingChecks: [String]? = nil
+        /// Complete agreeing native mode/pan census from this same owned menu.
+        /// Retained historical data only, not a fresh control or write capability.
+        var sendMode: AccessibilityChannel.SendModeState? = nil
     }
 
     struct HeldDisclosureExposure: Sendable {
@@ -1052,6 +1055,7 @@ enum SessionPopulationObservation {
             var result = slot
             result.checkedDestination = nil; result.destinationSource = nil
             result.checkedNonRoutingTitles = nil; result.nonRoutingSource = nil
+            result.mode = nil; result.independentPan = nil; result.modeSource = nil
             if result.state == .occupiedKnownDestination { result.state = .occupiedUnknownDestination }
             guard qualified, capture.freshPopulation?.stable == true,
                   let owner = strip.physicalBinding,
@@ -1070,6 +1074,11 @@ enum SessionPopulationObservation {
             if let titles = checked.first?.sendNonRoutingChecks, !titles.isEmpty {
                 result.checkedNonRoutingTitles = titles
                 result.nonRoutingSource = "ax_send_menu_checkmark"
+            }
+            if let mode = checked.first?.sendMode {
+                result.mode = mode.mode.rawValue
+                result.independentPan = mode.independentPan
+                result.modeSource = "ax_send_mode_menu_census"
             }
             return result
         }
