@@ -162,6 +162,89 @@ extension AccessibilityChannel {
         AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: source.mixer, runtime: runtime.ax)?.strips
     }
 
+    /// Fresh creation starts from native empty custody, not inverse data. A
+    /// complete singleton after-census supplies its new control/ordinal; none
+    /// of the new send's level, bypass or mode is inferred from the empty slot.
+    static func finishFreshSendCreation(original: AXMixerStripBinding.Binding,
+        population: [AXUIElement], peerSlots: [[SendSlotObservation]], extras initial: [String: Any],
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming) async -> CheckedOutputReading {
+        var extras = initial
+        func uncertain(_ hint: String) -> CheckedOutputReading {
+            extras["hint"] = hint
+            return .init(result: .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras)), assignment: nil)
+        }
+        guard let pair = AXMixerStripBinding.outputAssociation, pair.strip.matches(original),
+              let census = removalCensus(original, runtime: runtime), peerSlots.count == population.count else {
+            return uncertain("Fresh creation lost its original-header or complete physical census.")
+        }
+        let surviving = census.filter { CFEqual($0, original.strip) }.count
+        guard surviving <= 1, surviving == 0 || original.currentIndex(runtime: runtime) != nil else {
+            return uncertain("Fresh creation lost unique original source custody.")
+        }
+        let renewal = await renewSourceThroughOriginalHeader(pair, original: original, runtime: runtime,
+            selectedHeaderRequired: false, sourceDisposition: surviving == 0 ? .retiredOriginal : .survivingOriginal)
+        extras["ui_effects"] = ["navigation_performed": renewal.effects.navigationPerformed,
+            "attempted": renewal.effects.attempted, "changed": renewal.effects.changed,
+            "restoration": renewal.effects.restoration, "reason": renewal.effects.reason as Any? ?? NSNull()]
+        guard let source = renewal.source, source.permits(runtime: runtime) else {
+            return uncertain("Fresh creation failed exact original-header source renewal or restoration.")
+        }
+        func occupied() -> (AXLogicProElements.AssignedSendMenuControl, [SendSlotObservation])? {
+            var controls: [AXLogicProElements.AssignedSendMenuControl] = []
+            guard let slots = AXLogicProElements.sendSlotObservations(in: source.pair.strip.strip,
+                runtime: runtime.ax, observingAssignedGroup: { controls.append($0) }), slots.count == 2,
+                  slots.filter({ $0.state == .observedEmpty }).count == 1, controls.count == 1,
+                  let slot = slots.first(where: { $0.state == .occupiedUnknownDestination }),
+                  slot.ordinal == controls[0].ordinal, slot.bypassed != nil, slot.levelRaw?.isFinite == true,
+                  let knob = controls[0].level else { return nil }
+            let raw: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(knob,
+                kAXValueAttribute as String, runtime: runtime.ax)
+            guard case .success(.some(let value)) = raw, CFGetTypeID(value) == CFNumberGetTypeID(),
+                  let number = value as? NSNumber, number.doubleValue.isFinite,
+                  number.doubleValue == slot.levelRaw else { return nil }
+            return (controls[0], slots)
+        }
+        let expectedPopulation = population.map { CFEqual($0, original.strip) ? source.pair.strip.strip : $0 }
+        func populationAndPeersHeld() -> Bool {
+            guard let current = removalCensus(original, runtime: runtime), current.count == expectedPopulation.count,
+                  zip(current, expectedPopulation).allSatisfy({ CFEqual($0, $1) }) else { return false }
+            for index in current.indices where !CFEqual(current[index], source.pair.strip.strip) {
+                guard let slots = AXLogicProElements.sendSlotObservations(in: current[index], runtime: runtime.ax) else { return false }
+                if slots == peerSlots[index] { continue }
+                // Native first-assignment padding: one previously empty Send
+                // row may become two empty rows. No occupied/protected value or
+                // arbitrary count change is accepted by this specific case.
+                guard peerSlots[index] == [.init(ordinal: 0, state: .observedEmpty)],
+                      slots == [.init(ordinal: 0, state: .observedEmpty), .init(ordinal: 1, state: .observedEmpty)] else { return false }
+            }
+            return source.permits(runtime: runtime)
+        }
+        guard let (control, slots) = occupied(), populationAndPeersHeld() else {
+            return uncertain("Fresh occupied control, complete physical population or protected peer Sends were not observed.")
+        }
+        let after = await AXMixerStripBinding.$current.withValue(source.pair.strip) {
+            await getOutputObservation(runtime: runtime, sendOrdinal: control.ordinal, timing: timing)
+        }
+        guard after.assignment == .stereoOutput, let checks = after.sendNonRoutingChecks, !checks.isEmpty,
+              populationAndPeersHeld(),
+              let (final, finalSlots) = occupied(), control.matches(final), slots == finalSlots,
+              source.permits(runtime: runtime) else {
+            return uncertain("Fresh creation lost its independent checked Stereo destination or native protected after-state.")
+        }
+        extras["after"] = OutputAssignment.stereoOutput.json; extras["changed"] = true
+        extras["send_ordinal_after"] = final.ordinal
+        if let slot = finalSlots.first(where: { $0.ordinal == final.ordinal }) {
+            extras["level_raw"] = slot.levelRaw; extras["level_description"] = slot.levelDescription
+            extras["bypassed"] = slot.bypassed
+        }
+        extras["protected_nonrouting_titles"] = checks; extras["strip_count_after"] = expectedPopulation.count
+        extras["source_renewal"] = source.pair.source; extras["reference_reread_required"] = true
+        extras["source_index_after"] = source.index; extras["verify_source"] = "ax_send_menu_checkmark"
+        extras["snapshot_atomic"] = false
+        return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: .stereoOutput,
+            sendNonRoutingChecks: checks)
+    }
+
     static func finishSendRestoration(_ removed: RemovedSendObservation, original: AXMixerStripBinding.Binding,
         population: [AXUIElement], extras initial: [String: Any], runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming) async -> CheckedOutputReading {

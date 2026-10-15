@@ -252,26 +252,56 @@ extension AccessibilityChannel {
         func isSink(_ assignment: OutputAssignment) -> Bool {
             switch assignment { case .stereoOutput, .physical, .bus: true; default: false }
         }
+        let creating = params["replace_existing"] == "false" && params["expected_current"] == "no_send"
+            && params["destination"] == OutputAssignment.stereoOutput.token
+        let expected = params["expected_current"].flatMap(OutputAssignment.init(token:))
         guard params.keys.allSatisfy({ ["destination", "expected_current", "replace_existing", "send_ordinal"].contains($0) }),
-              params["replace_existing"] == "true", let ordinal = params["send_ordinal"].flatMap(Int.init), ordinal >= 0,
+              creating || params["replace_existing"] == "true", let ordinal = params["send_ordinal"].flatMap(Int.init), ordinal >= 0,
               params["destination"] == "no_send" || params["destination"].flatMap(OutputAssignment.init(token:)).map(isSink) == true,
-              let expected = params["expected_current"].flatMap(OutputAssignment.init(token:)), isSink(expected),
+              creating || expected.map(isSink) == true,
               (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
             return .error(HonestContract.encodeStateC(error: .invalidParams,
                 hint: "An occupied physical send, explicit replacement, checked physical/stereo/bus before and destination, and owned acquisition are required.",
                 extras: ["operation": "mixer.set_send_output_verified", "write_attempted": false]))
         }
+        let creation: FreshSendCreation?
+        if creating {
+            guard let source = AXMixerStripBinding.current, let pair = AXMixerStripBinding.outputAssociation,
+                  pair.strip.matches(source), let observed = soleEmptySend(in: source.strip, runtime: runtime.ax), ordinal == 0 else {
+                return .error(HonestContract.encodeStateC(error: .staleSnapshot,
+                    hint: "Fresh creation requires a complete sole-empty source and its exact original-header association.",
+                    extras: ["operation": "mixer.set_send_output_verified", "write_attempted": false]))
+            }
+            guard let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: source.mixer, runtime: runtime.ax)?.strips else {
+                return .error(HonestContract.encodeStateC(error: .readbackUnavailable, hint: "Fresh creation requires a complete peer census.", extras: ["write_attempted": false]))
+            }
+            let reads = population.map { AXLogicProElements.sendSlotObservations(in: $0, runtime: runtime.ax) }
+            guard reads.allSatisfy({ $0 != nil }) else {
+                return .error(HonestContract.encodeStateC(error: .readbackUnavailable, hint: "Fresh creation requires complete peer Send footprints.", extras: ["write_attempted": false]))
+            }
+            creation = .init(empty: observed, population: population, peerSlots: reads.compactMap { $0 })
+        } else { creation = nil }
         return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal,
             runtime: runtime, timing: timing, sendReplacement: .init(expected: expected,
-                destination: params["destination"].flatMap(OutputAssignment.init(token:)))).result
+                destination: params["destination"].flatMap(OutputAssignment.init(token:)), creation: creation)).result
+    }
+
+    /// Invocation-local immutable AX handles. Sendability grants no action
+    /// authority: every use checks this exact census, empty CF/path and values.
+    private struct FreshSendCreation: @unchecked Sendable {
+        let empty: AXLogicProElements.EmptySendMenuControl
+        let population: [AXUIElement]
+        let peerSlots: [[SendSlotObservation]]
     }
 
     private struct SendReplacement: Sendable {
-        let expected: OutputAssignment
+        let expected: OutputAssignment?
         /// nil is the explicitly scoped No Send action, never a No Output routing endpoint.
         let destination: OutputAssignment?
         var restoration: RemovedSendObservation? = nil
         var occupiedInverse: ChangedSendObservation? = nil
+        /// Fresh current native empty control, not a removed-send capsule.
+        var creation: FreshSendCreation? = nil
     }
 
     static func readRestoredSendObservation(_ restored: CheckedOutputReading,
@@ -444,11 +474,15 @@ extension AccessibilityChannel {
                 ordinal: sendOrdinal, runtime: runtime.ax)
         }
         let assigned = assignedControl()
-        let restoringEmpty = sendReplacement?.restoration?.empty
+        let restoringEmpty = sendReplacement?.restoration?.empty ?? sendReplacement?.creation?.empty
         guard sendOrdinal == nil || assigned != nil || restoringEmpty != nil else {
             return refuse(.readbackUnavailable, "The requested ordinal has no uniquely qualified assigned-send list control; nothing was pressed.")
         }
         @Sendable func selectedControl() -> AXUIElement? {
+            if let empty = sendReplacement?.creation?.empty {
+                guard let current = soleEmptySend(in: physical.strip, runtime: runtime.ax), empty.matches(current) else { return nil }
+                return current.control
+            }
             if let restoration = sendReplacement?.restoration {
                 guard let current = soleEmptySend(in: physical.strip, runtime: runtime.ax),
                       restoration.empty.matches(current) else { return nil }
@@ -687,6 +721,9 @@ extension AccessibilityChannel {
                 return false
             }
             func expectedCheckedBefore(fresh: Bool = false) -> Bool {
+                if request.creation != nil {
+                    return checkedRemovedSendMenu(in: root, nonRoutingChecks: [], runtime: runtime.ax)
+                }
                 if let restoration = request.restoration {
                     return checkedRemovedSendMenu(in: root, nonRoutingChecks: restoration.nonRoutingChecks,
                         runtime: runtime.ax)
@@ -757,6 +794,14 @@ extension AccessibilityChannel {
                       fresh.count == population.count, zip(fresh, population).allSatisfy({ CFEqual($0, $1) }),
                       AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax) == protectedSends,
                       sameOriginalSendControl() else { return false }
+                if let creation = request.creation {
+                    guard creation.population.count == population.count,
+                          zip(creation.population, population).allSatisfy({ CFEqual($0, $1) }),
+                          creation.peerSlots.count == population.count,
+                          zip(population, creation.peerSlots).allSatisfy({
+                            AXLogicProElements.sendSlotObservations(in: $0.0, runtime: runtime.ax) == $0.1
+                          }) else { return false }
+                }
                 if let restoration = request.restoration,
                    !restoration.source.permits(runtime: runtime, ownedPopup: root) { return false }
                 if let inverse = request.occupiedInverse {
@@ -778,13 +823,14 @@ extension AccessibilityChannel {
             guard dataOwned, expectedCheckedBefore() else {
                 return closeBeforeRefusal(.staleSnapshot, "Checked current send did not agree with expected_current; no destination was pressed.")
             }
+            let slotState = request.restoration?.before ?? protectedSends?.first(where: { $0.ordinal == sendOrdinal })
             guard let population, let protectedSends,
-                  let slotState = request.restoration?.before ?? protectedSends.first(where: { $0.ordinal == sendOrdinal }),
-                  slotState.bypassed != nil, slotState.levelRaw?.isFinite == true,
-                  let sendChecks, !sendChecks.isEmpty, writeBoundary() else {
+                  request.creation != nil || (slotState?.bypassed != nil && slotState?.levelRaw?.isFinite == true),
+                  let sendChecks, request.creation != nil || !sendChecks.isEmpty, writeBoundary() else {
                 return closeBeforeRefusal(.readbackUnavailable, "The exact occupied send, protected level/bypass/checkmarks or write boundary did not remain observed; nothing was selected.")
             }
-            extras["before"] = request.restoration == nil ? request.expected.json : ["state": "observed_empty"]
+            if request.restoration != nil || request.creation != nil { extras["before"] = ["state": "observed_empty"] }
+            else { extras["before"] = request.expected?.json }
             extras["destination"] = request.destination?.json ?? ["kind": "no_send"]
             extras["strip_count_before"] = population.count
             if request.restoration == nil, let assigned, request.expected == request.destination {
@@ -826,7 +872,7 @@ extension AccessibilityChannel {
                     return refuse(.readbackUnavailable,
                         "The matching send lost its original source or protected state during cleanup; nothing was selected.")
                 }
-                extras["after"] = request.expected.json
+                extras["after"] = request.expected?.json
                 extras["changed"] = false
                 extras["strip_count_after"] = population.count
                 extras["verify_source"] = "ax_send_menu_checkmark"
@@ -929,13 +975,21 @@ extension AccessibilityChannel {
                 return await finishSendRestoration(restoration, original: physical, population: population,
                     extras: extras, runtime: runtime, timing: timing)
             }
+            if let creation = request.creation {
+                guard axPopupAbsent, cgPopupAbsent,
+                      request.destination == .stereoOutput else {
+                    return uncertain("Fresh creation lost its original empty control or owned popup absence.")
+                }
+                return await finishFreshSendCreation(original: physical, population: population, peerSlots: creation.peerSlots,
+                    extras: extras, runtime: runtime, timing: timing)
+            }
             if request.destination == nil {
-                guard axPopupAbsent, cgPopupAbsent, let assigned, let singleton,
+                guard axPopupAbsent, cgPopupAbsent, let assigned, let singleton, let expected = request.expected,
                       singleton.control.matches(assigned), singleton.slots == protectedSends else {
                     return uncertain("Send removal lost popup absence or its complete original singleton census.")
                 }
                 return await finishSendRemoval(original: physical, before: protectedSends,
-                    checkedBefore: request.expected, nonRoutingChecks: sendChecks,
+                    checkedBefore: expected, nonRoutingChecks: sendChecks,
                     population: population, extras: extras, runtime: runtime)
             }
             guard let assigned else { return uncertain("The original occupied-send control is unavailable.") }
@@ -1017,9 +1071,9 @@ extension AccessibilityChannel {
                     && request.expected == .stereoOutput && request.destination.map {
                         if case .bus = $0 { return true }; return false
                     } == true)
-                if observingChange, let checkedAfter = after.assignment, let verifiedPopulation {
+                if observingChange, let checkedAfter = after.assignment, let checkedBefore = request.expected, let verifiedPopulation {
                     let proof = ChangedSendObservation(source: source, control: final.control, footprint: final.slots,
-                        checkedBefore: request.expected, checkedAfter: checkedAfter,
+                        checkedBefore: checkedBefore, checkedAfter: checkedAfter,
                         nonRoutingChecks: sendChecks, population: verifiedPopulation)
                     guard proof.permits(runtime: runtime) else {
                         return uncertain("The occupied change lost native custody before publication.")

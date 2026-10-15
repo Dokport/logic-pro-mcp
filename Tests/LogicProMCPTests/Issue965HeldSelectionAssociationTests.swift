@@ -2176,6 +2176,35 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(fault)
     }
 
+    @Test func registeredFreshEmptySendCreatesOnlyItsExactControl() async throws {
+        try await assertOccupiedSingleSendRenewal(freshEmpty: "observed")
+    }
+
+    @Test(arguments: ["multiple_empty", "occupied", "wrong_target", "wrong_project", "expired_pair",
+                      "unread_mark", "conflicting_route", "late_empty", "late_document", "late_play", "before_peer"])
+    func registeredFreshEmptySendRefusesLostOrAmbiguousBefore(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(freshEmpty: fault)
+    }
+
+    @Test(arguments: ["peer_padding", "peer_occupied", "peer_padding_three", "after_source", "after_mode"])
+    func registeredFreshEmptySendVerifiesOnlyItsQualifiedAfter(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(freshEmpty: fault)
+    }
+
+    @Test func registeredFreshEmptySendFinalPeerReadCannotMaskTargetChange() async throws {
+        let witness = try Fixture()
+        try await assertOccupiedSingleSendRenewal(freshEmpty: "calibrate_late_target", recordFreshFinalPeerRead: {
+            witness.routingIndependentSendReads = $0
+        })
+        #expect(witness.routingIndependentSendReads > 0)
+        try await assertOccupiedSingleSendRenewal(freshEmpty: "late_target",
+            freshAfterTargetReads: witness.routingIndependentSendReads)
+    }
+
+    @Test func registeredFreshEmptySendRejectsBooleanRawAfterLeaf() async throws {
+        try await assertOccupiedSingleSendRenewal(freshEmpty: "boolean_after")
+    }
+
     private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
@@ -2183,7 +2212,9 @@ struct Issue965HeldSelectionAssociationTests {
                                                readRestored: String? = nil, sagaMode: String? = nil,
                                                inspectSendWitness: String? = nil,
                                                noOpDestination: OutputAssignment? = nil,
-                                               bypassMode: String? = nil, levelMode: String? = nil) async throws {
+                                               bypassMode: String? = nil, levelMode: String? = nil,
+                                               freshEmpty: String? = nil, freshAfterTargetReads: Int? = nil,
+                                               recordFreshFinalPeerRead: (@Sendable (Int) -> Void)? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -2221,6 +2252,7 @@ struct Issue965HeldSelectionAssociationTests {
                 return [anchor, group, level]
             }
             let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
+            if freshEmpty != nil { f.useBulkReads = true }
             if levelMode != nil {
                 f.useBulkReads = true
                 let knob = b.element(1_965_2624), editor = b.element(1_965_2800), field = b.element(1_965_2801)
@@ -2317,7 +2349,14 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let originalList = b.element(1_965_2623), renewedList = b.element(1_965_2643)
             let originalChildren = b.makeAXRuntime().children(f.strips[1])
-            b.setChildren(f.strips[1], originalChildren + originalSend)
+            b.setChildren(f.strips[1], originalChildren + (freshEmpty == nil ? originalSend : [originalSend[0]]))
+            if freshEmpty != nil { b.setActionNames(originalSend[0], [kAXPressAction as String]) }
+            if freshEmpty == "multiple_empty" { b.setChildren(f.strips[1], originalChildren + [originalSend[0], extraSend[0]]) }
+            if freshEmpty == "occupied" { b.setChildren(f.strips[1], originalChildren + originalSend) }
+            let peerChildren = b.makeAXRuntime().children(f.strips[0])
+            if freshEmpty?.hasPrefix("peer_") == true || ["calibrate_late_target", "late_target"].contains(freshEmpty ?? "") {
+                b.setChildren(f.strips[0], peerChildren + [extraSend[0]])
+            }
             b.setRole(replacement, kAXLayoutItemRole as String)
             b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
             b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
@@ -2339,6 +2378,12 @@ struct Issue965HeldSelectionAssociationTests {
             }
             for item in [echo, mode, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
             b.setChildren(menu, [stereo, destination]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, mode, parent])
+            if freshEmpty != nil {
+                b.setAttribute(echo, kAXTitleAttribute as String, "No Send")
+                b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                b.setAttribute(mode, kAXEnabledAttribute as String, false)
+                b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+            }
             if removing {
                 b.setAttribute(destination, kAXTitleAttribute as String, "No Send")
                 b.setChildren(menu, [stereo]); b.setChildren(root, [echo, mode, parent, destination])
@@ -2384,6 +2429,32 @@ struct Issue965HeldSelectionAssociationTests {
                     return true
                 }
                 let source = f.routingReplacement ?? f.strips[1]
+                if freshEmpty != nil, action == kAXPressAction as String, CFEqual(element, originalSend[0]) {
+                    b.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], source, root]); return true
+                }
+                if freshEmpty != nil, action == kAXPressAction as String, CFEqual(element, stereo) {
+                    f.routingDestinationPresses += 1; f.routingReplacement = replacement
+                    b.setAttribute(echo, kAXTitleAttribute as String, "Stereo Output")
+                    b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
+                    b.setAttribute(mode, kAXEnabledAttribute as String, true)
+                    b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
+                    b.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement])
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                    if freshEmpty?.hasPrefix("peer_") == true {
+                        var padding: [AXUIElement] = []
+                        for offset in 0..<(freshEmpty == "peer_padding_three" ? 2 : 1) {
+                            let button = b.element(1_965_2780 + offset)
+                            b.setButton(button, description: "send button", help: "Send slot. Route signal.", x: 0, y: 0, width: 1, height: 1)
+                            b.setChildren(button, []); padding.append(button)
+                        }
+                        b.setChildren(f.strips[0], peerChildren + [extraSend[0]] + padding)
+                        if freshEmpty == "peer_occupied" { b.setChildren(f.strips[0], peerChildren + extraSend) }
+                    }
+                    if freshEmpty == "after_source" { b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
+                    if freshEmpty == "after_mode" { b.setAttribute(mode, "AXMenuItemMarkChar", "") }
+                    if freshEmpty == "boolean_after" { b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, true) }
+                    return true
+                }
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
                     if bypassMode != nil { f.routingBypassMenuOpens += 1 }
@@ -2641,6 +2712,21 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.routingDestinationPresses == 0 && f.routingReplacement == nil)
             }
             f.routingRead = { element, attribute in
+                if ["calibrate_late_target", "late_target"].contains(freshEmpty ?? ""), f.routingDestinationPresses == 1 {
+                    if CFEqual(element, b.element(1_965_2644)), attribute == kAXValueAttribute as String {
+                        f.routingIndependentSendReads += 1
+                    }
+                    if CFEqual(element, extraSend[0]), attribute == kAXHelpAttribute as String,
+                       f.routingIndependentSendReads > 0 {
+                        f.routingBypassFinalValueReads = f.routingIndependentSendReads
+                        if let freshAfterTargetReads, f.routingIndependentSendReads == freshAfterTargetReads,
+                           !f.routingLateScopeInjected {
+                            f.routingLateScopeInjected = true
+                            b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1)
+                            b.setAttribute(b.element(1_965_2642), kAXValueAttribute as String, 1)
+                        }
+                    }
+                }
                 if bypassMode == "final_record_document", f.routingBypassFinalCapabilityRead,
                    CFEqual(element, b.element(1_965_722)), attribute == kAXValueAttribute as String,
                    !f.routingLateScopeInjected {
@@ -2991,6 +3077,70 @@ struct Issue965HeldSelectionAssociationTests {
                 return
             }
             let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))
+            if freshEmpty != nil {
+                var prepared: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(0),
+                    "destination": .object(["kind": .string("stereo_output")]),
+                    "expected_current": .object(["kind": .string("no_send")]), "replace_existing": .bool(false)]
+                if freshEmpty == "wrong_target" { prepared["target_ref"] = .string(try #require(capture.mixerReference(at: 0)).rawValue) }
+                if freshEmpty == "wrong_project" { prepared["project_ref"] = .string("prj_foreign") }
+                if freshEmpty == "expired_pair" { f.expireRetainedCapture = true }
+                if freshEmpty == "conflicting_route" { b.setAttribute(stereo, "AXMenuItemMarkChar", "✓") }
+                if freshEmpty == "unread_mark" {
+                    let prior = f.routingReadResult
+                    f.routingReadResult = { element, attribute in
+                        if CFEqual(element, stereo), attribute == "AXMenuItemMarkChar" {
+                            f.routingLateScopeInjected = true
+                            return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                        }
+                        return prior?(element, attribute)
+                    }
+                }
+                f.routingActionNames = { element in
+                    let trigger = freshEmpty == "before_peer" ? originalSend[0] : stereo
+                    guard CFEqual(element, trigger), !f.routingLateScopeInjected else { return nil }
+                    switch freshEmpty {
+                    case "before_peer":
+                        let peer = b.element(1_965_2790)
+                        b.setRole(peer, kAXLayoutItemRole as String); b.setChildren(peer, peerChildren)
+                        f.routingOtherReplacement = peer
+                        b.setChildren(f.mixer, [peer, f.strips[1]])
+                    case "late_empty": b.setChildren(f.strips[1], originalChildren + [extraSend[0]])
+                    case "late_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "late_play": b.setAttribute(b.element(1_965_721), kAXValueAttribute as String, 1)
+                    default: return nil
+                    }
+                    f.routingLateScopeInjected = true
+                    return nil
+                }
+                let params = prepared
+                let slots = try #require(AXLogicProElements.sendSlotObservations(in: f.strips[1], runtime: f.logic().ax))
+                if freshEmpty != "multiple_empty" && freshEmpty != "occupied" { #expect(slots.count == 1 && slots[0].state == .observedEmpty) }
+                #expect(f.routingRemovedSend == nil && f.routingDestinationPresses == 0)
+                let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
+                    commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if !["observed", "peer_padding", "peer_occupied", "peer_padding_three", "after_source", "after_mode",
+                     "calibrate_late_target", "late_target", "boolean_after"].contains(freshEmpty ?? "") {
+                    #expect(body["state"] as? String == "C", "Actual refused fresh-empty source: \(sharedToolText(result))")
+                    #expect(f.routingDestinationPresses == 0)
+                    if ["unread_mark", "late_empty", "late_document", "late_play", "before_peer"].contains(freshEmpty ?? "") { #expect(f.routingLateScopeInjected) }
+                    return
+                }
+                if ["peer_occupied", "peer_padding_three", "after_source", "after_mode", "late_target", "boolean_after"].contains(freshEmpty ?? "") {
+                    #expect(body["state"] as? String == "B", "Actual unverified fresh-empty after-state: \(sharedToolText(result))")
+                    #expect(f.routingDestinationPresses == 1)
+                    if freshEmpty == "late_target" { #expect(f.routingLateScopeInjected) }
+                    return
+                }
+                if freshEmpty == "calibrate_late_target" {
+                    #expect(f.routingBypassFinalValueReads > 0)
+                    recordFreshFinalPeerRead?(f.routingBypassFinalValueReads)
+                }
+                #expect(body["state"] as? String == "A", "Actual registered fresh-empty creation: \(sharedToolText(result))")
+                #expect(f.routingDestinationPresses == 1)
+                #expect(f.routingRemovedSend == nil, "Fresh creation never forges a removed-send capsule")
+                return
+            }
             var preparedParams: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
                 "destination": removing ? .object(["kind": .string("no_send")])
                     : existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
