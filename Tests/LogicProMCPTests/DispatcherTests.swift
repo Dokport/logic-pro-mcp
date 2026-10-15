@@ -1826,11 +1826,13 @@ func testTransportDispatcherStillnessRefusalsBeforeTheKeyAreStateC(
     #expect(description.contains("get_send_bypass_verified"))
     #expect(description.contains("set_send_bypass_verified"))
     #expect(description.contains("set_send_level_verified"))
+    #expect(description.contains("set_send_mode_verified"))
     #expect(description.contains("bypassed: literal Bool"))
     let withoutPublicSendSetters = description
         .replacingOccurrences(of: "set_send_output_verified", with: "")
         .replacingOccurrences(of: "set_send_bypass_verified", with: "")
         .replacingOccurrences(of: "set_send_level_verified", with: "")
+        .replacingOccurrences(of: "set_send_mode_verified", with: "")
     #expect(!withoutPublicSendSetters.contains("set_send"))
 }
 

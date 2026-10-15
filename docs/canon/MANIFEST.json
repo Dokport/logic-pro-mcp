@@ -114,7 +114,7 @@
     "index/stringsdict.tsv": "538081502dfdd84fb916e331a08b1682b64807cdbc2adbfe6faf9c70a983a511",
     "index/stringsdict.values.tsv": "81c2945e23ef803ec6c80a4b3b1dab6f4d4d7f16554dc07956accb89e667190f",
     "ledger/casefold.tsv": "f2e0ead02d6a52de4e5ac8fc67a14ea0d45489541cedfee231316c048361c385",
-    "ledger/presence.tsv": "e34e44ca956a3bf451de9591f313862eabbc92b78b3a02bed4bf81bbf839de1b"
+    "ledger/presence.tsv": "62cd5b12fc463756630ce1d8aff2ef628cf16638e8a6d1c2a3f6be76abe9b549"
   },
   "extractor_version": 3,
   "ledger_casefold_entries": {
@@ -187,7 +187,7 @@
       "fr": 56,
       "it": 47,
       "ja": 68,
-      "ko": 79,
+      "ko": 82,
       "pt": 47,
       "zh_CN": 66,
       "zh_TW": 47
@@ -200,7 +200,7 @@
       "fr": 193,
       "it": 203,
       "ja": 210,
-      "ko": 216,
+      "ko": 219,
       "pt": 211,
       "zh_CN": 202,
       "zh_TW": 185
