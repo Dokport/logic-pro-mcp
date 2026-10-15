@@ -66,9 +66,9 @@ struct Issue291CheckedOutputGraphTests {
         #expect(f.mutations.map { $0.1 } == (navigation ? ["AXPress", "AXCancel", "AXPress", "AXCancel"] : []))
     }
 
-    @Test("Checked before-output capture uses the owned menu without promoting non-bus graph coverage",
+    @Test("Checked before-output capture publishes only owned partial non-bus endpoints",
           arguments: ["stereo", "physical", "no_output", "unknown", "navigation_denied", "missing_mark", "owner_loss"])
-    func checkedNonBusBeforeCaptureRemainsLocal(kind: String) async throws {
+    func checkedNonBusBeforeCapturePublishesOnlyPartialEndpoints(kind: String) async throws {
         let label: String
         switch kind {
         case "physical": label = "Output 3-4"
@@ -146,7 +146,33 @@ struct Issue291CheckedOutputGraphTests {
         #expect(!graph.complete)
         #expect(graph.coverage.mainOutput.state != .complete)
         #expect(graph.coverage.physicalOutput.state != .complete)
-        #expect(!graph.edges.contains { $0.kind == .mainOutput })
+        let edges = graph.edges.filter { $0.kind == .mainOutput }
+        let endpoints = graph.nodes.filter { $0.kind == .output }
+        if let expected {
+            let destination = kind == "physical" ? "output_physical_3_4" : "output_stereo"
+            let sources = try capture.channelStrips.indices.map {
+                try #require(capture.mixerReference(at: $0))
+            }
+            #expect(sources.count == 2 && edges.count == 2)
+            #expect(Set(edges.map(\.source)) == Set(sources.map(\.rawValue)))
+            #expect(edges.allSatisfy {
+                $0.destination == destination && $0.provenance == .axOutputMenuCheckmark && $0.send == nil
+            })
+            #expect(endpoints.count == 1)
+            let endpoint = try #require(endpoints.first)
+            #expect(endpoint.id == destination && endpoint.displayName == expected.token)
+            #expect(endpoint.targetRef == nil)
+            #expect(!graph.nodes.contains { $0.id == "output_physical_1_2" })
+            #expect(graph.coverage.mainOutput.state == .partial)
+            #expect(graph.coverage.physicalOutput.state == .partial)
+            for source in sources {
+                #expect(routingPath(from: source, to: destination, in: graph) == .unverified)
+            }
+            #expect(population.uiEffects.restoration == "restored")
+        } else {
+            #expect(edges.isEmpty)
+            #expect(endpoints.isEmpty)
+        }
     }
 
     @Test("Only request-held checked output contributes a physical-source bus edge",
