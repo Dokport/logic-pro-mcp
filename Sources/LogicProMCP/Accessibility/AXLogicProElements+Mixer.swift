@@ -95,8 +95,11 @@ extension AXLogicProElements {
             for child in children {
                 guard let role = string(child, kAXRoleAttribute as String) else { return nil }
                 if role == kAXStaticTextRole as String {
-                    guard let description = string(child, kAXDescriptionAttribute as String) else { return nil }
-                    if description == "label" { labels.append(child) }
+                    guard let description = string(child, kAXDescriptionAttribute as String),
+                          !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    // The observed fixed label is the sole direct static-text child.
+                    // A second static text is ambiguous regardless of its description.
+                    labels.append(child)
                 }
             }
             return labels.count == 1 ? labels.first : nil

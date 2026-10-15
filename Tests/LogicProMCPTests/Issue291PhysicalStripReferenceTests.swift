@@ -398,13 +398,17 @@ struct Issue291PhysicalStripReferenceTests {
         }
     }
 
-    @Test(arguments: ["duplicate", "wrong_role", "nonstring", "description_unread", "value_unread", "role_unread", "foreign_parent", "replaced_control"])
+    @Test(arguments: ["duplicate", "other_static_text", "wrong_role", "nonstring", "description_unread", "value_unread", "role_unread", "foreign_parent", "replaced_control"])
     func registeredTypeLabelRefusesIncompleteOrChangedOwnControl(fault: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let fixture = try Fixture(aux: true), b = fixture.b
             let strip = fixture.strips[2]
             let label = addTypeLabel(fixture, strip: strip, id: 2_919_120, label: "Aux 1")
             if fault == "duplicate" { _ = addTypeLabel(fixture, strip: strip, id: 2_919_121, label: "Audio 2") }
+            if fault == "other_static_text" {
+                let other = addTypeLabel(fixture, strip: strip, id: 2_919_121, label: "Aux 9")
+                b.setAttribute(other, kAXDescriptionAttribute as String, "readout")
+            }
             if fault == "wrong_role" { b.setRole(label, kAXTextFieldRole as String) }
             if fault == "nonstring" { b.setAttribute(label, kAXValueAttribute as String, true) }
             if fault == "foreign_parent" { b.setAttribute(label, kAXParentAttribute as String, fixture.strips[0]) }

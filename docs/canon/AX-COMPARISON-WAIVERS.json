@@ -1,7 +1,0 @@
-{
-  "literals": {
-    "label": {
-      "reason": "The optional typeNumberLabel reader in AXLogicProElements+Mixer.swift deliberately recognizes only the fixed English AX description observed on Logic 12.3; it is not a universal translated UI-label matcher. A different, missing or unreadable descriptor yields no type evidence and never falls back to the mutable strip name. Aux classification still requires its own native static-text control, exact physical owner, agreeing value reads and a fresh capture. Translated or all-locale detection is not claimed."
-    }
-  }
-}
