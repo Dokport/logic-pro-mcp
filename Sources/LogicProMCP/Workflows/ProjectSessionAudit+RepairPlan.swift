@@ -460,6 +460,12 @@ extension ProjectSessionAudit {
         let approvedNames: [Value] = names.map { .object([
             "target": .string($0.target), "name": .string($0.name)
         ]) }
+        if let localOutputStep, !names.isEmpty {
+            // The coupled name is independently owned before output actuation.
+            // Its explicit dependency is also bound by this canonical digest.
+            steps.removeAll { $0.objectValue?["kind"] == .string("local_output") }
+            steps.append(localOutputStep)
+        }
         steps = auxSteps + steps
         if let sort = policy.trackSort {
             let tracks = SessionPopulationObservation.build(request: request, capture: capture).tracks

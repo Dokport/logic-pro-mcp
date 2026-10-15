@@ -42,6 +42,32 @@ private actor SendRemovalSagaResultBoundary: Channel {
     }
 }
 
+/// A failure AFTER the real second writer's verified forward, not a response echo.
+private actor SelectedOutputSagaResultBoundary: Channel {
+    nonisolated let id: ChannelID = .accessibility
+    let base: AccessibilityChannel
+    var failed = false
+    let shouldFail: Bool
+    let observed: @Sendable (ChannelResult) -> Void
+    init(_ base: AccessibilityChannel, shouldFail: Bool = true,
+         observed: @escaping @Sendable (ChannelResult) -> Void = { _ in }) {
+        self.base = base; self.shouldFail = shouldFail; self.observed = observed
+    }
+    func start() async throws {}
+    func stop() async {}
+    func healthCheck() async -> ChannelHealth { await base.healthCheck() }
+    func execute(operation: String, params: [String: String]) async -> ChannelResult {
+        let result = await base.execute(operation: operation, params: params)
+        if operation == "mixer.set_output_verified" { observed(result) }
+        if shouldFail, operation == "mixer.set_output_verified", !failed,
+           sharedJSONObject(result.message)?["state"] as? String == "A" {
+            failed = true
+            return .error(HonestContract.encodeStateC(error: .readbackUnavailable, extras: ["write_attempted": true]))
+        }
+        return result
+    }
+}
+
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
     @Test("A held input popup may move focus without losing its original complete association",
@@ -288,6 +314,21 @@ struct Issue965HeldSelectionAssociationTests {
         var routingReplacement: AXUIElement?
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
+        var routingSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool?)?
+        var routingMenuRename = false
+        var routingNameReturn: (@Sendable () -> Bool)?
+        var routingFocusMouse: AXMouseHelper.Runtime?
+        var routingFocusHit: (@Sendable (AXUIElement, CGPoint) -> Result<AXUIElement?, AXHelpers.AXStatusError>)?
+        var routingFocusClickEvents: [CGEventType] = []
+        var routingFocusClickFault: String?
+        var routingFocusHitReads = 0
+        var routingOutputChannelStates: [String] = []
+        var routingMenuNameOpens = 0
+        var routingNameWrites: [String] = []
+        var routingNameConfirms = 0
+        var routingDocumentReads = 0
+        var routingDocumentReadsAtFirstNameWrite: Int?
+        var routingDocumentReadsAtFirstNameConfirm: Int?
         var routingDestinationPresses = 0
         var routingRemovalPublications = 0
         var routingRemovedSend: AccessibilityChannel.RemovedSendObservation?
@@ -514,6 +555,7 @@ struct Issue965HeldSelectionAssociationTests {
                     return .success(strips)
                 },
                 setAttributeHandler: { [self] element, attribute, value in
+                    if let handled = routingSetter?(element, attribute, value) { return handled }
                     if strips.contains(where: { CFEqual($0, element) }), attribute == kAXFocusedAttribute as String {
                         cleanupTransportReadsAtWrite = cleanupTransportReads
                         focusRestorationWrites.append(element)
@@ -654,6 +696,13 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         return .success(values)
                     })
+            } else if let routingFocusHit {
+                ax = AXHelpers.Runtime(axApp: base.ax.axApp, attributeValue: base.ax.attributeValue,
+                    attributeIsSettable: base.ax.attributeIsSettable, setAttributeValue: base.ax.setAttributeValue,
+                    children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
+                    actionNames: base.ax.actionNames, actionNamesResult: base.ax.actionNamesResult,
+                    childrenResult: base.ax.childrenResult, attributeValueResult: base.ax.attributeValueResult,
+                    performActionResult: base.ax.performActionResult, elementAtPosition: routingFocusHit)
             } else { ax = base.ax }
             let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax,
                 executeAppleScript: { _ in Issue.record("no scripts"); return .error("forbidden") },
@@ -662,9 +711,80 @@ struct Issue965HeldSelectionAssociationTests {
             return logic
         }
 
+        func configureOriginalPlateClick() throws {
+            focusRestorationAckOnly = true
+            let plate = builder.element(1_965_711)
+            var position = CGPoint(x: 100, y: 300), size = CGSize(width: 100, height: 20)
+            builder.setAttribute(plate, kAXPositionAttribute as String, try #require(AXValueCreate(.cgPoint, &position)))
+            builder.setAttribute(plate, kAXSizeAttribute as String, try #require(AXValueCreate(.cgSize, &size)))
+            builder.setAttributeSettable(plate, kAXValueAttribute as String, false)
+            builder.setAttribute(plate, kAXWindowAttribute as String, window)
+            routingFocusHit = { [self] app, point in
+                guard CFEqual(app, self.app), point == CGPoint(x: 150, y: 310) else { return .success(nil) }
+                routingFocusHitReads += 1
+                if routingFocusHitReads == 1 {
+                    if routingFocusClickFault == "plate" {
+                        let replacement = builder.element(1_971_450)
+                        builder.setRole(replacement, kAXTextFieldRole as String)
+                        builder.setAttribute(replacement, kAXDescriptionAttribute as String, "Name")
+                        builder.setAttribute(replacement, kAXValueAttribute as String, "Selected Canonical")
+                        builder.setAttributeSettable(replacement, kAXValueAttribute as String, false)
+                        builder.setChildren(replacement, [])
+                        let children = builder.makeAXRuntime().children(strips[1]).map {
+                            CFEqual($0, builder.element(1_965_711)) ? replacement : $0
+                        }
+                        builder.setChildren(strips[1], children)
+                    } else if routingFocusClickFault == "frame" {
+                        var changed = CGSize(width: 120, height: 20)
+                        builder.setAttribute(builder.element(1_965_711), kAXSizeAttribute as String, AXValueCreate(.cgSize, &changed)!)
+                    } else if routingFocusClickFault == "editor" {
+                        builder.setAttributeSettable(builder.element(1_965_711), kAXValueAttribute as String, true)
+                    } else if routingFocusClickFault == "source" {
+                        builder.setChildren(mixer, [strips[0]])
+                    } else if routingFocusClickFault == "peer" {
+                        builder.setAttribute(builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                    }
+                }
+                if routingFocusHitReads == 2 {
+                    if routingFocusClickFault == "hit" { return .success(builder.element(1_971_451)) }
+                    if routingFocusClickFault == "late_focus" {
+                        builder.setAttribute(self.app, kAXFocusedUIElementAttribute as String, builder.element(1_971_451))
+                    }
+                    if routingFocusClickFault == "late_frame" {
+                        var changed = CGSize(width: 120, height: 20)
+                        builder.setAttribute(builder.element(1_965_711), kAXSizeAttribute as String, AXValueCreate(.cgSize, &changed)!)
+                    }
+                }
+                return .success(builder.element(1_965_711))
+            }
+            routingFocusMouse = .init(postMouseEvent: { [self] type, point, count in
+                guard point == CGPoint(x: 150, y: 310), count == 1,
+                      type == .leftMouseDown || type == .leftMouseUp else {
+                    Issue.record("Only the retained plate's single paired click is supported"); return false
+                }
+                routingFocusClickEvents.append(type)
+                if type == .leftMouseUp {
+                    if routingFocusClickFault == "release" { return false }
+                    if routingFocusClickFault != "ack_only" {
+                        builder.setAttribute(app, kAXFocusedUIElementAttribute as String, routingReplacement ?? strips[1])
+                    }
+                }
+                return true
+            }, postKeyEvent: { [self] key in key == 0x24 && (routingNameReturn?() ?? false) },
+            postUnicodeScalar: { _ in Issue.record("No typing"); return false }, sleepMicros: { _ in })
+        }
+
         func channel() -> AccessibilityChannel {
             AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
-                isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic()))
+                isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic(),
+                trackRenameMouseRuntime: routingFocusMouse ?? (routingMenuRename ? .init(
+                    postMouseEvent: { _, _, _ in Issue.record("No rename mouse fallback"); return false },
+                    postKeyEvent: { [self] key in key == 0x24 && (routingNameReturn?() ?? false) },
+                    postUnicodeScalar: { _ in Issue.record("No rename typing fallback"); return false }, sleepMicros: { _ in },
+                    postFlaggedKeyEvent: { _, _ in Issue.record("No flagged rename key"); return false }) : .production),
+                processRuntime: routingMenuRename ? .init(logicProPID: { 4242 }, fallbackLogicProPID: { 4242 },
+                    logicProRunning: { true }, activateLogicPro: { false }, logicIsFrontmost: { true },
+                    logicProBundleURL: { nil }) : .production, canPostEvents: { true }))
         }
     }
 
@@ -696,12 +816,198 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("A checked physical output intent keeps the actual opposite-ordinal association in its canonical task",
-          arguments: ["forward", "cancel", "late_peer", "unread_scalar", "unread_range", "boolean_scalar", "stereo", "no_op", "ack_only", "newer", "retired", "late_project", "absent_pan", "occupied_peer", "late_peer_send", "known_plugin", "unread_plugin", "unread_plugin_bypass", "post_write_loss", "unassigned_physical", "unoffered_physical", "census_redraw", "census_foreign", "census_scalar", "census_input", "census_send", "census_plugin", "census_header", "census_project"])
+          arguments: ["forward", "cancel", "late_peer", "unread_scalar", "unread_range", "boolean_scalar", "stereo", "no_op", "ack_only", "newer", "retired", "late_project", "absent_pan", "occupied_peer", "late_peer_send", "known_plugin", "unread_plugin", "unread_plugin_bypass", "post_write_loss", "unassigned_physical", "unoffered_physical", "census_redraw", "census_foreign", "census_scalar", "census_input", "census_send", "census_plugin", "census_header", "census_project", "coupled", "coupled_cancel", "coupled_second_failure", "coupled_newer_name", "coupled_late_peer", "coupled_project", "coupled_retired", "coupled_same", "coupled_name_leaf_peer", "coupled_editor", "coupled_foreign_editor", "coupled_retired_editor"])
     func canonicalPhysicalOutputUsesTheCapturedPair(mode: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: mode)
+    }
+
+    @Test func lateOwnedEditorFocusAtFinalDocumentRefusesTheFirstSetter() async throws {
+        let calibration = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "coupled_editor", fixture: calibration)
+        let lastDocumentRead = try #require(calibration.routingDocumentReadsAtFirstNameWrite)
+        #expect(lastDocumentRead > 0, "Calibrate from the actual first writer, not an earlier refusal")
+        let lastConfirmDocumentRead = try #require(calibration.routingDocumentReadsAtFirstNameConfirm)
+        #expect(lastConfirmDocumentRead > lastDocumentRead)
+        for (mode, read) in [("coupled_late_editor", lastDocumentRead), ("coupled_late_confirm", lastConfirmDocumentRead)] {
+            let fault = try Fixture()
+            try await assertCanonicalPhysicalOutput(mode: mode, fixture: fault, foreignFocusAtDocumentRead: read)
+            #expect(fault.routingLateScopeInjected)
+            #expect(fault.routingNameWrites == (mode == "coupled_late_editor" ? [] : ["Selected Canonical"]))
+            #expect(fault.routingNameConfirms == 0 && fault.routingDestinationPresses == 0)
+        }
+    }
+
+    @Test(arguments: ["coupled_menu_overlay", "coupled_menu_overlay_second_failure",
+                      "coupled_menu_overlay_foreign_rail", "coupled_menu_overlay_missing_header",
+                      "coupled_menu_overlay_peer_change", "coupled_menu_overlay_late_editor",
+                      "coupled_menu_overlay_post_peer", "coupled_menu_overlay_post_source",
+                      "coupled_menu_overlay_post_editor", "coupled_menu_overlay_post_foreign_focus",
+                      "coupled_menu_overlay_restore_ack_only"])
+    func capturedOutputAndNameUseTheOwnedMenuEditorOverlay(mode: String) async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: mode, fixture: f)
+        let failing = !["coupled_menu_overlay", "coupled_menu_overlay_second_failure"].contains(mode)
+        let inverses = mode == "coupled_menu_overlay_second_failure"
+        let committed = mode.contains("_post_") || mode.hasSuffix("_restore_ack_only")
+        #expect(f.routingMenuNameOpens == (inverses ? 2 : 1))
+        #expect(f.routingNameWrites == (failing && !committed ? [] : inverses ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
+        #expect(f.routingNameConfirms == (failing && !committed ? 0 : inverses ? 2 : 1))
+        #expect(f.routingDestinationPresses == (failing ? 0 : inverses ? 2 : 1))
+        if failing { #expect(f.routingLateScopeInjected) }
+        if !failing {
+            let sampled: AXUIElement? = AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String, runtime: f.logic().ax)
+            let focus = try #require(sampled)
+            #expect(CFEqual(focus, f.strips[1]), "Reacquisition must retain the original Mixer focus duty")
+            #expect(f.focusRestorationWrites.isEmpty)
+            #expect(f.routingFocusClickEvents == (inverses ? [.leftMouseDown, .leftMouseUp, .leftMouseDown, .leftMouseUp] : [.leftMouseDown, .leftMouseUp]))
+        } else {
+            #expect(f.focusRestorationWrites.isEmpty)
+            #expect(f.routingFocusClickEvents == (mode.hasSuffix("_restore_ack_only") ? [.leftMouseDown, .leftMouseUp] : []))
+        }
+    }
+
+    @Test func committedMenuNameUsesOneOriginalPlateClickWhenFocusedSetterHasNoEffect() async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_click", fixture: f)
+        #expect(f.focusRestorationWrites.isEmpty, "This continuation must not attempt AXFocused before clicking")
+        #expect(f.routingFocusClickEvents == [.leftMouseDown, .leftMouseUp])
+        let sampled: AXUIElement? = AXHelpers.getAttribute(f.app, kAXFocusedUIElementAttribute as String, runtime: f.logic().ax)
+        let focus = try #require(sampled)
+        #expect(CFEqual(focus, f.strips[1]))
+    }
+
+    @Test func ownedCoupledNameContinuesThroughTheWholeOutputRenewalCensus() async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_census", fixture: f)
+        #expect(f.routingNameWrites == ["Selected Canonical"])
+        #expect(f.routingDestinationPresses == 1)
+        let peer = try #require(f.routingOtherReplacement)
+        let source = try #require(f.routingReplacement)
+        #expect(!CFEqual(peer, f.strips[0]) && !CFEqual(source, f.strips[1]))
+        let census = try #require(AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: f.mixer, runtime: f.logic().ax))
+        #expect(census.strips.count == 2)
+        #expect(census.strips.allSatisfy { current in f.strips.allSatisfy { !CFEqual(current, $0) } })
+    }
+
+    @Test func ownedWholeCensusContinuationCanCompensateBothActualLeaves() async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_census_second_failure", fixture: f)
+        #expect(f.routingOutputChannelStates == ["A", "A"])
+        #expect(f.routingNameWrites == ["Selected Canonical", "Duplicate"])
+        #expect(f.routingDestinationPresses == 2)
+    }
+
+    @Test(arguments: ["plate", "frame", "editor", "source", "peer", "hit", "late_focus", "late_frame", "ack_only", "release"])
+    func committedMenuFocusClickRefusesChangedCustodyWithoutOutputOrGuessedInverse(fault: String) async throws {
+        let f = try Fixture()
+        f.routingFocusClickFault = fault
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_click", fixture: f)
+        #expect(f.routingNameWrites == ["Selected Canonical"])
+        #expect(f.routingNameConfirms == 1)
+        #expect(f.routingDestinationPresses == 0)
+        #expect(f.focusRestorationWrites.isEmpty)
+        #expect(f.routingFocusHitReads > 0)
+        #expect(f.routingFocusClickEvents == (["ack_only", "release"].contains(fault) ? [.leftMouseDown, .leftMouseUp] : []))
+    }
+
+    private func assertCanonicalPhysicalOutput(mode: String, fixture: Fixture? = nil,
+                                               foreignFocusAtDocumentRead: Int? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
-                let f = try Fixture(), cache = StateCache(), registry = TargetRegistry()
-                let redrawsCensus = mode.hasPrefix("census_")
+                let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
+                let composed = mode.hasPrefix("coupled")
+                let menuOverlay = mode.hasPrefix("coupled_menu_overlay")
+                let ownsEditor = ["coupled_editor", "coupled_retired_editor", "coupled_late_editor", "coupled_late_confirm"].contains(mode)
+                let compensatesBoth = ["coupled_cancel", "coupled_second_failure", "coupled_retired", "coupled_retired_editor", "coupled_menu_overlay_second_failure", "coupled_menu_overlay_census_second_failure"].contains(mode)
+                let nameField = f.builder.element(1_971_400)
+                let menuEditor = f.builder.element(1_971_402), rename = f.builder.element(1_971_406)
+                if composed {
+                    f.builder.setRole(nameField, kAXTextFieldRole as String)
+                    f.builder.setAttribute(nameField, kAXDescriptionAttribute as String, "Duplicate")
+                    f.builder.setAttribute(nameField, kAXValueAttribute as String, "0")
+                    f.builder.setAttribute(nameField, kAXWindowAttribute as String, f.window)
+                    f.builder.setChildren(nameField, [])
+                    f.builder.setChildren(f.headers[0], [nameField])
+                    if menuOverlay {
+                        f.routingMenuRename = true
+                        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+                        f.builder.setAttributeSettable(f.rail, kAXValueAttribute as String, false)
+                        try f.configureOriginalPlateClick()
+                        if mode.hasSuffix("_restore_ack_only") { f.routingFocusClickFault = "ack_only" }
+                        f.builder.setAttribute(nameField, kAXValueAttribute as String, NSNumber(value: 0))
+                        f.builder.setAttributeSettable(nameField, kAXValueAttribute as String, false)
+                        let bar = f.builder.element(1_971_403), trackMenu = f.builder.element(1_971_404)
+                        let menu = f.builder.element(1_971_405)
+                        for (node, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                                             (menu, kAXMenuRole), (rename, kAXMenuItemRole), (menuEditor, kAXTextFieldRole)] {
+                            f.builder.setRole(node, role as String)
+                        }
+                        f.builder.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+                        f.builder.setAttribute(rename, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+                        f.builder.setChildren(bar, [trackMenu]); f.builder.setChildren(trackMenu, [menu]); f.builder.setChildren(menu, [rename])
+                        f.builder.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+                        f.builder.setAttribute(menuEditor, kAXWindowAttribute as String, f.window)
+                        f.builder.setAttribute(menuEditor, kAXParentAttribute as String, f.rail)
+                        f.builder.setAttribute(menuEditor, kAXValueAttribute as String, "Duplicate")
+                        f.builder.setAttributeSettable(menuEditor, kAXValueAttribute as String, true)
+                        f.builder.setChildren(menuEditor, [])
+                        f.routingNameReturn = {
+                            guard let name = f.builder.attributeValue(menuEditor, kAXValueAttribute as String) as? String else { return false }
+                            f.routingNameConfirms += 1
+                            f.builder.setAttribute(nameField, kAXDescriptionAttribute as String, name)
+                            f.builder.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
+                            f.builder.setAttribute(f.builder.element(1_965_711), kAXValueAttribute as String, name)
+                            // Native menu Return closes the owned editor on the
+                            // original rail path, not the earlier Mixer focus.
+                            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.routingReplacement ?? f.strips[1]])
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                            if mode == "coupled_menu_overlay_post_peer" {
+                                f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                            } else if mode == "coupled_menu_overlay_post_source" {
+                                let replacement = f.builder.element(1_971_408)
+                                f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                                f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[1]))
+                                f.routingReplacement = replacement
+                                f.builder.setChildren(f.mixer, [f.strips[0], replacement])
+                                f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [replacement])
+                            } else if mode == "coupled_menu_overlay_post_editor" || mode == "coupled_menu_overlay_post_foreign_focus" {
+                                let foreign = f.builder.element(1_971_409)
+                                f.builder.setRole(foreign, mode.hasSuffix("_post_editor") ? kAXTextFieldRole as String : kAXGroupRole as String)
+                                f.builder.setAttribute(foreign, kAXWindowAttribute as String, f.window)
+                                f.builder.setAttribute(foreign, kAXValueAttribute as String, "Selected Canonical")
+                                f.builder.setAttributeSettable(foreign, kAXValueAttribute as String, true)
+                                f.builder.setChildren(foreign, [])
+                                f.builder.setAttribute(foreign, kAXParentAttribute as String, f.window)
+                                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                            }
+                            if mode.contains("_post_") || mode.hasSuffix("_restore_ack_only") { f.routingLateScopeInjected = true }
+                            return true
+                        }
+                    }
+                    f.routingSetter = { element, attribute, value in
+                        guard CFEqual(element, menuOverlay ? menuEditor : nameField), attribute == kAXValueAttribute as String,
+                              let name = value as? String else { return nil }
+                        if f.routingNameWrites.isEmpty { f.routingDocumentReadsAtFirstNameWrite = f.routingDocumentReads }
+                        f.routingNameWrites.append(name)
+                        if menuOverlay {
+                            f.builder.setAttribute(menuEditor, kAXValueAttribute as String, name)
+                            return true
+                        }
+                        f.builder.setAttribute(nameField, kAXDescriptionAttribute as String, name)
+                        f.builder.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
+                        if ownsEditor {
+                            f.builder.setAttribute(nameField, kAXValueAttribute as String, name)
+                        }
+                        return true
+                    }
+                }
+                let redrawsCensus = mode.hasPrefix("census_") || mode.hasPrefix("coupled_menu_overlay_census")
+                if mode.hasPrefix("coupled_menu_overlay_census") {
+                    f.routingSelection = { index in
+                        f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                            [index == 0 ? f.routingReplacement ?? f.strips[1] : f.routingOtherReplacement ?? f.strips[0]])
+                    }
+                }
                 @Sendable func redrawPeer(_ node: AXUIElement, key: Int) -> AXUIElement {
                     let copy = f.builder.element(key)
                     for attribute in [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute,
@@ -741,6 +1047,14 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setChildren(outer, [f.mixer])
                 f.builder.setChildren(f.window, [f.rail, outer, f.builder.element(1_965_720)])
                 f.routingReadResult = { element, attribute in
+                    if menuOverlay, CFEqual(element, f.rail),
+                       [kAXValueAttribute, kAXSelectedTextAttribute, kAXNumberOfCharactersAttribute,
+                        kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    if menuOverlay, CFEqual(element, nameField), attribute == kAXValueAttribute as String {
+                        return .success(NSNumber(value: 0))
+                    }
                     if mode == "unread_scalar", CFEqual(element, f.builder.element(1_973_121)),
                        attribute == kAXValueAttribute as String {
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
@@ -760,6 +1074,29 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setAttribute(echo, "AXMenuItemMarkChar", "✓")
                 f.builder.setChildren(echo, [])
                 f.routingRead = { element, attribute in
+                    if mode == "coupled_menu_overlay_late_editor", f.routingMenuNameOpens > 0,
+                       CFEqual(element, menuEditor), attribute == kAXParentAttribute as String, !f.routingLateScopeInjected {
+                        let foreign = f.builder.element(1_971_401)
+                        f.builder.setRole(foreign, kAXTextFieldRole as String)
+                        f.builder.setAttribute(foreign, kAXValueAttribute as String, "Duplicate")
+                        f.builder.setAttribute(foreign, kAXWindowAttribute as String, f.window)
+                        f.builder.setAttribute(foreign, kAXParentAttribute as String, f.rail)
+                        f.builder.setChildren(foreign, [])
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                        f.routingLateScopeInjected = true
+                    }
+                    if composed, CFEqual(element, f.window), attribute == kAXDocumentAttribute as String {
+                        f.routingDocumentReads += 1
+                        if f.routingDocumentReads == foreignFocusAtDocumentRead {
+                            let foreign = f.builder.element(1_971_401)
+                            f.builder.setRole(foreign, kAXTextFieldRole as String)
+                            f.builder.setAttribute(foreign, kAXValueAttribute as String, "Duplicate")
+                            f.builder.setAttribute(foreign, kAXWindowAttribute as String, f.window)
+                            f.builder.setChildren(foreign, [])
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                            f.routingLateScopeInjected = true
+                        }
+                    }
                     if outputs.contains(where: { CFEqual($0, element) }), attribute == kAXHelpAttribute as String {
                         f.routingClassifierHelpReads += 1
                     }
@@ -860,6 +1197,56 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setChildren(submenu, mode == "unoffered_physical" ? [stereo] : [stereo, physical]); f.builder.setChildren(parent, [submenu])
                 f.builder.setChildren(root, [echo, parent]); f.builder.setActionNames(root, [kAXCancelAction as String])
                 f.routingAction = { element, action in
+                    if menuOverlay, CFEqual(element, rename), action == kAXPressAction as String {
+                        f.routingMenuNameOpens += 1
+                        f.builder.setAttribute(menuEditor, kAXValueAttribute as String,
+                            f.builder.attributeValue(nameField, kAXDescriptionAttribute as String))
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, menuEditor)
+                        if mode == "coupled_menu_overlay_foreign_rail" {
+                            let foreignRail = f.builder.element(1_971_407)
+                            f.builder.setRole(foreignRail, kAXGroupRole as String)
+                            f.builder.setAttribute(foreignRail, kAXWindowAttribute as String, f.window)
+                            f.builder.setChildren(foreignRail, [])
+                            f.builder.setAttribute(menuEditor, kAXParentAttribute as String, foreignRail)
+                            f.routingLateScopeInjected = true
+                        } else if mode == "coupled_menu_overlay_missing_header" {
+                            f.builder.setChildren(f.rail, [f.headers[0]])
+                            f.routingLateScopeInjected = true
+                        } else if mode == "coupled_menu_overlay_peer_change" {
+                            f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                            f.routingLateScopeInjected = true
+                        }
+                        return true
+                    }
+                    if composed, CFEqual(element, nameField) {
+                        if ownsEditor {
+                            f.builder.setAttributeSettable(nameField, kAXValueAttribute as String, true)
+                            f.builder.setAttribute(nameField, kAXValueAttribute as String,
+                                f.builder.attributeValue(nameField, kAXDescriptionAttribute as String))
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                                action == kAXConfirmAction as String ? f.routingReplacement ?? f.strips[1] : nameField)
+                        }
+                        if mode == "coupled_foreign_editor", action == kAXPressAction as String {
+                            let foreign = f.builder.element(1_971_401)
+                            f.builder.setRole(foreign, kAXTextFieldRole as String)
+                            f.builder.setAttribute(foreign, kAXValueAttribute as String, "Duplicate")
+                            f.builder.setAttribute(foreign, kAXWindowAttribute as String, f.window)
+                            f.builder.setChildren(foreign, [])
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                            f.routingLateScopeInjected = true
+                        }
+                        if mode == "coupled_name_leaf_peer", action == kAXPressAction as String, !f.routingLateScopeInjected {
+                            f.routingLateScopeInjected = true
+                            f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                        }
+                        if action == kAXConfirmAction as String {
+                            if f.routingNameConfirms == 0 { f.routingDocumentReadsAtFirstNameConfirm = f.routingDocumentReads }
+                            f.routingNameConfirms += 1
+                            f.builder.setAttribute(f.builder.element(1_965_711), kAXValueAttribute as String,
+                                f.builder.attributeValue(nameField, kAXDescriptionAttribute as String))
+                        }
+                        return [kAXPressAction as String, kAXConfirmAction as String].contains(action)
+                    }
                     if action == kAXPressAction as String,
                        let index = outputs.firstIndex(where: { CFEqual($0, element) }) {
                         let label = f.builder.attributeValue(outputs[index], kAXDescriptionAttribute as String) as? String
@@ -884,7 +1271,7 @@ struct Issue965HeldSelectionAssociationTests {
                                 CFEqual(element, physical) ? "Output 3-4" : "Stereo Output")
                         }
                         f.routingOpenedOutputIndex = nil
-                        if mode == "retired" || redrawsCensus, f.routingReplacement == nil {
+                        if mode == "retired" || mode.hasPrefix("coupled_retired") || redrawsCensus, f.routingReplacement == nil {
                             let replacement = f.builder.element(1_973_140)
                             f.builder.setRole(replacement, kAXLayoutItemRole as String)
                             f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
@@ -895,6 +1282,9 @@ struct Issue965HeldSelectionAssociationTests {
                             if redrawsCensus { f.routingOtherReplacement = redrawPeer(f.strips[0], key: 1_974_200) }
                         }
                         f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
+                        if menuOverlay, let replacement = f.routingReplacement {
+                            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [replacement])
+                        }
                         if mode == "census_header" {
                             f.routingLateScopeInjected = true
                             f.builder.setChildren(f.rail, [redrawPeer(f.headers[0], key: 1_974_201), f.headers[1]])
@@ -958,8 +1348,26 @@ struct Issue965HeldSelectionAssociationTests {
                 guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
                     Issue.record("The explicit typed physical output must parse"); return
                 }
-                let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
-                    names: [], capture: capture, request: retained.request, snapshotCurrent: true)
+                let names: [ProjectSessionAudit.ApprovedName] = composed
+                    ? [.init(target: "source", name: mode == "coupled_same" ? "Duplicate" : "Selected Canonical")] : []
+                let plan: ProjectSessionAudit.CanonicalRepairPlan
+                if composed {
+                    let dependencies = HandlerDependencies(router: ChannelRouter(), cache: cache, targetRegistry: registry,
+                        poller: StatePoller(axChannel: f.channel(), cache: cache, runtime: .init(hasVisibleWindow: { false })),
+                        dialogPresent: { false }, supportBundleExporter: nil, mutationGate: LogicMutationGate(),
+                        liveTrackNames: { [:] }, projectFileReader: .unavailable)
+                    let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
+                    let params: [String: Value] = ["snapshot_id": .string(id), "policy": .object(raw),
+                        "names": .array(names.map { .object(["target": .string($0.target), "name": .string($0.name)]) })]
+                    #expect(LogicProServer.strictParamValidationResult(tool: "logic_project", command: "plan_session_repair", params: params) == nil)
+                    let text = sharedToolText(await handler(dependencies, params))
+                    let result = try #require(sharedJSONObject(text))
+                    plan = .init(id: try #require(result["plan_id"] as? String),
+                        digest: try #require(result["digest"] as? String), json: text)
+                } else {
+                    plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                        names: names, capture: capture, request: retained.request, snapshotCurrent: true)
+                }
                 let body = try #require(sharedJSONObject(plan.json))
                 let executable = try #require(body["executable"] as? Bool)
                 if ["unread_scalar", "unread_range", "boolean_scalar", "unread_plugin", "unread_plugin_bypass"].contains(mode) {
@@ -969,23 +1377,71 @@ struct Issue965HeldSelectionAssociationTests {
                     return
                 }
                 #expect(executable)
+                if composed {
+                    let combined = try #require(body["steps"] as? [[String: Any]])
+                    #expect(combined.count == (mode == "coupled_same" ? 1 : 2))
+                    #expect(combined.map { $0["kind"] as? String } == (mode == "coupled_same" ? ["local_output"] : ["name", "local_output"]))
+                    #expect(combined.allSatisfy { $0["target_ref"] as? String == target.rawValue })
+                    #expect(f.routingDestinationPresses == 0, "Preview never actuates either goal")
+                }
                 if ["absent_pan", "occupied_peer", "late_peer_send"].contains(mode), body["executable"] as? Bool != true { return }
                 let steps = try #require(body["steps"] as? [[String: Any]])
-                #expect(steps.count == 1 && steps[0]["target_ref"] as? String == target.rawValue)
-                #expect((steps[0]["before"] as? [String: Any])?["kind"] as? String == (mode == "stereo" ? "physical" : "stereo_output"))
-                #expect((steps[0]["after"] as? [String: Any])?["kind"] as? String == (mode == "stereo" || mode == "no_op" ? "stereo_output" : "physical"))
+                #expect(steps.count == (composed && mode != "coupled_same" ? 2 : 1) && steps[0]["target_ref"] as? String == target.rawValue)
+                #expect((steps.last?["before"] as? [String: Any])?["kind"] as? String == (mode == "stereo" ? "physical" : "stereo_output"))
+                #expect((steps.last?["after"] as? [String: Any])?["kind"] as? String == (mode == "stereo" || mode == "no_op" ? "stereo_output" : "physical"))
                 #expect(await cache.retainRepairPlan(plan, snapshotID: id))
                 let journal = SagaJournal(), key = "captured-physical-output-" + mode
                 let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
                     key: key, cache: cache, registry: registry, journal: journal))
-                #expect(approval.plan.steps.count == 1 && approval.plan.steps[0].operationID == .mixerSetOutputVerified)
+                #expect(approval.plan.steps.count == (composed && mode != "coupled_same" ? 2 : 1) && approval.plan.steps.last?.operationID == .mixerSetOutputVerified)
                 #expect(approval.plan.steps[0].targetRef == target)
                 let router = ChannelRouter()
-                await router.register(f.channel())
+                if mode.hasPrefix("coupled_menu_overlay_census") {
+                    await router.register(SelectedOutputSagaResultBoundary(f.channel(), shouldFail: mode.hasSuffix("second_failure"), observed: { response in
+                        f.routingOutputChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
+                    }))
+                } else if mode == "coupled_second_failure" || mode == "coupled_menu_overlay_second_failure" {
+                    await router.register(SelectedOutputSagaResultBoundary(f.channel()))
+                } else { await router.register(f.channel()) }
+                let applyDependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                    poller: StatePoller(axChannel: f.channel(), cache: cache, runtime: .init(hasVisibleWindow: { false })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                    mutationGate: LogicMutationGate(), liveTrackNames: { [:] }, projectFileReader: .unavailable)
+                let applyHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
+                let approvedParams: [String: Value] = ["plan_id": .string(plan.id), "digest": .string(plan.digest),
+                    "confirmed": .bool(true), "idempotency_key": .string(key)]
+                if composed {
+                    for (field, value) in [("confirmed", Value.bool(false)), ("digest", Value.string(String(repeating: "0", count: 64)))] {
+                        var rejectedParams = approvedParams
+                        rejectedParams[field] = value
+                        let rejected = try #require(sharedJSONObject(sharedToolText(await applyHandler(applyDependencies, rejectedParams))))
+                        #expect(rejected["state"] as? String == "C")
+                        #expect(f.routingNameWrites.isEmpty && f.routingDestinationPresses == 0)
+                    }
+                }
                 func run() async -> CallTool.Result {
-                    await SystemDispatcher.handle(command: "saga_execute", params: [:], router: router,
+                    if mode == "coupled" || mode == "coupled_same" || menuOverlay {
+                        return await applyHandler(applyDependencies, approvedParams)
+                    }
+                    return await SystemDispatcher.handle(command: "saga_execute", params: [:], router: router,
                         cache: cache, targetRegistry: registry, dialogPresent: { false }, sagaJournal: journal,
                         mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {
+                            if composed, f.routingNameWrites.count == 1, f.routingDestinationPresses == 0, !f.routingLateScopeInjected {
+                                if mode == "coupled_newer_name" {
+                                    f.routingLateScopeInjected = true
+                                    f.builder.setAttribute(nameField, kAXDescriptionAttribute as String, "External")
+                                    f.builder.setAttribute(f.builder.element(1_965_711), kAXValueAttribute as String, "External")
+                                } else if mode == "coupled_late_peer" {
+                                    f.routingLateScopeInjected = true
+                                    f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                                } else if mode == "coupled_project" {
+                                    f.routingLateScopeInjected = true
+                                    f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                                }
+                            }
+                            if ["coupled_cancel", "coupled_retired", "coupled_retired_editor"].contains(mode), f.routingDestinationPresses == 1 {
+                                _ = await journal.cancel(idempotencyKey: key)
+                            }
                             if mode == "census_foreign", let peer = f.routingOtherReplacement {
                                 f.routingLateScopeInjected = true
                                 f.routingOtherReplacement = redrawPeer(peer, key: 1_975_200)
@@ -1002,6 +1458,40 @@ struct Issue965HeldSelectionAssociationTests {
                         }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let result = try #require(sharedJSONObject(sharedToolText(await run())))
+                if mode.hasPrefix("coupled_menu_overlay_census") {
+                    #expect(f.routingOutputChannelStates.first == "A", "Reach the verified real channel before judging the owned-name continuation")
+                }
+                if composed {
+                    if f.routingFocusClickFault != nil || ["coupled_newer_name", "coupled_late_peer", "coupled_project", "coupled_name_leaf_peer", "coupled_foreign_editor", "coupled_late_editor", "coupled_late_confirm", "coupled_menu_overlay_foreign_rail", "coupled_menu_overlay_missing_header", "coupled_menu_overlay_peer_change", "coupled_menu_overlay_late_editor"].contains(mode)
+                        || (menuOverlay && (mode.contains("_post_") || mode.hasSuffix("_restore_ack_only"))) {
+                        if f.routingFocusClickFault == nil { #expect(f.routingLateScopeInjected) }
+                        #expect(result["saga_state"] as? String != "completed")
+                        let verified = try #require(result["verified"] as? Bool)
+                        #expect(!verified)
+                        #expect(f.routingDestinationPresses == 0)
+                        #expect(f.routingNameWrites == (["coupled_name_leaf_peer", "coupled_foreign_editor", "coupled_late_editor", "coupled_menu_overlay_foreign_rail", "coupled_menu_overlay_missing_header", "coupled_menu_overlay_peer_change", "coupled_menu_overlay_late_editor"].contains(mode) ? [] : ["Selected Canonical"]))
+                        if mode == "coupled_late_peer" || mode == "coupled_name_leaf_peer" {
+                            #expect(f.builder.attributeValue(f.builder.element(1_973_121), kAXValueAttribute as String) as? NSNumber == NSNumber(value: 0.4))
+                        }
+                    } else {
+                        #expect(result["saga_state"] as? String == (compensatesBoth ? "fullyCompensated" : "completed"))
+                        #expect(f.routingDestinationPresses == (compensatesBoth ? 2 : 1))
+                        #expect(f.routingNameWrites == (mode == "coupled_same" ? [] : compensatesBoth ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
+                        #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == (compensatesBoth || mode == "coupled_same" ? "Duplicate" : "Selected Canonical"))
+                        if menuOverlay {
+                            let verified = try #require(result["verified"] as? Bool)
+                            if compensatesBoth { #expect(!verified) } else { #expect(verified) }
+                        }
+                    }
+                    let presses = f.routingDestinationPresses, writes = f.routingNameWrites
+                    let replay = try #require(sharedJSONObject(sharedToolText(await run())))
+                    if !["coupled_cancel", "coupled_retired", "coupled_retired_editor"].contains(mode) {
+                        let duplicate = try #require(replay["duplicate"] as? Bool)
+                        #expect(duplicate)
+                    }
+                    #expect(f.routingDestinationPresses == presses && f.routingNameWrites == writes)
+                    return
+                }
                 if mode == "census_redraw" {
                     #expect(((result["steps"] as? [[String: Any]])?.first?["result"] as? [String: Any])?["state"] as? String == "A",
                         "Reach the actually verified scalar write before judging the independent aggregate proof")
@@ -1030,7 +1520,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let verified = try #require(result["verified"] as? Bool)
                     if mode == "cancel" { #expect(!verified) } else { #expect(verified) }
                     if mode != "cancel" {
-                        let evidence = try #require((result["steps"] as? [[String: Any]])?.first?["evidence"] as? [String: Any])
+                    let evidence = try #require((result["steps"] as? [[String: Any]])?.last?["evidence"] as? [String: Any])
                         let verification = try #require(evidence["verification"] as? [String: Any])
                         let readback = try #require(verification["readback"] as? [String: Any])
                         #expect(readback["provenance"] as? String == "live_independent")
@@ -1040,7 +1530,11 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingDestinationPresses == (mode == "cancel" ? 2 : mode == "no_op" ? 0 : 1))
                 }
                 #expect(f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String
-                    == (mode == "newer" ? "Output 5-6" : redrawsCensus || ["forward", "retired", "absent_pan", "occupied_peer", "known_plugin", "post_write_loss", "unassigned_physical"].contains(mode) ? "Output 3-4" : "Stereo Output"))
+                    == (mode == "newer" ? "Output 5-6" : composed || redrawsCensus || ["forward", "retired", "absent_pan", "occupied_peer", "known_plugin", "post_write_loss", "unassigned_physical"].contains(mode) ? "Output 3-4" : "Stereo Output"))
+                if composed {
+                    #expect(f.routingNameWrites == ["Selected Canonical"])
+                    #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == "Selected Canonical")
+                }
                 #expect(f.builder.attributeValue(outputs[0], kAXDescriptionAttribute as String) as? String == (["stereo", "unassigned_physical", "unoffered_physical"].contains(mode) ? "Stereo Output" : "Output 3-4"))
                 if mode == "retired" {
                     #expect(pair.strip.currentIndex(runtime: f.logic()) == nil)

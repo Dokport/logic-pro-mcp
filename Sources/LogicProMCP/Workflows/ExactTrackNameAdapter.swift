@@ -5,10 +5,93 @@ import MCP
 /// #968: exact-local Arrange naming, including one producer-observed coupled
 /// pair, with earlier canonical effects carried only by this adapter's owned receipts.
 enum ExactTrackNameAdapter {
-    @TaskLocal private static var coupledWriteBoundary: (@Sendable (Bool) -> Bool)?
+    @TaskLocal private static var coupledWriteBoundary: (@Sendable (Bool, AXUIElement?) -> Bool)?
+    @TaskLocal private static var coupledFootprintFocusBookends = false
+    @TaskLocal private static var coupledMenuRail: MenuRailCustody?
+    @TaskLocal private static var coupledMenuEditor: MenuEditorIdentity?
+    @TaskLocal private static var coupledNameFocusTransport: NameFocusTransportCapture?
 
-    static func coupledWritePermitted(allowOwnPreview: Bool = false) -> Bool {
-        coupledWriteBoundary?(allowOwnPreview) ?? true
+    /// Configured native transport only, never source or inverse authority.
+    struct NameFocusTransport: Sendable {
+        let mouse: AXMouseHelper.Runtime
+        let canPostEvents: @Sendable () -> Bool
+    }
+    private final class NameFocusTransportCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var transport: NameFocusTransport?
+        func record(_ value: NameFocusTransport) { lock.withLock { if transport == nil { transport = value } } }
+        var value: NameFocusTransport? { lock.withLock { transport } }
+    }
+    static func recordCoupledNameFocusTransport(mouse: AXMouseHelper.Runtime,
+                                                canPostEvents: @escaping @Sendable () -> Bool) {
+        coupledNameFocusTransport?.record(.init(mouse: mouse, canPostEvents: canPostEvents))
+    }
+
+    static func coupledWritePermitted(allowOwnPreview: Bool = false, ownedEditor: AXUIElement? = nil) -> Bool {
+        coupledWriteBoundary?(allowOwnPreview, ownedEditor) ?? true
+    }
+
+    /// Only the existing writer's successfully opened Rename menu supplies this
+    /// exact editor. This scope cannot discover or adopt another focused field.
+    static func coupledMenuWritePermitted(allowOwnPreview: Bool = false, ownedEditor: AXUIElement) -> Bool {
+        $coupledMenuEditor.withValue(MenuEditorIdentity(editor: ownedEditor)) {
+            coupledWritePermitted(allowOwnPreview: allowOwnPreview, ownedEditor: ownedEditor)
+        }
+    }
+
+    // A retained CF identity only, like the existing native bindings. Every
+    // consuming read independently rechecks the same request's focus/custody.
+    private struct MenuEditorIdentity: @unchecked Sendable { let editor: AXUIElement }
+
+    /// Immutable native handles held before the Rename menu is actuated. Logic's
+    /// menu editor reports this rail as Parent without joining its exported children.
+    private struct MenuRailCustody: @unchecked Sendable {
+        let pair: AccessibilityChannel.HeldSelectionAssociation.Pair
+        let rail: AXUIElement
+        let headers: [AXUIElement]
+
+        init?(_ mirror: CoupledMirror) {
+            let pair = mirror.pair
+            let runtime = pair.track.runtime
+            let sources = [pair.track] + mirror.preservedTracks.compactMap(\.physicalBinding)
+            guard operationPermitted(), pair.track.currentIndex() != nil,
+                  let rail: AXUIElement = AXHelpers.getAttribute(pair.track.header, kAXParentAttribute as String, runtime: runtime.ax),
+                  let heldRail = AXLogicProElements.uniqueTrackHeaderRail(in: pair.track.window, runtime: runtime),
+                  CFEqual(heldRail, rail),
+                  case .success(let headers) = AXHelpers.childrenResult(rail, runtime: runtime.ax),
+                  headers.count == sources.count, sources.count == mirror.preservedTracks.count + 1,
+                  headers.allSatisfy({ header in sources.filter { CFEqual($0.header, header) }.count == 1 }),
+                  headers.allSatisfy({ AXValueExtractors.extractSelectedState($0, runtime: runtime.ax)
+                    == CFEqual($0, pair.track.header) }), operationPermitted() else { return nil }
+            self.pair = pair; self.rail = rail; self.headers = headers
+        }
+
+        func permits(parent: AXUIElement, children: [AXUIElement], pair: AccessibilityChannel.HeldSelectionAssociation.Pair) -> Bool {
+            guard self.pair.track.matches(pair.track), self.pair.strip.matches(pair.strip), CFEqual(parent, rail),
+                  children.count == headers.count, zip(children, headers).allSatisfy({ CFEqual($0, $1) }),
+                  let currentParent: AXUIElement = AXHelpers.getAttribute(pair.track.header, kAXParentAttribute as String,
+                    runtime: pair.track.runtime.ax), CFEqual(currentParent, rail),
+                  children.filter({ CFEqual($0, pair.track.header) }).count == 1,
+                  children.allSatisfy({ AXValueExtractors.extractSelectedState($0, runtime: pair.track.runtime.ax)
+                    == CFEqual($0, pair.track.header) }), operationPermitted() else { return false }
+            return true
+        }
+    }
+
+    /// Ordinary callers keep their existing behavior. The composed footprint
+    /// captures its already-qualified focus before heavy reads, not a new owner.
+    static func captureCoupledWriteFocus(runtime: AXLogicProElements.Runtime) -> AXUIElement? {
+        guard coupledFootprintFocusBookends, let app = AXLogicProElements.appRoot(runtime: runtime) else { return nil }
+        return AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax)
+    }
+
+    static func coupledWriteFocusMatches(_ expected: AXUIElement?, runtime: AXLogicProElements.Runtime) -> Bool {
+        guard let expected else { return !coupledFootprintFocusBookends }
+        guard operationPermitted(), let pid = runtime.logicProPID(), runtime.focusedApplicationPID() == pid,
+              let app = AXLogicProElements.appRoot(runtime: runtime),
+              let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+              CFEqual(focus, expected), operationPermitted() else { return false }
+        return true
     }
     struct Action: Sendable {
         let projectReference: TargetReference
@@ -33,7 +116,7 @@ enum ExactTrackNameAdapter {
         fileprivate let written: String
         fileprivate let registry: TargetRegistry
         fileprivate let cache: StateCache
-        fileprivate let mirror: CoupledMirror?
+        fileprivate var mirror: CoupledMirror?
         fileprivate var selectionOrigin: AXTrackBinding.Binding? = nil
     }
 
@@ -72,7 +155,9 @@ enum ExactTrackNameAdapter {
         router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
         liveTrackName: @escaping @Sendable (Int) -> String?,
         liveTrackNames: @escaping @Sendable () -> [Int: String]?,
-        ownedPeerEffects: [OwnedInverse] = [], selectionOrigin: AXTrackBinding.Binding? = nil
+        ownedPeerEffects: [OwnedInverse] = [], selectionOrigin: AXTrackBinding.Binding? = nil,
+        preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
+        afterVerifiedWrite: (@Sendable (NameFocusTransport?) async -> Bool)? = nil
     ) async -> Receipt {
         func reject() -> Receipt {
             .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
@@ -86,7 +171,7 @@ enum ExactTrackNameAdapter {
                   target: action.targetReference, registry: registry) else { return reject() }
         return await applySelecting(action, router: router, cache: cache, registry: registry,
             liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror,
-            selectionOrigin: selectionOrigin)
+            selectionOrigin: selectionOrigin, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite)
     }
 
     /// Pure availability over the retained producer capture, not permission to
@@ -144,6 +229,65 @@ enum ExactTrackNameAdapter {
             target: proof.target, registry: proof.registry)
     }
 
+    /// The writer supplies its already-held editor, never a discovered focus.
+    /// This qualifies footprint reads only; it grants no key or setter action.
+    static func permitsCoupledEditorRead(_ editor: AXUIElement,
+        pair: AccessibilityChannel.HeldSelectionAssociation.Pair, names: [String]
+    ) -> Bool {
+        let runtime = pair.track.runtime
+        // This is itself used by the enclosing Help read's stop predicate.
+        // Its custody reads must neither read Help in an editor nor recurse
+        // into that enclosing predicate through a locator's Help fallback.
+        return AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: false, stop: { !operationPermitted() })) {
+        guard operationPermitted(), let pid = runtime.logicProPID(), runtime.focusedApplicationPID() == pid,
+              let app = AXLogicProElements.appRoot(runtime: runtime),
+              let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+              CFEqual(focus, editor), AXHelpers.getRole(editor, runtime: runtime.ax) == kAXTextFieldRole as String,
+              AXHelpers.isAttributeSettable(editor, kAXValueAttribute as String, runtime: runtime.ax) == true,
+              case .success(.some(let value)) = AXHelpers.getAttributeResult(editor, kAXValueAttribute as String,
+                runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
+              names.contains(where: { value.utf8.elementsEqual($0.utf8) }),
+              let window: AXUIElement = AXHelpers.getAttribute(editor, kAXWindowAttribute as String, runtime: runtime.ax),
+              CFEqual(window, pair.track.window),
+              let parent: AXUIElement = AXHelpers.getAttribute(editor, kAXParentAttribute as String, runtime: runtime.ax),
+              case .success(let siblings) = AXHelpers.childrenResult(parent, runtime: runtime.ax),
+              siblings.filter({ CFEqual($0, editor) }).count == 1
+                || (siblings.allSatisfy { !CFEqual($0, editor) }
+                    && coupledMenuEditor.map { CFEqual($0.editor, editor) } == true
+                    && coupledMenuRail?.permits(parent: parent, children: siblings, pair: pair) == true),
+              let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax),
+              CFEqual(focusedWindow, pair.track.window), !AXLogicProElements.dialogPresent(runtime: runtime),
+              AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
+              AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
+              pair.track.currentIndex() != nil, pair.strip.currentIndex(runtime: runtime) != nil,
+              let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+              CFEqual(final, editor), operationPermitted() else { return false }
+        return true
+        }
+    }
+
+    /// Continue only an already-owned name effect through this same plan's
+    /// original-header output renewal. The issued Mixer reference stays bound
+    /// to its original strip; the native replacement is request-local custody.
+    static func renewingOwnedCoupledName(_ proof: OwnedInverse,
+        through source: AccessibilityChannel.OriginalHeaderSourceRenewal
+    ) async -> OwnedInverse? {
+        guard let mirror = proof.mirror,
+              mirror.pair.track.matches(source.originalTrack),
+              mirror.pair.strip.matches(source.original),
+              source.original.currentIndex(runtime: mirror.pair.track.runtime) == nil,
+              source.permits(runtime: mirror.pair.track.runtime),
+              await proof.registry.resolve(mirror.reference)?.physicalMixerStrip?.matches(mirror.registryStrip ?? mirror.pair.strip) == true else { return nil }
+        var updated = proof
+        updated.mirror = CoupledMirror(pair: source.pair, reference: mirror.reference, snapshot: mirror.snapshot,
+            preservedTracks: mirror.preservedTracks, preservedStrips: mirror.preservedStrips,
+            registryStrip: mirror.registryStrip ?? mirror.pair.strip, renewal: source)
+        guard let renewed = updated.mirror,
+              await renewed.isCurrent(name: proof.written, project: proof.project, target: proof.target, registry: proof.registry),
+              source.permits(runtime: mirror.pair.track.runtime) else { return nil }
+        return updated
+    }
+
     private static func readHeldCoupledName(_ mirror: CoupledMirror, project: TargetReference,
                                            target: TargetReference, registry: TargetRegistry) async -> String? {
         let guardHelp = AXHelpers.HelpReadGuard(allowHelpReads: false, stop: { !operationPermitted() })
@@ -168,6 +312,8 @@ enum ExactTrackNameAdapter {
         // population scan or a claim about hidden/unobserved host effects.
         var preservedTracks: [TrackState] = []
         var preservedStrips: [ChannelStripState] = []
+        var registryStrip: AXMixerStripBinding.Binding? = nil
+        var renewal: AccessibilityChannel.OriginalHeaderSourceRenewal? = nil
 
         /// Only adapter-issued earlier effects can revise this capture's peers.
         /// The normal fresh pair/membership reads still corroborate these exact bytes.
@@ -213,22 +359,39 @@ enum ExactTrackNameAdapter {
                       source.currentIndex() == ordinal else { return nil }
                 renewed.preservedTracks[index].name = name
             }
-            for index in preservedStrips.indices {
+            if renewal != nil {
+                guard let names = renewedPeerStripNames(), names.count == preservedStrips.count else { return nil }
+                // Aggregate preservation only. Historical peer bindings are not
+                // rebound to these rows or granted any mutation authority.
+                for index in preservedStrips.indices { renewed.preservedStrips[index].name = names[index] }
+            } else { for index in preservedStrips.indices {
                 guard operationPermitted(), let source = preservedStrips[index].physicalBinding,
                       let ordinal = source.currentIndex(runtime: pair.track.runtime),
                       case .success(.some(let name)) = AXPluginInstanceIdentity.stripNameResult(
                         source.strip, runtime: pair.track.runtime.ax),
                       source.currentIndex(runtime: pair.track.runtime) == ordinal else { return nil }
                 renewed.preservedStrips[index].name = name
-            }
+            } }
             guard renewed.peerNamesStillHeld(), operationPermitted() else { return nil }
             return renewed
         }
 
-        private func membershipStillHeld() -> Bool {
+        private func membershipStillHeld(ownedEditor: AXUIElement? = nil) -> Bool {
             let trackSources = [pair.track] + preservedTracks.compactMap(\.physicalBinding)
             let stripSources = [pair.strip] + preservedStrips.compactMap(\.physicalBinding)
-            guard operationPermitted(), trackSources.count == preservedTracks.count + 1,
+            func stripMembership(_ current: [AXUIElement]) -> Bool {
+                guard let renewal else {
+                    return current.allSatisfy { strip in stripSources.filter { CFEqual(strip, $0.strip) }.count == 1 }
+                }
+                // This output's original-header receipt owns the entire new
+                // census. It does not establish continuity of individual peers.
+                let held = renewal.observation.strips
+                return renewal.pair.strip.matches(pair.strip) && held.count == current.count
+                    && held.filter({ CFEqual($0, pair.strip.strip) }).count == 1
+                    && zip(held, current).allSatisfy { CFEqual($0, $1) }
+            }
+            guard operationPermitted(), ownedEditor != nil || (renewal.map({ $0.permits(runtime: pair.track.runtime) }) ?? true),
+                  trackSources.count == preservedTracks.count + 1,
                   stripSources.count == preservedStrips.count + 1,
                   case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(
                     in: pair.track.window, runtime: pair.track.runtime),
@@ -237,13 +400,26 @@ enum ExactTrackNameAdapter {
                   let enumeration = AXLogicProElements.mixerChannelStripsIfCompletelyRead(
                     in: pair.strip.mixer, runtime: pair.track.runtime.ax),
                   enumeration.strips.count == stripSources.count,
-                  enumeration.strips.allSatisfy({ strip in stripSources.filter { CFEqual(strip, $0.strip) }.count == 1 }),
+                  stripMembership(enumeration.strips),
                   operationPermitted() else { return false }
-            return true
+            return ownedEditor != nil || (renewal.map({ $0.permits(runtime: pair.track.runtime) }) ?? true)
         }
 
-        private func peerNamesStillHeld() -> Bool {
-            guard membershipStillHeld() else { return false }
+        private func renewedPeerStripNames(ownedEditor: AXUIElement? = nil) -> [String]? {
+            guard let renewal, membershipStillHeld(ownedEditor: ownedEditor) else { return nil }
+            var names: [String] = []
+            for strip in renewal.observation.strips where !CFEqual(strip, pair.strip.strip) {
+                guard operationPermitted(),
+                      case .success(.some(let name)) = AXPluginInstanceIdentity.stripNameResult(strip,
+                        runtime: pair.track.runtime.ax) else { return nil }
+                names.append(name)
+            }
+            guard names.count == preservedStrips.count, membershipStillHeld(ownedEditor: ownedEditor), operationPermitted() else { return nil }
+            return names
+        }
+
+        private func peerNamesStillHeld(ownedEditor: AXUIElement? = nil) -> Bool {
+            guard membershipStillHeld(ownedEditor: ownedEditor) else { return false }
             for row in preservedTracks {
                 guard operationPermitted(), let source = row.physicalBinding,
                       source.document.utf8.elementsEqual(pair.track.document.utf8),
@@ -252,7 +428,12 @@ enum ExactTrackNameAdapter {
                         from: source.header, runtime: source.runtime.ax),
                       name.utf8.elementsEqual(row.name.utf8), source.currentIndex() == index else { return false }
             }
-            for row in preservedStrips {
+            if renewal != nil {
+                guard let names = renewedPeerStripNames(ownedEditor: ownedEditor), names.count == preservedStrips.count,
+                      zip(names, preservedStrips).allSatisfy({ name, row in
+                          row.name.map { name.utf8.elementsEqual($0.utf8) } == true
+                      }) else { return false }
+            } else { for row in preservedStrips {
                 guard operationPermitted(), let source = row.physicalBinding, let expected = row.name,
                       source.document.utf8.elementsEqual(pair.strip.document.utf8),
                       CFEqual(source.window, pair.strip.window), CFEqual(source.mixer, pair.strip.mixer),
@@ -261,27 +442,30 @@ enum ExactTrackNameAdapter {
                         source.strip, runtime: pair.track.runtime.ax),
                       name.utf8.elementsEqual(expected.utf8),
                       source.currentIndex(runtime: pair.track.runtime) == index else { return false }
-            }
-            return membershipStillHeld() && operationPermitted()
+            } }
+            return membershipStillHeld(ownedEditor: ownedEditor) && operationPermitted()
         }
 
-        func namesStillHeld(before: String, after: String? = nil) -> Bool {
+        func namesStillHeld(before: String, after: String? = nil, ownedEditor: AXUIElement? = nil) -> Bool {
             let guardHelp = AXHelpers.HelpReadGuard(allowHelpReads: false, stop: { !operationPermitted() })
             return AXHelpers.HelpReadGuard.$current.withValue(guardHelp) {
                 func matches(_ name: String) -> Bool {
                     name.utf8.elementsEqual(before.utf8) || after.map { name.utf8.elementsEqual($0.utf8) } == true
                 }
-                guard operationPermitted(), peerNamesStillHeld(), pair.track.currentIndex() != nil,
+                let names = [before] + (after.map { [$0] } ?? [])
+                guard ownedEditor.map({ permitsCoupledEditorRead($0, pair: pair, names: names) }) ?? true,
+                      operationPermitted(), peerNamesStillHeld(ownedEditor: ownedEditor), pair.track.currentIndex() != nil,
                       pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
                       // Peer reads can redraw or change the pair. Its deciding
                       // native name/custody reads must follow the last peer read.
-                      peerNamesStillHeld(),
+                      peerNamesStillHeld(ownedEditor: ownedEditor),
                       case .success(.some(let stripName)) = AXPluginInstanceIdentity.stripNameResult(pair.strip.strip,
                         runtime: pair.track.runtime.ax), matches(stripName),
                       case .success(.some(let trackName)) = AXValueExtractors.extractTrackNameResult(
                         from: pair.track.header, runtime: pair.track.runtime.ax), matches(trackName),
                       pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
-                      pair.track.currentIndex() != nil, operationPermitted() else { return false }
+                      pair.track.currentIndex() != nil, operationPermitted(),
+                      ownedEditor.map({ permitsCoupledEditorRead($0, pair: pair, names: names) }) ?? true else { return false }
                 return true
             }
         }
@@ -294,7 +478,7 @@ enum ExactTrackNameAdapter {
                   pair.strip.projectPath?.utf8.elementsEqual(path.utf8) == true,
                   pair.track.document.utf8.elementsEqual(pair.strip.document.utf8),
                   await registry.resolve(target)?.physicalTrack?.matches(pair.track) == true,
-                  await registry.resolve(reference)?.physicalMixerStrip?.matches(pair.strip) == true else { return false }
+                  await registry.resolve(reference)?.physicalMixerStrip?.matches(registryStrip ?? pair.strip) == true else { return false }
             let read = namesStillHeld(before: name)
             guard read, await registry.currentSnapshot == snapshot,
                   await registry.resolveCurrentProject(project)?.descriptor == projectBinding.descriptor,
@@ -308,11 +492,12 @@ enum ExactTrackNameAdapter {
         _ action: Action, router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
         liveTrackName: @escaping @Sendable (Int) -> String?,
         liveTrackNames: @escaping @Sendable () -> [Int: String]?, mirror: CoupledMirror?,
-        selectionOrigin: AXTrackBinding.Binding?
+        selectionOrigin: AXTrackBinding.Binding?, preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
+        afterVerifiedWrite: (@Sendable (NameFocusTransport?) async -> Bool)? = nil
     ) async -> Receipt {
         guard let origin = selectionOrigin, let mirror else {
             return await applyChecked(action, router: router, cache: cache, registry: registry,
-                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror)
+                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite)
         }
         let source = mirror.pair.track
         func exclusive(_ binding: AXTrackBinding.Binding) -> Bool {
@@ -370,7 +555,7 @@ enum ExactTrackNameAdapter {
         let receipt: Receipt
         if acquired {
             receipt = await applyChecked(action, router: router, cache: cache, registry: registry,
-                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror)
+                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite)
         } else {
             receipt = .init(status: .rejectedBeforeWrite, before: nil, after: nil,
                 survivingReference: nil, inverse: nil,
@@ -411,24 +596,50 @@ enum ExactTrackNameAdapter {
     private static func applyChecked(
         _ action: Action, router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
         liveTrackName: @escaping @Sendable (Int) -> String?,
-        liveTrackNames: @escaping @Sendable () -> [Int: String]?, mirror: CoupledMirror?
+        liveTrackNames: @escaping @Sendable () -> [Int: String]?, mirror: CoupledMirror?,
+        preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
+        afterVerifiedWrite: (@Sendable (NameFocusTransport?) async -> Bool)? = nil
     ) async -> Receipt {
         if let failure = TrackDispatcher.renameNameFailure(action.desiredAfter) {
             return Receipt(status: .rejectedBeforeWrite, before: nil, after: nil,
                            survivingReference: nil, inverse: nil, result: failure)
+        }
+        guard preservingFootprint?(false, nil) ?? true else {
+            return .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
+                result: TargetRefResolver.staleTargetReferenceResult(action.targetReference.rawValue, operation: "track.rename"))
         }
         if let mirror, !(await mirror.isCurrent(name: action.expectedBefore, project: action.projectReference,
                                                target: action.targetReference, registry: registry)) {
             return .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
                 result: TargetRefResolver.staleTargetReferenceResult(action.targetReference.rawValue, operation: "track.rename"))
         }
-        let prewrite: (@Sendable (Bool) -> Bool)?
+        let prewrite: (@Sendable (Bool, AXUIElement?) -> Bool)?
         if let mirror {
-            prewrite = { allowPreview in
-                mirror.namesStillHeld(before: action.expectedBefore, after: allowPreview ? action.desiredAfter : nil)
+            prewrite = { allowPreview, editor in
+                let activeEditor: AXUIElement?
+                if preservingFootprint != nil, let editor,
+                   let app = AXLogicProElements.appRoot(runtime: mirror.pair.track.runtime),
+                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
+                        runtime: mirror.pair.track.runtime.ax), CFEqual(focus, editor) {
+                    activeEditor = editor
+                } else { activeEditor = nil }
+                return mirror.namesStillHeld(before: action.expectedBefore, after: allowPreview ? action.desiredAfter : nil,
+                    ownedEditor: activeEditor)
+                    && (preservingFootprint?(allowPreview, activeEditor) ?? true)
             }
         } else { prewrite = nil }
-        let result = await $coupledWriteBoundary.withValue(prewrite) {
+        let menuRail = preservingFootprint == nil ? nil : mirror.flatMap { mirror in
+            AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: false, stop: { !operationPermitted() })) {
+                MenuRailCustody(mirror)
+            }
+        }
+        // Every name leaf and inverse owns a fresh capture; nothing is reused
+        // across invocations or reconstructed from the dispatcher JSON.
+        let focusTransport = afterVerifiedWrite == nil ? nil : NameFocusTransportCapture()
+        let result = await $coupledNameFocusTransport.withValue(focusTransport) {
+          await $coupledWriteBoundary.withValue(prewrite) {
+          await $coupledFootprintFocusBookends.withValue(preservingFootprint != nil) {
+            await $coupledMenuRail.withValue(menuRail) {
             await TrackDispatcher.handle(
             command: "rename",
             params: ["project_ref": .string(action.projectReference.rawValue),
@@ -437,6 +648,9 @@ enum ExactTrackNameAdapter {
             router: router, cache: cache, targetRegistry: registry,
             liveTrackName: liveTrackName, liveTrackNames: liveTrackNames
             )
+            }
+          }
+          }
         }
         let body = decodedJSONObject(sharedText(result))
         let before = body?["before"] as? String
@@ -480,6 +694,10 @@ enum ExactTrackNameAdapter {
                   currentName.utf8.elementsEqual(after.utf8),
                   source.currentIndex() != nil else { return unverified() }
         }
+        // Only a real A, rebound reference and deciding native after-name can
+        // run the composed caller's exact original-custody restoration.
+        if let afterVerifiedWrite, !(await afterVerifiedWrite(focusTransport?.value)) { return unverified() }
+        guard preservingFootprint?(true, nil) ?? true else { return unverified() }
         if let mirror, !(await mirror.isCurrent(name: after, project: action.projectReference,
                                                target: action.targetReference, registry: registry)) { return unverified() }
         let inverse = wrote ? OwnedInverse(project: action.projectReference, target: action.targetReference,
@@ -491,7 +709,9 @@ enum ExactTrackNameAdapter {
     static func inverse(
         _ proof: OwnedInverse, router: ChannelRouter,
         liveTrackName: @escaping @Sendable (Int) -> String?,
-        liveTrackNames: @escaping @Sendable () -> [Int: String]?
+        liveTrackNames: @escaping @Sendable () -> [Int: String]?,
+        preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
+        afterVerifiedWrite: (@Sendable (NameFocusTransport?) async -> Bool)? = nil
     ) async -> Receipt {
         // Only this pair is restored. Observe newer peers as the preservation
         // baseline, rather than overwriting them or dropping their proof.
@@ -508,7 +728,7 @@ enum ExactTrackNameAdapter {
                            expectedBefore: proof.written, desiredAfter: proof.before),
                     router: router, cache: proof.cache, registry: proof.registry,
                     liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror,
-                    selectionOrigin: proof.selectionOrigin)
+                    selectionOrigin: proof.selectionOrigin, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite)
     }
 
     private static func sharedText(_ result: CallTool.Result) -> String {

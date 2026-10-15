@@ -2,6 +2,67 @@
 import Foundation
 
 extension AccessibilityChannel {
+    /// The existing unique direct Name plate resolver, shared by the name
+    /// editor and its bounded focus-only first phase. No descendant search.
+    static func physicalMixerNamePlate(source: AXMixerStripBinding.Binding,
+                                       runtime: AXLogicProElements.Runtime) -> AXUIElement? {
+        guard case .success(let children) = AXHelpers.childrenResult(source.strip, runtime: runtime.ax) else { return nil }
+        var matches: [AXUIElement] = []
+        for child in children {
+            guard case .success(.some(let role)) = AXHelpers.getAttributeResult(child, kAXRoleAttribute as String, runtime: runtime.ax)
+                as Result<String?, AXHelpers.AXStatusError> else { return nil }
+            if role != kAXTextFieldRole as String { continue }
+            guard case .success(.some(let description)) = AXHelpers.getAttributeResult(child, kAXDescriptionAttribute as String, runtime: runtime.ax)
+                as Result<String?, AXHelpers.AXStatusError> else { return nil }
+            if AXLocalePolicy.mixerStripNameField.matches(description, mode: .exact) { matches.append(child) }
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    /// Only the already-measured single Name-plate click. Caller independently
+    /// owns source/population/footprint and verifies the exact original focus.
+    /// No AXFocused fallback, second click, editor acquisition, keys or typing.
+    static func clickOriginalMixerNamePlate(source: AXMixerStripBinding.Binding,
+                                           expectedName: String, expectedFocus: AXUIElement,
+                                           runtime: AXLogicProElements.Runtime,
+                                           transport: ExactTrackNameAdapter.NameFocusTransport,
+                                           permittingClick: @Sendable () -> Bool) -> Bool {
+        guard permittingClick(), let pid = runtime.logicProPID(),
+              let app = AXLogicProElements.appRoot(runtime: runtime),
+              let plate = physicalMixerNamePlate(source: source, runtime: runtime),
+              let position = AXHelpers.getPosition(plate, runtime: runtime.ax),
+              let size = AXHelpers.getSize(plate, runtime: runtime.ax),
+              position.x.isFinite, position.y.isFinite, size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0, let hitTest = runtime.ax.elementAtPosition else { return false }
+        let point = CGPoint(x: position.x + size.width / 2, y: position.y + size.height / 2)
+        func held() -> Bool {
+            guard permittingClick(), source.currentIndex(runtime: runtime) != nil,
+                  physicalMixerNamePlate(source: source, runtime: runtime).map({ CFEqual($0, plate) }) == true,
+                  let parent: AXUIElement = AXHelpers.getAttribute(plate, kAXParentAttribute as String, runtime: runtime.ax),
+                  CFEqual(parent, source.strip),
+                  AXHelpers.isAttributeSettable(plate, kAXValueAttribute as String, runtime: runtime.ax) == false,
+                  case .success(.some(let name)) = AXHelpers.getAttributeResult(plate, kAXValueAttribute as String,
+                      runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
+                  name.utf8.elementsEqual(expectedName.utf8),
+                  AXHelpers.getPosition(plate, runtime: runtime.ax) == position,
+                  AXHelpers.getSize(plate, runtime: runtime.ax) == size,
+                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(source.window, runtime: runtime),
+                  source.document.utf8.elementsEqual(document.utf8), runtime.logicProPID() == pid,
+                  runtime.focusedApplicationPID() == pid,
+                  AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
+                  AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
+                  permittingClick() else { return false }
+            return true
+        }
+        guard let prepared = transport.mouse.prepareMouseClick(point, 1), held(),
+              case .success(.some(let hit)) = hitTest(app, point), CFEqual(hit, plate), held(),
+              case .success(.some(let decidingHit)) = hitTest(app, point), CFEqual(decidingHit, plate), held(),
+              let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+              CFEqual(focus, expectedFocus), transport.canPostEvents(), ExactTrackNameAdapter.operationPermitted() else { return false }
+        guard prepared.postDown() else { return false }
+        return prepared.postUp()
+    }
+
     /// One name write on an already-issued physical Mixer source. This does not
     /// establish Arrange association, coupling, an inverse or plan preservation.
     static func renamePhysicalMixerStrip(
@@ -40,17 +101,7 @@ extension AccessibilityChannel {
                 return ExactTrackNameAdapter.operationPermitted()
             }
             func nameField() -> AXUIElement? {
-                guard case .success(let children) = AXHelpers.childrenResult(source.strip, runtime: runtime.ax) else { return nil }
-                var matches: [AXUIElement] = []
-                for child in children {
-                    guard case .success(.some(let role)) = AXHelpers.getAttributeResult(child, kAXRoleAttribute as String, runtime: runtime.ax)
-                        as Result<String?, AXHelpers.AXStatusError> else { return nil }
-                    if role != kAXTextFieldRole as String { continue }
-                    guard case .success(.some(let description)) = AXHelpers.getAttributeResult(child, kAXDescriptionAttribute as String, runtime: runtime.ax)
-                        as Result<String?, AXHelpers.AXStatusError> else { return nil }
-                    if AXLocalePolicy.mixerStripNameField.matches(description, mode: .exact) { matches.append(child) }
-                }
-                return matches.count == 1 ? matches[0] : nil
+                physicalMixerNamePlate(source: source, runtime: runtime)
             }
             func observedName() -> String? {
                 guard owned(), case .success(.some(let name)) = AXPluginInstanceIdentity.stripNameResult(source.strip, runtime: runtime.ax),
