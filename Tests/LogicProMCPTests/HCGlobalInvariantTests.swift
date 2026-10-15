@@ -135,6 +135,10 @@ struct HCGlobalInvariantTests {
                 "target_ref": .string("mix_hc_fixture"), "ordinal": .int(1),
                 "level_db": .string("-6"), "expected_current": .string("-∞")],
                 operation: "mixer.set_send_level_verified", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_mixer", command: "set_send_mode_verified", params: [
+                "target_ref": .string("mix_hc_fixture"), "ordinal": .int(1),
+                "mode": .string("pre_fader"), "expected_current": .string("post_fader")],
+                operation: "mixer.set_send_mode_verified", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_plugin_param", params: ["track": .int(0), "insert": .int(0), "param": .int(0), "value": .double(0.5)], operation: "plugin.set_param", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "insert_plugin", params: ["track": .int(0), "slot": .int(0), "plugin_name": .string("Gain"), "confirmed": .bool(true)], operation: "plugin.insert", destinations: [], invariant: .minimumV1),
 
@@ -564,6 +568,15 @@ struct HCGlobalInvariantTests {
                 liveTrackNames: hcLiveTrackHeaders
             )
         case "logic_mixer":
+            if routeCase.command == "set_send_mode_verified" {
+                let context = try await Issue965HeldSelectionAssociationTests().modeMetadataCapture()
+                var params = routeCase.params
+                params["target_ref"] = .string(context.reference)
+                return await FeatureFlags.withAdr002TargetRefForTests(true) {
+                    await MixerDispatcher.handle(command: routeCase.command, params: params,
+                        router: router, cache: context.cache, targetRegistry: context.registry)
+                }
+            }
             if routeCase.command == "set_input_bus_verified" || routeCase.command == "set_send_output_verified"
                 || routeCase.command == "set_send_bypass_verified" || routeCase.command == "set_send_level_verified" {
                 let fixture = try Issue291InputAssignmentTests.Fixture()

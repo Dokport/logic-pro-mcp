@@ -289,6 +289,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
         var routingDestinationPresses = 0
+        var routingModePresses = 0
         var routingBypassPresses = 0
         var routingBypassMenuOpens = 0
         var routingBypassMenuCancels = 0
@@ -702,6 +703,25 @@ struct Issue965HeldSelectionAssociationTests {
             return AccessibilityChannel(runtime: .axBacked(isTrusted: { true },
                 isLogicProRunning: { true }, hasVisibleWindow: { true }, logicRuntime: logic()))
         }
+    }
+
+    /// Metadata censuses must reach the route with a genuinely retained native pair,
+    /// not manufacture the association missing from a bare Mixer resource.
+    func modeMetadataCapture() async throws -> (cache: StateCache, registry: TargetRegistry, reference: String) {
+        let f = try Fixture(), cache = StateCache(), registry = TargetRegistry()
+        let body = try await inspect(f, cache: cache, registry: registry,
+            domains: ["tracks", "strips", "associations"], scope: "selection")
+        let id = try #require(body["snapshot_id"] as? String)
+        let retained = try #require(await cache.retainedInspection(id: id))
+        let capture = retained.capture
+        let index = try #require(capture.channelStrips.firstIndex {
+            $0.physicalBinding.map { CFEqual($0.strip, f.strips[1]) } == true
+        })
+        let reference = try #require(capture.mixerReference(at: index))
+        let source = try #require(capture.channelStrips[index].physicalBinding)
+        _ = try #require(await cache.retainedMixerAssociation(reference: reference, source: source,
+            snapshot: await registry.currentSnapshot))
+        return (cache, registry, reference.rawValue)
     }
 
     private func inspect(_ f: Fixture, navigation: Bool = true, cache: StateCache = StateCache(),
@@ -1684,6 +1704,52 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(fault)
     }
 
+    @Test func registeredSendModeHasItsVerifiedHandler() throws {
+        _ = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_mode_verified"))
+    }
+
+    @Test func registeredSendModePreservesItsOccupiedSendRoundtrip() async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip")
+    }
+
+    private final class ModePeerBoundary: @unchecked Sendable {
+        var peerReads = 0, beforeLeafPeerReads = 0, mutations = 0, leafCount = 0
+        var injectAt = -1
+        var state = "", receipt = ""
+        let independentPan: Bool
+        init(independentPan: Bool = false) { self.independentPan = independentPan }
+    }
+
+    @Test(arguments: [false, true])
+    func registeredSendModeFinalPeerReadCannotHideModeOrPan(independentPan: Bool) async throws {
+        let healthy = ModePeerBoundary()
+        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modePeerBoundary: healthy)
+        #expect(healthy.state == "A" && healthy.leafCount == 1 && healthy.beforeLeafPeerReads > 0)
+        let fault = ModePeerBoundary(independentPan: independentPan)
+        fault.injectAt = healthy.beforeLeafPeerReads
+        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modePeerBoundary: fault)
+        #expect(fault.mutations == 1, "Reach the final peer read after the deciding mode check")
+        #expect(fault.state == "C", "\(fault.receipt)")
+        #expect(fault.leafCount == 0, "An intervening checked mode or Independent Pan edit must prevent the leaf")
+    }
+
+    @Test(arguments: ["noop", "independent_pan"])
+    func registeredSendModeUsesOnlyItsCheckedMode(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: mode)
+    }
+
+    @Test(arguments: ["missing", "duplicate", "unread_mark", "no_checked_mode", "two_checked_modes",
+                      "wrong_target", "wrong_project", "unsupported_mode", "boolean_mode", "extra_param",
+                      "late_document", "late_level", "late_bypass", "late_play", "late_mode", "late_peer", "boolean_raw"])
+    func registeredSendModeRefusesUnownedOrUnknownBefore(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: fault)
+    }
+
+    @Test(arguments: ["after_route", "after_level", "after_bypass", "after_independent_pan", "after_source", "after_ack_only", "after_peer", "after_boolean_raw"])
+    func registeredSendModeCannotInventItsAfterOrInverse(fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: fault)
+    }
+
     @Test func registeredFreshEmptySendCreatesOnlyItsExactControl() async throws {
         try await assertOccupiedSingleSendRenewal(freshEmpty: "observed")
     }
@@ -1722,7 +1788,9 @@ struct Issue965HeldSelectionAssociationTests {
                                                noOpDestination: OutputAssignment? = nil,
                                                bypassMode: String? = nil, levelMode: String? = nil,
                                                freshEmpty: String? = nil, freshAfterTargetReads: Int? = nil,
-                                               recordFreshFinalPeerRead: (@Sendable (Int) -> Void)? = nil) async throws {
+                                               recordFreshFinalPeerRead: (@Sendable (Int) -> Void)? = nil,
+                                               modeCommand: String? = nil,
+                                               modePeerBoundary: ModePeerBoundary? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let mixerOwner = b.element(1_965_2599)
@@ -1741,6 +1809,7 @@ struct Issue965HeldSelectionAssociationTests {
             let parent = b.element(1_965_2604), menu = b.element(1_965_2605)
             let stereo = b.element(1_965_2606), destination = b.element(1_965_2607)
             let competitor = b.element(1_965_2720), leafChild = b.element(1_965_2721)
+            let preFader = b.element(1_965_2771), postPan = b.element(1_965_2772), independentPan = b.element(1_965_2773)
             let lateRemovalChoice = removing && fault?.hasPrefix("late_") == true
             func send(_ base: Int) -> [AXUIElement] {
                 let anchor = b.element(base), group = b.element(base + 1), bypass = b.element(base + 2)
@@ -1760,7 +1829,7 @@ struct Issue965HeldSelectionAssociationTests {
                 return [anchor, group, level]
             }
             let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
-            if freshEmpty != nil { f.useBulkReads = true }
+            if freshEmpty != nil || modeCommand != nil { f.useBulkReads = true }
             if levelMode != nil {
                 f.useBulkReads = true
                 let knob = b.element(1_965_2624), editor = b.element(1_965_2800), field = b.element(1_965_2801)
@@ -1862,7 +1931,7 @@ struct Issue965HeldSelectionAssociationTests {
             if freshEmpty == "multiple_empty" { b.setChildren(f.strips[1], originalChildren + [originalSend[0], extraSend[0]]) }
             if freshEmpty == "occupied" { b.setChildren(f.strips[1], originalChildren + originalSend) }
             let peerChildren = b.makeAXRuntime().children(f.strips[0])
-            if freshEmpty?.hasPrefix("peer_") == true || ["calibrate_late_target", "late_target"].contains(freshEmpty ?? "") {
+            if modePeerBoundary != nil || freshEmpty?.hasPrefix("peer_") == true || ["calibrate_late_target", "late_target"].contains(freshEmpty ?? "") {
                 b.setChildren(f.strips[0], peerChildren + [extraSend[0]])
             }
             b.setRole(replacement, kAXLayoutItemRole as String)
@@ -1878,7 +1947,7 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(restoredSource, [name] + extraSend)
             b.setActionNames(renewedSend[0], [kAXPressAction as String])
             for container in [root, menu] { b.setRole(container, kAXMenuRole as String) }
-            for (item, title) in [(echo, "Stereo Output"), (mode, emptyModeMenu ? "Post Fader" : "Post Pan"), (parent, "Output"),
+            for (item, title) in [(echo, "Stereo Output"), (mode, emptyModeMenu || modeCommand != nil ? "Post Fader" : "Post Pan"), (parent, "Output"),
                                   (stereo, "Stereo Output"), (destination, "Output 3-4")] {
                 b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
                 b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
@@ -1886,6 +1955,15 @@ struct Issue965HeldSelectionAssociationTests {
             }
             for item in [echo, mode, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
             b.setChildren(menu, [stereo, destination]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, mode, parent])
+            if modeCommand != nil {
+                for (item, title) in [(preFader, "Pre Fader"), (postPan, "Post Pan"), (independentPan, "Independent Pan")] {
+                    b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
+                    b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
+                    b.setAttribute(item, "AXMenuItemMarkChar", ""); b.setActionNames(item, [kAXPressAction as String])
+                }
+                b.setChildren(root, [echo, independentPan, postPan, mode, preFader, parent])
+                if modeCommand == "independent_pan" { b.setAttribute(independentPan, "AXMenuItemMarkChar", "✓") }
+            }
             if freshEmpty != nil {
                 b.setAttribute(echo, kAXTitleAttribute as String, "No Send")
                 b.setAttribute(mode, "AXMenuItemMarkChar", "")
@@ -1923,6 +2001,27 @@ struct Issue965HeldSelectionAssociationTests {
             }
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
+                if modeCommand != nil, action == kAXPressAction as String, CFEqual(element, mode) || CFEqual(element, preFader) {
+                    modePeerBoundary?.beforeLeafPeerReads = modePeerBoundary?.peerReads ?? 0
+                    f.routingModePresses += 1
+                    if modeCommand != "after_ack_only" {
+                        b.setAttribute(mode, "AXMenuItemMarkChar", CFEqual(element, mode) ? "✓" : "")
+                        b.setAttribute(preFader, "AXMenuItemMarkChar", CFEqual(element, preFader) ? "✓" : "")
+                    }
+                    switch modeCommand {
+                    case "after_route":
+                        b.setAttribute(echo, kAXTitleAttribute as String, "Output 3-4")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                    case "after_level": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 99)
+                    case "after_bypass": b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1)
+                    case "after_independent_pan": b.setAttribute(independentPan, "AXMenuItemMarkChar", "✓")
+                    case "after_source": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "after_peer": b.setChildren(f.strips[0], peerChildren + extraSend)
+                    case "after_boolean_raw": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, false)
+                    default: break
+                    }
+                    b.setChildren(f.mixer, f.strips); return true
+                }
                 if bypassMode != nil, CFEqual(element, b.element(1_965_2622)), action == kAXPressAction as String {
                     f.routingBypassPresses += 1
                     if bypassMode == "press_failed" { return false }
@@ -2220,6 +2319,18 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.routingDestinationPresses == 0 && f.routingReplacement == nil)
             }
             f.routingRead = { element, attribute in
+                if let boundary = modePeerBoundary, f.routingModePresses == 0,
+                   CFEqual(element, extraSend[0]), attribute == kAXHelpAttribute as String {
+                    boundary.peerReads += 1
+                    if boundary.peerReads == boundary.injectAt {
+                        boundary.mutations += 1
+                        if boundary.independentPan { b.setAttribute(independentPan, "AXMenuItemMarkChar", "✓") }
+                        else {
+                            b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                            b.setAttribute(postPan, "AXMenuItemMarkChar", "✓")
+                        }
+                    }
+                }
                 if ["calibrate_late_target", "late_target"].contains(freshEmpty ?? ""), f.routingDestinationPresses == 1 {
                     if CFEqual(element, b.element(1_965_2644)), attribute == kAXValueAttribute as String {
                         f.routingIndependentSendReads += 1
@@ -2582,6 +2693,79 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.routingReplacement == nil && f.selections == initialSelections)
                 #expect(AXLogicProElements.sendSlotObservations(in: f.strips[1], runtime: f.logic().ax) == beforeSlots)
                 #expect(!gate.isHeldByEntitledHolder())
+                return
+            }
+            if let modeCommand {
+                let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_mode_verified"))
+                var prepared: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
+                    "mode": .string(modeCommand == "noop" ? "post_fader" : "pre_fader"), "expected_current": .string("post_fader")]
+                switch modeCommand {
+                case "boolean_raw": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, false)
+                case "wrong_target": prepared["target_ref"] = .string(try #require(capture.mixerReference(at: 0)).rawValue)
+                case "wrong_project": prepared["project_ref"] = .string("prj_foreign")
+                case "unsupported_mode": prepared["mode"] = .string("post_pan")
+                case "boolean_mode": prepared["mode"] = .bool(true)
+                case "extra_param": prepared["value"] = .double(0.5)
+                case "missing": b.setChildren(root, [echo, independentPan, mode, preFader, parent])
+                case "duplicate":
+                    b.setRole(competitor, kAXMenuItemRole as String); b.setAttribute(competitor, kAXTitleAttribute as String, "Pre Fader")
+                    b.setChildren(competitor, []); b.setChildren(root, [echo, independentPan, postPan, mode, preFader, competitor, parent])
+                case "no_checked_mode": b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                case "two_checked_modes": b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                default: break
+                }
+                if modeCommand == "unread_mark" {
+                    let prior = f.routingReadResult
+                    f.routingReadResult = { element, attribute in
+                        if CFEqual(element, postPan), attribute == "AXMenuItemMarkChar" {
+                            f.routingLateScopeInjected = true; return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                        }
+                        return prior?(element, attribute)
+                    }
+                }
+                f.routingActionNames = { element in
+                    guard CFEqual(element, preFader), !f.routingLateScopeInjected else { return nil }
+                    switch modeCommand {
+                    case "late_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "late_level": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 99)
+                    case "late_bypass": b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1)
+                    case "late_play": b.setAttribute(b.element(1_965_721), kAXValueAttribute as String, 1)
+                    case "late_mode": b.setAttribute(mode, "AXMenuItemMarkChar", ""); b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                    case "late_peer": b.setChildren(f.strips[0], peerChildren + extraSend)
+                    default: return nil
+                    }
+                    f.routingLateScopeInjected = true; return nil
+                }
+                let params = prepared
+                let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_mode_verified",
+                    commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if let boundary = modePeerBoundary {
+                    boundary.state = body["state"] as? String ?? "missing"
+                    boundary.leafCount = f.routingModePresses
+                    boundary.receipt = sharedToolText(result)
+                    return
+                }
+                if modeCommand.hasPrefix("after_") {
+                    #expect(body["state"] as? String == "B", "\(sharedToolText(result))")
+                    #expect(f.routingModePresses == 1 && f.routingDestinationPresses == 0)
+                    return
+                }
+                if !["roundtrip", "noop", "independent_pan"].contains(modeCommand) {
+                    #expect(body["state"] as? String == "C", "\(sharedToolText(result))")
+                    #expect(f.routingModePresses == 0 && f.routingDestinationPresses == 0)
+                    if modeCommand.hasPrefix("late_") || modeCommand == "unread_mark" { #expect(f.routingLateScopeInjected) }
+                    return
+                }
+                #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
+                guard body["state"] as? String == "A" else { return }
+                if modeCommand == "noop" { #expect(f.routingModePresses == 0); return }
+                let inverse = params.merging(["mode": Value.string("post_fader"), "expected_current": .string("pre_fader")]) { _, new in new }
+                let restored = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_mode_verified",
+                    commandParams: inverse, mutationGate: gate) { await handler(dependencies, inverse) }
+                #expect(sharedJSONObject(sharedToolText(restored))?["state"] as? String == "A", "\(sharedToolText(restored))")
+                #expect(f.routingModePresses == 2 && f.routingDestinationPresses == 0)
+                #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "✓")
                 return
             }
             let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))

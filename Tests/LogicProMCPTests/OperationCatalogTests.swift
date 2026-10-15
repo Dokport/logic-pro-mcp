@@ -117,6 +117,7 @@ struct OperationCatalogTests {
         .mixerGetSendBypassVerified: ["ordinal"],
         .mixerSetSendBypassVerified: ["ordinal", "bypassed", "expected_current"],
         .mixerSetSendLevelVerified: ["ordinal", "level_db", "expected_current"],
+        .mixerSetSendModeVerified: ["ordinal", "mode", "expected_current"],
         .mixerSetMasterVolume: ["value", "volume"],
         .mixerBank: ["count", "direction"],
         .mixerSetPluginParam: ["insert", "param", "value"],
