@@ -848,7 +848,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             guard let proof = self.outputProof else { return false }
             if let editor = ownedNameEditor, let names = ownedNamePreview {
                 return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
-                    && ExactTrackNameAdapter.permitsCoupledEditorRead(editor, pair: pair, names: names)
+                    && ExactTrackNameAdapter.permitsCoupledEditorRead(editor, pair: pair, names: names, transportProof: proof)
             }
             return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
                 && (popup.map { proof.permitsOwnedPopupRead($0) } ?? proof.permitsRead())

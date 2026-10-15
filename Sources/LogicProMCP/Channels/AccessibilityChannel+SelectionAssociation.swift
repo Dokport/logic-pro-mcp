@@ -355,7 +355,18 @@ extension AccessibilityChannel {
                 Log.info("Held association ownership refused: original rail/Mixer census", subsystem: "ax")
                 lost = true; return false
             }
-            guard transportPaths.allSatisfy({ held in
+            guard stoppedTransportPathsMatch() else {
+                Log.info("Held association ownership refused: original transport path/value", subsystem: "ax")
+                lost = true; return false
+            }
+            guard case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
+                  document.utf8.elementsEqual(finalDocument.utf8), logic.logicProPID() == pid,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { lost = true; return false }
+            return true
+        }
+
+        private func stoppedTransportPathsMatch() -> Bool {
+            transportPaths.allSatisfy({ held in
                       guard let control = held.first, let current = Self.path(control, to: window, ax: logic.ax),
                             Self.same(held, current) else { return false }
                       let attributes = AXHelpers.getNonHelpAttributes(control, [kAXRoleAttribute, kAXValueAttribute] as [String],
@@ -363,13 +374,29 @@ extension AccessibilityChannel {
                       guard case .success(.some(let role)) = attributes[0], role as? String == kAXCheckBoxRole as String,
                             case .success(.some(let rawValue)) = attributes[1], let value = rawValue as? NSNumber else { return false }
                       return value == 0
-                  }) else {
-                Log.info("Held association ownership refused: original transport path/value", subsystem: "ax")
-                lost = true; return false
-            }
-            guard case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
-                  document.utf8.elementsEqual(finalDocument.utf8), logic.logicProPID() == pid,
-                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { lost = true; return false }
+                  })
+        }
+
+        /// The coupled writer already owns its editor; renew only this proof's
+        /// original stopped controls, not passive-focus permission or stored values.
+        func permitsCoupledEditorTransportRead(pair: Pair) -> Bool {
+            guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  CFEqual(pair.track.window, window), CFEqual(pair.strip.window, window),
+                  CFEqual(pair.strip.mixer, mixer),
+                  pair.track.document.utf8.elementsEqual(document.utf8),
+                  pair.strip.document.utf8.elementsEqual(document.utf8),
+                  headers.filter({ CFEqual($0, pair.track.header) }).count == 1,
+                  strips.filter({ CFEqual($0, pair.strip.strip) }).count == 1,
+                  logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
+                  pair.track.runtime.logicProPID() == pid,
+                  let currentApp = AXLogicProElements.appRoot(runtime: pair.track.runtime), CFEqual(currentApp, app),
+                  case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
+                  currentDocument.utf8.elementsEqual(document.utf8), stoppedTransportPathsMatch(),
+                  // One fresh uniqueness census still rejects an added competing bar,
+                  // including one appearing during the deciding Play/Record reads.
+                  let currentBar = AXLogicProElements.getControlBar(in: window, runtime: logic.ax),
+                  CFEqual(currentBar, transport.controlBar),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
             return true
         }
 

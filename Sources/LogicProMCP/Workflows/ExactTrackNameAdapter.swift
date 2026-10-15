@@ -232,7 +232,8 @@ enum ExactTrackNameAdapter {
     /// The writer supplies its already-held editor, never a discovered focus.
     /// This qualifies footprint reads only; it grants no key or setter action.
     static func permitsCoupledEditorRead(_ editor: AXUIElement,
-        pair: AccessibilityChannel.HeldSelectionAssociation.Pair, names: [String]
+        pair: AccessibilityChannel.HeldSelectionAssociation.Pair, names: [String],
+        transportProof: AccessibilityChannel.HeldSelectionAssociation? = nil
     ) -> Bool {
         let runtime = pair.track.runtime
         // This is itself used by the enclosing Help read's stop predicate.
@@ -257,8 +258,9 @@ enum ExactTrackNameAdapter {
                     && coupledMenuRail?.permits(parent: parent, children: siblings, pair: pair) == true),
               let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax),
               CFEqual(focusedWindow, pair.track.window), !AXLogicProElements.dialogPresent(runtime: runtime),
-              AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
-              AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
+              transportProof.map({ $0.permitsCoupledEditorTransportRead(pair: pair) })
+                ?? (AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
+                    && AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false),
               pair.track.currentIndex() != nil, pair.strip.currentIndex(runtime: runtime) != nil,
               let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
               CFEqual(final, editor), operationPermitted() else { return false }
