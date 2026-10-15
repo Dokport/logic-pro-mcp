@@ -685,9 +685,9 @@ extension AccessibilityChannel {
               let checks = sendMenuNonRoutingChecks(in: root, runtime: runtime) else { return nil }
         func mode(_ title: String) -> SendMode? {
             switch title {
-            case "Post Pan", "포스트패닝", "포스트 패닝": .postPan
-            case "Post Fader", "포스트페이더", "포스트 페이더": .postFader
-            case "Pre Fader", "프리페이더", "프리 페이더": .preFader
+            case "Post Pan", "포스트 패닝": .postPan
+            case "Post Fader", "포스트 페이더": .postFader
+            case "Pre Fader", "프리 페이더": .preFader
             default: nil
             }
         }
@@ -710,7 +710,7 @@ extension AccessibilityChannel {
             rows[kind] = item
             if checked { selected.append(kind) }
         }
-        let independent = items.filter { ["Independent Pan", "독립패닝", "독립 패닝"].contains($0.title) }
+        let independent = items.filter { ["Independent Pan", "독립 패닝"].contains($0.title) }
         guard rows.count == SendMode.allCases.count, selected.count == 1,
               independent.count == 1, !independent[0].hasSubmenu, let panned = mark(independent[0]) else { return nil }
         let known = Set(rows.values.map(\.title) + [independent[0].title])

@@ -2214,6 +2214,51 @@ struct Issue965HeldSelectionAssociationTests {
         _ = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_mode_verified"))
     }
 
+    @Test(arguments: ["english", "korean", "compact_pan", "compact_post_pan", "compact_post_fader", "compact_pre_fader"])
+    func sendModeCensusRequiresMeasuredWholeTitles(fault: String) throws {
+        let f = try Fixture(), b = f.builder
+        let root = b.element(1_965_2900)
+        b.setRole(root, kAXMenuRole as String)
+        var titles = fault == "english"
+            ? ["Independent Pan", "Post Pan", "Post Fader", "Pre Fader"]
+            : ["독립 패닝", "포스트 패닝", "포스트 페이더", "프리 페이더"]
+        let compactFaults = ["compact_pan", "compact_post_pan", "compact_post_fader", "compact_pre_fader"]
+        if let index = compactFaults.firstIndex(of: fault) {
+            titles[index] = ["독립패닝", "포스트패닝", "포스트페이더", "프리페이더"][index]
+        }
+        let items = titles.enumerated().map { index, title in
+            let item = b.element(1_965_2901 + index)
+            b.setRole(item, kAXMenuItemRole as String)
+            b.setAttribute(item, kAXTitleAttribute as String, title)
+            b.setAttribute(item, kAXEnabledAttribute as String, true)
+            b.setAttribute(item, "AXMenuItemMarkChar", index == 2 ? "✓" : "")
+            b.setChildren(item, [])
+            return item
+        }
+        b.setChildren(root, items)
+        let ax = b.makeAXRuntime()
+        let observed = AccessibilityChannel.currentSendMode(in: root, runtime: ax)
+        let choice = AccessibilityChannel.sendModeMenuChoice(.preFader, in: root, runtime: ax)
+        if fault.hasPrefix("compact_") {
+            #expect(observed == nil)
+            guard case .menuUnread = choice else {
+                Issue.record("An unsupported compact title must not grant a mode choice")
+                return
+            }
+        } else {
+            let current = try #require(observed)
+            #expect(current.mode == .postFader)
+            #expect(!current.independentPan)
+            #expect(current.otherChecks.isEmpty)
+            guard case .item(let item, let path) = choice else {
+                Issue.record("Measured whole titles must retain their mode choice")
+                return
+            }
+            #expect(CFEqual(item, items[3]))
+            #expect(path == [titles[3]])
+        }
+    }
+
     @Test func registeredSendModePreservesItsOccupiedSendRoundtrip() async throws {
         try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip")
     }
