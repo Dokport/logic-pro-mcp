@@ -630,6 +630,176 @@ struct Issue291AssignedSendMenuTests {
         #expect(CFEqual(presses[0].0, f.outputs[0]) && CFEqual(presses[1].0, f.outputs[1]))
         #expect(population.uiEffects.restoration == "restored")
     }
+
+    @Test("Registered inspection publishes checked physical and host Stereo output endpoints",
+          arguments: ["physical", "stereo", "send_physical", "send_stereo", "missing_checked", "conflicting_checked"])
+    func registeredCheckedPhysicalOutputReachesItsGraphEndpoint(_ destination: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let isSend = destination.hasPrefix("send_")
+            let prepared = isSend ? try prepare() : nil
+            let f: Issue291PhysicalStripReferenceTests.Fixture
+            if let prepared { f = prepared.f } else { f = try .init() }
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let isPhysical = destination == "physical" || destination == "send_physical"
+            let title = isPhysical ? "Output 3-4" : "Stereo Output"
+            let assignment: OutputAssignment = isPhysical ? .physical(3, 4) : .stereoOutput
+            let echo = f.b.element(291_990)
+            f.b.setRole(echo, kAXMenuItemRole as String)
+            f.b.setAttribute(echo, kAXTitleAttribute as String, title)
+            f.b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
+            f.b.setChildren(echo, [])
+            f.b.setAttribute(f.pair, kAXTitleAttribute as String, title)
+            f.b.setAttribute(f.pair, "AXMenuItemMarkChar", "✓")
+            f.b.setChildren(f.root, [echo, f.b.element(2_910_202)])
+            if destination == "conflicting_checked" {
+                let competitor = f.b.element(291_991)
+                f.b.setRole(competitor, kAXMenuItemRole as String)
+                f.b.setAttribute(competitor, kAXTitleAttribute as String, "Output 5-6")
+                f.b.setAttribute(competitor, "AXMenuItemMarkChar", "✓")
+                f.b.setChildren(competitor, [])
+                f.b.setChildren(f.b.element(2_910_203), [f.pair, competitor])
+            }
+            for output in f.outputs {
+                // A source caption is deliberately not the checked destination's identity.
+                if !isSend || !CFEqual(output, f.outputs[0]) {
+                    f.b.setAttribute(output, kAXDescriptionAttribute as String, "Bus 256")
+                }
+                f.b.setActionNames(output, [kAXPressAction as String])
+            }
+            let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter(), channel = f.channel()
+            await router.register(channel)
+            let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                poller: StatePoller(axChannel: channel, cache: cache, runtime: .init(hasVisibleWindow: { true },
+                    projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                dialogPresent: { false }, supportBundleExporter: nil, mutationGate: LogicMutationGate(),
+                liveTrackNames: { [:] }, projectFileReader: .unavailable)
+            let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "inspect_session"))
+            let params: [String: Value] = ["domains": .array([.string("strips"), .string("routing")]),
+                "allow_ui_navigation": .bool(destination != "missing_checked")]
+            let response = await LogicProServer.runWithDeadline(tool: "logic_project", command: "inspect_session",
+                commandParams: params, mutationGate: dependencies.mutationGate) {
+                await FeatureFlags.withAdr002TargetRefForTests(true) { await handler(dependencies, params) }
+            }
+            let body = try #require(sharedJSONObject(sharedToolText(response)))
+            let snapshot = try #require(body["snapshot_id"] as? String)
+            let retained = try #require(await cache.retainedInspection(id: snapshot))
+            let owner = try #require(retained.capture.channelStrips.first?.physicalBinding)
+            let ordinal: Int? = isSend ? 1 : nil
+            let checked = try #require(retained.capture.freshPopulation?.checkedOutputs.filter {
+                $0.source.matches(owner) && $0.sendOrdinal == ordinal
+            })
+            let source = try #require(retained.capture.mixerReference(at: 0))
+            let graph = try #require(body["routing"] as? [String: Any])
+            let nodes = try #require(graph["nodes"] as? [[String: Any]])
+            let edges = try #require(graph["edges"] as? [[String: Any]])
+            if ["missing_checked", "conflicting_checked"].contains(destination) {
+                #expect(checked.isEmpty)
+                #expect(!nodes.contains { $0["kind"] as? String == "output" })
+                #expect(!edges.contains { $0["provenance"] as? String == "axOutputMenuCheckmark" })
+                #expect(f.mutations.count == (destination == "missing_checked" ? 0 : 4))
+                return
+            }
+            #expect(checked.count == 1 && checked.first?.assignment == assignment,
+                "Reach the actual registered native checked-menu producer before testing its consumer")
+            let endpointID = isPhysical ? "output_physical_3_4" : "output_stereo"
+            let outgoing = edges.filter { $0["source"] as? String == source.rawValue
+                && $0["kind"] as? String == (isSend ? "send" : "mainOutput") }
+            #expect(outgoing.count == 1)
+            #expect(outgoing.first?["destination"] as? String == endpointID)
+            #expect(outgoing.first?["provenance"] as? String == (isSend ? "axSendMenuCheckmark" : "axOutputMenuCheckmark"))
+            if isSend {
+                #expect(outgoing.first?["observedSendOrdinal"] as? Int == 1)
+                #expect(outgoing.first?["send"] == nil || outgoing.first?["send"] is NSNull)
+            }
+            let endpoint = try #require(nodes.first { $0["id"] as? String == endpointID })
+            #expect(endpoint["kind"] as? String == "output")
+            #expect(endpoint["displayName"] as? String == assignment.token)
+            #expect(endpoint["targetRef"] == nil || endpoint["targetRef"] is NSNull)
+            #expect(nodes.filter { $0["kind"] as? String == "output" }.count == 1,
+                "Two separately held sources share one typed sink, not two invented output identities")
+            let mainOutputs = edges.filter { $0["kind"] as? String == "mainOutput" }
+            #expect(mainOutputs.count == (isSend ? 1 : 2))
+            #expect(Set(mainOutputs.compactMap { $0["source"] as? String }).count == (isSend ? 1 : 2))
+            #expect(!nodes.contains { $0["id"] as? String == "output_physical_1_2" })
+            #expect(graph["coverage"] as? String == "partial")
+            #expect(f.mutations.count == 4)
+            #expect(f.mutations.allSatisfy { element, action in
+                action == kAXCancelAction as String && CFEqual(element, f.root)
+                    || action == kAXPressAction as String && f.outputs.contains { CFEqual($0, element) }
+            })
+        }
+    }
+
+    @Test("Physical output endpoints require fresh unique native checked assignments",
+          arguments: ["physical", "stereo", "bus", "distinct_stereo_pair", "absent", "foreign_owner", "conflict",
+                      "duplicate", "unstable", "cached", "decoded", "refs_stale", "moved", "invalid_ports", "invalid_bus", "no_output"])
+    func checkedPhysicalOutputGraphRefusesUnsupportedEvidence(_ fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Issue291PhysicalStripReferenceTests.Fixture()
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let states = try #require(AccessibilityChannel.defaultGetMixerStates(
+                runtime: f.logic, stoppingWhen: { false }).states)
+            let cache = StateCache(), registry = TargetRegistry()
+            await cache.updateProject(.init(name: "Session", filePath: f.bundle.path, source: "fixture"))
+            await cache.updateDocumentState(true)
+            await cache.updateChannelStrips(states)
+            let base = await SessionPopulationObservation.capture(cache: cache, targetRegistry: registry, fileReader: .unavailable)
+            let owner = try #require(states[0].physicalBinding)
+            let source = try #require(base.mixerReference(at: 0))
+            var fresh = SessionPopulationObservation.FreshPopulation(project: base.project,
+                tracks: base.tracks, strips: states, fileTrackCount: nil,
+                beganAt: base.beganAt, endedAt: base.endedAt, stable: fault != "unstable")
+            let assignment: OutputAssignment
+            switch fault {
+            case "stereo", "distinct_stereo_pair": assignment = .stereoOutput
+            case "bus": assignment = .bus(7)
+            case "invalid_ports": assignment = .physical(3, 3)
+            case "invalid_bus": assignment = .bus(257)
+            case "no_output": assignment = .noOutput
+            default: assignment = .physical(3, 4)
+            }
+            if fault != "absent" {
+                let observedOwner = fault == "foreign_owner" ? AXMixerStripBinding.Binding(
+                    window: f.window, mixer: f.mixer, strip: f.strips[0], document: "file:///foreign.logicx/") : owner
+                fresh.checkedOutputs = [.init(source: observedOwner, assignment: assignment)]
+                if fault == "conflict" || fault == "duplicate" {
+                    fresh.checkedOutputs.append(.init(source: owner, assignment: fault == "conflict" ? .stereoOutput : assignment))
+                }
+                if fault == "distinct_stereo_pair" {
+                    fresh.checkedOutputs.append(.init(source: try #require(states[1].physicalBinding), assignment: .physical(1, 2)))
+                }
+            }
+            let rows = fault == "decoded" ? try JSONDecoder().decode([ChannelStripState].self,
+                from: JSONEncoder().encode(states)) : states
+            let capture = SessionPopulationObservation.Capture(before: base.before, after: base.after,
+                projectEpoch: base.projectEpoch, project: base.project, tracks: base.tracks,
+                tracksFetchedAt: base.tracksFetchedAt, channelStrips: rows, mixerFetchedAt: base.mixerFetchedAt,
+                fileTrackCount: base.fileTrackCount, projectFileNotBound: base.projectFileNotBound,
+                requestedProjectMatches: base.requestedProjectMatches, referencesEnabled: base.referencesEnabled,
+                targetSnapshot: base.targetSnapshot, issued: fault == "refs_stale" ? nil : base.issued,
+                projectIssuance: base.projectIssuance, beganAt: base.beganAt, endedAt: base.endedAt,
+                captureID: base.captureID, freshPopulation: fault == "cached" ? nil : fresh,
+                mixerReferences: base.mixerReferences)
+            let graph = fault == "moved" ? RoutingGraphPublication.publish(capture: capture, project: .moved)
+                : SessionPopulationObservation.routingGraph(capture: capture)
+            let outgoing = graph.edges.filter { $0.source == source.rawValue && $0.kind == .mainOutput }
+            if ["physical", "stereo", "bus", "distinct_stereo_pair"].contains(fault) {
+                #expect(outgoing.count == 1)
+                let id = fault == "physical" ? "output_physical_3_4" : fault == "bus" ? "bus_7" : "output_stereo"
+                #expect(outgoing.first?.destination == id)
+                #expect(outgoing.first?.provenance == .axOutputMenuCheckmark)
+                #expect(graph.nodes.first { $0.id == id }?.targetRef == nil)
+                if fault != "bus" { #expect(graph.coverage.physicalOutput.state == .partial) }
+                #expect(routingPath(from: source, to: id, in: graph) == .unverified)
+                if fault == "distinct_stereo_pair" {
+                    #expect(graph.nodes.filter { $0.kind == .output }.count == 2)
+                    #expect(graph.edges.contains { $0.destination == "output_physical_1_2" && $0.source != source.rawValue })
+                }
+            } else { #expect(outgoing.isEmpty) }
+            #expect(!graph.complete)
+            #expect(f.mutations.isEmpty)
+        }
+    }
     @Test("Registered routing capture permits only its original nonediting physical or header focus under its Help guard",
           arguments: ["healthy", "editor", "settable", "characters", "line", "detached", "duplicate", "parent", "window", "background",
                       "header_healthy", "header_popup", "header_settable", "header_value", "header_line", "header_detached", "header_window", "header_background"])
@@ -759,15 +929,17 @@ struct Issue291AssignedSendMenuTests {
             let graph = fault == "moved" ? RoutingGraphPublication.publish(capture: capture, project: .moved)
                 : SessionPopulationObservation.routingGraph(capture: capture)
             let edges = graph.edges.filter { $0.source == source.rawValue && $0.kind == .send }
-            if fault == "held" {
+            if ["held", "stereo", "physical"].contains(fault) {
                 #expect(edges.count == 1)
                 let edge = try #require(edges.first)
-                #expect(edge.destination == "bus_1")
+                let endpoint = fault == "stereo" ? "output_stereo" : fault == "physical" ? "output_physical_3_4" : "bus_1"
+                #expect(edge.destination == endpoint)
                 #expect(edge.send == nil)
                 #expect(edge.observedSendOrdinal == 1)
                 #expect(edge.provenance.rawValue == "axSendMenuCheckmark")
-                #expect(graph.nodes.first { $0.id == "bus_1" }?.targetRef == nil)
+                #expect(graph.nodes.first { $0.id == endpoint }?.targetRef == nil)
                 #expect(graph.coverage.sends.state == .partial)
+                #expect(routingPath(from: source, to: endpoint, in: graph) == .unverified)
             } else { #expect(edges.isEmpty) }
             if fault != "moved" {
                 let report = SessionPopulationObservation.build(request: .init(domains: [.routing, .strips]), capture: capture)

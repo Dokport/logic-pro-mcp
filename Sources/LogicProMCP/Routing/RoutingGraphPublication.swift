@@ -23,10 +23,12 @@ enum RoutingProjectBinding: Sendable {
 /// is never an output destination in Logic, so a track named like a bus is not one (#291). A
 /// label that classifies as a bus becomes a `bus_<n>` node whose only identity is the number parsed
 /// from the source's own slot description, and `main_output` coverage says so. A physical output
-/// or no output is recorded on the source node and publishes no node and no edge. Send display
+/// or no output label is recorded on the source node and alone publishes no node or edge. Send display
 /// names and occupancy alone publish no edge. Physical-strip nodes retain classification as display evidence only; no
 /// track association, bus/port identity or edge is derived from their ordinal or labels.
-/// Request-held, checked output/send menus can additionally publish physical-source bus edges;
+/// Request-held, checked output menus can additionally publish physical-source bus or output
+/// endpoint edges. A host Stereo Output endpoint is not a hardware 1-2 port assignment.
+/// Checked send menus can publish those same endpoints from their exact physical source;
 /// a send retains its census ordinal but no physical write-slot payload. Neither establishes
 /// receiving-strip identity or complete graph coverage.
 /// Checked input menus bind a bus to its request-held physical receiver only;
@@ -179,26 +181,22 @@ enum RoutingGraphPublication {
                         let checked = capture.freshPopulation?.checkedOutputs.filter {
                             $0.source.matches(owner) && $0.sendOrdinal == nil
                         } ?? []
-                        if checked.count == 1, case .bus(let number) = checked[0].assignment,
-                           OutputAssignment.busNumbers.contains(number) {
-                            let busID = "bus_\(number)"
-                            nodesByID[busID] = RoutingNode(id: busID, kind: .bus,
-                                displayName: "Bus \(number)", busNumber: number, targetRef: nil)
+                        if checked.count == 1, let endpoint = checkedEndpoint(checked[0].assignment) {
+                            nodesByID[endpoint.id] = RoutingNode(id: endpoint.id, kind: endpoint.kind,
+                                displayName: endpoint.name, busNumber: endpoint.bus, targetRef: nil)
                             edges.append(RoutingEdge(kind: .mainOutput, source: reference.rawValue,
-                                destination: busID, send: nil, provenance: .axOutputMenuCheckmark))
+                                destination: endpoint.id, send: nil, provenance: .axOutputMenuCheckmark))
                         }
                         for slot in strip.sendSlots ?? [] where slot.state == .occupiedUnknownDestination && slot.ordinal >= 0 {
                             guard strip.sendSlots?.filter({ $0.ordinal == slot.ordinal }).count == 1 else { continue }
                             let sends = capture.freshPopulation?.checkedOutputs.filter {
                                 $0.source.matches(owner) && $0.sendOrdinal == slot.ordinal
                             } ?? []
-                            guard sends.count == 1, case .bus(let number) = sends[0].assignment,
-                                  OutputAssignment.busNumbers.contains(number) else { continue }
-                            let busID = "bus_\(number)"
-                            nodesByID[busID] = RoutingNode(id: busID, kind: .bus,
-                                displayName: "Bus \(number)", busNumber: number, targetRef: nil)
+                            guard sends.count == 1, let endpoint = checkedEndpoint(sends[0].assignment) else { continue }
+                            nodesByID[endpoint.id] = RoutingNode(id: endpoint.id, kind: endpoint.kind,
+                                displayName: endpoint.name, busNumber: endpoint.bus, targetRef: nil)
                             edges.append(RoutingEdge(kind: .send, source: reference.rawValue,
-                                destination: busID, send: nil, provenance: .axSendMenuCheckmark,
+                                destination: endpoint.id, send: nil, provenance: .axSendMenuCheckmark,
                                 observedSendOrdinal: slot.ordinal))
                         }
                     }
@@ -278,19 +276,28 @@ enum RoutingGraphPublication {
         // an actually observed physical-source edge. No complete claim follows.
         let mainOutputCoverage = checkedMainOutputObserved
             ? RoutingDomainCoverage(state: .partial, reasons: mainOutput.coverage.reasons
-                + ["only request-held bus main outputs have checked-menu evidence"])
+                + ["only request-held main outputs have checked-menu evidence"])
             : mainOutput.coverage
+        let checkedOutputEndpointObserved = edges.contains {
+            ($0.provenance == .axOutputMenuCheckmark || $0.provenance == .axSendMenuCheckmark)
+                && nodesByID[$0.destination]?.kind == .output
+        }
+        let physicalOutputCoverage = checkedOutputEndpointObserved
+            ? RoutingDomainCoverage(state: .partial, reasons: physicalOutput.coverage.reasons.filter {
+                $0 != physicalOutputHasNoNodeReason
+            } + ["only request-held physical or host Stereo output assignments have checked-menu evidence; hardware namespace completeness is unverified"])
+            : physicalOutput.coverage
         let checkedSendObserved = edges.contains { $0.provenance == .axSendMenuCheckmark }
         let checkedInputObserved = edges.contains { $0.provenance == .axInputMenuCheckmark }
         let sendCoverage = checkedSendObserved
             ? RoutingDomainCoverage(state: .partial, reasons: sends.coverage.reasons.filter { $0 != sendDestinationReason }
-                + ["only request-held bus sends have checked-menu evidence; source census ordinals do not establish physical write slots or receiving-strip identity"])
+                + ["only request-held sends have checked-menu evidence; source census ordinals do not establish physical write slots or receiving-strip identity"])
             : sends.coverage
         let coverage = RoutingCoverage(
             population: population.coverage,
             stripTrackAssociation: association.coverage,
             mainOutput: mainOutputCoverage,
-            physicalOutput: physicalOutput.coverage,
+            physicalOutput: physicalOutputCoverage,
             busToAuxInput: checkedInputObserved
                 ? RoutingDomainCoverage(state: .partial, reasons: ["only request-held bus inputs have checked-menu evidence; physical receivers do not establish aux kind or receiving-population completeness"])
                 : RoutingDomainCoverage(state: .notObserved, reasons: [busToAuxInputReason]),
@@ -317,6 +324,22 @@ enum RoutingGraphPublication {
             snapshotId: snapshotId,
             coverage: coverage
         )
+    }
+
+    /// Endpoint identity comes from the caller's held checked assignment, not its display label.
+    /// This pure projection does not grant a destination reference or physical Send slot authority.
+    private static func checkedEndpoint(_ assignment: OutputAssignment)
+        -> (id: String, kind: RoutingNodeKind, name: String, bus: Int?)? {
+        switch assignment {
+        case .bus(let number) where OutputAssignment.busNumbers.contains(number):
+            return ("bus_\(number)", .bus, "Bus \(number)", number)
+        case .physical(let first, let second) where
+            OutputAssignment.make(kind: "physical", number: nil, ports: [first, second]).value == assignment:
+            return ("output_physical_\(first)_\(second)", .output, assignment.token, nil)
+        case .stereoOutput:
+            return ("output_stereo", .output, assignment.token, nil)
+        default: return nil
+        }
     }
 
     /// Classifies an output-slot description by the canon-derived sets in `AXLocalePolicy`.
@@ -381,7 +404,7 @@ enum RoutingGraphPublication {
     static let busIdentityReason = "bus identity parsed from the source output slot description"
     static let labelRenameReason = "I/O label renames defeat the parse"
     static let physicalOutputHasNoNodeReason =
-        "physical outputs are classified on the source node and publish no node or edge"
+        "output-slot display labels alone establish no physical output node or edge"
     static let busToAuxInputReason = "bus-to-aux input edges are not observed in this increment"
     static let sendDestinationReason = "send endpoint identities are not observed at the source slot: display labels do not establish routing edges"
 }

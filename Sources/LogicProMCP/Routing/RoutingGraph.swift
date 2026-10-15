@@ -15,8 +15,9 @@ enum RoutingNodeKind: String, Codable, Sendable {
 /// What a source strip's output-slot description was classified as (#291).
 ///
 /// A classification of the SOURCE's own slot, read by the canon-derived label sets in
-/// `AXLocalePolicy`. `physicalOutput` and `noOutput` publish no node and no edge; only `bus`
-/// publishes a `bus_<n>` node and a `mainOutput` edge. `unclassified` is a label none of the sets
+/// `AXLocalePolicy`. Classification alone gives `physicalOutput` and `noOutput` no node or edge;
+/// the legacy `bus` projection publishes `bus_<n>`. Separate request-held checked menu evidence
+/// can publish output endpoints without trusting these display labels. `unclassified` is a label none of the sets
 /// recognise — an I/O-label rename, or a locale the sets do not carry — and is never guessed into
 /// one of the other three.
 enum RoutingOutputClassification: String, Codable, Sendable {
@@ -306,8 +307,9 @@ func routingPath(from sourceRef: TargetReference, to sinkNodeID: String, in grap
     guard Dictionary(grouping: outputs, by: \.source).values.allSatisfy({ $0.count == 1 }) else {
         return .unverified
     }
-    // Neither no-output nor physical-output classification publishes a logical main-output
-    // edge. Both may still reach the sink through independently recorded parallel sends.
+    // Legacy display classification does not establish complete-path output identity.
+    // New request-held output endpoint edges retain partial coverage and do not bypass this guard.
+    // Parallel sends still participate when the complete graph is otherwise supported.
     let outputSources = Set(outputs.map(\.source))
     guard graph.nodes.allSatisfy({
         ($0.outputClassification != .noOutput && $0.outputClassification != .physicalOutput)
