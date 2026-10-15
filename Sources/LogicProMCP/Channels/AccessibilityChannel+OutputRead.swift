@@ -103,6 +103,8 @@ extension AccessibilityChannel {
         var removedSend: RemovedSendObservation? = nil
         var restoredSend: RestoredSendObservation? = nil
         var changedSend: ChangedSendObservation? = nil
+        /// Opt-in typed native mode evidence for this scalar writer only.
+        var sendMode: SendModeState? = nil
     }
 
     struct SendBypassSnapshot {
@@ -295,13 +297,36 @@ extension AccessibilityChannel {
     }
 
     private struct SendReplacement: Sendable {
-        let expected: OutputAssignment?
+        var expected: OutputAssignment?
         /// nil is the explicitly scoped No Send action, never a No Output routing endpoint.
-        let destination: OutputAssignment?
+        var destination: OutputAssignment?
         var restoration: RemovedSendObservation? = nil
         var occupiedInverse: ChangedSendObservation? = nil
         /// Fresh current native empty control, not a removed-send capsule.
         var creation: FreshSendCreation? = nil
+        var modeChange: SendModeChange? = nil
+    }
+
+    private struct SendModeChange: Sendable {
+        let expected: SendMode
+        let desired: SendMode
+    }
+
+    static func setSendModeVerified(params: [String: String], runtime: AXLogicProElements.Runtime,
+        timing: OutputAssignmentTiming = .live) async -> ChannelResult {
+        guard params.keys.allSatisfy({ ["ordinal", "mode", "expected_current"].contains($0) }),
+              let ordinal = params["ordinal"].flatMap(Int.init), ordinal >= 0,
+              let desired = params["mode"].flatMap(SendMode.init(rawValue:)), desired != .postPan,
+              let expected = params["expected_current"].flatMap(SendMode.init(rawValue:)), expected != .postPan,
+              let source = AXMixerStripBinding.current, let pair = AXMixerStripBinding.outputAssociation,
+              pair.strip.matches(source), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+            return .error(HonestContract.encodeStateC(error: .invalidParams,
+                hint: "An exact retained occupied Send and explicit post_fader/pre_fader current and desired modes are required.",
+                extras: ["operation": "mixer.set_send_mode_verified", "write_attempted": false]))
+        }
+        return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal, runtime: runtime, timing: timing,
+            sendReplacement: .init(expected: nil, destination: nil, modeChange: .init(expected: expected, desired: desired)),
+            observingSendMode: true).result
     }
 
     static func readRestoredSendObservation(_ restored: CheckedOutputReading,
@@ -424,9 +449,12 @@ extension AccessibilityChannel {
     /// Shares the exact owned reader; wire receipt decoding never supplies graph identity.
     static func getOutputObservation(runtime: AXLogicProElements.Runtime, sendOrdinal: Int? = nil,
                                      timing: OutputAssignmentTiming = .live,
+                                     observingSendMode: Bool = false,
+                                     requiringSendMode: Bool = true,
                                      observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in }) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: sendOrdinal, runtime: runtime, timing: timing,
-            observingPopupFocus: observingPopupFocus)
+            observingPopupFocus: observingPopupFocus, observingSendMode: observingSendMode,
+            requiringSendMode: requiringSendMode)
     }
 
     private static func getCheckedRoutingDestination(
@@ -434,9 +462,10 @@ extension AccessibilityChannel {
         timing: OutputAssignmentTiming,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
-        sendReplacement: SendReplacement? = nil
+        sendReplacement: SendReplacement? = nil, observingSendMode: Bool = false,
+        requiringSendMode: Bool = true
     ) async -> CheckedOutputReading {
-        let operation = sendReplacement != nil ? "mixer.set_send_output_verified" :
+        let operation = sendReplacement?.modeChange != nil ? "mixer.set_send_mode_verified" : sendReplacement != nil ? "mixer.set_send_output_verified" :
             (inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified"))
         var extras: [String: Any] = ["operation": operation, "write_attempted": false,
                                    "navigation_attempted": false, "popup_menu_state": "not_opened"]
@@ -709,8 +738,17 @@ extension AccessibilityChannel {
         let first = checkedChoice()
         let second = menuOwned() ? checkedChoice() : nil
         let sendChecks = sendOrdinal == nil ? nil : sendMenuNonRoutingChecks(in: root, runtime: runtime.ax)
+        let firstMode = observingSendMode ? currentSendMode(in: root, runtime: runtime.ax) : nil
+        let secondMode = observingSendMode && menuOwned() ? currentSendMode(in: root, runtime: runtime.ax) : nil
+        let modeEvidence = firstMode != nil && firstMode == secondMode ? firstMode : nil
         let dataOwned = menuOwned()
-        if let request = sendReplacement, let sendOrdinal {
+        if let initialRequest = sendReplacement, let sendOrdinal {
+            var effective = initialRequest
+            if effective.modeChange != nil {
+                effective.expected = first
+                effective.destination = first
+            }
+            let request = effective
             func sameOriginalSendControl() -> Bool {
                 if let assigned {
                     return assignedControl().map { assigned.matches($0) } == true
@@ -721,6 +759,12 @@ extension AccessibilityChannel {
                 return false
             }
             func expectedCheckedBefore(fresh: Bool = false) -> Bool {
+                if let mode = request.modeChange {
+                    guard let modeEvidence, modeEvidence.mode == mode.expected,
+                          first != nil, first != .noOutput, first == second, !fresh || checkedChoice() == first,
+                          currentSendMode(in: root, runtime: runtime.ax) == modeEvidence else { return false }
+                    return true
+                }
                 if request.creation != nil {
                     return checkedRemovedSendMenu(in: root, nonRoutingChecks: [], runtime: runtime.ax)
                 }
@@ -737,15 +781,48 @@ extension AccessibilityChannel {
                 return first == request.expected && second == first && (!fresh || checkedChoice() == request.expected)
             }
             func normalized(_ slots: [SendSlotObservation]) -> [SendSlotObservation] {
-                slots.map { slot in
+                if request.modeChange != nil { return slots }
+                return slots.map { slot in
                     var result = slot
                     if result.ordinal == sendOrdinal { result.destinationDisplay = nil }
                     return result
                 }
             }
+            func protectedChecksAfter(_ after: CheckedOutputReading) -> Bool {
+                guard let mode = request.modeChange else { return after.sendNonRoutingChecks == sendChecks }
+                guard let before = modeEvidence, let current = after.sendMode else { return false }
+                return current.mode == mode.desired && current.independentPan == before.independentPan
+                    && current.otherChecks == before.otherChecks
+            }
             let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips
             let protectedSends = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax)
             let singleton = soleAssignedSend(in: physical.strip, runtime: runtime.ax)
+            let modePeerFootprints: [[SendSlotObservation]]?
+            if request.modeChange != nil, let population {
+                let reads = population.map { AXLogicProElements.sendSlotObservations(in: $0, runtime: runtime.ax) }
+                modePeerFootprints = reads.allSatisfy({ $0 != nil }) ? reads.compactMap { $0 } : nil
+            } else { modePeerFootprints = nil }
+            func modePeersHeld(_ current: [AXUIElement], currentSource: AXUIElement? = nil) -> Bool {
+                guard request.modeChange != nil else { return true }
+                guard let population, let before = modePeerFootprints, current.count == population.count,
+                      before.count == population.count else { return false }
+                let expected = population.map { CFEqual($0, physical.strip) ? currentSource ?? physical.strip : $0 }
+                guard zip(current, expected).allSatisfy({ CFEqual($0, $1) }) else { return false }
+                for index in current.indices where !CFEqual(population[index], physical.strip) {
+                    guard AXLogicProElements.sendSlotObservations(in: current[index], runtime: runtime.ax) == before[index] else { return false }
+                }
+                return true
+            }
+            func modeRawHeld(_ control: AXLogicProElements.AssignedSendMenuControl?, slots: [SendSlotObservation]?) -> Bool {
+                guard request.modeChange != nil else { return true }
+                guard let control, let knob = control.level,
+                      let slot = slots?.first(where: { $0.ordinal == control.ordinal }) else { return false }
+                let reading: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(knob,
+                    kAXValueAttribute as String, runtime: runtime.ax)
+                guard case .success(.some(let value)) = reading, CFGetTypeID(value) == CFNumberGetTypeID(),
+                      let number = value as? NSNumber, number.doubleValue.isFinite else { return false }
+                return number.doubleValue == slot.levelRaw
+            }
             @Sendable func writerContextCurrent(ownedPopup: AXUIElement? = nil,
                 preservingOriginalLabel: Bool = true) -> Bool {
                 guard sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel), ownerBoundaryStillCurrent(),
@@ -794,6 +871,11 @@ extension AccessibilityChannel {
                       fresh.count == population.count, zip(fresh, population).allSatisfy({ CFEqual($0, $1) }),
                       AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax) == protectedSends,
                       sameOriginalSendControl() else { return false }
+                if request.modeChange != nil {
+                    guard modePeersHeld(fresh),
+                          AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax) == protectedSends,
+                          sameOriginalSendControl(), modeRawHeld(assigned, slots: protectedSends) else { return false }
+                }
                 if let creation = request.creation {
                     guard creation.population.count == population.count,
                           zip(creation.population, population).allSatisfy({ CFEqual($0, $1) }),
@@ -826,14 +908,23 @@ extension AccessibilityChannel {
             let slotState = request.restoration?.before ?? protectedSends?.first(where: { $0.ordinal == sendOrdinal })
             guard let population, let protectedSends,
                   request.creation != nil || (slotState?.bypassed != nil && slotState?.levelRaw?.isFinite == true),
-                  let sendChecks, request.creation != nil || !sendChecks.isEmpty, writeBoundary() else {
+                  let sendChecks, request.creation != nil || !sendChecks.isEmpty,
+                  modeRawHeld(assigned, slots: protectedSends), writeBoundary() else {
                 return closeBeforeRefusal(.readbackUnavailable, "The exact occupied send, protected level/bypass/checkmarks or write boundary did not remain observed; nothing was selected.")
             }
             if request.restoration != nil || request.creation != nil { extras["before"] = ["state": "observed_empty"] }
             else { extras["before"] = request.expected?.json }
             extras["destination"] = request.destination?.json ?? ["kind": "no_send"]
+            if let mode = request.modeChange {
+                extras["before"] = mode.expected.rawValue; extras["mode"] = mode.desired.rawValue
+                extras["checked_destination"] = first?.json
+                extras["level_raw"] = slotState?.levelRaw; extras["bypassed"] = slotState?.bypassed
+                extras["independent_pan"] = modeEvidence?.independentPan
+                extras["protected_nonrouting_titles"] = modeEvidence?.otherChecks
+            }
             extras["strip_count_before"] = population.count
-            if request.restoration == nil, let assigned, request.expected == request.destination {
+            if request.restoration == nil, let assigned,
+               request.modeChange.map({ $0.expected == $0.desired }) ?? (request.expected == request.destination) {
                 // Reapplying an already checked destination can retire Logic's
                 // controls. A no-op closes only its owned popup; it never presses
                 // a destination or borrows mutation-time label-change authority.
@@ -872,7 +963,8 @@ extension AccessibilityChannel {
                     return refuse(.readbackUnavailable,
                         "The matching send lost its original source or protected state during cleanup; nothing was selected.")
                 }
-                extras["after"] = request.expected?.json
+                if let mode = request.modeChange { extras["after"] = mode.desired.rawValue }
+                else { extras["after"] = request.expected?.json }
                 extras["changed"] = false
                 extras["strip_count_after"] = population.count
                 extras["verify_source"] = "ax_send_menu_checkmark"
@@ -901,7 +993,8 @@ extension AccessibilityChannel {
             extras["pre_press_source_identifiers"] = identifiers
             extras["pre_press_identifier_read_status"] = identifierStatuses
             func destinationChoice() -> OutputMenuChoice {
-                request.destination.map { sendMenuChoice(for: $0, in: root, runtime: runtime.ax) }
+                if let mode = request.modeChange { return sendModeMenuChoice(mode.desired, in: root, runtime: runtime.ax) }
+                return request.destination.map { sendMenuChoice(for: $0, in: root, runtime: runtime.ax) }
                     ?? sendRemovalMenuChoice(in: root, runtime: runtime.ax)
             }
             let choice = destinationChoice()
@@ -925,6 +1018,15 @@ extension AccessibilityChannel {
                 }
                 guard writeBoundary() else {
                     return closeBeforeRefusal(.staleTargetReference, "Source or protected state changed after the final bus check; nothing was selected.")
+                }
+            }
+            if request.modeChange != nil {
+                // The deciding peer census may observe an intervening mode or
+                // Independent Pan edit. Renew that exact before-state last.
+                guard expectedCheckedBefore(fresh: true),
+                      sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == sendChecks,
+                      writerMenuOwned() else {
+                    return closeBeforeRefusal(.staleSnapshot, "Checked Send mode or protected pan state changed at the final boundary; no mode was pressed.")
                 }
             }
             extras["write_attempted"] = true; extras["menu_path"] = path
@@ -1036,7 +1138,8 @@ extension AccessibilityChannel {
                     guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer,
                         runtime: runtime.ax)?.strips else { return false }
                     let expected = population.map { CFEqual($0, physical.strip) ? renewedOwner.strip : $0 }
-                    guard current.count == expected.count && zip(current, expected).allSatisfy({ CFEqual($0, $1) }) else { return false }
+                    guard current.count == expected.count && zip(current, expected).allSatisfy({ CFEqual($0, $1) }),
+                          modePeersHeld(current, currentSource: renewedOwner.strip) else { return false }
                     verifiedPopulation = current
                     return true
                 }
@@ -1048,21 +1151,30 @@ extension AccessibilityChannel {
                 // The fresh checked reader observes this unique occupied group;
                 // its census ordinal is only the already proved footprint coordinate.
                 let after = await AXMixerStripBinding.$current.withValue(renewedOwner) {
-                    await getOutputObservation(runtime: runtime, sendOrdinal: renewed.control.ordinal, timing: timing)
+                    await getOutputObservation(runtime: runtime, sendOrdinal: renewed.control.ordinal, timing: timing,
+                        observingSendMode: request.modeChange != nil)
                 }
                 if let data = after.result.message.data(using: .utf8), let receipt = try? JSONSerialization.jsonObject(with: data) {
                     extras["after_acquisition"] = receipt
                 }
-                guard after.assignment == request.destination, after.sendNonRoutingChecks == sendChecks,
+                guard after.assignment == request.destination, protectedChecksAfter(after),
                       let final = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax),
                       renewed.control.matches(final.control), normalized(final.slots) == normalized(singleton.slots),
                       populationPreserved(), source.permits(runtime: runtime) else {
                     return uncertain("Fresh checked destination, unique occupied slot or protected source facts did not survive renewal and the deciding read.")
                 }
+                if request.modeChange != nil {
+                    guard let deciding = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax),
+                          final.control.matches(deciding.control), deciding.slots == singleton.slots,
+                          modeRawHeld(deciding.control, slots: deciding.slots), source.permits(runtime: runtime) else {
+                        return uncertain("The renewed mode target lost its deciding protected state after peer verification.")
+                    }
+                }
                 extras["source_renewal"] = source.pair.source
                 extras["reference_reread_required"] = true
                 extras["source_index_after"] = source.index
-                extras["after"] = after.assignment?.json
+                if let mode = request.modeChange { extras["after"] = mode.desired.rawValue }
+                else { extras["after"] = after.assignment?.json }
                 extras["strip_count_after"] = population.count
                 extras["changed"] = true
                 extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
@@ -1087,21 +1199,32 @@ extension AccessibilityChannel {
                         .init(source: $0.source, control: $0.control, population: $0.population)
                     }, changedSend: change)
             }
-            let after = await getOutputObservation(runtime: runtime, sendOrdinal: sendOrdinal, timing: timing)
+            let after = await getOutputObservation(runtime: runtime, sendOrdinal: sendOrdinal, timing: timing,
+                observingSendMode: request.modeChange != nil)
             if let data = after.result.message.data(using: .utf8), let receipt = try? JSONSerialization.jsonObject(with: data) {
                 extras["after_acquisition"] = receipt
             }
-            guard after.assignment == request.destination, after.sendNonRoutingChecks == sendChecks,
+            guard after.assignment == request.destination, protectedChecksAfter(after),
                   let slotsAfter = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
                   normalized(slotsAfter) == normalized(protectedSends),
                   let populationAfter = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax)?.strips,
                   populationAfter.count == population.count, zip(populationAfter, population).allSatisfy({ CFEqual($0, $1) }),
+                  modePeersHeld(populationAfter),
                   sameOriginalSendControl(),
                   writerContextCurrent(preservingOriginalLabel: false) else {
                 return uncertain("Checked destination, protected send state or original population did not survive the press and fresh read; no automatic inverse was attempted.")
             }
-            extras["after"] = request.destination?.json; extras["strip_count_after"] = population.count
-            extras["changed"] = request.expected != request.destination
+            if request.modeChange != nil {
+                guard AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax) == protectedSends,
+                      sameOriginalSendControl(), modeRawHeld(assigned, slots: protectedSends),
+                      writerContextCurrent(preservingOriginalLabel: false) else {
+                    return uncertain("The mode target lost its deciding protected state after peer verification.")
+                }
+            }
+            if let mode = request.modeChange { extras["after"] = mode.desired.rawValue }
+            else { extras["after"] = request.destination?.json }
+            extras["strip_count_after"] = population.count
+            extras["changed"] = request.modeChange.map({ $0.expected != $0.desired }) ?? (request.expected != request.destination)
             extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
             return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: request.destination,
                 sendNonRoutingChecks: after.sendNonRoutingChecks)
@@ -1227,6 +1350,9 @@ extension AccessibilityChannel {
         guard dataOwned, sourceAfter, let first, second == first else {
             return refuse(.readbackUnavailable, "The checked output was unreadable, contradictory, or lost its original source/menu custody; no destination was selected.")
         }
+        guard !observingSendMode || !requiringSendMode || modeEvidence != nil else {
+            return refuse(.readbackUnavailable, "The complete checked Send mode census was missing, ambiguous or changed.")
+        }
         guard sendOrdinal == nil || first != .noOutput else {
             return refuse(.readbackUnavailable, "An output-only No Output marker is not an assigned-send destination.")
         }
@@ -1244,7 +1370,7 @@ extension AccessibilityChannel {
         if inputBusOnly { extras["input_scope"] = "bus_only" }
         extras["snapshot_atomic"] = false
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
-            inputRenewal: inputRenewal, inputSlot: inputSlot, sendNonRoutingChecks: sendChecks)
+            inputRenewal: inputRenewal, inputSlot: inputSlot, sendNonRoutingChecks: sendChecks, sendMode: modeEvidence)
     }
 
     static func outputReadContextFailure(_ result: ChannelResult, operation: String) -> ChannelResult {

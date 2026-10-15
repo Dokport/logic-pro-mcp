@@ -594,6 +594,8 @@ actor AccessibilityChannel: Channel {
                                 }
                             }
                             return await Self.getOutputObservation(runtime: runtime.logicRuntime, sendOrdinal: candidate.ordinal,
+                                observingSendMode: candidate.ordinal != nil,
+                                requiringSendMode: false,
                                 observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) })
                         }
                         let receipt = read.result.message.data(using: .utf8).flatMap {
@@ -646,7 +648,7 @@ actor AccessibilityChannel: Channel {
                                 }
                             } else {
                                 checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal,
-                                    sendNonRoutingChecks: read.sendNonRoutingChecks))
+                                    sendNonRoutingChecks: read.sendNonRoutingChecks, sendMode: read.sendMode))
                             }
                         }
                     }
@@ -1819,6 +1821,8 @@ actor AccessibilityChannel: Channel {
         case "mixer.set_send_level_verified":
             return await Self.setSendLevelVerified(params: params, runtime: runtime.logicRuntime,
                 mouse: runtime.observationMouseRuntime, canPostEvents: runtime.canPostEvents)
+        case "mixer.set_send_mode_verified":
+            return await Self.setSendModeVerified(params: params, runtime: runtime.logicRuntime)
         case "mixer.get_send_bypass_verified", "mixer.set_send_bypass_verified":
             return await AccessibilityChannel.sendBypassVerified(params: params,
                 writing: operation == "mixer.set_send_bypass_verified", runtime: runtime.logicRuntime)

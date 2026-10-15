@@ -667,6 +667,69 @@ extension AccessibilityChannel {
         currentRoutingMenuAssignment(in: root, runtime: runtime, inputBusOnly: false)
     }
 
+    enum SendMode: String, Sendable, CaseIterable {
+        case postPan = "post_pan", postFader = "post_fader", preFader = "pre_fader"
+    }
+
+    /// Values from a complete owned mode menu, not a typed resource projection
+    /// or permission to reacquire an unrelated control.
+    struct SendModeState: Equatable, Sendable {
+        let mode: SendMode
+        let independentPan: Bool
+        let otherChecks: [String]
+    }
+
+    private static func sendModeCensus(in root: AXUIElement, runtime: AXHelpers.Runtime)
+        -> (state: SendModeState, rows: [SendMode: TitledMenuItem])? {
+        guard let items = titledMenuItems(of: root, runtime: runtime),
+              let checks = sendMenuNonRoutingChecks(in: root, runtime: runtime) else { return nil }
+        func mode(_ title: String) -> SendMode? {
+            switch title {
+            case "Post Pan", "포스트 패닝": .postPan
+            case "Post Fader", "포스트 페이더": .postFader
+            case "Pre Fader", "프리 페이더": .preFader
+            default: nil
+            }
+        }
+        func mark(_ item: TitledMenuItem) -> Bool? {
+            let result: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                item.element, "AXMenuItemMarkChar", runtime: runtime)
+            switch result {
+            case .success(nil): return false
+            case .success(let value?):
+                guard let text = value as? String else { return nil }
+                if text == "" { return false }; if text == "✓" { return true }; return nil
+            case .failure(let error) where error.raw == -25212: return false
+            default: return nil
+            }
+        }
+        var rows: [SendMode: TitledMenuItem] = [:], selected: [SendMode] = []
+        for item in items {
+            guard let kind = mode(item.title) else { continue }
+            guard !item.hasSubmenu, rows[kind] == nil, let checked = mark(item) else { return nil }
+            rows[kind] = item
+            if checked { selected.append(kind) }
+        }
+        let independent = items.filter { ["Independent Pan", "독립 패닝"].contains($0.title) }
+        guard rows.count == SendMode.allCases.count, selected.count == 1,
+              independent.count == 1, !independent[0].hasSubmenu, let panned = mark(independent[0]) else { return nil }
+        let known = Set(rows.values.map(\.title) + [independent[0].title])
+        return (.init(mode: selected[0], independentPan: panned,
+            otherChecks: checks.filter { !known.contains($0) }), rows)
+    }
+
+    static func currentSendMode(in root: AXUIElement, runtime: AXHelpers.Runtime) -> SendModeState? {
+        sendModeCensus(in: root, runtime: runtime)?.state
+    }
+
+    static func sendModeMenuChoice(_ desired: SendMode, in root: AXUIElement,
+        runtime: AXHelpers.Runtime) -> OutputMenuChoice {
+        guard let census = sendModeCensus(in: root, runtime: runtime), let item = census.rows[desired] else {
+            return .menuUnread(path: [])
+        }
+        return .item(item.element, path: [item.title])
+    }
+
     /// Complete raw non-routing root checkmarks, solely to detect collateral
     /// changes during an occupied-send replacement. No label supplies routing authority.
     static func sendMenuNonRoutingChecks(in root: AXUIElement, runtime: AXHelpers.Runtime) -> [String]? {

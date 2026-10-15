@@ -71,7 +71,7 @@ struct IndexBindingCensusTests {
         // Send ordinals address the source census, not a legacy track/index
         // fallback. No legacy operation is promoted or loses compatibility.
         let expected: Set<OperationID> = [
-            .mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendBypassVerified, .mixerSetSendLevelVerified,
+            .mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendBypassVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified,
         ]
         #expect(OperationRegistry.refRequiredOperationIDs == expected)
         #expect(Self.ids { $0.indexBinding == .refRequired } == expected)
