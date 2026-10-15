@@ -262,7 +262,9 @@ actor AccessibilityChannel: Channel {
                     )
                 },
                 renameTrack: {
-                    AccessibilityChannel.defaultRenameTrack(
+                    ExactTrackNameAdapter.recordCoupledNameFocusTransport(mouse: trackRenameMouseRuntime,
+                        canPostEvents: canPostEvents)
+                    return AccessibilityChannel.defaultRenameTrack(
                         params: $0,
                         runtime: logicRuntime,
                         mouseRuntime: trackRenameMouseRuntime,

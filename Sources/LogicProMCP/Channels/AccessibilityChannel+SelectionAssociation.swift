@@ -45,7 +45,8 @@ extension AccessibilityChannel {
               expectedProject: TargetDescriptor?, requiresProjectReference: Bool,
               allowsSelectedChildRailEntry: Bool = false,
               retainedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus? = nil,
-              retainedTrackBindings: [AXTrackBinding.Binding]? = nil) {
+              retainedTrackBindings: [AXTrackBinding.Binding]? = nil,
+              restorationBaseline: HeldSelectionAssociation? = nil) {
             // The existing foreground AX probe requires this CLI process's
             // window-server connection; a missing/foreign PID still refuses.
             _ = logic.onScreenWindowList()
@@ -93,13 +94,34 @@ extension AccessibilityChannel {
             self.logic = logic; self.app = app; self.pid = pid; self.window = window
             self.title = title; self.document = document; self.rail = rail; self.railPath = railPath; self.headers = headers
             self.mixer = mixer; strips = enumeration.strips; self.path = path
-            originalIndex = selected; originalFocus = focus; expectedIndex = selected; expectedFocus = focus
+            originalIndex = selected; originalFocus = restorationBaseline?.originalFocus ?? focus
+            expectedIndex = selected; expectedFocus = focus
             originalRailFocus = enumeration.strips.contains { CFEqual($0, focus) } ? nil : focus
             originalHeaderFocus = retainedHeaderFocus
             self.retainedTrackBindings = retainedTrackBindings
             transport = activity; self.viewport = viewport
             self.viewportPaths = viewportPaths; expectedViewport = viewport
             transportPaths = [playPath, recordPath]
+            if let baseline = restorationBaseline {
+                // A verified caller-owned effect may end on another already
+                // qualified passive focus. Keep the prior restoration duty,
+                // never turn the new focus/viewport into the original baseline.
+                guard !baseline.lost, baseline.expectedIndex == baseline.originalIndex,
+                      baseline.originalIndex == selected, CFEqual(baseline.app, app), baseline.pid == pid,
+                      CFEqual(baseline.window, window), baseline.document.utf8.elementsEqual(document.utf8),
+                      baseline.title.utf8.elementsEqual(title.utf8), CFEqual(baseline.rail, rail),
+                      CFEqual(baseline.mixer, mixer), Self.same(baseline.headers, headers), Self.same(baseline.strips, strips),
+                      Self.same(baseline.railPath, railPath), Self.same(baseline.path, path),
+                      Self.sameViewport(baseline.viewport, viewport),
+                      Self.sameViewport(baseline.expectedViewport, viewport),
+                      baseline.viewportPaths.count == viewportPaths.count,
+                      zip(baseline.viewportPaths, viewportPaths).allSatisfy({ Self.same($0, $1) }),
+                      baseline.transportPaths.count == transportPaths.count,
+                      zip(baseline.transportPaths, transportPaths).allSatisfy({ Self.same($0, $1) }),
+                      CFEqual(baseline.transport.play, activity.play), CFEqual(baseline.transport.record, activity.record),
+                      baseline.transport.isPlaying == activity.isPlaying,
+                      baseline.transport.isRecording == activity.isRecording else { return nil }
+            }
             if originalRailFocus != nil {
                 // A passive rail focus is never a fallback focus/strip pair.
                 // This entry needs this exact Mixer's actual held relationship.
@@ -753,6 +775,53 @@ extension AccessibilityChannel {
                 do { try await Task.sleep(for: .milliseconds(25)) } catch { return false }
             }
             return false
+        }
+
+        /// Used only by the post-verified owned-name continuation. The new
+        /// owner has kept the old native baseline; these are the existing
+        /// guarded inverses, not an assumed ACK or arbitrary focus adoption.
+        func restoreCommittedFocus(source: AXMixerStripBinding.Binding, expectedName: String,
+                                   transport focusTransport: ExactTrackNameAdapter.NameFocusTransport?,
+                                   preservingFootprint: @Sendable () -> Bool,
+                                   referenceIsCurrent: @Sendable () async -> Bool,
+                                   stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
+            guard !stop(), await referenceIsCurrent(), permitsRead() else { return false }
+            if !CFEqual(expectedFocus, originalFocus) {
+                guard let focusTransport, CFEqual(source.strip, originalFocus), CFEqual(source.mixer, mixer),
+                      CFEqual(source.window, window), source.document.utf8.elementsEqual(document.utf8),
+                      expectedSelectedChild.map({ CFEqual($0, originalFocus) }) == true,
+                      passiveStripMatches(originalFocus),
+                      let originalPath = Self.path(originalFocus, to: window, ax: logic.ax),
+                      Self.same(originalPath, [originalFocus] + path),
+                      preservingFootprint(), !stop(), await referenceIsCurrent() else { return false }
+                effects.attempted.append("keyboard_focus_restoration")
+                let precedingFocus = expectedFocus
+                guard AccessibilityChannel.clickOriginalMixerNamePlate(source: source,
+                    expectedName: expectedName, expectedFocus: precedingFocus, runtime: logic,
+                    transport: focusTransport, permittingClick: {
+                        !stop() && self.permitsRead() && preservingFootprint()
+                            && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+                    }) else { return false }
+                // Same bounded landing observation as the existing inverse;
+                // one click only, never another setter/action on a late landing.
+                for attempt in 0..<3 {
+                    guard owned(), let focus: AXUIElement = AXHelpers.getAttribute(app,
+                        kAXFocusedUIElementAttribute as String, runtime: logic.ax) else { return false }
+                    if CFEqual(focus, originalFocus) {
+                        guard let afterViewport = currentViewport() else { return false }
+                        expectedFocus = originalFocus; expectedViewport = afterViewport
+                        guard permitsRead(), preservingFootprint(), !stop(), await referenceIsCurrent() else { return false }
+                        effects.changed.append("keyboard_focus_restoration")
+                        break
+                    }
+                    guard CFEqual(focus, precedingFocus), attempt < 2 else { lost = true; return false }
+                    do { try await Task.sleep(for: .milliseconds(25)) } catch { return false }
+                }
+            }
+            guard await restoreViewport(referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop),
+                  CFEqual(expectedFocus, originalFocus), permitsRead(), !stop(), await referenceIsCurrent() else { return false }
+            effects.restoration = "restored"
+            return true
         }
 
         func observe(referenceIsCurrent: @Sendable () async -> Bool,
