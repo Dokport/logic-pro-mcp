@@ -262,7 +262,9 @@ actor AccessibilityChannel: Channel {
                     )
                 },
                 renameTrack: {
-                    AccessibilityChannel.defaultRenameTrack(
+                    ExactTrackNameAdapter.recordCoupledNameFocusTransport(mouse: trackRenameMouseRuntime,
+                        canPostEvents: canPostEvents)
+                    return AccessibilityChannel.defaultRenameTrack(
                         params: $0,
                         runtime: logicRuntime,
                         mouseRuntime: trackRenameMouseRuntime,
@@ -1892,6 +1894,9 @@ actor AccessibilityChannel: Channel {
             return await runtime.deleteMarker(["index": String(index)])
 
         // MARK: - Project
+        case "project.get_tempo_map":
+            return Self.defaultGetTempoMap(runtime: runtime.logicRuntime,
+                permittingRead: { !Task.isCancelled && runtime.isTrusted() && runtime.isLogicProRunning() })
         case "project.get_info":
             // v3.1.8 (Issue #7) — AppleScript-primary fallback removed
             // (Logic 12.x dropped the `tempo` / `time signature` /

@@ -1600,6 +1600,64 @@ extension AccessibilityChannel {
 
     // MARK: - Markers
 
+    struct TempoMapObservation: Codable, Sendable {
+        let projectFilePath: String
+        let snapshot: TempoMapAX.Snapshot
+    }
+
+    /// Read an already-open, uniquely observed Tempo List. No UI acquisition,
+    /// opening, cached/default tempo, event conversion or map-completion claim.
+    static func defaultGetTempoMap(
+        runtime: AXLogicProElements.Runtime,
+        permittingRead: () -> Bool = { !Task.isCancelled }
+    ) -> ChannelResult {
+        func refused(_ hint: String, reason: String) -> ChannelResult {
+            .error(HonestContract.encodeStateC(error: .readbackUnavailable, hint: hint,
+                extras: ["operation": "project.get_tempo_map", "source": "unavailable",
+                    "readable": false, "complete": false, "coverage": "unavailable",
+                    "reason": reason, "data": NSNull(), "write_attempted": false]))
+        }
+        guard permittingRead(), let pid = runtime.logicProPID(),
+              let app = AXLogicProElements.appRoot(runtime: runtime),
+              case .found(let arrange) = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime),
+              let title = AXHelpers.getTitle(arrange, runtime: runtime.ax),
+              isCreatedProjectWindowTitle(title),
+              case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(arrange, runtime: runtime),
+              let url = URL(string: document), url.isFileURL,
+              url.host == nil || url.host == "" || url.host == "localhost",
+              !url.path.isEmpty else {
+            return refused("The current Arrange window and its project document could not be held.",
+                reason: "project_identity_unobserved")
+        }
+        func primaryWindowIsHeld(_ chosen: AXUIElement) -> Bool {
+            guard permittingRead(), runtime.logicProPID() == pid,
+                  let currentApp = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, currentApp),
+                  case .success(.some(let windows)) = AXHelpers.getAttributeResult(app,
+                      kAXWindowsAttribute as String, runtime: runtime.ax) as Result<[AXUIElement]?, AXHelpers.AXStatusError>,
+                  windows.filter({ CFEqual($0, arrange) }).count == 1,
+                  windows.filter({ CFEqual($0, chosen) }).count == 1,
+                  case .found(let currentArrange) = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime),
+                  CFEqual(arrange, currentArrange),
+                  AXHelpers.getTitle(arrange, runtime: runtime.ax)?.utf8.elementsEqual(title.utf8) == true,
+                  case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(arrange, runtime: runtime),
+                  currentDocument.utf8.elementsEqual(document.utf8), permittingRead() else { return false }
+            return true
+        }
+        func windowIsHeld(_ chosen: AXUIElement) -> Bool {
+            guard primaryWindowIsHeld(chosen),
+                  case .success(.some(let chosenDocument)) = AXLogicProElements.projectPickerDocumentRead(chosen, runtime: runtime),
+                  chosenDocument.utf8.elementsEqual(document.utf8),
+                  primaryWindowIsHeld(chosen) else { return false }
+            return true
+        }
+        do {
+            let snapshot = try TempoMapAX.readOpenTempoList(runtime: runtime, permittingWindow: windowIsHeld)
+            return encodeResult(TempoMapObservation(projectFilePath: url.path, snapshot: snapshot))
+        } catch {
+            return refused(String(describing: error), reason: "tempo_list_read_unavailable")
+        }
+    }
+
     /// v3.1.9 (Issue #8) — Logic 12.2 marker subtree path.
     ///
     /// Single delegating wrapper around `AXLogicProElements.enumerateMarkers`

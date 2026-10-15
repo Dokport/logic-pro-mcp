@@ -61,7 +61,7 @@ Counts below are read from the current source tree with the command shown; re-ru
 | Surface | Current source tree | Command |
 |---------|---------------------|---------|
 | MCP tools | 10 tools — `logic_transport`, `logic_tracks`, `logic_mixer`, `logic_midi`, `logic_edit`, `logic_navigate`, `logic_project`, `logic_audio`, `logic_system`, `logic_plugins` | `grep -c '^        toolWithOutputSchema' Sources/LogicProMCP/Server/LogicProServer.swift` |
-| Read resources | 18 static resources — health, transport, tracks, mixer, markers, project info/audit/cleanup-plan, MIDI ports, MCU state, library inventory, stock plugins/census/capabilities, stock instruments, Session Players, workflow skills/schema | `awk '/private static let baseResources/,/^\]/' Sources/LogicProMCP/Resources/ResourceProvider.swift \| grep -c 'uri:'` |
+| Read resources | 19 static resources — health, transport, already-open Tempo List, tracks, mixer, markers, project info/audit/cleanup-plan, MIDI ports, MCU state, library inventory, stock plugins/census/capabilities, stock instruments, Session Players, workflow skills/schema | `awk '/private static let baseResources/,/^\]/' Sources/LogicProMCP/Resources/ResourceProvider.swift \| grep -c 'uri:'` |
 | Resource templates | 12 templates — operation catalog, track, region, mixer-strip, stock plugin detail/search, stock instrument detail/search, Session Player detail, session-plan dry run, workflow detail/search | `awk '/private static let baseTemplates/,/^\]/' Sources/LogicProMCP/Resources/ResourceProvider.swift \| grep -c 'uriTemplate:'` |
 | Control channels | **7** — CoreMIDI, Accessibility, CGEvent, AppleScript, MCU, MIDIKeyCommands, Scripter | `grep -n 'case .* = "' Sources/LogicProMCP/Channels/Channel.swift` |
 | Locales Logic ships | **10** — de-DE en-US es-ES fr-FR it-IT ja-JP ko-KR pt-BR zh-CN zh-TW | `python3 -c "import json; print(json.load(open('docs/locale/ui-labels.json'))['supported_locales'])"` |
@@ -334,7 +334,7 @@ MCP clients launch the Swift stdio server. Dispatchers validate tool parameters,
 | Document | Audience | Purpose |
 |----------|----------|---------|
 | [Setup Guide](docs/SETUP.md) | End users | Install, MCP registration, Logic Pro integration, doctor anchors |
-| [API Reference](docs/API.md) | End users, MCP clients | All 10 tools, 18 resources, 12 templates, Honest Contract, verified apply-back |
+| [API Reference](docs/API.md) | End users, MCP clients | All 10 tools, 19 resources, 12 templates, Honest Contract, verified apply-back |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | End users | Common failures and fixes |
 | [Security Policy](SECURITY.md) | Security reviewers | Threat model, reporting, hardening |
 | [Changelog](CHANGELOG.md) | Everyone | Per-release changes |

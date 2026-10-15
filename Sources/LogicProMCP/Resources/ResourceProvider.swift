@@ -7,7 +7,7 @@ import MCP
 /// sync without consuming tool-call budget.
 ///
 /// Stable surface: `resources/list` always advertises the full static set,
-/// matching the documented "18 static resources" catalog and the URIs that
+/// matching the documented "19 static resources" catalog and the URIs that
 /// are directly readable. `logic://mcu/state` is included even when the MCU
 /// control surface is disconnected — a direct read returns a meaningful
 /// `{ connected: false, … }` payload (not an empty probe), so hiding it from
@@ -57,6 +57,13 @@ struct ResourceProvider {
             description: "All tracks: name, type, index, mute/solo/arm states",
             mimeType: "application/json",
             annotations: annotations(priority: 0.85)
+        ),
+        Resource(
+            name: "Tempo Map",
+            uri: "logic://tempo/map",
+            description: "Already-open current-project Tempo List: raw position, BPM, SMPTE and observed item count; partial coverage, no cached/default tempo or UI opening",
+            mimeType: "application/json",
+            annotations: annotations(priority: 0.75)
         ),
         Resource(
             name: "Mixer",

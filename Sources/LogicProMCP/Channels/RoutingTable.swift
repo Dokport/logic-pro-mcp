@@ -267,6 +267,7 @@ extension ChannelRouter {
         "project.save_as":            [.accessibility],
         "project.close":              [.appleScript, .cgEvent],
         "project.get_info":           [.accessibility],
+        "project.get_tempo_map":      [.accessibility],
         "project.bounce":             [.accessibility, .midiKeyCommands, .cgEvent],
         "project.is_running":         [],
         "project.launch":             [.appleScript],

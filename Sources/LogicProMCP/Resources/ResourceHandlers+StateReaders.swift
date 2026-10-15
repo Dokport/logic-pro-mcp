@@ -6,6 +6,24 @@ import MCP
 extension ResourceHandlers {
     // MARK: - Individual resource handlers
 
+    static func readTempoMap(router: ChannelRouter, uri: String) async throws -> ReadResource.Result {
+        let reading = await router.route(operation: "project.get_tempo_map")
+        guard reading.isSuccess, let bytes = reading.message.data(using: .utf8),
+              let observation = try? JSONDecoder().decode(AccessibilityChannel.TempoMapObservation.self, from: bytes) else {
+            let body = reading.isSuccess ? HonestContract.encodeStateC(error: .readbackUnavailable,
+                hint: "The live Tempo List returned no decodable target-bound observation.",
+                extras: ["source": "unavailable", "readable": false, "complete": false,
+                    "coverage": "unavailable", "data": NSNull(), "write_attempted": false]) : reading.message
+            return .init(contents: [.text(body, uri: uri, mimeType: "application/json")])
+        }
+        let body = wrapWithCacheEnvelope(bodyJSON: encodeJSON(observation.snapshot), fetchedAt: Date(),
+            extras: ["source": "ax_live", "readable": true, "complete": false, "coverage": "partial",
+                "project_file_path": observation.projectFilePath,
+                "reason": "tempo_list_count_agreement_only",
+                "observation_source": "ax_tempo_list_two_pass_count_agreement"])
+        return .init(contents: [.text(body, uri: uri, mimeType: "application/json")])
+    }
+
     static func readTransportState(
         cache: StateCache,
         router: ChannelRouter,

@@ -3431,7 +3431,7 @@ extension AccessibilityChannel {
                       let value: String = AXHelpers.getAttribute(editor, kAXValueAttribute as String, runtime: runtime.ax),
                       value.utf8.elementsEqual(expected.utf8),
                       case .textEditing = readLogicKeyboardFocus(runtime: runtime),
-                      ExactTrackNameAdapter.coupledWritePermitted(), editorIsHeld() else {
+                      ExactTrackNameAdapter.coupledMenuWritePermitted(ownedEditor: editor), editorIsHeld() else {
                     return refusal("Ordinary rename lost its held editor before the value setter")
                 }
                 attempted = true
@@ -3472,7 +3472,7 @@ extension AccessibilityChannel {
                 guard let value: String = AXHelpers.getAttribute(editor, kAXValueAttribute as String, runtime: runtime.ax),
                       value.utf8.elementsEqual(desired.utf8),
                       case .textEditing = readLogicKeyboardFocus(runtime: runtime),
-                      ExactTrackNameAdapter.coupledWritePermitted(allowOwnPreview: true),
+                      ExactTrackNameAdapter.coupledMenuWritePermitted(allowOwnPreview: true, ownedEditor: editor),
                       editorIsHeld(allowOwnNamePreview: true), mouseRuntime.postKeyEvent(0x24),
                       targetStillHeld(requiringExclusiveSelection: true),
                       let after = readHeldName(), after.utf8.elementsEqual(desired.utf8) else {
@@ -3495,7 +3495,7 @@ extension AccessibilityChannel {
                 mouseRuntime: mouseRuntime,
                 permittingPost: {
                     guard editorIsHeld(), case .textEditing = readLogicKeyboardFocus(runtime: runtime),
-                          ExactTrackNameAdapter.coupledWritePermitted(allowOwnPreview: nameInputStarted),
+                          ExactTrackNameAdapter.coupledWritePermitted(allowOwnPreview: nameInputStarted, ownedEditor: editor),
                           editorIsHeld() else { return false }
                     nameInputStarted = true
                     attempted = true
@@ -3520,14 +3520,20 @@ extension AccessibilityChannel {
         }
         // Opening the editor is not proof that its target or raw value survived.
         // This deciding live read precedes the setter, including the early no-op path above.
+        let setterFocus = ExactTrackNameAdapter.captureCoupledWriteFocus(runtime: runtime)
         guard let boundaryName = readHeldName(), boundaryName.utf8.elementsEqual(expected.utf8),
-              ExactTrackNameAdapter.coupledWritePermitted(),
-              targetStillHeld(requiringExclusiveSelection: true) else { return refusal("Exact rename precondition changed before the setter") }
+              ExactTrackNameAdapter.coupledWritePermitted(ownedEditor: field),
+              targetStillHeld(requiringExclusiveSelection: true),
+              ExactTrackNameAdapter.coupledWriteFocusMatches(setterFocus, runtime: runtime) else { return refusal("Exact rename precondition changed before the setter") }
         actualBefore = boundaryName
         attempted = true
-        guard AXHelpers.setAttribute(field, kAXValueAttribute, desired as CFTypeRef, runtime: runtime.ax),
-              ExactTrackNameAdapter.coupledWritePermitted(allowOwnPreview: true),
+        guard AXHelpers.setAttribute(field, kAXValueAttribute, desired as CFTypeRef, runtime: runtime.ax) else {
+            return refusal("Exact rename was attempted but its held-target readback is unavailable")
+        }
+        let confirmFocus = ExactTrackNameAdapter.captureCoupledWriteFocus(runtime: runtime)
+        guard ExactTrackNameAdapter.coupledWritePermitted(allowOwnPreview: true, ownedEditor: field),
               targetStillHeld(requiringExclusiveSelection: true),
+              ExactTrackNameAdapter.coupledWriteFocusMatches(confirmFocus, runtime: runtime),
               AXHelpers.performAction(field, kAXConfirmAction, runtime: runtime.ax),
               let after = readHeldName(), after.utf8.elementsEqual(desired.utf8) else {
             return refusal("Exact rename was attempted but its held-target readback is unavailable")

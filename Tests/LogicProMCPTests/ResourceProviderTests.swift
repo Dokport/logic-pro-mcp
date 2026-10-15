@@ -136,14 +136,14 @@ struct ResourceProviderTests {
     func mcuStateAlwaysListed() {
         // #215: `logic://mcu/state` used to be filtered out of the list when
         // the MCU surface was disconnected, even though it stayed directly
-        // readable and the docs advertise a stable 18-resource catalog. It is
+        // readable and the docs advertise a stable 19-resource catalog. It is
         // now always present so list == docs == readable surface.
         let uris = ResourceProvider.resources.map(\.uri)
         #expect(uris.contains("logic://mcu/state"))
         #expect(uris.contains("logic://transport/state"))
         #expect(uris.contains("logic://tracks"))
-        // The documented stable surface is exactly 18 resources.
-        #expect(uris.count == 18)
+        // The documented current surface includes the read-only Tempo List.
+        #expect(uris.count == 19)
     }
 
     // MARK: - Template placeholders

@@ -31,6 +31,7 @@ enum TempoMapAX {
     enum ReadRefusal: Error, Equatable, Sendable, CustomStringConvertible {
         case unmeasuredLocale(String)
         case tempoListWindowUnavailable
+        case tempoListWindowCustodyLost
         case tempoListMenuUnavailable
         case tempoListMenuDisabled
         case axReadFailed(site: String, status: AXHelpers.AXStatusError)
@@ -57,6 +58,8 @@ enum TempoMapAX {
                 return "Tempo List is unmeasured for Logic UI locale '\(locale)'; only en-US and ko-KR are allowed."
             case .tempoListWindowUnavailable:
                 return "Tempo List window is unavailable."
+            case .tempoListWindowCustodyLost:
+                return "The chosen Tempo List window no longer belongs to the held current project."
             case .tempoListMenuUnavailable:
                 return "Edit > Tempo > Show Tempo List is unavailable."
             case .tempoListMenuDisabled:
@@ -216,13 +219,19 @@ enum TempoMapAX {
     /// refuse rather than choosing by window order.
     static func readOpenTempoList(
         runtime: AXLogicProElements.Runtime = .production,
-        localeIdentifier: String? = nil
+        localeIdentifier: String? = nil,
+        permittingWindow: (AXUIElement) -> Bool = { _ in true }
     ) throws -> Snapshot {
         try requireMeasuredLocale(runtime: runtime, localeIdentifier: localeIdentifier)
         guard let window = try findTempoListWindow(runtime: runtime) else {
             throw ReadRefusal.tempoListWindowUnavailable
         }
-        return try inventory(in: window, runtime: runtime.ax).snapshot
+        // Validate the actual unique structural candidate; never hide a foreign
+        // or ambiguous candidate by filtering it into another project reading.
+        guard permittingWindow(window) else { throw ReadRefusal.tempoListWindowCustodyLost }
+        let snapshot = try inventory(in: window, runtime: runtime.ax).snapshot
+        guard permittingWindow(window) else { throw ReadRefusal.tempoListWindowCustodyLost }
+        return snapshot
     }
 
     /// Sets one existing event by row index and verifies the result.
