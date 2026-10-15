@@ -70,6 +70,119 @@ private actor SelectedOutputSagaResultBoundary: Channel {
 
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
+    @Test("One coupled-editor decision reuses its already-held stopped transport",
+        arguments: ["held", "fallback", "play", "record", "bad_play", "bad_record", "play_role", "record_role",
+                    "replaced_bar", "replaced_record", "competing_bar", "late_competing_bar",
+                    "late_focus", "late_document", "late_source", "cancel", "lost", "fresh_values"])
+    func coupledEditorGuardDoesNotRediscoverItsHeldTransport(_ fault: String) async throws {
+        let f = try Fixture(), gate = LogicMutationGate()
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let claim = try #require(gate.tryAcquire(operation: "coupled-editor-transport"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+            cancellationRequested: { fault == "cancel" && f.routingLateScopeInjected })
+        try OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            #expect(held.permitsRead())
+            let pair = AccessibilityChannel.HeldSelectionAssociation.Pair(
+                track: .init(window: f.window, header: f.headers[0], document: f.bundle.absoluteString, runtime: runtime),
+                strip: .init(window: f.window, mixer: f.mixer, strip: f.strips[1], document: f.bundle.absoluteString))
+            let editor = f.builder.element(1_971_801)
+            f.builder.setRole(editor, kAXTextFieldRole as String)
+            f.builder.setAttribute(editor, kAXValueAttribute as String, "Duplicate")
+            f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+            f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+            f.builder.setChildren(editor, [])
+            f.builder.setChildren(f.headers[0], [editor])
+            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+            let play = f.builder.element(1_965_721), record = f.builder.element(1_965_722)
+            let otherBar = f.builder.element(1_971_802), otherRecord = f.builder.element(1_971_803)
+            f.builder.setRole(otherBar, kAXGroupRole as String)
+            f.builder.setAttribute(otherBar, kAXDescriptionAttribute as String, "Control Bar")
+            f.builder.setRole(otherRecord, kAXCheckBoxRole as String)
+            f.builder.setAttribute(otherRecord, kAXTitleAttribute as String, "Record")
+            f.builder.setAttribute(otherRecord, kAXValueAttribute as String, NSNumber(value: 0))
+            if fault == "play" { f.builder.setAttribute(play, kAXValueAttribute as String, NSNumber(value: 1)) }
+            if fault == "bad_play" { f.builder.setAttribute(play, kAXValueAttribute as String, "unknown") }
+            if fault == "bad_record" { f.builder.setAttribute(record, kAXValueAttribute as String, NSNumber(value: 0.5)) }
+            if fault == "play_role" { f.builder.setRole(play, kAXTextFieldRole as String) }
+            if fault == "record_role" { f.builder.setRole(record, kAXTextFieldRole as String) }
+            if fault == "competing_bar" {
+                f.builder.setChildren(otherBar, [otherRecord])
+                f.builder.setChildren(f.window, [f.rail, f.mixer, f.builder.element(1_965_720), otherBar])
+            }
+            if fault == "lost" { #expect(!held.permitsRead()) }
+            f.routingRead = { element, attribute in
+                if f.coupledGuardCountDiscovery || f.coupledGuardRecordReads == 0,
+                   CFEqual(element, f.builder.element(1_965_720)),
+                   attribute == kAXDescriptionAttribute as String { f.coupledGuardBarReads += 1 }
+                if attribute == kAXValueAttribute as String {
+                    if CFEqual(element, play) {
+                        f.coupledGuardPlayReads += 1
+                        if fault == "record" { f.builder.setAttribute(record, kAXValueAttribute as String, NSNumber(value: 1)) }
+                        if fault == "replaced_record" { f.builder.setChildren(f.builder.element(1_965_720), [play, otherRecord]) }
+                        if fault == "replaced_bar" || fault == "late_competing_bar" {
+                            f.builder.setChildren(otherBar, [otherRecord])
+                            f.builder.setChildren(f.window, fault == "replaced_bar" ? [f.rail, f.mixer, otherBar]
+                                : [f.rail, f.mixer, f.builder.element(1_965_720), otherBar])
+                        }
+                    }
+                    if CFEqual(element, record) {
+                        f.coupledGuardRecordReads += 1
+                        if fault == "late_focus" { f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, otherRecord) }
+                        if fault == "late_document" { f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/foreign.logicx") }
+                        if fault == "late_source" { f.builder.setChildren(f.mixer, [f.strips[0]]) }
+                        if fault == "cancel" { f.routingLateScopeInjected = true }
+                    }
+                }
+            }
+            let bar = AXLogicProElements.getControlBar(in: f.window, runtime: runtime.ax)
+            if fault != "competing_bar" {
+                let currentBar = try #require(bar)
+                #expect(CFEqual(currentBar, held.transport.controlBar))
+            }
+            let oneDiscoveryReads = f.coupledGuardBarReads
+            #expect(oneDiscoveryReads > 0)
+            f.coupledGuardBarReads = 0
+            let admitted = ExactTrackNameAdapter.permitsCoupledEditorRead(editor, pair: pair, names: ["Duplicate"],
+                transportProof: fault == "fallback" ? nil : held)
+            if ["held", "fallback", "fresh_values"].contains(fault) {
+                #expect(admitted)
+                #expect(f.coupledGuardPlayReads > 0 && f.coupledGuardRecordReads > 0,
+                    "Reach both actual deciding values, not an earlier refusal")
+                if fault != "fallback" {
+                    #expect(f.coupledGuardBarReads <= oneDiscoveryReads,
+                        "Do not repeat whole Control Bar discovery before deciding Record")
+                }
+                if fault == "held" {
+                    // Measure the entire transport-only decision as well: the
+                    // final uniqueness discovery occurs after the Record value.
+                    f.coupledGuardBarReads = 0
+                    f.coupledGuardCountDiscovery = true
+                    let playReads = f.coupledGuardPlayReads, recordReads = f.coupledGuardRecordReads
+                    #expect(held.permitsCoupledEditorTransportRead(pair: pair))
+                    #expect(f.coupledGuardBarReads == oneDiscoveryReads)
+                    #expect(f.coupledGuardPlayReads > playReads && f.coupledGuardRecordReads > recordReads)
+                    f.coupledGuardCountDiscovery = false
+                }
+                if fault == "fresh_values" {
+                    let reads = f.coupledGuardRecordReads
+                    f.builder.setAttribute(record, kAXValueAttribute as String, NSNumber(value: 1))
+                    #expect(!ExactTrackNameAdapter.permitsCoupledEditorRead(editor, pair: pair, names: ["Duplicate"], transportProof: held))
+                    #expect(f.coupledGuardRecordReads > reads)
+                }
+            } else {
+                #expect(!admitted)
+                if fault.hasPrefix("late_") || ["record", "replaced_bar", "replaced_record", "cancel"].contains(fault) {
+                    #expect(f.coupledGuardPlayReads > 0)
+                }
+            }
+        }
+        #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+    }
+
     @Test("A held input popup may move focus without losing its original complete association",
           arguments: ["unchanged", "unchanged_focus", "popup_no_focused_window", "popup_unchanged_no_focused_window", "ordinary_no_focused_window", "popup_unreadable_window", "popup_foreign_window", "foreign_document", "foreign_focus", "detached_search", "retired_strip", "changed_selection", "playing", "rail", "rail_unchanged", "rail_missing_relationship", "rail_changed_child", "rail_editor", "rail_final_child_drift", "rail_final_focus_drift", "rail_final_rail_editor", "rail_final_rail_insertion"])
     func ownedPopupFocusPreservesOnlyActualHeldCustody(_ fault: String) async throws {
@@ -362,6 +475,10 @@ struct Issue965HeldSelectionAssociationTests {
         var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
+        var coupledGuardBarReads = 0
+        var coupledGuardPlayReads = 0
+        var coupledGuardRecordReads = 0
+        var coupledGuardCountDiscovery = false
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
         var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingSelection: (@Sendable (Int) -> Void)?
