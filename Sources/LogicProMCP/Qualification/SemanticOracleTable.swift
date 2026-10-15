@@ -349,6 +349,10 @@ enum SemanticOracleTable {
             "semantic oracle pending — a bounded native occupied-send bypass round trip exists, "
             + "but no audited qualification write-and-restore recipe or independent readback "
             + "oracle exists; the handler's checkbox receipt is not promotion evidence",
+        .mixerSetSendLevelVerified:
+            "semantic oracle pending — only three occupied-send numeric-editor values have bounded "
+            + "native provider evidence; no audited public write-and-restore recipe or independent "
+            + "readback oracle exists, and the handler's display receipt is not promotion evidence",
         .pluginsSetEQBandVerified:
             "live 2026-08-30 evidence establishes the Channel EQ raw AXValue ranges and "
             + "one-step increment-walk behavior only; no end-to-end write/readback round "

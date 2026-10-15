@@ -38,6 +38,7 @@ struct OperationRegistryTests {
         (.mixerGetSendDestinationVerified, "get_send_destination_verified"),
         (.mixerGetSendBypassVerified, "get_send_bypass_verified"),
         (.mixerSetSendBypassVerified, "set_send_bypass_verified"),
+        (.mixerSetSendLevelVerified, "set_send_level_verified"),
     ]
 
     private static let navigateCommands: [(String, String)] = [
@@ -173,7 +174,7 @@ struct OperationRegistryTests {
     @Test("all mixer metadata matches current runtime truth")
     func mixerMetadata() throws {
         let mixerSpecs = OperationRegistry.specs.filter { $0.tool == .logicMixer }
-        let targetBearingCommands: Set<String> = ["set_volume", "set_pan", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified"]
+        let targetBearingCommands: Set<String> = ["set_volume", "set_pan", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified", "set_send_level_verified"]
         #expect(Set(Self.mixerCommands.map(\.1)) == Set(mixerSpecs.map(\.command)))
 
         for (id, command) in Self.mixerCommands {
@@ -186,7 +187,7 @@ struct OperationRegistryTests {
             #expect(spec.target == (targetBearingCommands.contains(command) ? .acceptsStableTarget : .none))
             #expect(spec.verification == .readbackRequired)
             #expect(spec.retry == .neverAutomatic)
-            #expect(spec.deadline == (id == .mixerSetInputBusVerified ? .medium : .short))
+            #expect(spec.deadline == ([OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(id) ? .medium : .short))
             #expect(spec.availability == .defaultInstall)
             #expect(spec.capability.rawValue == id.rawValue)
         }
@@ -196,7 +197,7 @@ struct OperationRegistryTests {
     func mixerLegacyParity() {
         #expect(OperationRegistry.mutatingCommands(tool: .logicMixer) == Set(Self.mixerCommands.map(\.1)).subtracting(["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"]))
         for (id, command) in Self.mixerCommands {
-            let expectedDeadline = id == .mixerSetInputBusVerified ? 90.0 : 25.0
+            let expectedDeadline = [OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(id) ? 90.0 : 25.0
             #expect(OperationRegistry.deadlineSeconds(tool: ToolID.logicMixer.rawValue, command: command) == expectedDeadline)
             let isMutating = LogicProServer.isMutatingCommand(tool: ToolID.logicMixer.rawValue, command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"].contains(command) { #expect(!isMutating) }
@@ -287,7 +288,7 @@ struct OperationRegistryTests {
             let isMutating = LogicProServer.isMutatingCommand(tool: "logic_mixer", command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"].contains(command) { #expect(!isMutating) }
             else { #expect(isMutating) }
-            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (command == "set_input_bus_verified" ? 90.0 : 25.0))
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (["set_input_bus_verified", "set_send_level_verified"].contains(command) ? 90.0 : 25.0))
         }
         #expect(!LogicProServer.isMutatingCommand(tool: "logic_mixer", command: "play"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: "play") == 25)
@@ -299,7 +300,7 @@ struct OperationRegistryTests {
             let isMutating = LogicProServer.isMutatingCommand(tool: "logic_mixer", command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"].contains(command) { #expect(!isMutating) }
             else { #expect(isMutating) }
-            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (command == "set_input_bus_verified" ? 90.0 : 25.0))
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (["set_input_bus_verified", "set_send_level_verified"].contains(command) ? 90.0 : 25.0))
         }
         #expect(!LogicProServer.isMutatingCommand(tool: "logic_mixer", command: "play"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: "import_file") == 25)
@@ -311,7 +312,7 @@ struct OperationRegistryTests {
         for spec in OperationRegistry.specs where [
             ToolID.logicTransport, .logicMixer, .logicNavigate,
         ].contains(spec.tool) {
-            let expectedDeadline = spec.id == .mixerSetInputBusVerified ? 90.0 : 25.0
+            let expectedDeadline = [OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(spec.id) ? 90.0 : 25.0
             #expect(spec.deadline.seconds == expectedDeadline)
             #expect(OperationRegistry.deadlineSeconds(tool: spec.tool.rawValue, command: spec.command) == expectedDeadline)
             #expect(LogicProServer.commandDeadlineSeconds(tool: spec.tool.rawValue, command: spec.command) == expectedDeadline)
@@ -337,7 +338,7 @@ struct OperationRegistryTests {
             if [.mixerGetOutputVerified, .mixerGetInputBusVerified, .mixerGetSendDestinationVerified, .mixerGetSendBypassVerified].contains(spec.id) { #expect(!isMutating) }
             else { #expect(isMutating) }
             #expect(LogicProServer.commandDeadlineSeconds(tool: spec.tool.rawValue, command: spec.command)
-                == (spec.id == .mixerSetInputBusVerified ? 90.0 : 25.0))
+                == ([OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(spec.id) ? 90.0 : 25.0))
         }
         #expect(LogicProServer.isMutatingCommand(tool: "logic_midi", command: "import_file"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_midi", command: "import_file") == 300)

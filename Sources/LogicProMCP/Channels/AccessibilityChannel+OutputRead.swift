@@ -105,7 +105,7 @@ extension AccessibilityChannel {
         var changedSend: ChangedSendObservation? = nil
     }
 
-    private struct SendBypassSnapshot {
+    struct SendBypassSnapshot {
         let physical: AXMixerStripBinding.Binding
         let control: AXLogicProElements.AssignedSendMenuControl
         let slots: [SendSlotObservation]
@@ -137,7 +137,7 @@ extension AccessibilityChannel {
         return current == expected && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
     }
 
-    private static func readSendBypassSnapshot(ordinal: Int, runtime: AXLogicProElements.Runtime) async -> SendBypassSnapshot? {
+    static func readSendBypassSnapshot(ordinal: Int, runtime: AXLogicProElements.Runtime) async -> SendBypassSnapshot? {
         guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
               let physical = AXMixerStripBinding.current, let app = AXLogicProElements.appRoot(runtime: runtime),
               let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
