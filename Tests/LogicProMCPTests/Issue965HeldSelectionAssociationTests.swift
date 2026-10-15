@@ -334,6 +334,8 @@ struct Issue965HeldSelectionAssociationTests {
         var associationStopReadsAtWrite = 0
         var routingLateScopeInjected = false
         var routingModeInspectionReads = 0
+        var lateAssociationFocusSampled = false
+        var lateAssociationFocusLanded = false
         var inputMenuPresses = 0
         var inputMenuCancels = 0
         var inputRetirementCensusLag = false
@@ -3893,6 +3895,63 @@ struct Issue965HeldSelectionAssociationTests {
             runtime: f.builder.makeAXRuntime()))
         #expect(CFEqual(focus, f.strips[1]))
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+    }
+
+    @Test(arguments: ["healthy", "retained_focus", "own_landing", "foreign_editor", "foreign_held_strip"])
+    func wholeInspectionKeepsOnlyItsOwnLateSelectionFocus(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true), b = f.builder
+        f.useBulkReads = true
+        for (index, header) in f.headers.enumerated() {
+            b.setAttribute(header, kAXSelectedAttribute as String, index == 3)
+        }
+        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[2])
+        b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[2]])
+        f.thirdRetainsPreviousFocus = fault == "retained_focus"
+        f.routingSelection = { index in
+            let source = index == 0 ? 1 : index == 1 ? 0 : index == 2 ? 3 : 2
+            b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[source]])
+        }
+        let inject = ["own_landing", "foreign_editor", "foreign_held_strip"].contains(fault)
+        let foreign = b.element(1_965_799)
+        b.setRole(foreign, kAXTextFieldRole as String)
+        b.setAttribute(foreign, kAXWindowAttribute as String, f.window)
+        f.routingRead = { element, attribute in
+            guard inject, f.selections.last == 2 else { return }
+            if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
+               !f.lateAssociationFocusSampled {
+                f.lateAssociationFocusSampled = true
+                // The selected child already identifies challenge 2; keyboard
+                // focus still reflects the preceding, completely held strip.
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[0])
+            }
+            if f.lateAssociationFocusSampled, !f.lateAssociationFocusLanded,
+               CFEqual(element, f.scroll), attribute == kAXValueAttribute as String {
+                f.lateAssociationFocusLanded = true
+                let focus = fault == "own_landing" ? f.strips[3]
+                    : fault == "foreign_held_strip" ? f.strips[1] : foreign
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, focus)
+            }
+        }
+        let body = try await inspect(f)
+        let effects = try #require(body["ui_effects"] as? [String: Any])
+        let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+        if inject {
+            #expect(f.lateAssociationFocusSampled && f.lateAssociationFocusLanded,
+                "Reach the target-2 focus sample and unchanged viewport boundary")
+        }
+        if fault.hasPrefix("foreign_") {
+            #expect(rows.isEmpty)
+            #expect(effects["restoration"] as? String != "restored")
+            #expect(f.selections.last == 2, "A foreign focus must not grant another selection write")
+        } else {
+            #expect(rows.count == 4, "\(body)")
+            #expect(effects["restoration"] as? String == "restored")
+            #expect(f.selections == [0, 1, 2, 3])
+            let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+                kAXFocusedUIElementAttribute as String, runtime: f.logic().ax))
+            #expect(CFEqual(focus, f.strips[2]))
+            #expect(b.attributeValue(f.scroll, kAXValueAttribute as String) as? Double == 0.8)
+        }
     }
 
     @Test("Whole-project inspection observes all held headers, without a duplicate-name or ordinal join",
