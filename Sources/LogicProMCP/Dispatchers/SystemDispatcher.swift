@@ -2303,6 +2303,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                 Resources (reads — zero tool cost):
                   logic://system/health         — System health
                   logic://transport/state       — Transport state
+                  logic://tempo/map             — Already-open Tempo List rows and count (partial coverage)
                   logic://tracks                — All tracks
                   logic://mixer                 — Mixer state
                   logic://markers               — All project markers
