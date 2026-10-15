@@ -250,6 +250,11 @@ extension OperationRegistry {
                 "ordinal": index(1), "bypassed": .enforced(.boolean, .bool(true)),
                 "expected_current": .enforced(.boolean, .bool(false)),
             ], required: [["target_ref"], ["ordinal"], ["bypassed"], ["expected_current"]]),
+            "mixer.set_send_level_verified": .init(params: [
+                "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
+                "ordinal": index(1), "level_db": .enforced(.string, .string("-6")),
+                "expected_current": .enforced(.string, .string("-∞")),
+            ], required: [["target_ref"], ["ordinal"], ["level_db"], ["expected_current"]]),
             "mixer.set_send_output_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,
                 "ordinal": .enforced(.integer, .int(1)),

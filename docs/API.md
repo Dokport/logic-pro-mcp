@@ -177,7 +177,11 @@ For Library patches, treat `presetsByCategory` as a browse/catalog view. Default
 
 ### `logic_mixer`
 
-Public commands: `set_volume`, `set_pan`, `set_master_volume`, `set_plugin_param`, `insert_plugin`, `bank`, `get_output_verified`, `get_send_destination_verified`, `set_output_verified`.
+Public commands include `set_volume`, `set_pan`, `set_master_volume`, `set_plugin_param`, `insert_plugin`, `bank`, `get_output_verified`, `get_send_destination_verified`, `set_output_verified`, and `set_send_level_verified`.
+
+`set_send_level_verified` takes `{target_ref: mix_…, project_ref?: prj_…, ordinal: Int >= 0, level_db: String, expected_current: String}`. It edits only the exact occupied Send knob from that source's complete census, not a physical screen-slot number. Both level strings are limited to the natively exercised semantic values `-95`, `-6`, and `-∞`; `-95.0`/`-6.0` are equivalent normalized spellings. Other levels refuse before writes: no universal dB range or raw-slider conversion is inferred. The existing `send_slots` reader exposes raw/display observations.
+
+An equal expected/current/desired level is a verified zero-click no-op. A changing call requires stopped transport, agreeing checked routing/non-routing observations, exact knob/frame/hit custody, and its own unique numeric editor. One String value write and Return commit are independently checked against the same knob's finite raw value and semantic display, with unchanged bypass, other slots, route, checked titles and complete physical population. Unknown or changed after-state is State B, without a guessed inverse. There is no Send-level Saga/canonical or cross-locale qualification claim; an explicit restoration is another fully checked call.
 
 `get_send_destination_verified` requires a current physical Mixer `target_ref` (`mix_`) and a nonnegative integer `ordinal` from that source's `logic://mixer` `send_slots` census; `project_ref` is optional. The ordinal is the census order, not Logic's on-screen slot number. Only a uniquely qualified occupied assigned-send group with its retained list control is accepted. Empty slots, unqualified legacy shapes, missing controls, unread competitors and changed physical custody refuse before navigation. Track/index selectors, slot aliases, destination, value and other write inputs are not accepted.
 

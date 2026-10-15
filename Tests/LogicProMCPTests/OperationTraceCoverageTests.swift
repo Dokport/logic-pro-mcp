@@ -347,7 +347,7 @@ extension OperationTraceTests {
         let mutatingSpecs = OperationRegistry.specs.filter {
             $0.mutability == Mutability.`mutating`
         }
-        #expect(mutatingSpecs.count == 98)
+        #expect(mutatingSpecs.count == 99)
 
         // A mutating op that refuses BEFORE dispatch starts its trace starts no trace with the
         // coverage params (which carry no consent), so it is asserted to claim NO trace coverage
@@ -851,7 +851,7 @@ private func dispatchOperationTraceCoverageSpec(
             sleep: { _ in }
         )
     case .logicMixer:
-        if spec.id == .mixerSetInputBusVerified || spec.id == .mixerSetSendOutputVerified || spec.id == .mixerSetSendBypassVerified {
+        if [.mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendBypassVerified, .mixerSetSendLevelVerified].contains(spec.id) {
             // Issue an actual physical reference from the injected host census,
             // not a track/index stand-in. Keep this snapshot separate from the
             // generic track fixture and route through the census's refusing channel.
@@ -999,6 +999,8 @@ private func operationTraceCoverageParams(
             "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
     case .mixerSetSendBypassVerified:
         return ["ordinal": .int(1), "bypassed": .bool(true), "expected_current": .bool(false)]
+    case .mixerSetSendLevelVerified:
+        return ["ordinal": .int(1), "level_db": .string("-6"), "expected_current": .string("-∞")]
     case .mixerSetPluginParam:
         return ["track": .int(0), "insert": .int(0), "param": .int(0), "value": .double(0.5)]
     case .mixerInsertPlugin:

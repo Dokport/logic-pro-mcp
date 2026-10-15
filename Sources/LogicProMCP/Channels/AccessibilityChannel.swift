@@ -1814,6 +1814,9 @@ actor AccessibilityChannel: Channel {
             return await AccessibilityChannel.setInputBusVerified(params: params, runtime: runtime.logicRuntime)
         case "mixer.set_send_output_verified":
             return await AccessibilityChannel.setAssignedSendOutputVerified(params: params, runtime: runtime.logicRuntime)
+        case "mixer.set_send_level_verified":
+            return await Self.setSendLevelVerified(params: params, runtime: runtime.logicRuntime,
+                mouse: runtime.observationMouseRuntime, canPostEvents: runtime.canPostEvents)
         case "mixer.get_send_bypass_verified", "mixer.set_send_bypass_verified":
             return await AccessibilityChannel.sendBypassVerified(params: params,
                 writing: operation == "mixer.set_send_bypass_verified", runtime: runtime.logicRuntime)
