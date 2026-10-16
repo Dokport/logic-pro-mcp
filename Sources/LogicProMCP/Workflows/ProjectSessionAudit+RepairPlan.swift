@@ -198,6 +198,8 @@ extension ProjectSessionAudit {
         // was observed. Each offers only answers that settle it on a rebuild (#1090 supplementary
         // review S002): an absence is answered with `new` or `none`, a present receiver with `keep`.
         var receiverQuestions: [Int: Value] = [:]
+        let keptObservations = names.isEmpty
+            ? ApprovedSessionRepair.capturedReceiverKeepObservations(policy: policy, source: capture, request: request) : nil
         func receiverQuestion(_ bus: Int, observed: ReceivingAux) {
             let answers: [String] = observed == .present ? ["keep"] : ["new", "none"]
             receiverQuestions[bus] = .object([
@@ -213,12 +215,14 @@ extension ProjectSessionAudit {
         // inconsistent) is not evidence about this session's receivers, so neither presence nor
         // absence is read from it (#1090 review R1090-001, R1090-002).
         func observedReceiver(_ bus: Int) -> ReceivingAux {
-            graphBound ? receivingAux(bus: bus, graph: graph) : .unverified
+            if keptObservations?.contains(where: { $0.objectValue?["bus"] == .int(bus) }) == true { return .present }
+            return graphBound ? receivingAux(bus: bus, graph: graph) : .unverified
         }
         // #967 B1: retain exact existing candidates in this same canonical preview.
         // Receiver absence is not an unused-bus or allocation observation. These
         // captured facts grant neither live reference authority nor creation permission.
         func existingReceiverObservation(_ bus: Int) -> Value {
+            if let kept = keptObservations?.first(where: { $0.objectValue?["bus"] == .int(bus) }) { return kept }
             func result(_ candidates: [Value]? = nil) -> Value {
                 .object(["bus": .int(bus), "state": .string(candidates == nil ? "unverified" : "observed"),
                     "candidates": .array(candidates ?? []), "namespace_availability": .string("not_observed")])
@@ -301,7 +305,9 @@ extension ProjectSessionAudit {
             return ([], [])
         }
         var steps: [Value] = []
-        var unchanged: [Value] = []
+        var unchanged: [Value] = keptObservations?.compactMap { observation in
+            observation.objectValue?["bus"]?.intValue.map { .string("receiver_keep_bus_\($0)") }
+        } ?? []
         var routingIDs: [String] = []
         // The current aux adapter supplies no factual predicted graph. Do not claim a protected
         // path survived a fabricated new-object topology or silently skip that canonical prefix.

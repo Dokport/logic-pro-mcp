@@ -3915,7 +3915,7 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false) async throws {
+    private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false, keep: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), registry = TargetRegistry()
             let captureNow = ContinuousClock.now
@@ -3968,6 +3968,16 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setChildren(replacement, graph
                 ? f.builder.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, input) } + [newInput]
                 : [newInput])
+            if keep {
+                for (strip, id) in [(f.strips[1], 1_967_801), (replacement, 1_967_802)] {
+                    let label = f.builder.element(id)
+                    f.builder.setRole(label, kAXStaticTextRole as String)
+                    f.builder.setAttribute(label, kAXDescriptionAttribute as String, "label")
+                    f.builder.setAttribute(label, kAXValueAttribute as String, "Aux 7")
+                    f.builder.setChildren(label, [])
+                    f.builder.setChildren(strip, f.builder.makeAXRuntime().children(strip) + [label])
+                }
+            }
             for menu in [root, submenu] { f.builder.setRole(menu, kAXMenuRole as String) }
             f.builder.setActionNames(root, [kAXCancelAction as String])
             for (item, title) in [(echo, "Bus \(number) ← Audio 2"), (bus, "Bus"), (leaf, "Bus \(number) ← Audio 2")] {
@@ -3989,7 +3999,17 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if CFEqual(element, root), action == kAXCancelAction as String {
                     f.inputMenuCancels += 1
+                    if keep, f.inputMenuCancels == 1 {
+                        // Capture keeps its original owner; the independent apply read
+                        // below performs the real replacement and must renew its own proof.
+                        f.builder.setChildren(f.mixer, f.strips)
+                        return true
+                    }
                     f.routingReplacement = replacement
+                    if keep, condition == "renewed_label_changed" {
+                        f.routingLateScopeInjected = true
+                        f.builder.setAttribute(f.builder.element(1_967_802), kAXValueAttribute as String, "Aux 9")
+                    }
                     if retiresWholeCensus { f.routingOtherReplacement = otherReplacement }
                     if condition == "retirement_census_lag" {
                         f.inputRetirementCensusLag = true
@@ -4072,12 +4092,28 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
             f.routingRead = { element, attribute in
+                if keep, !f.routingLateScopeInjected, f.routingReplacement != nil,
+                   CFEqual(element, f.builder.element(1_967_802)), attribute == kAXValueAttribute as String,
+                   condition == "deciding_read" || condition == "deciding_control_replaced" {
+                    f.routingLateScopeInjected = true
+                    if condition == "deciding_read" {
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    } else {
+                        let changedInput = f.builder.element(1_965_972)
+                        f.builder.setButton(changedInput, description: "Bus 256",
+                            help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 1, height: 1)
+                        f.builder.setChildren(changedInput, [])
+                        f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(replacement).map {
+                            CFEqual($0, newInput) ? changedInput : $0
+                        })
+                    }
+                }
                 if condition == "selected_child", f.routingReplacement != nil,
                    CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
                     let selectedOther = AXValueExtractors.extractSelectedState(f.headers[1], runtime: f.builder.makeAXRuntime()) == true
                     f.builder.setAttribute(f.mixer, attribute, [selectedOther ? f.strips[0] : replacement])
                 }
-                let inputDescription = f.selections.count == (graph ? 6 : 4) && CFEqual(element, newInput)
+                let inputDescription = !keep && f.selections.count == (graph ? 6 : 4) && CFEqual(element, newInput)
                     && attribute == kAXDescriptionAttribute as String
                 let decidingDescription = inputDescription && f.inputPreviousReadWasDescription
                 f.inputPreviousReadWasDescription = inputDescription
@@ -4116,13 +4152,85 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(f.selections == [1, 0])
             if graph {
                 let body = try await inspect(f, navigation: condition != "navigation_disabled", cache: cache,
-                    registry: registry, domains: condition == "missing_pair" ? ["routing"] : ["associations", "routing"],
+                    registry: registry, domains: keep ? ["tracks", "strips", "associations", "routing"]
+                        : condition == "missing_pair" ? ["routing"] : ["associations", "routing"],
                     guardedRenewalFocus: true)
                 let retained = if let id = body["snapshot_id"] as? String {
                     await cache.retainedInspection(id: id)?.capture
                 } else { nil as SessionPopulationObservation.Capture? }
                 let routing = retained.map { SessionPopulationObservation.routingGraph(capture: $0) }
                 let edges = routing?.edges.filter { $0.kind == .inputAssignment } ?? []
+                if keep {
+                    let snapshot = try #require(body["snapshot_id"] as? String)
+                    let project = try #require((body["project"] as? [String: Any])?["project_ref"] as? String)
+                    let fresh = try #require(retained)
+                    let originalRow = try #require(fresh.channelStrips.indices.first {
+                        fresh.channelStrips[$0].physicalBinding?.matches(source) == true
+                    })
+                    let approvedRef = try #require(fresh.mixerReference(at: originalRow))
+                    #expect(edges.count == 1 && edges.first?.destination == approvedRef.rawValue)
+                    let gate = LogicMutationGate(), router = ChannelRouter(), journal = SagaJournal()
+                    let channel = f.channel(); await router.register(channel)
+                    let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                        poller: StatePoller(axChannel: channel, cache: cache,
+                            runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable,
+                                keyboardFocus: { .notTextEditing })),
+                        dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                        mutationGate: gate, liveTrackNames: { [0: "Duplicate", 1: "Duplicate"] },
+                        projectFileReader: .unavailable)
+                    func call(_ command: String, _ params: [String: Value]) async throws -> [String: Any] {
+                        let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: command))
+                        let execution = LogicProServer.sagaExecutionOwnsLifecycle(tool: "logic_project", command: command)
+                        let lifecycle = execution ? ContinuousClock.now.advanced(by: .seconds(
+                            LogicProServer.commandDeadlineSeconds(tool: "logic_project", command: command))) : nil
+                        let scoped = lifecycle.map { dependencies.withSagaLifecycleDeadline($0) } ?? dependencies
+                        let result = await LogicProServer.runWithDeadline(tool: "logic_project", command: command,
+                            commandParams: params,
+                            outerAbsoluteDeadline: lifecycle.map { LogicProServer.sagaOuterAbsoluteDeadline(lifecycleDeadline: $0) },
+                            mutationGate: execution ? nil : gate, externallyManagedMutation: execution) {
+                            await FeatureFlags.withAdr002TargetRefForTests(true) {
+                                await FeatureFlags.withAdr004MutationSagaForTests(true) { await handler(scoped, params) }
+                            }
+                        }
+                        return try #require(sharedJSONObject(sharedToolText(result)))
+                    }
+                    let planned = try await call("plan_session_repair", ["snapshot_id": .string(snapshot),
+                        "policy": .object(["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                            "project_ref": .string(project), "targets": .array([]),
+                            "receivers": .array([.object(["bus": .int(number), "aux": .string("keep")])])])])
+                    let executable = try #require(planned["executable"] as? Bool)
+                    #expect(executable, "The actual initial own-control capture must support KEEP: \(planned)")
+                    guard executable else { return }
+                    let arguments: [String: Value] = ["plan_id": .string(try #require(planned["plan_id"] as? String)),
+                        "digest": .string(try #require(planned["digest"] as? String)), "confirmed": .bool(true),
+                        "idempotency_key": .string("keep-renewed-original-header")]
+                    let result = try await call("apply_session_repair", arguments)
+                    #expect(f.inputMenuPresses == 2 && f.inputMenuCancels == 2,
+                        "Apply must independently reopen and cancel the actual input after capture")
+                    #expect(source.currentIndex(runtime: f.builder.makeLogicRuntime(appElement: f.app)) == nil,
+                        "The originally approved physical object really retired during apply")
+                    if condition != "paired" {
+                        #expect(result["state"] as? String == "C", "A lost original KEEP renewal must refuse: \(result)")
+                        let wrote = try #require(result["write_attempted"] as? Bool); #expect(!wrote)
+                        #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+                        if ["partial_restore", "deciding_read", "deciding_control_replaced", "renewed_label_changed"].contains(condition) {
+                            #expect(f.routingLateScopeInjected, "Reach the actual late original-source boundary")
+                        }
+                        return
+                    }
+                    #expect(result["saga_state"] as? String == "completed", "Actual registered KEEP renewal: \(result)")
+                    let verified = try #require(result["verified"] as? Bool); #expect(verified)
+                    let wrote = try #require(result["write_attempted"] as? Bool); #expect(!wrote)
+                    #expect(result["writes_performed"] as? Int == 0)
+                    let evidence = try #require(result["goal_evidence"] as? [[String: Any]])
+                    #expect(evidence.count == 1 && evidence.first?["target_ref"] as? String == approvedRef.rawValue)
+                    let beforeReplay = f.inputMenuPresses
+                    let replay = try await call("apply_session_repair", arguments)
+                    let duplicate = try #require(replay["duplicate"] as? Bool); #expect(duplicate)
+                    #expect(f.inputMenuPresses == beforeReplay)
+                    #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+                    return
+                }
                 if condition == "two_input_retirements" {
                     #expect(f.inputMenuPresses == 2 && f.inputMenuCancels == 2,
                         "Both registered input acquisitions must actually replace physical owners")
@@ -4367,6 +4475,16 @@ struct Issue965HeldSelectionAssociationTests {
     @Test(arguments: [1, 256])
     func registeredRoutingCapturePublishesRenewedInputReceiver(number: Int) async throws {
         try await assertInputBusRenewal(number: number, condition: "paired", graph: true)
+    }
+
+    @Test func registeredReceiverKeepRenewsOnlyItsOriginallyCapturedHeader() async throws {
+        try await assertInputBusRenewal(number: 1, condition: "paired", graph: true, keep: true)
+    }
+
+    @Test(arguments: ["replaced_header", "foreign_project", "foreign_focus", "partial_restore",
+                      "deciding_read", "deciding_control_replaced", "renewed_label_changed"])
+    func registeredReceiverKeepRefusesLostOriginalRenewal(condition: String) async throws {
+        try await assertInputBusRenewal(number: 1, condition: condition, graph: true, keep: true)
     }
 
     @Test(arguments: [1, 256])

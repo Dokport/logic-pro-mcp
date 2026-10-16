@@ -40,6 +40,198 @@ struct Issue291OwnedInputBusMenuTests {
             await AccessibilityChannel.getInputBusVerified(runtime:f.logic,timing:.immediate)
         }
     }
+
+    @Test(arguments: ["healthy", "two_same_name", "no_type", "no_checked_input", "ambiguous_input", "changed_input",
+        "changed_input_control", "changed_label_control", "changed_label", "changed_source", "wrong_project", "wrong_registry",
+        "foreign_editor", "unread_checked_input", "not_restored"])
+    func registeredKeepRechecksTheCapturedAuxWithoutChangingRouting(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let p = try prepare(), f = p.f, b = f.b
+                defer { try? FileManager.default.removeItem(at: f.bundle) }
+                let label = b.element(967_901)
+                b.setRole(label, kAXStaticTextRole as String)
+                b.setAttribute(label, kAXDescriptionAttribute as String, "label")
+                b.setAttribute(label, kAXValueAttribute as String, "Aux 7")
+                b.setChildren(label, [])
+                if fault != "no_type" { b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]) + [label]) }
+                if ["two_same_name", "ambiguous_input"].contains(fault) {
+                    let second = b.element(967_902)
+                    if fault == "two_same_name" {
+                        b.setRole(second, kAXStaticTextRole as String)
+                        b.setAttribute(second, kAXDescriptionAttribute as String, "label")
+                        b.setAttribute(second, kAXValueAttribute as String, "Aux 9")
+                        b.setChildren(second, [])
+                        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [second])
+                        b.setAttribute(f.outputs[1], kAXHelpAttribute as String, "Input slot. Choose the channel strip input source.")
+                        b.setAttribute(f.outputs[1], kAXDescriptionAttribute as String, "Bus 256")
+                        b.setActionNames(f.outputs[1], [kAXPressAction as String])
+                        for nameID in [2_910_104, 2_910_114] { b.setAttribute(b.element(nameID), kAXValueAttribute as String, "Same") }
+                    } else {
+                        b.setButton(second, description: "Bus 256", help: "Input slot. Choose the channel strip input source.",
+                            x: 0, y: 0, width: 1, height: 1)
+                        b.setChildren(second, [])
+                        b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]) + [second])
+                    }
+                }
+                let cache = StateCache(), registry = TargetRegistry(), router = ChannelRouter(), journal = SagaJournal()
+                let gate = LogicMutationGate(), channel = f.channel()
+                await router.register(channel)
+                let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                    poller: StatePoller(axChannel: channel, cache: cache, runtime: .init(hasVisibleWindow: { true },
+                        projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                    mutationGate: gate, liveTrackNames: { [:] }, projectFileReader: .unavailable)
+                func call(_ command: String, _ params: [String: Value]) async throws -> [String: Any] {
+                    let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: command))
+                    #expect(LogicProServer.strictParamValidationResult(tool: "logic_project", command: command, params: params) == nil)
+                    let execution = LogicProServer.sagaExecutionOwnsLifecycle(tool: "logic_project", command: command)
+                    let lifecycle = execution ? ContinuousClock.now.advanced(by: .seconds(
+                        LogicProServer.commandDeadlineSeconds(tool: "logic_project", command: command))) : nil
+                    let scoped = lifecycle.map { dependencies.withSagaLifecycleDeadline($0) } ?? dependencies
+                    let response = await LogicProServer.runWithDeadline(tool: "logic_project", command: command,
+                        commandParams: params,
+                        outerAbsoluteDeadline: lifecycle.map { LogicProServer.sagaOuterAbsoluteDeadline(lifecycleDeadline: $0) },
+                        mutationGate: execution ? nil : gate, externallyManagedMutation: execution) {
+                        await FeatureFlags.withAdr002TargetRefForTests(true) {
+                            await FeatureFlags.withAdr004MutationSagaForTests(true) { await handler(scoped, params) }
+                        }
+                    }
+                    return try #require(sharedJSONObject(sharedToolText(response)))
+                }
+                let inspected = try await call("inspect_session", ["domains": .array([.string("strips"), .string("routing")]),
+                    "allow_ui_navigation": .bool(fault != "no_checked_input")])
+                let project = try #require((inspected["project"] as? [String: Any])?["project_ref"] as? String)
+                let snapshot = try #require(inspected["snapshot_id"] as? String)
+                let routing = try #require(inspected["routing"] as? [String: Any])
+                let nodes = try #require(routing["nodes"] as? [[String: Any]])
+                let receivers = nodes.filter { $0["kind"] as? String == "aux" }.compactMap {
+                    ($0["targetRef"] as? [String: Any])?["rawValue"] as? String
+                }
+                let edges = try #require(routing["edges"] as? [[String: Any]])
+                let incomplete = ["no_type", "no_checked_input", "ambiguous_input"].contains(fault)
+                if !incomplete {
+                    #expect(receivers.count == (fault == "two_same_name" ? 2 : 1))
+                    for receiver in receivers {
+                        #expect(edges.contains { $0["kind"] as? String == "inputAssignment" && $0["source"] as? String == "bus_1"
+                            && $0["destination"] as? String == receiver })
+                    }
+                }
+                #expect(routing["coverage"] as? String == "partial")
+                if fault == "healthy" {
+                    let retained = try #require(await cache.retainedInspection(id: snapshot))
+                    guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy([
+                        "schema": .string(ProjectSessionAudit.intentPolicySchema), "project_ref": .string(project),
+                        "targets": .array([]), "receivers": .array([.object(["bus": .int(1), "aux": .string("keep")])])
+                    ]) else { Issue.record("The observed-receiver policy must parse"); return }
+                    #expect(ApprovedSessionRepair.capturedReceiverKeepObservations(policy: policy,
+                        source: retained.capture, request: retained.request) != nil)
+                    // Even native-looking cached rows cannot replace this invocation's fresh proof.
+                    #expect(ApprovedSessionRepair.capturedReceiverKeepObservations(policy: policy,
+                        source: inputCapture(retained.capture, fresh: nil), request: retained.request) == nil)
+                }
+                let plan = try await call("plan_session_repair", ["snapshot_id": .string(snapshot), "policy": .object([
+                    "schema": .string(ProjectSessionAudit.intentPolicySchema), "project_ref": .string(project),
+                    "targets": .array([]), "receivers": .array([.object(["bus": .int(1), "aux": .string("keep")])])])])
+                let executable = try #require(plan["executable"] as? Bool)
+                if incomplete { #expect(!executable); return }
+                #expect(executable, "Actual captured Aux-kind + checked input should support KEEP: \(plan)")
+                guard executable else { return }
+                let steps = try #require(plan["steps"] as? [Any])
+                #expect(steps.isEmpty)
+                let arguments: [String: Value] = ["plan_id": .string(try #require(plan["plan_id"] as? String)),
+                    "digest": .string(try #require(plan["digest"] as? String)), "confirmed": .bool(true),
+                    "idempotency_key": .string("keep-native-aux")]
+                let readsBefore = f.mutations.count
+                let observations = try #require(plan["existing_receiver_observations"] as? [[String: Any]])
+                let observation = try #require(observations.first)
+                #expect(observation["namespace_availability"] as? String == "not_observed")
+                #expect(observation["scope"] as? String == "approved_observed_receivers")
+                let exhaustive = try #require(observation["exhaustive"] as? Bool)
+                #expect(!exhaustive)
+                let candidates = try #require(observation["candidates"] as? [[String: Any]])
+                #expect(Set(candidates.compactMap { $0["target_ref"] as? String }) == Set(receivers))
+                if fault == "changed_input" {
+                    for item in [p.echo, p.leaf] { b.setAttribute(item, kAXTitleAttribute as String, "Bus 2 ← Audio 2") }
+                }
+                if fault == "changed_label" { b.setAttribute(label, kAXValueAttribute as String, "Aux 2") }
+                if fault == "changed_label_control" {
+                    let replacement = b.element(967_903)
+                    b.setRole(replacement, kAXStaticTextRole as String)
+                    b.setAttribute(replacement, kAXDescriptionAttribute as String, "label")
+                    b.setAttribute(replacement, kAXValueAttribute as String, "Aux 7")
+                    b.setChildren(replacement, [])
+                    b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]).map { CFEqual($0, label) ? replacement : $0 })
+                }
+                if fault == "changed_input_control" {
+                    let replacement = b.element(967_904)
+                    b.setButton(replacement, description: "Bus 256", help: "Input slot. Choose the channel strip input source.",
+                        x: 0, y: 0, width: 1, height: 1)
+                    b.setChildren(replacement, [])
+                    b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]).map { CFEqual($0, f.outputs[0]) ? replacement : $0 })
+                }
+                if fault == "changed_source" {
+                    let replacement = b.element(967_905)
+                    b.setRole(replacement, kAXLayoutItemRole as String)
+                    b.setFrame(replacement, x: 0, y: 100, width: 80, height: 400)
+                    b.setChildren(replacement, [])
+                    b.setChildren(f.mixer, [replacement, f.strips[1]])
+                }
+                if fault == "wrong_project" { b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/foreign.logicx/") }
+                if fault == "wrong_registry" { await registry.bumpProjectEpoch() }
+                if fault == "foreign_editor" {
+                    let field = b.element(967_906)
+                    b.setRole(field, kAXTextFieldRole as String)
+                    b.setAttribute(field, kAXWindowAttribute as String, f.window)
+                    b.setAttribute(field, kAXValueAttribute as String, "editing")
+                    b.setAttribute(field, kAXInsertionPointLineNumberAttribute as String, 0)
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, field)
+                }
+                if fault == "unread_checked_input" {
+                    f.attributeReadResult = { element, attribute in
+                        CFEqual(element, p.leaf) && attribute == "AXMenuItemMarkChar"
+                            ? .failure(.init(raw: AXError.cannotComplete.rawValue)) : nil
+                    }
+                }
+                if fault == "not_restored" { b.setActionNames(f.root, []) }
+                let result = try await call("apply_session_repair", arguments)
+                if !["healthy", "two_same_name"].contains(fault) {
+                    #expect(result["state"] as? String == "C", "\(result)")
+                    let wrote = try #require(result["write_attempted"] as? Bool)
+                    #expect(!wrote)
+                    if ["changed_input", "unread_checked_input", "not_restored"].contains(fault) {
+                        #expect(f.mutations.count > readsBefore, "Reach the actual checked reader after preview")
+                    } else { #expect(f.mutations.count == readsBefore) }
+                    if fault == "not_restored" {
+                        let read = try #require(result["receiver_read_receipt"] as? [String: Any])
+                        #expect(read["popup_menu_state"] as? String == "not_restored")
+                    }
+                    return
+                }
+                #expect(result["saga_state"] as? String == "completed", "Actual KEEP apply: \(result)")
+                let verified = try #require(result["verified"] as? Bool)
+                #expect(verified)
+                let wrote = try #require(result["write_attempted"] as? Bool)
+                #expect(!wrote)
+                #expect(result["writes_performed"] as? Int == 0)
+                let evidence = try #require(result["goal_evidence"] as? [[String: Any]])
+                #expect(Set(evidence.compactMap { $0["target_ref"] as? String }) == Set(receivers))
+                #expect(f.mutations.count > readsBefore, "Apply must independently reopen/check/close the exact input, not echo its capture")
+                let countAfter = f.mutations.count
+                let replay = try await call("apply_session_repair", arguments)
+                let duplicate = try #require(replay["duplicate"] as? Bool)
+                #expect(duplicate)
+                #expect(f.mutations.count == countAfter)
+                #expect(f.mutations.allSatisfy { element, action in
+                    (action == kAXPressAction as String && f.outputs.contains { CFEqual($0, element) })
+                        || (action == kAXCancelAction as String && CFEqual(element, f.root))
+                })
+                guard case .completed? = await journal.record(for: "keep-native-aux") else {
+                    Issue.record("KEEP must finalize in the existing Saga journal"); return
+                }
+            }
+        }
+    }
     @Test("Input bus destinations follow the owning incoming-arrow menu, never its current echo",
           arguments: [1, 256])
     func inputDestinationChoiceUsesIncomingBusIdentity(_ number: Int) throws {
@@ -195,7 +387,7 @@ struct Issue291OwnedInputBusMenuTests {
     }
 
     private func inputCapture(_ base: SessionPopulationObservation.Capture,
-        fresh: SessionPopulationObservation.FreshPopulation) -> SessionPopulationObservation.Capture {
+        fresh: SessionPopulationObservation.FreshPopulation?) -> SessionPopulationObservation.Capture {
         SessionPopulationObservation.Capture(before: base.before, after: base.after,
                 projectEpoch: base.projectEpoch, project: base.project, tracks: base.tracks,
                 tracksFetchedAt: base.tracksFetchedAt, channelStrips: base.channelStrips,

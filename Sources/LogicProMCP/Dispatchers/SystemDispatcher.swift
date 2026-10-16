@@ -1152,11 +1152,13 @@ struct SystemDispatcher: OperationTraceDispatching {
                         defer { lease?.release() }
                         await PluginsDispatcher.$sagaLease.withValue(lease) {
                           await OperationTraceContext.$current.withValue(outerTraceContext) {
-                            // Only a retained, fully accounted names-only approval can
-                            // reconcile an empty canonical task list. Generic empty Saga
+                            // Only retained matching-name or observed-receiver KEEP goals
+                            // can reconcile an empty canonical task list. Generic empty Saga
                             // plans still pass through their unchanged rejection below.
-                            if let approval = approvedSessionRepair, approval.verifiesMatchingNamesOnly {
-                                let proposed = await approval.verifyMatchingNames()
+                            if let approval = approvedSessionRepair,
+                               approval.verifiesMatchingNamesOnly || approval.verifiesReceiverKeepsOnly {
+                                let proposed = approval.verifiesReceiverKeepsOnly
+                                    ? await approval.verifyReceiverKeeps() : await approval.verifyMatchingNames()
                                 let (winner, _) = await sagaJournal.finalizeReturningWinner(
                                     journalClaim, proposed: proposed, verifiedIfCancelled: true
                                 )
