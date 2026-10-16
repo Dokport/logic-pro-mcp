@@ -302,6 +302,7 @@ extension AccessibilityChannel {
         var destination: OutputAssignment?
         var restoration: RemovedSendObservation? = nil
         var occupiedInverse: ChangedSendObservation? = nil
+        var createdRemoval: CreatedSendObservation? = nil
         /// Fresh current native empty control, not a removed-send capsule.
         var creation: FreshSendCreation? = nil
         var modeChange: SendModeChange? = nil
@@ -338,6 +339,34 @@ extension AccessibilityChannel {
                 extras: ["write_attempted": false])), assignment: nil)
         }
         return await readOccupiedSendObservation(held, original: original, runtime: runtime, timing: timing)
+    }
+
+    static func readCreatedSendObservation(_ created: CreatedSendObservation,
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming = .live) async -> CheckedOutputReading? {
+        guard created.permits(runtime: runtime) else { return nil }
+        let reading = await AXMixerStripBinding.$current.withValue(created.source.pair.strip) {
+            await getOutputObservation(runtime: runtime, sendOrdinal: created.control.ordinal,
+                timing: timing, observingSendMode: true)
+        }
+        guard created.permits(runtime: runtime), reading.assignment == .stereoOutput,
+              reading.sendNonRoutingChecks == created.nonRoutingChecks, reading.sendMode == created.mode else { return nil }
+        return reading
+    }
+
+    static func removeCreatedSendObservation(_ created: CreatedSendObservation,
+        runtime: AXLogicProElements.Runtime, timing: OutputAssignmentTiming = .live) async -> CheckedOutputReading {
+        guard created.permits(runtime: runtime) else {
+            return .init(result: .error(HonestContract.encodeStateC(error: .staleSnapshot,
+                hint: "The exact created Send is no longer owned.", extras: ["write_attempted": false])), assignment: nil)
+        }
+        return await AXMixerStripBinding.$current.withValue(created.source.pair.strip) {
+            await AXMixerStripBinding.$outputAssociation.withValue(created.source.pair) {
+                await getCheckedRoutingDestination(params: [:], sendOrdinal: created.control.ordinal,
+                    runtime: runtime, timing: timing,
+                    sendReplacement: .init(expected: .stereoOutput, destination: nil, createdRemoval: created),
+                    observingSendMode: true)
+            }
+        }
     }
 
     static func readChangedSendObservation(_ changed: ChangedSendObservation,
@@ -778,6 +807,13 @@ extension AccessibilityChannel {
                           assigned.map({ inverse.control.matches($0) }) == true,
                           sendChecks == inverse.nonRoutingChecks else { return false }
                 }
+                if let created = request.createdRemoval {
+                    guard created.source.pair.strip.matches(physical),
+                          created.permits(runtime: runtime, ownedPopup: root),
+                          assigned.map({ created.control.matches($0) }) == true,
+                          sendChecks == created.nonRoutingChecks, modeEvidence == created.mode,
+                          currentSendMode(in: root, runtime: runtime.ax) == created.mode else { return false }
+                }
                 return first == request.expected && second == first && (!fresh || checkedChoice() == request.expected)
             }
             func normalized(_ slots: [SendSlotObservation]) -> [SendSlotObservation] {
@@ -891,6 +927,12 @@ extension AccessibilityChannel {
                           checkedChoice() == inverse.checkedAfter,
                           sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == inverse.nonRoutingChecks,
                           inverse.permits(runtime: runtime, ownedPopup: root) else { return false }
+                }
+                if let created = request.createdRemoval {
+                    guard created.permits(runtime: runtime, ownedPopup: root), checkedChoice() == .stereoOutput,
+                          sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == created.nonRoutingChecks,
+                          currentSendMode(in: root, runtime: runtime.ax) == created.mode,
+                          created.permits(runtime: runtime, ownedPopup: root) else { return false }
                 }
                 return writerMenuOwned()
             }
@@ -1020,13 +1062,13 @@ extension AccessibilityChannel {
                     return closeBeforeRefusal(.staleTargetReference, "Source or protected state changed after the final bus check; nothing was selected.")
                 }
             }
-            if request.modeChange != nil {
+            if request.modeChange != nil || request.createdRemoval != nil {
                 // The deciding peer census may observe an intervening mode or
                 // Independent Pan edit. Renew that exact before-state last.
                 guard expectedCheckedBefore(fresh: true),
                       sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == sendChecks,
                       writerMenuOwned() else {
-                    return closeBeforeRefusal(.staleSnapshot, "Checked Send mode or protected pan state changed at the final boundary; no mode was pressed.")
+                    return closeBeforeRefusal(.staleSnapshot, "Checked Send mode or protected pan state changed at the final boundary; no Send leaf was pressed.")
                 }
             }
             extras["write_attempted"] = true; extras["menu_path"] = path
