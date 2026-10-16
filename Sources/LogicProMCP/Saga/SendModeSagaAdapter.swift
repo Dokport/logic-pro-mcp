@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// One confirmed occupied Post Fader -> Pre Fader change, with a native owned inverse.
+/// One confirmed occupied Post Fader -> Pre Fader or Post Pan change, with a native owned inverse.
 /// This does not interpret a census ordinal as a physical screen-slot number.
 final class SendModeSagaAdapter: @unchecked Sendable {
     let forward: SagaStep
@@ -16,7 +16,8 @@ final class SendModeSagaAdapter: @unchecked Sendable {
               let step = plan.steps.first, step.operationID == .mixerSetSendModeVerified, step.targetRef != nil,
               Set(step.params.keys).subtracting(["ordinal", "mode", "expected_current", "project_ref"]).isEmpty,
               step.params["ordinal"]?.intValue.map({ $0 >= 0 }) == true,
-              step.params["mode"] == .string("pre_fader"), step.params["expected_current"] == .string("post_fader"),
+              step.params["mode"] == .string("pre_fader") || step.params["mode"] == .string("post_pan"),
+              step.params["expected_current"] == .string("post_fader"),
               step.expectedInverse == .init(operationID: .mixerSetSendModeVerified, valueParameter: "mode") else { return false }
         if let project = step.params["project_ref"] {
             guard let value = project.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -131,7 +132,7 @@ final class SendModeSagaAdapter: @unchecked Sendable {
                 let upstream = AccessibilityChannel.sendModeChangeObserver
                 response = await AccessibilityChannel.$sendModeChangeObserver.withValue({ proof in
                     if proof.original.strip.matches(held.strip), proof.original.track.matches(held.track),
-                       proof.before.mode == .postFader, proof.after.mode == .preFader {
+                       proof.before.mode == .postFader, proof.after.mode.rawValue == self.forward.params["mode"]?.stringValue {
                         self.effect = proof; upstream?(proof)
                     }
                 }) {

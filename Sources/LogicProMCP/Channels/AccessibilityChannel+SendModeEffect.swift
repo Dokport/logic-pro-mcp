@@ -24,7 +24,7 @@ extension AccessibilityChannel {
                   observation.permitsRead(), original.track.matches(current.track),
                   current.track.currentIndex() != nil, current.strip.currentIndex(runtime: runtime) != nil,
                   current.track.document.utf8.elementsEqual(current.strip.document.utf8),
-                  before.mode != after.mode, before.mode != .postPan, after.mode != .postPan,
+                  before.mode != after.mode, before.mode == .postFader || after.mode == .postFader,
                   before.independentPan == after.independentPan, before.otherChecks == after.otherChecks else { return false }
             if let renewal {
                 guard renewal.original.matches(original.strip), renewal.originalTrack.matches(original.track),
