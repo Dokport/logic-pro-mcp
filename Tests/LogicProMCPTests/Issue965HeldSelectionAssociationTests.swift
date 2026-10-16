@@ -2131,6 +2131,15 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "roundtrip")
     }
 
+    @Test func registeredSendLevelOwnsOnlyItsExactFirstClickFocusTransition() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "first_click_source_focus")
+    }
+
+    @Test(arguments: ["first_click_foreign_focus", "first_click_document", "first_click_control", "first_click_play"])
+    func registeredSendLevelFirstClickCannotAdoptForeignOrChangedCustody(_ fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: fault)
+    }
+
     @Test(arguments: ["preflight", "failure", "cancel"])
     func registeredSendLevelSagaOwnsItsActualCompensation(_ outcome: String) async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "roundtrip", levelSaga: outcome)
@@ -2620,6 +2629,20 @@ struct Issue965HeldSelectionAssociationTests {
                     if type == .leftMouseUp {
                         f.routingLevelClicks.append(count)
                         if levelMode == "incomplete_up" { return false }
+                        if count == 1, levelMode?.hasPrefix("first_click_") == true {
+                            f.routingLateScopeInjected = true
+                            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                                levelMode == "first_click_foreign_focus" ? f.strips[0] : f.strips[1])
+                            if levelMode == "first_click_document" {
+                                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
+                            if levelMode == "first_click_control" {
+                                b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, knob) })
+                            }
+                            if levelMode == "first_click_play" {
+                                b.setAttribute(b.element(1_965_721), kAXValueAttribute as String, 1)
+                            }
+                        }
                         if count == 2, levelMode != "no_editor" {
                             let display = b.attributeValue(knob, kAXValueDescriptionAttribute as String) as? String ?? ""
                             b.setAttribute(field, kAXValueAttribute as String, display == "-6.0" ? "-6" : display == "-95.0" ? "-95" : display)
@@ -3209,6 +3232,9 @@ struct Issue965HeldSelectionAssociationTests {
             if levelMode != nil {
                 let set = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_level_verified"))
                 let knob = b.element(1_965_2624), field = b.element(1_965_2801)
+                if levelMode?.hasPrefix("first_click_") == true {
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                }
                 let minus95 = ["minus95", "deferred_minus95", "return_window_minus95"].contains(levelMode ?? "")
                 let desired = minus95 ? "-95.0" : "-6.0"
                 if levelMode == "preexisting_editor" {
@@ -3423,7 +3449,7 @@ struct Issue965HeldSelectionAssociationTests {
                     return await set(dependencies, params)
                 }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
-                if !["roundtrip", "minus95", "noop", "deferred", "deferred_minus95", "return_window", "return_window_minus95"].contains(levelMode ?? "") {
+                if !["roundtrip", "first_click_source_focus", "minus95", "noop", "deferred", "deferred_minus95", "return_window", "return_window_minus95"].contains(levelMode ?? "") {
                     if ["setter_ack_only", "commit_ack_only", "source_lost_after", "route_changed_after",
                         "deferred_foreign", "deferred_window", "deferred_source", "deferred_cancel", "deferred_never",
                         "return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate"].contains(levelMode ?? "") {
@@ -3450,13 +3476,24 @@ struct Issue965HeldSelectionAssociationTests {
                     if levelMode == "late_hit_document" {
                         #expect(f.routingLateScopeInjected && f.routingLevelClicks.isEmpty)
                     }
+                    if levelMode?.hasPrefix("first_click_") == true {
+                        #expect(f.routingLateScopeInjected && f.routingLevelClicks == [1],
+                            "A changed deciding source/focus after our first click must prevent the second click and data write")
+                    }
                     if ["late_play", "late_record", "late_document", "changed_raw", "replaced_control", "editor_foreign", "editor_window", "editor_value"].contains(levelMode ?? "") {
                         #expect(f.routingLateScopeInjected, "Reach the actual owned editor boundary")
                     }
                     return
                 }
                 #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
+                if levelMode == "first_click_source_focus" {
+                    #expect(f.routingLateScopeInjected && f.routingLevelClicks == [1, 2],
+                        "Reach the native-shaped exact-source focus landing after the first paired click")
+                    #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "not_restored",
+                        "Verified level data must not impersonate restoration of the original Tracks focus")
+                }
                 guard body["state"] as? String == "A" else {
+                    if levelMode == "first_click_source_focus" { return }
                     if levelMode?.hasPrefix("return_window") == true {
                         #expect(f.routingLevelCommits == 1 && f.routingLevelReturnTransitions == 1 && !f.routingLevelCommitPending)
                     } else {
