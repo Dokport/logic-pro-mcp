@@ -1155,6 +1155,12 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(census.strips.allSatisfy { current in f.strips.allSatisfy { !CFEqual(current, $0) } })
     }
 
+    @Test("Cancellation after the actual name writer preserves only its owned cleanup and inverse",
+          arguments: ["healthy", "peer", "project", "source"])
+    func coupledNameWriterCancellationFinishesOwnedFocusBeforeCompensation(fault: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_name_cancel_" + fault)
+    }
+
     @Test func ownedWholeCensusContinuationCanCompensateBothActualLeaves() async throws {
         let f = try Fixture()
         try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_census_second_failure", fixture: f)
@@ -1185,6 +1191,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
                 let composed = mode.hasPrefix("coupled")
                 let menuOverlay = mode.hasPrefix("coupled_menu_overlay")
+                let cancelsAfterName = mode.hasPrefix("coupled_menu_overlay_name_cancel_")
                 let ownsEditor = ["coupled_editor", "coupled_retired_editor", "coupled_late_editor", "coupled_late_confirm"].contains(mode)
                 let compensatesBoth = ["coupled_cancel", "coupled_second_failure", "coupled_retired", "coupled_retired_editor", "coupled_menu_overlay_second_failure", "coupled_menu_overlay_census_second_failure"].contains(mode)
                 let nameField = f.builder.element(1_971_400)
@@ -1668,7 +1675,26 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(approval.plan.steps.count == (composed && mode != "coupled_same" ? 2 : 1) && approval.plan.steps.last?.operationID == .mixerSetOutputVerified)
                 #expect(approval.plan.steps[0].targetRef == target)
                 let router = ChannelRouter()
-                if mode.hasPrefix("coupled_menu_overlay_census") {
+                if cancelsAfterName {
+                    await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
+                        mode: "cancel", operation: "track.rename", idempotencyKey: key,
+                        afterForward: {
+                            guard f.routingNameWrites.count == 1 else { return }
+                            f.routingLateScopeInjected = true
+                            if mode.hasSuffix("_peer") {
+                                f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                            } else if mode.hasSuffix("_project") {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            } else if mode.hasSuffix("_source") {
+                                let replacement = f.builder.element(1_971_409)
+                                f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                                f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[1]))
+                                f.builder.setChildren(f.mixer, [f.strips[0], replacement])
+                            }
+                        }, observedResult: { response in
+                            f.routingOutputChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
+                        }))
+                } else if mode.hasPrefix("coupled_menu_overlay_census") {
                     await router.register(SelectedOutputSagaResultBoundary(f.channel(), shouldFail: mode.hasSuffix("second_failure"), observed: { response in
                         f.routingOutputChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
                     }))
@@ -1730,6 +1756,31 @@ struct Issue965HeldSelectionAssociationTests {
                         }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let result = try #require(sharedJSONObject(sharedToolText(await run())))
+                if cancelsAfterName {
+                    #expect(f.routingOutputChannelStates.first == "A", "Reach the actual verified name channel before cancellation")
+                    #expect(f.routingLateScopeInjected)
+                    let healthy = mode.hasSuffix("_healthy")
+                    #expect(result["saga_state"] as? String == (healthy ? "fullyCompensated" : "rollbackUncertain"))
+                    #expect(f.routingDestinationPresses == 0, "A pending cancellation cannot start the output writer")
+                    #expect(f.routingNameWrites == (healthy ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
+                    if healthy {
+                        #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == "Duplicate")
+                        guard case .cancelled(_, verified: true)? = await journal.record(for: key) else {
+                            Issue.record("The actual journal must retain verified owned compensation"); return
+                        }
+                    }
+                    let writes = f.routingNameWrites
+                    let replay = try #require(sharedJSONObject(sharedToolText(await run())))
+                    if healthy {
+                        #expect(replay["state"] as? String == "C")
+                    } else {
+                        #expect(replay["state"] as? String == "B")
+                        let duplicate = try #require(replay["duplicate"] as? Bool)
+                        #expect(duplicate)
+                    }
+                    #expect(f.routingNameWrites == writes && f.routingDestinationPresses == 0)
+                    return
+                }
                 if mode.hasPrefix("coupled_menu_overlay_census") {
                     #expect(f.routingOutputChannelStates.first == "A", "Reach the verified real channel before judging the owned-name continuation")
                 }

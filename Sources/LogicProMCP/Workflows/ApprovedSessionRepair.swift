@@ -1253,7 +1253,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             }
             afterVerifiedWrite = { [self] transport in
                 let pair = outputPair ?? task.pair
-                guard let baseline, await projectIsCurrent(allowPendingCancellation: restoring),
+                // The writer has already verified its own name effect. A pending
+                // journal cancellation must not abandon this owned UI cleanup or
+                // its inverse receipt; all native custody/gate/deadline checks stay.
+                guard let baseline, await projectIsCurrent(allowPendingCancellation: true),
                       let renewed = heldOutputProof(pair, restorationBaseline: baseline) else { return false }
                 if let source = outputRenewal {
                     // The verified own menu commit may move focus to the held
@@ -1273,7 +1276,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         transport: transport, preservingFootprint: { [self] in
                             outputFootprintHeld(pair: pair, assignment: task.before, ownedNamePreview: [afterName])
                         }, referenceIsCurrent: { [self] in
-                          await projectIsCurrent(allowPendingCancellation: restoring)
+                          await projectIsCurrent(allowPendingCancellation: true)
                               && pair.track.currentIndex() != nil && pair.strip.currentIndex(runtime: runtime) != nil
                       }, stoppingWhen: { !ExactTrackNameAdapter.operationPermitted() }) else { return false }
                 return true
