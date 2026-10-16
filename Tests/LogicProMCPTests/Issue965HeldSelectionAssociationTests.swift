@@ -1021,6 +1021,16 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: mode)
     }
 
+    @Test("An owned output may redraw a peer while its exact source survives; changed protected state remains unknown",
+          arguments: ["redraw", "foreign", "scalar", "input", "send", "plugin", "header", "project"])
+    func canonicalOutputRenewsAnOwnedCensusWithASurvivingSource(fault: String) async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "surviving_census_" + fault, fixture: f)
+        #expect(f.routingReplacement == nil, "The original source itself must not be retired in this counterexample")
+        #expect(f.routingOtherReplacement != nil)
+        #expect(f.routingDestinationPresses == 1, "No setter retry or guessed inverse is authorized")
+    }
+
     @Test func lateOwnedEditorFocusAtFinalDocumentRefusesTheFirstSetter() async throws {
         let calibration = try Fixture()
         try await assertCanonicalPhysicalOutput(mode: "coupled_editor", fixture: calibration)
@@ -1110,8 +1120,10 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.routingFocusClickEvents == (["ack_only", "release"].contains(fault) ? [.leftMouseDown, .leftMouseUp] : []))
     }
 
-    private func assertCanonicalPhysicalOutput(mode: String, fixture: Fixture? = nil,
+    private func assertCanonicalPhysicalOutput(mode requestedMode: String, fixture: Fixture? = nil,
                                                foreignFocusAtDocumentRead: Int? = nil) async throws {
+        let survivingSource = requestedMode.hasPrefix("surviving_")
+        let mode = survivingSource ? String(requestedMode.dropFirst("surviving_".count)) : requestedMode
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
@@ -1301,17 +1313,17 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingClassifierHelpReads += 1
                     }
                     if mode == "late_peer", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
-                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
                     }
                     if mode == "late_project", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
-                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     }
                     if mode == "late_peer_send", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
-                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.builder.element(1_973_151), kAXDescriptionAttribute as String, "Bus 1")
                     }
@@ -1471,7 +1483,8 @@ struct Issue965HeldSelectionAssociationTests {
                                 CFEqual(element, physical) ? "Output 3-4" : "Stereo Output")
                         }
                         f.routingOpenedOutputIndex = nil
-                        if mode == "retired" || mode.hasPrefix("coupled_retired") || redrawsCensus, f.routingReplacement == nil {
+                        if !survivingSource,
+                           mode == "retired" || mode.hasPrefix("coupled_retired") || redrawsCensus, f.routingReplacement == nil {
                             let replacement = f.builder.element(1_973_140)
                             f.builder.setRole(replacement, kAXLayoutItemRole as String)
                             f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
@@ -1480,6 +1493,9 @@ struct Issue965HeldSelectionAssociationTests {
                             f.routingReplacement = replacement
                             f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
                             if redrawsCensus { f.routingOtherReplacement = redrawPeer(f.strips[0], key: 1_974_200) }
+                        }
+                        if survivingSource, f.routingOtherReplacement == nil {
+                            f.routingOtherReplacement = redrawPeer(f.strips[0], key: 1_974_200)
                         }
                         f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
                         if menuOverlay, let replacement = f.routingReplacement {
@@ -1534,7 +1550,7 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(capture.freshPopulation?.checkedOutputs.filter {
                     $0.source.matches(pair.strip) && $0.assignment == (mode == "stereo" ? .physical(3, 4) : .stereoOutput) && $0.sendOrdinal == nil
                 }.count == 1, "Actual outputs=\(capture.channelStrips.map(\.output)), Help reads=\(f.routingClassifierHelpReads), presses=\(f.inputMenuPresses), stable=\(capture.freshPopulation?.stable)")
-                #expect(f.inputMenuPresses == 2 && f.inputMenuCancels == 2 && f.routingDestinationPresses == 0)
+                #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1 && f.routingDestinationPresses == 0)
                 let target = try #require(capture.issued?.byRow[0])
                 guard case .issued(let project)? = capture.projectIssuance else {
                     Issue.record("Actual capture must issue the project"); return
@@ -1645,7 +1661,7 @@ struct Issue965HeldSelectionAssociationTests {
                             if mode == "census_foreign", let peer = f.routingOtherReplacement {
                                 f.routingLateScopeInjected = true
                                 f.routingOtherReplacement = redrawPeer(peer, key: 1_975_200)
-                                f.builder.setChildren(f.mixer, [f.routingOtherReplacement!, f.routingReplacement!])
+                                f.builder.setChildren(f.mixer, [f.routingOtherReplacement!, f.routingReplacement ?? f.strips[1]])
                             }
                             if mode == "post_write_loss" {
                                 f.routingLateScopeInjected = true
@@ -1703,7 +1719,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingDestinationPresses == 0, "Unchanged source and document alone cannot authorize the changed footprint")
                     #expect(result["saga_state"] as? String != "completed")
                 } else if mode == "unoffered_physical" {
-                    #expect(f.inputMenuPresses > 2, "The actual source menu must be read before refusing a missing destination")
+                    #expect(f.inputMenuPresses > 1, "The actual source menu must be read before refusing a missing destination")
                     #expect(f.routingDestinationPresses == 0)
                     #expect(result["saga_state"] as? String != "completed")
                 } else if mode == "newer" || mode == "ack_only" || mode == "post_write_loss" || (redrawsCensus && mode != "census_redraw") {
@@ -1741,8 +1757,8 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingReplacement != nil && !f.selections.isEmpty, "Renewal must re-observe the original header's actual pair")
                 }
                 if redrawsCensus {
-                    #expect(f.routingReplacement != nil && f.routingOtherReplacement != nil)
-                    #expect(pair.strip.currentIndex(runtime: f.logic()) == nil)
+                    #expect((f.routingReplacement == nil) == survivingSource && f.routingOtherReplacement != nil)
+                    #expect(pair.strip.currentIndex(runtime: f.logic()) == (survivingSource && mode != "census_project" ? 1 : nil))
                     #expect(capture.channelStrips[0].physicalBinding?.currentIndex(runtime: f.logic()) == nil)
                     let oldPeerName = try #require(f.builder.makeAXRuntime().children(f.strips[0]).first)
                     let stillContainsOldName = try #require(f.routingOtherReplacement.map {
@@ -5371,6 +5387,9 @@ struct Issue965HeldSelectionAssociationTests {
         defer { gate.release(claim) }
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
         try await OperationTraceContext.$current.withValue(context) {
+            let scalarDefault = AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false)
+            #expect(scalarDefault == nil, "Request-owned rail entry must not change scalar/default acquisition")
             let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
                 logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
                 allowsSelectedChildRailEntry: true))
@@ -5804,8 +5823,8 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.selections == [1, 0])
     }
 
-    @Test("Selection challenge evidence cannot authorize an unselected peer's input popup")
-    func selectionChallengeDoesNotPromotePeerRoutingAuthority() async throws {
+    @Test("Selection challenge evidence cannot authorize an unselected peer's routing popup", arguments: ["input", "output"])
+    func selectionChallengeDoesNotPromotePeerRoutingAuthority(kind: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), cache = StateCache()
             let mixerOwner = f.builder.element(1_974_101)
@@ -5816,8 +5835,9 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setChildren(mixerOwner, [f.mixer])
             f.builder.setChildren(f.window, [f.rail, mixerOwner, f.builder.element(1_965_720)])
             let peerInput = f.builder.element(1_974_100)
-            f.builder.setButton(peerInput, description: "Bus 1",
-                help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 1, height: 1)
+            f.builder.setButton(peerInput, description: kind == "input" ? "Bus 1" : "Stereo Output",
+                help: kind == "input" ? "Input slot. Choose the channel strip input source." : "Output slot. Choose the channel strip output.",
+                x: 0, y: 0, width: 1, height: 1)
             f.builder.setChildren(peerInput, [])
             f.builder.setActionNames(peerInput, [kAXPressAction as String])
             f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [peerInput])
@@ -5835,8 +5855,10 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(population.selectionAssociations.count == 1)
             let pair = try #require(population.selectionAssociations.first)
             #expect(CFEqual(pair.track.header, f.headers[0]) && CFEqual(pair.strip.strip, f.strips[1]))
-            #expect(retained.capture.channelStrips[0].inputObservation?.source == "Bus 1")
-            #expect(retained.capture.channelStrips[0].inputObservation?.state == .observedSource)
+            if kind == "input" {
+                #expect(retained.capture.channelStrips[0].inputObservation?.source == "Bus 1")
+                #expect(retained.capture.channelStrips[0].inputObservation?.state == .observedSource)
+            } else { #expect(retained.capture.channelStrips[0].output == "Stereo Output") }
             #expect(population.checkedInputs.isEmpty)
             #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
         }
@@ -6063,10 +6085,11 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.focusRestorationWrites.isEmpty)
     }
 
-    @Test("Whole-held selected-child observation can enter from its exact nonediting rail without changing scalar entry",
-          arguments: [false, true])
-    func mixerSelectedChildrenCanEnterFromTheOriginalPassiveRail(whole: Bool) async throws {
+    @Test("Request-owned selected-child observation can enter from its exact nonediting rail without changing scalar entry",
+          arguments: ["whole", "selection", "unchanged", "wrong_return"])
+    func mixerSelectedChildrenCanEnterFromTheOriginalPassiveRail(profile: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
+        let whole = profile == "whole"
         let mapping = [0, 3, 1, 2]
         f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
         f.routingRead = { element, attribute in
@@ -6074,7 +6097,9 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setAttribute(f.app, attribute, f.rail)
             }
             if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
-                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                let index = profile == "unchanged" ? 0
+                    : (profile == "wrong_return" && f.selections == [1, 0] ? 1 : f.selections.last ?? 0)
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[index]]])
             }
         }
         f.routingReadResult = { element, attribute in
@@ -6084,25 +6109,27 @@ struct Issue965HeldSelectionAssociationTests {
             }
             return nil
         }
-        let body = try await inspect(f, scope: whole ? "whole_project" : "selected_only")
+        let body = try await inspect(f, scope: whole ? "whole_project" : "selection")
         let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
-        #expect(rows.count == (whole ? 4 : 0))
-        if whole {
+        #expect(rows.count == (whole ? 4 : profile == "selection" ? 1 : 0),
+            "Only a changed-strip challenge and exact original return establish the selected source pair")
+        if !rows.isEmpty {
             let stripRows = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
-            for index in mapping.indices {
+            for index in (whole ? Array(mapping.indices) : [0]) {
                 let row = try #require(rows.first { $0["track_index"] as? Int == index })
                 #expect(row["mixer_strip_ref"] as? String == stripRows[mapping[index]]["mixer_strip_ref"] as? String)
                 #expect(row["source"] as? String == "held_exclusive_selection_selected_child")
             }
             #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
         }
-        #expect(f.selections == (whole ? [1, 2, 3, 0] : []))
+        #expect(f.selections == (whole ? [1, 2, 3, 0] : [1, 0]))
         #expect(f.focusRestorationWrites.isEmpty)
     }
 
     @Test("Passive rail entry refuses editing, unknown metadata and lost exact custody before navigation",
-          arguments: ["text_role", "settable", "zero_insertion", "unreadable", "nil_metadata", "foreign_focus", "detached_rail", "retired_strip", "foreign_document", "missing_relationship"])
-    func passiveRailSelectedChildEntryMustRetainExactNoneditingCustody(fault: String) async throws {
+          arguments: ["text_role", "settable", "zero_insertion", "unreadable", "nil_metadata", "foreign_focus", "detached_rail", "retired_strip", "foreign_document", "missing_relationship"],
+          ["whole_project", "selection"])
+    func passiveRailSelectedChildEntryMustRetainExactNoneditingCustody(fault: String, scope: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
         let mapping = [0, 3, 1, 2]
         let foreign = f.builder.element(1_965_998)
@@ -6140,7 +6167,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             return nil
         }
-        let body = try await inspect(f)
+        let body = try await inspect(f, scope: scope)
         let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
         #expect(rows.isEmpty)
         #expect(f.selections.isEmpty, "An unknown/editor/foreign rail must not authorize a selection")

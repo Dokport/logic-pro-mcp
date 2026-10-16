@@ -1082,8 +1082,22 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard let body = decodedJSONObject(text), body["write_attempted"] as? Bool == true else { return response }
         outputAttempted = true
         var renewedThisOutput: AccessibilityChannel.OriginalHeaderSourceRenewal?
-        if pair.strip.currentIndex(runtime: runtime) == nil {
-            let renewal = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip, runtime: runtime)
+        let priorCensus = outputRenewal?.observation.strips
+            ?? task.capture.channelStrips.compactMap { $0.physicalBinding?.strip }
+        let currentCensus = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer, runtime: runtime.ax)?.strips
+        let sourceRetired = pair.strip.currentIndex(runtime: runtime) == nil
+        // A committed output can redraw an existing peer without retiring the
+        // source. Renew only through the original header and its actual inverse;
+        // the unchanged protected-value comparison still decides acceptance.
+        let peerRedrawn = !sourceRetired && body["state"] as? String == "A"
+            && priorCensus.count == task.capture.channelStrips.count
+            && currentCensus.map { current in
+                current.count == priorCensus.count
+                    && !zip(current, priorCensus).allSatisfy { CFEqual($0, $1) }
+            } == true
+        if sourceRetired || peerRedrawn {
+            let renewal = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip, runtime: runtime,
+                sourceDisposition: sourceRetired ? .retiredOriginal : .survivingOriginal)
             guard let owned = renewal.source, owned.permits(runtime: runtime) else {
                 return toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: ["write_attempted": true]), isError: true)
             }

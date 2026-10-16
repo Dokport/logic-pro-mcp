@@ -355,7 +355,7 @@ actor AccessibilityChannel: Channel {
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime),
            let candidate = HeldSelectionAssociation(window: window, logic: runtime.logicRuntime,
                 expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
-                allowsSelectedChildRailEntry: request.scope == .wholeProject) {
+                allowsSelectedChildRailEntry: true) {
             association = candidate
             readFocusScope?.retainAssociation(candidate)
         }
@@ -581,10 +581,12 @@ actor AccessibilityChannel: Channel {
                         let pair = pairs.count == 1 && population.selectionAssociations.filter { candidatePair in
                             pairs.first.map { candidatePair.track.matches($0.track) } ?? false
                         }.count == 1 ? pairs.first : nil
-                        // This bounded paired projection cannot restore a retired
-                        // unpaired receiver through an Arrange header. Leave its
-                        // input unqualified instead of risking the verified pairs.
-                        if candidate.input, request.domains.contains(.associations), pair == nil { continue }
+                        // A selection request qualifies only its captured pairs,
+                        // not the unselected challenge or other raw physical rows.
+                        // Whole-project outputs retain their broader observation;
+                        // an unpaired input still cannot renew through a header.
+                        if request.domains.contains(.associations), pair == nil,
+                           request.scope == .selection || candidate.input { continue }
                         let read = await AXMixerStripBinding.$current.withValue(owner) {
                             if candidate.input {
                                 return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
