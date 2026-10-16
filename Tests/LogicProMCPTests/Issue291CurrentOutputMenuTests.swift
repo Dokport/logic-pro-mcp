@@ -141,6 +141,117 @@ func currentOutputMenuRefusesMalformedWitness(_ malformedRole: Bool) {
 
 @Suite("#291 owned checked-output acquisition", .serialized)
 struct Issue291OwnedCurrentOutputTests {
+    @Test("No Output native popup requires the same owned native path and CG frame, never a destination press",
+          arguments: ["owned", "wrong_window", "wrong_mixer", "wrong_wrapper_role", "wrong_root_role",
+                      "wrong_hit_role", "nonreciprocal_hit", "nonreciprocal_root", "frame_disagrees",
+                      "missing_frame", "hit_unread", "hit_absent", "foreign_popup", "duplicate_popup",
+                      "preexisting_popup", "cg_changed_during_hit", "source_changed_during_hit",
+                      "document_changed_during_hit", "foreign_focus_during_hit", "wrapper_changed_after_mark",
+                      "other_output_state", "missing_press_capability"])
+    func ownedNativeNoOutputPopupAcquiresAndCleansUp(fault: String) async throws {
+        let f = try Issue291PhysicalStripReferenceTests.Fixture()
+        let wrapper = f.b.element(291_860), noOutput = f.b.element(291_861)
+        f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+        f.b.setRole(wrapper, kAXPopUpButtonRole as String)
+        f.b.setAttribute(wrapper, kAXParentAttribute as String, f.mixer)
+        f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.window)
+        f.b.setAttribute(f.root, kAXWindowAttribute as String, f.window)
+        f.b.setRole(noOutput, kAXMenuItemRole as String)
+        f.b.setAttribute(noOutput, kAXTitleAttribute as String, "No Output")
+        f.b.setAttribute(noOutput, "AXMenuItemMarkChar", "✓")
+        f.b.setChildren(noOutput, [])
+        f.b.setChildren(f.root, [noOutput])
+        f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "No Output")
+        f.b.setActionNames(f.outputs[0], [kAXPressAction as String])
+        f.b.setFrame(f.root, x: 20, y: 100, width: 230, height: 175)
+        f.outputMenuWrapper = wrapper
+        f.popupFrame = CGRect(x: 20, y: 100, width: 230, height: 175)
+        // The real host opens this menu despite returning cannotComplete.
+        f.outputPressFailure = .init(raw: AXError.cannotComplete.rawValue)
+        @Sendable func popupWindow(owner: pid_t, number: Int) -> [String: Any] {
+            [kCGWindowOwnerPID as String: owner, kCGWindowNumber as String: number,
+             kCGWindowLayer as String: LogicOnScreenWindows.popupMenuLevel,
+             kCGWindowBounds as String: CGRect(x: 20, y: 100, width: 230, height: 175).dictionaryRepresentation]
+        }
+        switch fault {
+        case "missing_press_capability": f.b.setActionNames(f.outputs[0], [])
+        case "wrong_window": f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.b.element(291_862))
+        case "wrong_mixer": f.b.setAttribute(wrapper, kAXParentAttribute as String, f.b.element(291_862))
+        case "wrong_wrapper_role": f.b.setRole(wrapper, kAXGroupRole as String)
+        case "wrong_root_role": f.b.setRole(f.root, kAXGroupRole as String)
+        case "wrong_hit_role": f.b.setRole(noOutput, kAXButtonRole as String)
+        case "nonreciprocal_hit": f.b.setChildren(f.root, [])
+        case "frame_disagrees": f.b.setFrame(f.root, x: 21, y: 100, width: 230, height: 175)
+        case "missing_frame": f.popupFrame = nil
+        case "preexisting_popup": f.popupWindowsOverride = [popupWindow(owner: f.pid, number: 291_901)]
+        case "other_output_state": f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "Stereo Output")
+        default: break
+        }
+        if ["foreign_popup", "duplicate_popup"].contains(fault) {
+            f.onChildrenResultRead = { node in
+                if CFEqual(node, f.mixer), !f.mutations.isEmpty {
+                    if fault == "foreign_popup" {
+                        f.popupWindowsOverride = [popupWindow(owner: f.pid + 1, number: 291_901)]
+                    } else {
+                        f.popupWindowsOverride = [popupWindow(owner: f.pid, number: 291_901),
+                                                 popupWindow(owner: f.pid, number: 291_902)]
+                    }
+                }
+            }
+        }
+        if fault == "nonreciprocal_root" {
+            f.onChildrenResultRead = { node in
+                if CFEqual(node, wrapper) { f.b.setChildren(wrapper, []) }
+            }
+        }
+        if fault == "wrapper_changed_after_mark" {
+            f.onAttributeRead = { node, attribute in
+                if CFEqual(node, noOutput), attribute == "AXMenuItemMarkChar" {
+                    f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.b.element(291_862))
+                }
+            }
+        }
+        f.outputHitTest = { app, point in
+            #expect(CFEqual(app, f.app))
+            #expect(point == CGPoint(x: 135, y: 187.5))
+            switch fault {
+            case "hit_unread": return .failure(.init(raw: AXError.cannotComplete.rawValue))
+            case "hit_absent": return .success(nil)
+            case "cg_changed_during_hit":
+                f.popupWindowsOverride = [popupWindow(owner: f.pid, number: 291_902)]
+            case "source_changed_during_hit": f.reorder([1])
+            case "document_changed_during_hit": f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///wrong.logicx")
+            case "foreign_focus_during_hit": f.b.setAttribute(f.app, kAXFrontmostAttribute as String, false)
+            default: break
+            }
+            return .success(noOutput)
+        }
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let reading = await AXMixerStripBinding.$current.withValue(binding) {
+            await AccessibilityChannel.getOutputVerified(params: [:], runtime: f.logic, timing: .immediate)
+        }
+        let body = try #require(sharedJSONObject(reading.message))
+        if fault != "owned" {
+            #expect(body["state"] as? String == "C")
+            #expect(body["current_output"] == nil)
+            #expect(body["write_attempted"] as? Bool == false)
+            #expect(f.mutations.allSatisfy { CFEqual($0.0, f.outputs[0]) && $0.1 == kAXPressAction as String })
+            #expect(f.mutations.count == (["preexisting_popup", "missing_press_capability"].contains(fault) ? 0 : 1))
+            return
+        }
+        #expect(body["state"] as? String == "A")
+        #expect((body["current_output"] as? [String: Any])?["kind"] as? String == "no_output")
+        #expect(body["popup_menu_state"] as? String == "closed")
+        #expect(body["write_attempted"] as? Bool == false)
+        #expect(body["popup_press_succeeded"] as? Bool == false)
+        #expect(body["popup_cancel_succeeded"] as? Bool == true)
+        #expect(f.mutations.count == 2)
+        #expect(CFEqual(f.mutations.first!.0, f.outputs[0]))
+        #expect(CFEqual(f.mutations.last!.0, f.root))
+        #expect(f.mutations.last!.1 == kAXCancelAction as String)
+    }
+
     @Test("A late stale-target refusal keeps known menu/focus effects but withholds the output")
     func outputContextFailureKeepsObservedMenuEffects() throws {
         let read = ChannelResult.success(HonestContract.encodeStateA(extras: [

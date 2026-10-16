@@ -38,6 +38,10 @@ struct Issue291PhysicalStripReferenceTests {
         var onActionNamesRead: (@Sendable (AXUIElement) -> Void)?
         var outputPressFailure: AXHelpers.AXStatusError?
         var outputPressOpensMenu = true
+        var outputMenuWrapper: AXUIElement?
+        var popupFrame: CGRect?
+        var popupWindowsOverride: [[String: Any]]?
+        var outputHitTest: (@Sendable (AXUIElement, CGPoint) -> Result<AXUIElement?, AXHelpers.AXStatusError>)?
         var typeLabelReplacementCount = 0
         private(set) var mutations: [(AXUIElement, String)] = []
 
@@ -160,7 +164,10 @@ struct Issue291PhysicalStripReferenceTests {
             if action == kAXPressAction as String {
                 if outputs.contains(where: { CFEqual($0, element) }) {
                     if !outputPressOpensMenu { return false }
-                    openedSlot = element; b.setChildren(mixer, currentStrips + [root]); return true
+                    openedSlot = element
+                    if let outputMenuWrapper { b.setChildren(outputMenuWrapper, [root]) }
+                    else { b.setChildren(mixer, currentStrips + [root]) }
+                    return true
                 }
                 if CFEqual(element, pair), let slot = openedSlot {
                     b.setAttribute(slot, kAXDescriptionAttribute as String, "Output 3-4")
@@ -216,16 +223,23 @@ struct Issue291PhysicalStripReferenceTests {
                     return .failure(failure)
                 }
                 return action(element, requestedAction) ? .success(()) : .failure(.init(raw: AXError.failure.rawValue))
+            }, elementAtPosition: { [self] app, point in
+                outputHitTest?(app, point) ?? .success(nil)
             }, executeAppleScript: { _ in Issue.record("AX AppleScript forbidden"); return .error("forbidden") })
             return AXLogicProElements.Runtime(
                 logicProPID: { [self] in pid }, ax: ax,
                 executeAppleScript: { _ in Issue.record("AppleScript forbidden"); return .error("forbidden") },
                 executeAppleScriptWithTimeout: { _, _ in Issue.record("timed AppleScript forbidden"); return .error("forbidden") },
                 onScreenWindowList: { [self] in
+                    if let popupWindowsOverride { return popupWindowsOverride }
                     var windows: [[String: Any]] = [[kCGWindowOwnerPID as String: pid,
                         kCGWindowNumber as String: 291_900, kCGWindowLayer as String: 0]]
-                    if openedSlot != nil { windows.append([kCGWindowOwnerPID as String: pid,
-                        kCGWindowNumber as String: 291_901, kCGWindowLayer as String: 101]) }
+                    if openedSlot != nil {
+                        var popup: [String: Any] = [kCGWindowOwnerPID as String: pid,
+                            kCGWindowNumber as String: 291_901, kCGWindowLayer as String: LogicOnScreenWindows.popupMenuLevel]
+                        if let popupFrame { popup[kCGWindowBounds as String] = popupFrame.dictionaryRepresentation }
+                        windows.append(popup)
+                    }
                     return windows
                 },
                 postPopupMenuEscape: { Issue.record("Escape forbidden") },
