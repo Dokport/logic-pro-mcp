@@ -31,8 +31,9 @@ enum RoutingProjectBinding: Sendable {
 /// Checked send menus can publish those same endpoints from their exact physical source;
 /// a send retains its census ordinal but no physical write-slot payload. Neither establishes
 /// receiving-strip identity or complete graph coverage.
-/// Checked input menus bind a bus to its request-held physical receiver only;
-/// they do not establish aux kind, track attribution or receiving completeness.
+/// Checked input menus bind a bus or a logical physical-input endpoint to its request-held
+/// physical receiver only; they do not establish hardware namespace completeness, aux kind,
+/// track attribution or receiving completeness. No Input publishes no input edge.
 /// A separate native own Type and Number Label can establish Aux kind for this fresh
 /// capture; its suffix is not a bus number and does not close receiving coverage.
 ///
@@ -189,6 +190,15 @@ enum RoutingGraphPublication {
                             edges.append(RoutingEdge(kind: .inputAssignment, source: busID,
                                 destination: reference.rawValue, send: nil, provenance: .axInputMenuCheckmark))
                         }
+                        if let checked = SessionPopulationObservation.reportedCheckedInput(
+                            of: strip, capture: capture, qualified: true), let ports = checked.ports {
+                            let inputID = "input_physical_" + ports.map { String($0) }.joined(separator: "_")
+                            nodesByID[inputID] = RoutingNode(id: inputID, kind: .input,
+                                displayName: "Input " + ports.map { String($0) }.joined(separator: "-"),
+                                busNumber: nil, targetRef: nil)
+                            edges.append(RoutingEdge(kind: .inputAssignment, source: inputID,
+                                destination: reference.rawValue, send: nil, provenance: .axInputMenuCheckmark))
+                        }
                         let checked = capture.freshPopulation?.checkedOutputs.filter {
                             $0.source.matches(owner) && $0.sendOrdinal == nil
                         } ?? []
@@ -310,7 +320,7 @@ enum RoutingGraphPublication {
             mainOutput: mainOutputCoverage,
             physicalOutput: physicalOutputCoverage,
             busToAuxInput: checkedInputObserved
-                ? RoutingDomainCoverage(state: .partial, reasons: ["only request-held bus inputs have checked-menu evidence; physical receivers do not establish aux kind or receiving-population completeness"])
+                ? RoutingDomainCoverage(state: .partial, reasons: ["only request-held bus or physical inputs have checked-menu evidence; hardware namespace, aux kind and receiving-population completeness remain unverified"])
                 : RoutingDomainCoverage(state: .notObserved, reasons: [busToAuxInputReason]),
             sends: sendCoverage
         )
