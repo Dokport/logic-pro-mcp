@@ -68,6 +68,8 @@ private final class ExactNameFixture: @unchecked Sendable {
     var menuEditorValueWrites: [String] = []
     var menuEditorSetterAcknowledgesOnly = false
     var onMenuEditorValueSet: (@Sendable () -> Void)?
+    var onMenuEditorValueReadAfterSet: (@Sendable () -> Void)?
+    var menuEditorValueReadGeneration = 0
     var coupledNameField: AXUIElement?
     var coupledPeerNameField: AXUIElement?
     var onMirrorReadAfterWrite: (@Sendable () -> Void)?
@@ -108,6 +110,11 @@ private final class ExactNameFixture: @unchecked Sendable {
             ax: builder.makeAXRuntime(
                 appElement: app,
                 attributeValueHandler: { [self] element, attribute in
+                    if menuEditorValueWrites.count > menuEditorValueReadGeneration, let menuFocusedEditor,
+                       CFEqual(element, menuFocusedEditor), attribute == kAXValueAttribute as String {
+                        menuEditorValueReadGeneration = menuEditorValueWrites.count
+                        onMenuEditorValueReadAfterSet?()
+                    }
                     if countRawHelpReads, attribute == kAXHelpAttribute as String { rawHelpReads += 1 }
                     if !writes.isEmpty, additionalNameFields.contains(where: { CFEqual($0, element) }),
                        attribute == kAXDescriptionAttribute as String {
@@ -1438,8 +1445,8 @@ struct Issue968ExactTrackNameAdapterTests {
     }
 
     @Test(arguments: ["committed", "newer_name", "peer_changed", "project_changed", "membership_changed", "gate_lost",
-                      "editing_elsewhere", "focus_unreadable"])
-    func canonicalCancellationCanRestoreASetterCommittedNameWithoutPostingIntoLostEditor(_ change: String) async throws {
+                      "editing_elsewhere", "focus_unreadable"], ["immediate", "post_set_value_read"])
+    func canonicalCancellationCanRestoreASetterCommittedNameWithoutPostingIntoLostEditor(change: String, closure: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let f = ExactNameFixture()
@@ -1470,7 +1477,7 @@ struct Issue968ExactTrackNameAdapterTests {
                     f.builder.setAttribute(editor, kAXValueAttribute as String,
                         f.builder.attributeValue(f.field, kAXDescriptionAttribute as String) as Any)
                 }
-                f.onMenuEditorValueSet = {
+                let commitAndClose: @Sendable () -> Void = {
                     // This models a successful actual String setter which commits the
                     // original pair and closes its editor. It is not a channel ack-only.
                     let name = f.builder.attributeValue(editor, kAXValueAttribute as String) as? String
@@ -1498,6 +1505,8 @@ struct Issue968ExactTrackNameAdapterTests {
                     }
                     if change == "gate_lost" { f.boundaryOwnership = false }
                 }
+                if closure == "immediate" { f.onMenuEditorValueSet = commitAndClose }
+                else { f.onMenuEditorValueReadAfterSet = commitAndClose }
                 let approval = try await f.canonicalNameApproval(capture, project: project, target: target,
                     desired: "Canonical", key: "cancel-auto-committed-name", journal: SagaJournal())
                 let runtime = f.runtime
