@@ -250,6 +250,39 @@ struct Issue291AssignedSendMenuTests {
             }
         }
     }
+    @Test("A checked Send reader observes Cancel settlement before reporting restored evidence",
+          arguments: ["cancel_cg_delayed", "cancel_cg_persistent", "cancel_cg_unreadable", "cancel_cg_project"])
+    func occupiedSendReaderWaitsForPopupClosure(fault: String) async throws {
+        let p = try prepare(), probe = SendWriterProbe(p), f = p.f
+        probe.fault = fault
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_mixer.get_send_destination_verified"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let result = await OperationTraceContext.$current.withValue(context) {
+            await AXMixerStripBinding.$current.withValue(.init(window: f.window, mixer: f.mixer,
+                strip: f.strips[0], document: f.bundle.absoluteString)) {
+                await AccessibilityChannel.getAssignedSendVerified(ordinal: 1, runtime: probe.runtime,
+                    timing: .init(popupOpenTimeoutMs: 0, popupCloseTimeoutMs: 30, readbackTimeoutMs: 0, pollIntervalMs: 1))
+            }
+        }
+        let body = try #require(sharedJSONObject(result.message))
+        // This reader may report a checked observation with an explicit UI residual.
+        // Restoration is not assignment authority; a changed project still withholds it.
+        #expect(body["state"] as? String == (fault == "cancel_cg_project" ? "C" : "A"), "\(body)")
+        let writeAttempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!writeAttempted)
+        #expect(probe.menuOpens == 1 && probe.cancels == 1)
+        #expect(probe.pressed.isEmpty)
+        if fault == "cancel_cg_delayed" {
+            #expect(probe.closeWindowReads >= 2)
+            #expect(body["popup_menu_state"] as? String == "closed")
+            #expect(body["focus_restoration"] as? String == "restored")
+        } else {
+            #expect(body["popup_menu_state"] as? String != "closed")
+            if fault == "cancel_cg_project" { #expect(body["current_destination"] == nil) }
+        }
+    }
     @Test("A matching send waits for observed asynchronous popup closure without another action",
           arguments: ["cancel_cg_delayed", "cancel_cg_persistent", "cancel_cg_unreadable", "cancel_cg_project"])
     func occupiedSendNoOpWaitsForPopupClosure(fault: String) async throws {
