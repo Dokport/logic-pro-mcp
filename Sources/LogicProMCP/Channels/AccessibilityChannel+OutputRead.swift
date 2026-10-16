@@ -1178,18 +1178,27 @@ extension AccessibilityChannel {
                     "send_group_children": childrenStatus(assigned.group), "send_list_role": roleStatus(assigned.list),
                     "send_bypass_role": roleStatus(assigned.bypass)]
                 // Only the source's previously observed original-header pair
-                // can renew retirement. No old ref or send CF is rebound.
+                // can renew source/control retirement. No old ref or send CF is rebound.
                 guard axPopupAbsent, cgPopupAbsent, let singleton,
                       singleton.control.matches(assigned), singleton.slots == protectedSends,
                       let originalPair = AXMixerStripBinding.outputAssociation,
                       originalPair.strip.matches(physical),
                       let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax),
-                      !census.strips.contains(where: { CFEqual($0, physical.strip) }),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                     return uncertain("The retired send has no unique complete occupied-slot correspondence and original-header renewal authority.")
                 }
+                let originalCount = census.strips.filter { CFEqual($0, physical.strip) }.count
+                // A mode leaf may replace only the Send controls. Renew the
+                // exact surviving source through the same original-header
+                // observation/inverse; presence alone never adopts a new Send.
+                // Destination replacement retains its retired-source boundary.
+                guard originalCount == 0 || (request.modeChange != nil && originalCount == 1
+                    && physical.currentIndex(runtime: runtime) != nil) else {
+                    return uncertain("The original mode source is not uniquely current; no replacement control is adopted.")
+                }
                 let renewal = await renewSourceThroughOriginalHeader(originalPair, original: physical,
-                    runtime: runtime, selectedHeaderRequired: false)
+                    runtime: runtime, selectedHeaderRequired: false,
+                    sourceDisposition: originalCount == 0 ? .retiredOriginal : .survivingOriginal)
                 extras["ui_effects"] = ["navigation_performed": renewal.effects.navigationPerformed,
                     "attempted": renewal.effects.attempted, "changed": renewal.effects.changed,
                     "restoration": renewal.effects.restoration, "reason": renewal.effects.reason as Any? ?? NSNull()]

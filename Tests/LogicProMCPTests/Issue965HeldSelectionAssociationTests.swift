@@ -2452,6 +2452,25 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(modeCommand: "post_pan_roundtrip", modeSaga: "post_pan_rejected")
     }
 
+    @Test(arguments: ["roundtrip", "post_pan_roundtrip"])
+    func checkedModeRenewsRetiredControlsOnTheExactSurvivingStrip(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(survivingSource: true, modeCommand: mode)
+    }
+
+    @Test(arguments: ["mode_control_peer", "mode_control_header", "mode_control_raw", "mode_control_duplicate"])
+    func survivingModeControlRenewalCannotAdoptChangedCustody(fault: String) async throws {
+        let boundary = ModePeerBoundary()
+        try await assertOccupiedSingleSendRenewal(fault, survivingSource: true,
+            modeCommand: "post_pan_roundtrip", modePeerBoundary: boundary)
+        #expect(boundary.state == "B", "\(boundary.receipt)")
+        #expect(boundary.leafCount == 1, "Unknown after-state must not cause another mode leaf")
+    }
+
+    @Test(arguments: ["failure", "cancel"])
+    func existingModeSagaKeepsOwnedCompensationAfterControlRetirement(outcome: String) async throws {
+        try await assertOccupiedSingleSendRenewal(survivingSource: true, modeCommand: "roundtrip", modeSaga: outcome)
+    }
+
     @Test(arguments: ["preflight", "failure", "cancel"])
     func registeredSendModeSagaOwnsItsActualCompensation(_ outcome: String) async throws {
         try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeSaga: outcome)
@@ -2700,6 +2719,18 @@ struct Issue965HeldSelectionAssociationTests {
         }
         #expect(f.routingDestinationPresses == 2 && !gate.isHeldByEntitledHolder())
         return
+    }
+
+    private func assertSurvivingModeControlReadback(_ f: Fixture, originalList: AXUIElement,
+        body: [String: Any], selectionsBefore: Int) {
+        #expect(f.selections.count > selectionsBefore, "Same-strip renewal still needs an actual original-header observation and inverse")
+        #expect(body["source_renewal"] as? String != nil)
+        let role: String? = AXHelpers.getAttribute(f.strips[1], kAXRoleAttribute as String, runtime: f.logic().ax)
+        #expect(role == kAXLayoutItemRole as String)
+        let oldList: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(originalList,
+            kAXRoleAttribute as String, runtime: f.logic().ax)
+        if case .failure(let error) = oldList { #expect(error.raw == AXError.invalidUIElement.rawValue) }
+        else { Issue.record("The old Send control, not the original strip, must actually retire") }
     }
 
     private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
@@ -2992,6 +3023,12 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(preFader, "AXMenuItemMarkChar", CFEqual(element, preFader) ? "✓" : "")
                         b.setAttribute(postPan, "AXMenuItemMarkChar", CFEqual(element, postPan) ? "✓" : "")
                     }
+                    if survivingSource, f.routingModePresses == 1 {
+                        b.setChildren(f.strips[1], originalChildren + renewedSend)
+                        if fault == "mode_control_peer" { b.setChildren(f.strips[0], peerChildren + extraSend) }
+                        if fault == "mode_control_raw" { b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 99) }
+                        if fault == "mode_control_duplicate" { b.setChildren(f.strips[1], originalChildren + renewedSend + extraSend) }
+                    }
                     switch modeCommand {
                     case "after_route":
                         b.setAttribute(echo, kAXTitleAttribute as String, "Output 3-4")
@@ -3214,6 +3251,14 @@ struct Issue965HeldSelectionAssociationTests {
                     if attribute == kAXEnabledAttribute as String, inverseFault == "empty_mode_enabled_unreadable" {
                         f.routingLateScopeInjected = true
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                }
+                if survivingSource, modeCommand != nil, f.routingModePresses > 0 {
+                    if fault == "mode_control_header", CFEqual(element, f.headers[0]) {
+                        return .failure(.init(raw: AXError.invalidUIElement.rawValue))
+                    }
+                    if (originalSend + [originalList, b.element(1_965_2622)]).contains(where: { CFEqual($0, element) }) {
+                        return .failure(.init(raw: AXError.invalidUIElement.rawValue))
                     }
                 }
                 if survivingSource, f.routingDestinationPresses == 1 {
@@ -4108,6 +4153,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingModePresses == count)
                     return
                 }
+                let beforeModeSelections = f.selections.count
                 let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_mode_verified",
                     commandParams: params, mutationGate: gate) {
                     await AccessibilityChannel.$sendModeChangeObserver.withValue(effectObserver) { await handler(dependencies, params) }
@@ -4133,6 +4179,10 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
                 guard body["state"] as? String == "A" else { return }
                 if modeCommand == "noop" { #expect(f.routingModePresses == 0); return }
+                if survivingSource {
+                    assertSurvivingModeControlReadback(f, originalList: originalList,
+                        body: body, selectionsBefore: beforeModeSelections)
+                }
                 #expect(body["after"] as? String == desiredMode)
                 if modeCommand == "post_pan_roundtrip" {
                     #expect(b.attributeValue(postPan, "AXMenuItemMarkChar") as? String == "✓")
