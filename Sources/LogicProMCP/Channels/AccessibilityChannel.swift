@@ -571,17 +571,20 @@ actor AccessibilityChannel: Channel {
                         }
                     }
                     guard !candidates.isEmpty else { continue }
-                    guard let owner = strip.physicalBinding,
-                          population.strips?.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1 else { continue }
+                    guard let originalOwner = strip.physicalBinding,
+                          population.strips?.filter({ $0.physicalBinding?.matches(originalOwner) == true }).count == 1 else { continue }
+                    let pairs = population.selectionAssociations.filter { $0.strip.matches(originalOwner) }
+                    var heldOwner = originalOwner
+                    var heldPair = pairs.count == 1 && population.selectionAssociations.filter { candidatePair in
+                        pairs.first.map { candidatePair.track.matches($0.track) } ?? false
+                    }.count == 1 ? pairs.first : nil
                     for candidate in candidates {
                         guard !stop(), await navigationReferenceIsCurrent() else {
                             try SessionPopulationObservation.requireOwnedAcquisition()
                             throw SessionPopulationObservation.AcquisitionError.ownershipLost
                         }
-                        let pairs = population.selectionAssociations.filter { $0.strip.matches(owner) }
-                        let pair = pairs.count == 1 && population.selectionAssociations.filter { candidatePair in
-                            pairs.first.map { candidatePair.track.matches($0.track) } ?? false
-                        }.count == 1 ? pairs.first : nil
+                        let owner = heldOwner
+                        let pair = heldPair
                         // A selection request qualifies only its captured pairs,
                         // not the unselected challenge or other raw physical rows.
                         // Whole-project outputs retain their broader observation;
@@ -652,6 +655,11 @@ actor AccessibilityChannel: Channel {
                                     renewals.append(renewal)
                                     renewedSlots.append(slot)
                                     checkedInputs.append(.init(receiver: renewal.pair.strip, assignment: input))
+                                    // Later destinations are independently read from this
+                                    // actually renewed source, never the retired owner.
+                                    // Earlier checked facts retain their own CF witnesses.
+                                    heldOwner = renewal.pair.strip
+                                    heldPair = renewal.pair
                                     population.uiEffects = mergedEffects(population.uiEffects, renewal.observation.effects)
                                 } else {
                                     checkedInputs.append(.init(receiver: owner, assignment: input))

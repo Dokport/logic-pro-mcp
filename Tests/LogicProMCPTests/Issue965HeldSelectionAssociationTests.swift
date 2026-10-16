@@ -518,6 +518,8 @@ struct Issue965HeldSelectionAssociationTests {
         var lateAssociationFocusLanded = false
         var inputMenuPresses = 0
         var inputMenuCancels = 0
+        var renewedOutputPresses = 0
+        var renewedOutputCancels = 0
         var inputRetirementCensusLag = false
         var inputRetiredSourceReadable = false
         var inputRetirementCensusLagObserved = false
@@ -527,6 +529,51 @@ struct Issue965HeldSelectionAssociationTests {
         var passivePermissionSelectionReads = 0
         var passivePermissionFocusReads = 0
         var passivePermissionArmed = false
+
+        func installLaterOutputProbe(original: AXUIElement, renewed: AXUIElement) {
+            let oldOutput = builder.element(1_965_990), renewedOutput = builder.element(1_965_991)
+            let root = builder.element(1_965_992), parent = builder.element(1_965_993)
+            let menu = builder.element(1_965_994), echo = builder.element(1_965_995), leaf = builder.element(1_965_996)
+            for control in [oldOutput, renewedOutput] {
+                builder.setButton(control, description: "Stereo Output",
+                    help: "Output slot. Choose the channel strip output destination.", x: 0, y: 0, width: 1, height: 1)
+                builder.setChildren(control, []); builder.setActionNames(control, [kAXPressAction as String])
+            }
+            builder.setChildren(original, builder.makeAXRuntime().children(original) + [oldOutput])
+            builder.setChildren(renewed, builder.makeAXRuntime().children(renewed) + [renewedOutput])
+            for item in [root, menu] { builder.setRole(item, kAXMenuRole as String) }
+            for (item, title) in [(echo, "Stereo Output"), (parent, "Output"), (leaf, "Stereo Output")] {
+                builder.setRole(item, kAXMenuItemRole as String)
+                builder.setAttribute(item, kAXTitleAttribute as String, title)
+                builder.setChildren(item, [])
+            }
+            for item in [echo, leaf] { builder.setAttribute(item, "AXMenuItemMarkChar", "✓") }
+            builder.setChildren(menu, [leaf]); builder.setChildren(parent, [menu])
+            builder.setChildren(root, [echo, parent]); builder.setActionNames(root, [kAXCancelAction as String])
+            let inputAction = routingAction
+            routingAction = { [self] element, action in
+                if CFEqual(element, builder.element(1_965_991)), action == kAXPressAction as String {
+                    guard let current = routingReplacement else {
+                        Issue.record("Read the actual replacement only after owned input renewal")
+                        return false
+                    }
+                    renewedOutputPresses += 1
+                    builder.setChildren(mixer, [strips[0], current, builder.element(1_965_992)])
+                    return true
+                }
+                if CFEqual(element, builder.element(1_965_992)), action == kAXCancelAction as String,
+                   let current = routingReplacement {
+                    renewedOutputCancels += 1
+                    builder.setChildren(mixer, [strips[0], current])
+                    return true
+                }
+                if CFEqual(element, builder.element(1_965_990)) {
+                    Issue.record("The retired output control must never be used")
+                    return false
+                }
+                return inputAction?(element, action) ?? false
+            }
+        }
 
         init(withViewport: Bool = false, fourTracks: Bool = false) throws {
             bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-selection-\(UUID().uuidString).logicx")
@@ -4761,7 +4808,8 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false, keep: Bool = false) async throws {
+    private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false, keep: Bool = false,
+                                      readOutputAfterRenewal: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), registry = TargetRegistry()
             let captureNow = ContinuousClock.now
@@ -4892,6 +4940,9 @@ struct Issue965HeldSelectionAssociationTests {
                 if CFEqual(element, leaf) { f.routingDestinationPresses += 1 }
                 Issue.record("The input reader must not press any destination, decoy, or replacement popup")
                 return false
+            }
+            if readOutputAfterRenewal {
+                f.installLaterOutputProbe(original: f.strips[1], renewed: replacement)
             }
             if condition == "two_input_retirements" {
                 let otherInput = decoy, renewedOtherInput = f.builder.element(1_965_976)
@@ -5126,6 +5177,13 @@ struct Issue965HeldSelectionAssociationTests {
                     fresh.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, replacement) } == true
                 })
                 #expect(edge.destination == fresh.mixerReference(at: receiverRow)?.rawValue)
+                if readOutputAfterRenewal {
+                    #expect(f.renewedOutputPresses == 1 && f.renewedOutputCancels == 1)
+                    let output = try #require(routing?.edges.first {
+                        $0.kind == .mainOutput && $0.source == edge.destination
+                    }, "Input renewal must not suppress the source's later checked output")
+                    #expect(output.destination == "output_stereo" && output.provenance == .axOutputMenuCheckmark)
+                }
                 if retiresWholeCensus {
                     let currentPopulation = try #require(fresh.freshPopulation)
                     #expect(!currentPopulation.selectionAssociations.contains { CFEqual($0.strip.strip, f.strips[0]) },
@@ -5324,6 +5382,11 @@ struct Issue965HeldSelectionAssociationTests {
     @Test(arguments: [1, 256])
     func registeredRoutingCapturePublishesRenewedInputReceiver(number: Int) async throws {
         try await assertInputBusRenewal(number: number, condition: "paired", graph: true)
+    }
+
+    @Test("An owned input renewal retains exact source authority for later checked output acquisition")
+    func registeredInputRenewalPreservesLaterCheckedOutput() async throws {
+        try await assertInputBusRenewal(number: 1, condition: "paired", graph: true, readOutputAfterRenewal: true)
     }
 
     @Test func registeredReceiverKeepRenewsOnlyItsOriginallyCapturedHeader() async throws {
