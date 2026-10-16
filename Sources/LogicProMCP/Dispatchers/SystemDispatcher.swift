@@ -939,7 +939,7 @@ struct SystemDispatcher: OperationTraceDispatching {
             }
             if containsSend, sendRemoval == nil {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
-                    hint: "Only one exact occupied Stereo Output send removal or existing-bus replacement is supported by this Saga adapter.",
+                    hint: "Only one exact occupied Stereo Output send removal, existing-bus replacement or sole-empty Stereo Output creation is supported by this Saga adapter.",
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             if pluginPlan || containsSend || containsMode || containsLevel, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {

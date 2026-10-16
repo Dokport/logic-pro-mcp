@@ -223,7 +223,8 @@ extension AccessibilityChannel {
             return uncertain("Fresh occupied control, complete physical population or protected peer Sends were not observed.")
         }
         let after = await AXMixerStripBinding.$current.withValue(source.pair.strip) {
-            await getOutputObservation(runtime: runtime, sendOrdinal: control.ordinal, timing: timing)
+            await getOutputObservation(runtime: runtime, sendOrdinal: control.ordinal, timing: timing,
+                observingSendMode: sendCreationObserver != nil)
         }
         guard after.assignment == .stereoOutput, let checks = after.sendNonRoutingChecks, !checks.isEmpty,
               populationAndPeersHeld(),
@@ -241,6 +242,22 @@ extension AccessibilityChannel {
         extras["source_renewal"] = source.pair.source; extras["reference_reread_required"] = true
         extras["source_index_after"] = source.index; extras["verify_source"] = "ax_send_menu_checkmark"
         extras["snapshot_atomic"] = false
+        if let observer = sendCreationObserver {
+            guard let mode = after.sendMode else {
+                return uncertain("Fresh creation has no complete native default-mode evidence for compensation.")
+            }
+            let peerReads = expectedPopulation.map { AXLogicProElements.sendSlotObservations(in: $0, runtime: runtime.ax) }
+            guard peerReads.allSatisfy({ $0 != nil }) else {
+                return uncertain("Fresh creation lost its complete native peer Send after-state.")
+            }
+            let proof = CreatedSendObservation(source: source, control: final, footprint: finalSlots,
+                nonRoutingChecks: checks, mode: mode, population: expectedPopulation,
+                beforePeers: peerSlots, afterPeers: peerReads.compactMap { $0 })
+            guard proof.permits(runtime: runtime) else {
+                return uncertain("Fresh creation lost native control, mode, level, bypass or peer custody before publication.")
+            }
+            observer(proof)
+        }
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: .stereoOutput,
             sendNonRoutingChecks: checks)
     }

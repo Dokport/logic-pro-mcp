@@ -180,6 +180,8 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     private var footprint: [SendSlotObservation]?
     private var removal: AccessibilityChannel.RemovedSendObservation?
     private var change: AccessibilityChannel.ChangedSendObservation?
+    private var creation: AccessibilityChannel.CreatedSendObservation?
+    private var creationRemoval: AccessibilityChannel.RemovedSendObservation?
     private var restored: AccessibilityChannel.CheckedOutputReading?
     private var attempted = false
     private var inverseConsumed = false
@@ -190,14 +192,21 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
               step.targetRef != nil,
               Set(step.params.keys).subtracting(["ordinal", "destination", "expected_current", "replace_existing", "project_ref"]).isEmpty,
               step.params["ordinal"]?.intValue.map({ $0 >= 0 }) == true,
-              step.params["destination"] == .object(["kind": .string("no_send")]) || busDestination(step) != nil,
-              step.params["expected_current"] == .object(["kind": .string("stereo_output")]),
-              step.params["replace_existing"] == .bool(true),
+              isCreation(step) || ((step.params["destination"] == .object(["kind": .string("no_send")]) || busDestination(step) != nil)
+                && step.params["expected_current"] == .object(["kind": .string("stereo_output")])
+                && step.params["replace_existing"] == .bool(true)),
               step.expectedInverse == .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination") else { return false }
         if let project = step.params["project_ref"] {
             guard let value = project.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         }
         return true
+    }
+
+    private static func isCreation(_ step: SagaStep) -> Bool {
+        step.params["ordinal"] == .int(0)
+            && step.params["destination"] == .object(["kind": .string("stereo_output")])
+            && step.params["expected_current"] == .object(["kind": .string("no_send")])
+            && step.params["replace_existing"] == .bool(false)
     }
 
     private static func busDestination(_ step: SagaStep) -> OutputAssignment? {
@@ -216,13 +225,14 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     func supports(_ step: SagaStep) -> Bool {
         if step == forward { return true }
         var inverse = forward.params
-        inverse["destination"] = .string("stereo_output")
-        return (removal != nil || change != nil) && step.operationID == forward.operationID
+        inverse["destination"] = .string(Self.isCreation(forward) ? "no_send" : "stereo_output")
+        return (removal != nil || change != nil || creation != nil) && step.operationID == forward.operationID
             && step.targetRef == forward.targetRef && step.params == inverse
             && step.expectedInverse == forward.expectedInverse
     }
 
     static func journalValue(_ step: SagaStep) -> Value? {
+        if isCreation(step) { return .string("stereo_output") }
         if step.params["destination"] == .object(["kind": .string("no_send")]) { return .string("no_send") }
         return busDestination(step).map { .string($0.token) }
     }
@@ -245,7 +255,17 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                     operation: "saga.send_removal") == nil else { return nil }
             let token: String
             let source: SagaReadSource
-            if let restored = self.restored, let pair = self.pair,
+            if let created = self.creation {
+                if self.inverseConsumed {
+                    guard let removed = self.creationRemoval,
+                          created.permitsRemoval(removed, runtime: created.source.pair.track.runtime) else { return nil }
+                    token = "no_send"; source = .axSendSlotFootprint
+                } else {
+                    guard await AccessibilityChannel.readCreatedSendObservation(created,
+                        runtime: created.source.pair.track.runtime) != nil else { return nil }
+                    token = "stereo_output"; source = .axSendMenuCheckmark
+                }
+            } else if let restored = self.restored, let pair = self.pair,
                let original = self.removal?.source.pair.strip ?? self.change?.source.pair.strip {
                 let checked = await AccessibilityChannel.readRestoredSendObservation(restored,
                     original: original, runtime: pair.track.runtime)
@@ -269,21 +289,32 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                       self.pair.map({ $0.strip.matches(held.strip) && $0.track.matches(held.track) }) ?? true,
                       let ordinal = self.forward.params["ordinal"]?.intValue else { return nil }
                 let runtime = held.track.runtime
-                let checked = await AXMixerStripBinding.$current.withValue(physical) {
-                    await AXMixerStripBinding.$outputAssociation.withValue(held) {
-                        await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
+                if Self.isCreation(self.forward) {
+                    guard ordinal == 0, AccessibilityChannel.soleEmptySend(in: physical.strip, runtime: runtime.ax) != nil,
+                          let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
+                          slots == [.init(ordinal: 0, state: .observedEmpty)],
+                          self.footprint.map({ $0 == slots }) ?? true,
+                          held.track.currentIndex() != nil, physical.currentIndex(runtime: runtime) != nil,
+                          (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+                    self.pair = held; self.footprint = slots
+                    token = "no_send"; source = .axSendSlotFootprint
+                } else {
+                    let checked = await AXMixerStripBinding.$current.withValue(physical) {
+                        await AXMixerStripBinding.$outputAssociation.withValue(held) {
+                            await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
+                        }
                     }
+                    guard checked.assignment == .stereoOutput,
+                          checked.sendNonRoutingChecks == ["Post Fader"] || checked.sendNonRoutingChecks == ["포스트 페이더"],
+                          let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
+                          slots.count == 2, slots.filter({ $0.state == .observedEmpty }).count == 1,
+                          let occupied = slots.first(where: { $0.state == .occupiedUnknownDestination }),
+                          occupied.ordinal == ordinal, occupied.levelRaw == 0, occupied.bypassed == false,
+                          self.footprint.map({ $0 == slots }) ?? true,
+                          physical.currentIndex(runtime: runtime) != nil else { return nil }
+                    self.pair = held; self.footprint = slots
+                    token = "stereo_output"; source = .axSendMenuCheckmark
                 }
-                guard checked.assignment == .stereoOutput,
-                      checked.sendNonRoutingChecks == ["Post Fader"] || checked.sendNonRoutingChecks == ["포스트 페이더"],
-                      let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
-                      slots.count == 2, slots.filter({ $0.state == .observedEmpty }).count == 1,
-                      let occupied = slots.first(where: { $0.state == .occupiedUnknownDestination }),
-                      occupied.ordinal == ordinal, occupied.levelRaw == 0, occupied.bypassed == false,
-                      self.footprint.map({ $0 == slots }) ?? true,
-                      physical.currentIndex(runtime: runtime) != nil else { return nil }
-                self.pair = held; self.footprint = slots
-                token = "stereo_output"; source = .axSendMenuCheckmark
             }
             let evidence = SagaReadEvidence(readSource: source, provenance: .liveIndependent,
                 trackIndex: self.pair?.track.currentIndex(), field: "send_destination",
@@ -299,7 +330,16 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Native removal custody unavailable")
             }
             let response: CallTool.Result
-            if let changed = self.change {
+            if let created = self.creation {
+                guard !self.inverseConsumed, created.permits(runtime: held.track.runtime),
+                      await self.read(step, cache: cache, registry: registry) != nil else {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "The owned created Send is no longer current")
+                }
+                self.inverseConsumed = true
+                let result = await AccessibilityChannel.removeCreatedSendObservation(created, runtime: held.track.runtime)
+                self.creationRemoval = result.removedSend
+                response = toolTextResult(result.result)
+            } else if let changed = self.change {
                 guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime) else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
                 }
@@ -324,21 +364,29 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 params["target_ref"] = .string(self.forward.targetRef!.rawValue)
                 let upstream = AccessibilityChannel.sendRemovalObserver
                 let upstreamChange = AccessibilityChannel.sendChangeObserver
-                response = await AccessibilityChannel.$sendChangeObserver.withValue({ proof in
-                    if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track),
-                       proof.checkedBefore == .stereoOutput, proof.checkedAfter == Self.busDestination(self.forward) {
-                        self.change = proof
-                        upstreamChange?(proof)
+                let upstreamCreation = AccessibilityChannel.sendCreationObserver
+                response = await AccessibilityChannel.$sendCreationObserver.withValue({ proof in
+                    if Self.isCreation(self.forward), proof.source.original.matches(held.strip),
+                       proof.source.originalTrack.matches(held.track) {
+                        self.creation = proof; upstreamCreation?(proof)
                     }
                 }) {
-                    await AccessibilityChannel.$sendRemovalObserver.withValue({ proof in
-                        if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track) {
-                            self.removal = proof
-                            upstream?(proof)
+                    await AccessibilityChannel.$sendChangeObserver.withValue({ proof in
+                        if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track),
+                           proof.checkedBefore == .stereoOutput, proof.checkedAfter == Self.busDestination(self.forward) {
+                            self.change = proof
+                            upstreamChange?(proof)
                         }
                     }) {
-                        await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
-                            router: router, cache: cache, targetRegistry: registry)
+                        await AccessibilityChannel.$sendRemovalObserver.withValue({ proof in
+                            if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track) {
+                                self.removal = proof
+                                upstream?(proof)
+                            }
+                        }) {
+                            await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                                router: router, cache: cache, targetRegistry: registry)
+                        }
                     }
                 }
             }

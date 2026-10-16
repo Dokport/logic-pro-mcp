@@ -12,11 +12,14 @@ private actor SendRemovalSagaResultBoundary: Channel {
     let operation: String
     let idempotencyKey: String
     let afterForward: @Sendable () -> Void
+    let observedResult: @Sendable (ChannelResult) -> Void
     init(base: AccessibilityChannel, journal: SagaJournal, mode: String,
          operation: String = "mixer.set_send_output_verified", idempotencyKey: String = "owned-send-removal-saga",
-         afterForward: @escaping @Sendable () -> Void = {}) {
+         afterForward: @escaping @Sendable () -> Void = {},
+         observedResult: @escaping @Sendable (ChannelResult) -> Void = { _ in }) {
         self.base = base; self.journal = journal; self.mode = mode; self.afterForward = afterForward
         self.operation = operation; self.idempotencyKey = idempotencyKey
+        self.observedResult = observedResult
     }
     func start() async throws {}
     func stop() async {}
@@ -36,11 +39,14 @@ private actor SendRemovalSagaResultBoundary: Channel {
                     await base.execute(operation: operation, params: params)
                 }
             } else {
-                result = await AccessibilityChannel.$sendChangeObserver.withValue(nil) {
-                    await base.execute(operation: operation, params: params)
+                result = await AccessibilityChannel.$sendCreationObserver.withValue(nil) {
+                    await AccessibilityChannel.$sendChangeObserver.withValue(nil) {
+                        await base.execute(operation: operation, params: params)
+                    }
                 }
             }
         } else { result = await base.execute(operation: operation, params: params) }
+        if operation == self.operation { observedResult(result) }
         if operation == self.operation,
            sharedJSONObject(result.message)?["state"] as? String == "A" {
             afterForward()
@@ -469,6 +475,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingLevelHit: AXUIElement?
         var routingLevelHitEffect: (@Sendable () -> Void)?
         var routingLevelClicks: [Int64] = []
+        var creationForwardReceipt: String?
         var routingLevelWrites: [String] = []
         var routingLevelCommits = 0
         var routingLevelCommitPending = false
@@ -2534,6 +2541,141 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(freshEmpty: "boolean_after")
     }
 
+    @Test func registeredFreshEmptySendSagaPreflightReadsItsActualEmptySource() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, freshEmpty: "observed", creationSaga: "preflight")
+    }
+
+    @Test(arguments: ["failure", "cancel", "peer_padding"])
+    func registeredFreshEmptySendSagaRemovesOnlyItsActualCreatedControl(_ outcome: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true,
+            freshEmpty: outcome == "peer_padding" ? "peer_padding" : "observed",
+            creationSaga: outcome == "peer_padding" ? "failure" : outcome)
+    }
+
+    @Test(arguments: ["no_observer", "lost_observer", "late_inverse_level", "late_inverse_raw_boolean",
+        "late_inverse_bypass", "late_inverse_mode", "late_inverse_leaf_mode", "late_inverse_peer",
+        "late_inverse_control", "late_inverse_document", "late_inverse_route", "wrong_hash",
+        "wrong_project", "wrong_target", "wrong_slot", "unknown_creation_mode"])
+    func registeredFreshEmptySendSagaRefusesUnownedOrChangedCreation(_ fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, freshEmpty: "observed", creationSaga: fault)
+    }
+
+    @Test(arguments: [false, true])
+    func registeredFreshEmptySendFinalPeerReadCannotHideModeOrPan(independentPan: Bool) async throws {
+        let healthy = ModePeerBoundary()
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, freshEmpty: "observed",
+            modePeerBoundary: healthy, creationSaga: "failure")
+        #expect(healthy.beforeLeafPeerReads > 0)
+        let fault = ModePeerBoundary(independentPan: independentPan)
+        fault.injectAt = healthy.beforeLeafPeerReads
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, freshEmpty: "observed",
+            modePeerBoundary: fault, creationSaga: "late_inverse_peer_mode")
+        #expect(fault.mutations == 1, "Reach the actual final peer read before No Send")
+    }
+
+    private func assertFreshCreationSaga(_ creationSaga: String, fixture f: Fixture,
+        cache: StateCache, registry: TargetRegistry, router: ChannelRouter, gate: LogicMutationGate,
+        reference: TargetReference, params: [String: Value]) async throws {
+        let b = f.builder
+        let journal = SagaJournal(maxRecords: 1), key = "owned-fresh-send-creation"
+        let creationDependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+            poller: StatePoller(axChannel: f.channel(), cache: cache,
+                runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+            dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+            mutationGate: gate, liveTrackNames: { [:] })
+        var stepParams = params
+        stepParams.removeValue(forKey: "target_ref")
+        if creationSaga == "wrong_project" { stepParams["project_ref"] = .string("prj_foreign") }
+        if creationSaga == "wrong_slot" { stepParams["ordinal"] = .int(1) }
+        var wire: [String: Value] = ["idempotency_key": .string(key),
+            "steps": .array([.object([
+                "operation_id": .string(OperationID.mixerSetSendOutputVerified.rawValue),
+                "target_ref": .string(creationSaga == "wrong_target"
+                    ? "mix_00000000-0000-0000-0000-000000000000" : reference.rawValue), "params": .object(stepParams),
+                "expected_inverse": .object([
+                    "operation_id": .string(OperationID.mixerSetSendOutputVerified.rawValue),
+                    "value_parameter": .string("destination")])])])]
+        let preflight = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_preflight"))
+        let preview = await FeatureFlags.withAdr004MutationSagaForTests(true) { await preflight(creationDependencies, wire) }
+        let previewBody = try #require(sharedJSONObject(sharedToolText(preview)))
+        let ready = try #require(previewBody["ok"] as? Bool, "\(sharedToolText(preview))")
+        if ["wrong_project", "wrong_target", "wrong_slot"].contains(creationSaga) {
+            #expect(!ready && f.routingDestinationPresses == 0)
+            return
+        }
+        #expect(ready, "The actual registered preflight must observe the held sole-empty source: \(sharedToolText(preview))")
+        #expect(f.routingDestinationPresses == 0 && f.routingRemovedSend == nil)
+        if creationSaga == "preflight" { return }
+        await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
+            mode: creationSaga, idempotencyKey: key,
+            afterForward: {
+                switch creationSaga {
+                case "late_inverse_level": b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1)
+                case "late_inverse_raw_boolean": b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, false)
+                case "late_inverse_bypass": b.setAttribute(b.element(1_965_2642), kAXValueAttribute as String, 1)
+                case "late_inverse_mode":
+                    b.setAttribute(b.element(1_965_2603), "AXMenuItemMarkChar", "")
+                    b.setAttribute(b.element(1_965_2771), "AXMenuItemMarkChar", "✓")
+                case "late_inverse_peer": b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]) + [b.element(1_965_2660)])
+                case "late_inverse_control":
+                    let group = b.element(1_965_2899)
+                    b.setRole(group, kAXGroupRole as String)
+                    b.setChildren(group, b.makeAXRuntime().children(b.element(1_965_2641)))
+                    b.setChildren(b.element(1_965_2600), b.makeAXRuntime().children(b.element(1_965_2600)).map {
+                        CFEqual($0, b.element(1_965_2641)) ? group : $0
+                    })
+                case "late_inverse_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                case "late_inverse_route":
+                    b.setAttribute(b.element(1_965_2602), kAXTitleAttribute as String, "Bus 1 → Existing")
+                    b.setAttribute(b.element(1_965_2606), "AXMenuItemMarkChar", "")
+                default: return
+                }
+                f.routingLateScopeInjected = true
+            },
+            observedResult: { f.creationForwardReceipt = $0.message }))
+        wire["confirmed_plan_hash"] = .string(SagaJournal.planHash(try SagaWire.plan(from: wire)))
+        if creationSaga == "wrong_hash" { wire["confirmed_plan_hash"] = .string(String(repeating: "0", count: 64)) }
+        let execute = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_execute"))
+        let applied = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(creationDependencies, wire) }
+        let appliedBody = try #require(sharedJSONObject(sharedToolText(applied)))
+        if creationSaga == "wrong_hash" {
+            #expect(appliedBody["state"] as? String == "C" && f.routingDestinationPresses == 0)
+            let wrote = try #require(appliedBody["write_attempted"] as? Bool); #expect(!wrote)
+            return
+        }
+        if ["no_observer", "lost_observer", "unknown_creation_mode"].contains(creationSaga) || creationSaga.hasPrefix("late_inverse_") {
+            let terminal = try #require(appliedBody["saga_state"] as? String)
+            #expect(appliedBody["state"] as? String == "B" && terminal != "completed" && terminal != "fullyCompensated",
+                "\(sharedToolText(applied))")
+            let expectedWrites = creationSaga == "no_observer" ? 0 : 1
+            #expect(f.routingDestinationPresses == expectedWrites && !gate.isHeldByEntitledHolder())
+            if creationSaga.hasPrefix("late_inverse_") || creationSaga == "unknown_creation_mode" {
+                #expect(f.routingLateScopeInjected)
+            }
+            let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(creationDependencies, wire) }
+            let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+            let duplicate = try #require(replayBody["duplicate"] as? Bool); #expect(duplicate)
+            #expect(replayBody["state"] as? String == "B" && f.routingDestinationPresses == expectedWrites)
+            return
+        }
+        #expect(f.creationForwardReceipt.flatMap(sharedJSONObject)?["state"] as? String == "A",
+            "Reach the real native creation before testing its missing compensation: \(f.creationForwardReceipt ?? "missing")")
+        #expect(appliedBody["saga_state"] as? String == "fullyCompensated",
+            "Forward: \(f.creationForwardReceipt ?? "missing"); Saga: \(sharedToolText(applied))")
+        #expect(f.routingDestinationPresses == 2, "Exactly one creation and its own No Send inverse")
+        #expect(AXLogicProElements.sendSlotObservations(in: b.element(1_965_2700), runtime: f.logic().ax)
+            == [.init(ordinal: 0, state: .observedEmpty)])
+        let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(creationDependencies, wire) }
+        let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+        if creationSaga == "cancel" {
+            #expect(replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue)
+        } else {
+            let duplicate = try #require(replayBody["duplicate"] as? Bool); #expect(duplicate)
+        }
+        #expect(f.routingDestinationPresses == 2 && !gate.isHeldByEntitledHolder())
+        return
+    }
+
     private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
@@ -2548,7 +2690,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                modePeerBoundary: ModePeerBoundary? = nil,
                                                modeSaga: String? = nil,
                                                modeEffectBoundary: ModeEffectBoundary? = nil,
-                                               levelSaga: String? = nil) async throws {
+                                               levelSaga: String? = nil,
+                                               creationSaga: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
@@ -2591,6 +2734,9 @@ struct Issue965HeldSelectionAssociationTests {
                 return [anchor, group, level]
             }
             let originalSend = send(1_965_2620), renewedSend = send(1_965_2640), extraSend = send(1_965_2660)
+            b.setButton(b.element(1_965_2970), description: "send button", help: "Send slot. Route signal.",
+                x: 0, y: 0, width: 1, height: 1)
+            b.setChildren(b.element(1_965_2970), [])
             if freshEmpty != nil || modeCommand != nil || inspectTypedMode { f.useBulkReads = true }
             if levelMode != nil {
                 f.useBulkReads = true
@@ -2736,7 +2882,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             for item in [echo, mode, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
             b.setChildren(menu, [stereo, destination]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, mode, parent])
-            if modeCommand != nil || inspectTypedMode {
+            if modeCommand != nil || inspectTypedMode || creationSaga != nil {
                 for (item, title) in [(preFader, "Pre Fader"), (postPan, "Post Pan"), (independentPan, "Independent Pan")] {
                     b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
                     b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
@@ -2841,6 +2987,18 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
                     b.setAttribute(mode, kAXEnabledAttribute as String, true)
                     b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
+                    if creationSaga != nil {
+                        // A real occupied menu retains its checked routing echo
+                        // and a separate unselected No Send action.
+                        b.setAttribute(destination, kAXTitleAttribute as String, "No Send")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", "")
+                        b.setChildren(menu, [stereo])
+                        b.setChildren(root, [echo, independentPan, postPan, mode, preFader, parent, destination])
+                        if creationSaga == "unknown_creation_mode" {
+                            b.setChildren(root, [echo, independentPan, mode, preFader, parent, destination])
+                            f.routingLateScopeInjected = true
+                        }
+                    }
                     b.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement])
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
                     if freshEmpty?.hasPrefix("peer_") == true {
@@ -2856,6 +3014,22 @@ struct Issue965HeldSelectionAssociationTests {
                     if freshEmpty == "after_source" { b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
                     if freshEmpty == "after_mode" { b.setAttribute(mode, "AXMenuItemMarkChar", "") }
                     if freshEmpty == "boolean_after" { b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, true) }
+                    return true
+                }
+                if creationSaga != nil, f.routingDestinationPresses == 1,
+                   action == kAXPressAction as String, CFEqual(element, destination) {
+                    modePeerBoundary?.beforeLeafPeerReads = modePeerBoundary?.peerReads ?? 0
+                    f.routingDestinationPresses += 1; f.routingReplacement = restoredSource
+                    b.setChildren(restoredSource, [name, b.element(1_965_2970)])
+                    if freshEmpty == "peer_padding" { b.setChildren(f.strips[0], peerChildren + [extraSend[0]]) }
+                    b.setAttribute(echo, kAXTitleAttribute as String, "No Send")
+                    b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
+                    b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                    b.setAttribute(mode, kAXEnabledAttribute as String, false)
+                    b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                    b.setChildren(root, [echo, independentPan, postPan, mode, preFader, parent])
+                    b.setChildren(f.mixer, [f.strips[0], restoredSource])
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, restoredSource)
                     return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
@@ -3160,6 +3334,7 @@ struct Issue965HeldSelectionAssociationTests {
                     boundary.peerReads += 1
                     if boundary.peerReads == boundary.injectAt {
                         boundary.mutations += 1
+                        if creationSaga != nil { f.routingLateScopeInjected = true }
                         if boundary.independentPan { b.setAttribute(independentPan, "AXMenuItemMarkChar", "✓") }
                         else {
                             b.setAttribute(mode, "AXMenuItemMarkChar", "")
@@ -3879,6 +4054,12 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.routingActionNames = { element in
                     let trigger = freshEmpty == "before_peer" ? originalSend[0] : stereo
+                    if creationSaga == "late_inverse_leaf_mode", f.routingDestinationPresses == 1,
+                       CFEqual(element, destination), !f.routingLateScopeInjected {
+                        f.routingLateScopeInjected = true
+                        b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                        b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                    }
                     guard CFEqual(element, trigger), !f.routingLateScopeInjected else { return nil }
                     switch freshEmpty {
                     case "before_peer":
@@ -3898,6 +4079,11 @@ struct Issue965HeldSelectionAssociationTests {
                 let slots = try #require(AXLogicProElements.sendSlotObservations(in: f.strips[1], runtime: f.logic().ax))
                 if freshEmpty != "multiple_empty" && freshEmpty != "occupied" { #expect(slots.count == 1 && slots[0].state == .observedEmpty) }
                 #expect(f.routingRemovedSend == nil && f.routingDestinationPresses == 0)
+                if let creationSaga {
+                    try await assertFreshCreationSaga(creationSaga, fixture: f, cache: cache, registry: registry,
+                        router: router, gate: gate, reference: reference, params: params)
+                    return
+                }
                 let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_output_verified",
                     commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
