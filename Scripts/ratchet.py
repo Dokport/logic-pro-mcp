@@ -222,7 +222,16 @@ def check(repo: str, ratchets, failures: list, history: History = None, owner: s
         before = _before(repo, entry, base, failures, history, owner)
         if before is None:
             continue
-        now = load_json(os.path.join(repo, entry.path), {})
+        current_path = os.path.join(repo, entry.path)
+        now = load_json(current_path, {})
+        if entry.direction == "shrink":
+            try:
+                os.lstat(current_path)
+            except FileNotFoundError:
+                # Removing every waiver is a valid shrink, not a renamed list.
+                now = {entry.key: []}
+            except OSError:
+                pass  # Unreadable is not proof of absence; retain the shape failure.
         if not isinstance(before.get(entry.key), (list, dict)) \
                 or not isinstance(now.get(entry.key), (list, dict)):
             failures.append(

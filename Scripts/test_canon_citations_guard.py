@@ -541,6 +541,37 @@ class GuardBehaviour(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     # -- the base the ratchets are measured against ---------------------------------------------
+    def test_a_removed_ax_comparison_waiver_stays_absent(self):
+        waiver = os.path.join(self.root, "docs", "canon", "AX-COMPARISON-WAIVERS.json")
+        with open(waiver, "w", encoding="utf-8") as handle:
+            json.dump({"literals": {"temporary-comparison": "temporary exemption"}}, handle)
+        self.assertEqual(self._git("add", "-A").returncode, 0)
+        self.assertEqual(self._git("commit", "-q", "-m", "temporary waiver").returncode, 0)
+        os.remove(waiver)
+        self.assertEqual(self._git("add", "-A").returncode, 0)
+        self.assertEqual(self._git("commit", "-q", "-m", "remove every waiver").returncode, 0)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("last ancestor carrying it", result.stderr)
+
+    def test_a_present_waiver_with_a_renamed_list_still_fails(self):
+        waiver = os.path.join(self.root, "docs", "canon", "AX-COMPARISON-WAIVERS.json")
+        with open(waiver, "w", encoding="utf-8") as handle:
+            json.dump({"literals": {}}, handle)
+        self.assertEqual(self._git("add", "-A").returncode, 0)
+        self.assertEqual(self._git("commit", "-q", "-m", "empty waiver").returncode, 0)
+        with open(waiver, "w", encoding="utf-8") as handle:
+            json.dump({"renamed": {}}, handle)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("one side does not have it", result.stderr)
+
+    def test_removing_a_whole_requirement_file_still_fails(self):
+        os.remove(os.path.join(self.root, "docs", "canon", "LOGIC-FACING.json"))
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("LOGIC-FACING.json", result.stderr)
+
     def test_a_waiver_absent_at_the_base_is_ratcheted_against_the_last_ancestor_carrying_it(self):
         """Delete-then-restore must not become the new base.
 
