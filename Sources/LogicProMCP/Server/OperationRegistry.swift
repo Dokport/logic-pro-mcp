@@ -623,8 +623,8 @@ enum OperationRegistry {
             target: entry.3,
             verification: .readbackRequired,
             retry: .neverAutomatic,
-            // Checked input replacement includes source renewal and multiple owned popup acquisitions.
-            deadline: [.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(entry.0) ? .medium : .short,
+            // Compound routing edits retain source renewal, protected peer reads and owned acquisitions.
+            deadline: [.mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified].contains(entry.0) ? .medium : .short,
             availability: .defaultInstall,
             allowedParams: allowedParams(
                 for: entry.0,

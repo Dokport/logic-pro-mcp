@@ -317,12 +317,12 @@ extension AccessibilityChannel {
         timing: OutputAssignmentTiming = .live) async -> ChannelResult {
         guard params.keys.allSatisfy({ ["ordinal", "mode", "expected_current"].contains($0) }),
               let ordinal = params["ordinal"].flatMap(Int.init), ordinal >= 0,
-              let desired = params["mode"].flatMap(SendMode.init(rawValue:)), desired != .postPan,
-              let expected = params["expected_current"].flatMap(SendMode.init(rawValue:)), expected != .postPan,
+              let desired = params["mode"].flatMap(SendMode.init(rawValue:)),
+              let expected = params["expected_current"].flatMap(SendMode.init(rawValue:)),
               let source = AXMixerStripBinding.current, let pair = AXMixerStripBinding.outputAssociation,
               pair.strip.matches(source), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
             return .error(HonestContract.encodeStateC(error: .invalidParams,
-                hint: "An exact retained occupied Send and explicit post_fader/pre_fader current and desired modes are required.",
+                hint: "An exact retained occupied Send and explicit post_pan/post_fader/pre_fader current and desired modes are required.",
                 extras: ["operation": "mixer.set_send_mode_verified", "write_attempted": false]))
         }
         return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal, runtime: runtime, timing: timing,
@@ -1178,18 +1178,27 @@ extension AccessibilityChannel {
                     "send_group_children": childrenStatus(assigned.group), "send_list_role": roleStatus(assigned.list),
                     "send_bypass_role": roleStatus(assigned.bypass)]
                 // Only the source's previously observed original-header pair
-                // can renew retirement. No old ref or send CF is rebound.
+                // can renew source/control retirement. No old ref or send CF is rebound.
                 guard axPopupAbsent, cgPopupAbsent, let singleton,
                       singleton.control.matches(assigned), singleton.slots == protectedSends,
                       let originalPair = AXMixerStripBinding.outputAssociation,
                       originalPair.strip.matches(physical),
                       let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax),
-                      !census.strips.contains(where: { CFEqual($0, physical.strip) }),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                     return uncertain("The retired send has no unique complete occupied-slot correspondence and original-header renewal authority.")
                 }
+                let originalCount = census.strips.filter { CFEqual($0, physical.strip) }.count
+                // A mode leaf may replace only the Send controls. Renew the
+                // exact surviving source through the same original-header
+                // observation/inverse; presence alone never adopts a new Send.
+                // Destination replacement retains its retired-source boundary.
+                guard originalCount == 0 || (request.modeChange != nil && originalCount == 1
+                    && physical.currentIndex(runtime: runtime) != nil) else {
+                    return uncertain("The original mode source is not uniquely current; no replacement control is adopted.")
+                }
                 let renewal = await renewSourceThroughOriginalHeader(originalPair, original: physical,
-                    runtime: runtime, selectedHeaderRequired: false)
+                    runtime: runtime, selectedHeaderRequired: false,
+                    sourceDisposition: originalCount == 0 ? .retiredOriginal : .survivingOriginal)
                 extras["ui_effects"] = ["navigation_performed": renewal.effects.navigationPerformed,
                     "attempted": renewal.effects.attempted, "changed": renewal.effects.changed,
                     "restoration": renewal.effects.restoration, "reason": renewal.effects.reason as Any? ?? NSNull()]
