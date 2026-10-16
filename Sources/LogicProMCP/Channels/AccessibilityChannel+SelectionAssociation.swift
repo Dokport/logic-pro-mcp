@@ -158,7 +158,7 @@ extension AccessibilityChannel {
             lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { CFEqual($0, $1) }
         }
 
-        private static func path(_ mixer: AXUIElement, to window: AXUIElement, ax: AXHelpers.Runtime) -> [AXUIElement]? {
+        static func path(_ mixer: AXUIElement, to window: AXUIElement, ax: AXHelpers.Runtime) -> [AXUIElement]? {
             var path = [mixer]
             // Preserve the status-bearing childrenResult seam of older runtimes.
             guard ax.attributeValuesResult != nil else {
@@ -366,7 +366,18 @@ extension AccessibilityChannel {
         }
 
         private func stoppedTransportPathsMatch() -> Bool {
-            transportPaths.allSatisfy({ held in
+            Self.stoppedTransportPathsMatch(transportPaths, activity: transport, window: window, logic: logic)
+        }
+
+        static func stoppedTransportPathsMatch(_ paths: [[AXUIElement]],
+            activity: AXLogicProElements.ObservedTransportActivity, window: AXUIElement,
+            logic: AXLogicProElements.Runtime) -> Bool {
+            guard paths.count == 2, !CFEqual(activity.play, activity.record),
+                  paths.allSatisfy({ !$0.isEmpty && CFEqual($0[$0.count - 1], window)
+                      && $0.contains(where: { CFEqual($0, activity.controlBar) }) }),
+                  CFEqual(paths[0][0], activity.play), CFEqual(paths[1][0], activity.record),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            return paths.allSatisfy({ held in
                       guard let control = held.first, let current = Self.path(control, to: window, ax: logic.ax),
                             Self.same(held, current) else { return false }
                       let attributes = AXHelpers.getNonHelpAttributes(control, [kAXRoleAttribute, kAXValueAttribute] as [String],

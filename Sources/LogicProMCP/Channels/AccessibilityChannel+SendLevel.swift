@@ -67,10 +67,21 @@ extension AccessibilityChannel {
                 kAXWindowsAttribute as String, runtime: runtime.ax) else { return nil }
             return value
         }
-        func custody(allowingLevelChange: Bool = false) -> Bool {
+        func pairedClickWindowHeld() -> Bool {
+            let owner: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(knob,
+                kAXWindowAttribute as String, runtime: runtime.ax)
+            guard case .success(.some(let value)) = owner, CFGetTypeID(value) == AXUIElementGetTypeID(),
+                  CFEqual(value, before.physical.window), let members = windows(),
+                  members.filter({ CFEqual($0, before.physical.window) }).count == 1,
+                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(
+                    before.physical.window, runtime: runtime),
+                  document.utf8.elementsEqual(before.physical.document.utf8) else { return false }
+            return true
+        }
+        func custody(allowingLevelChange: Bool = false, pairingSecondClick: Bool = false) -> Bool {
             guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   let pid = runtime.logicProPID(), runtime.focusedApplicationPID() == pid,
-                  before.physical.currentIndex(runtime: runtime) != nil,
+                  pairingSecondClick ? pairedClickWindowHeld() : before.physical.currentIndex(runtime: runtime) != nil,
                   let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: runtime.ax),
                   CFEqual(main, before.physical.window),
                   let control = AXLogicProElements.assignedSendMenuControl(in: before.physical.strip, ordinal: ordinal, runtime: runtime.ax),
@@ -78,12 +89,17 @@ extension AccessibilityChannel {
                   let slots = AXLogicProElements.sendSlotObservations(in: before.physical.strip, runtime: runtime.ax),
                   sendLevelSlotsMatch(before.slots, slots, ordinal: ordinal, allowingLevelChange: allowingLevelChange),
                   let population = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: before.physical.mixer, runtime: runtime.ax)?.strips,
-                  population.count == before.population.count,
-                  zip(population, before.population).allSatisfy({ CFEqual($0, $1) }) else { return false }
+                  population.count == before.population.count && zip(population, before.population).allSatisfy({ CFEqual($0, $1) }) else { return false }
             return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
         }
-        func stopped() -> Bool {
-            AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
+        var pairedTransport: (activity: AXLogicProElements.ObservedTransportActivity, paths: [[AXUIElement]])?
+        func stopped(pairingSecondClick: Bool = false) -> Bool {
+            if pairingSecondClick {
+                guard let held = pairedTransport else { return false }
+                return HeldSelectionAssociation.stoppedTransportPathsMatch(held.paths, activity: held.activity,
+                    window: before.physical.window, logic: runtime)
+            }
+            return AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
                 && AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false
         }
         var observedOwnSourceFocus = false
@@ -130,14 +146,31 @@ extension AccessibilityChannel {
                 peerFootprints.append(slots)
             }
         }
+        guard let activity = try? AXLogicProElements.observedTransportActivity(in: before.physical.window,
+                runtime: runtime, checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+              !activity.isPlaying, !activity.isRecording,
+              let playPath = HeldSelectionAssociation.path(activity.play, to: before.physical.window, ax: runtime.ax),
+              let recordPath = HeldSelectionAssociation.path(activity.record, to: before.physical.window, ax: runtime.ax),
+              HeldSelectionAssociation.stoppedTransportPathsMatch([playPath, recordPath], activity: activity,
+                window: before.physical.window, logic: runtime) else {
+            return refused(.readbackUnavailable, "The original stopped transport controls and reciprocal paths were not observed.")
+        }
+        pairedTransport = (activity, [playPath, recordPath])
         // One native double-click, not AXValue stepping or a popup fallback.
         let point = CGPoint(x: position.x + size.width / 2, y: position.y + size.height / 2)
         for count: Int64 in [1, 2] {
-            guard let click = mouse.prepareMouseClick(point, count), stopped(), custody(), ordinaryFocus(),
+            // Bookend full window/Mixer discovery around this read-only pair.
+            // Rewalking the entire rail between clicks exceeded the native
+            // double-click interval on the measured 32-track fixture. The
+            // second hit still renews its exact native window/document/control,
+            // complete ordered population, raw state, frame, focus and transport.
+            // Full discovery remains mandatory before any field write/commit.
+            guard let click = mouse.prepareMouseClick(point, count), stopped(pairingSecondClick: count == 2),
+                  custody(pairingSecondClick: count == 2), ordinaryFocus(),
                   AXHelpers.getPosition(knob, runtime: runtime.ax) == position,
                   AXHelpers.getSize(knob, runtime: runtime.ax) == size,
                   case .success(.some(let hit)) = hitTest(app, point), CFEqual(hit, knob),
-                  stopped(), custody(), ordinaryFocus(),
+                  stopped(pairingSecondClick: count == 2), custody(pairingSecondClick: count == 2), ordinaryFocus(),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                 return refused(.staleSnapshot, "The exact knob frame, hit or custody changed before editor acquisition.")
             }
@@ -172,8 +205,28 @@ extension AccessibilityChannel {
         }
         var committedFocusReturned = false
         func ownsField(_ expectedValue: String, allowingLevelChange: Bool = false) -> Bool {
-            guard stopped(), custody(allowingLevelChange: allowingLevelChange), let members = windows(),
-                  members.filter({ CFEqual($0, editorWindow) }).count == 1,
+            guard stopped(), custody(allowingLevelChange: allowingLevelChange),
+                  let members = windows() else { return false }
+            if allowingLevelChange, !members.contains(where: { CFEqual($0, editorWindow) }) {
+                // Return can retire its own editor during the first ownership
+                // census, before any field read. A different original window
+                // can retire too: its absence grants no new target authority.
+                // Require the unique original source, no new/duplicate windows,
+                // stable membership and full current source/focus custody.
+                // Never read/adopt a retired field or revive a failed read.
+                guard members.filter({ CFEqual($0, before.physical.window) }).count == 1,
+                      members.allSatisfy({ member in
+                          originalWindows.contains(where: { CFEqual($0, member) })
+                              && members.filter({ CFEqual($0, member) }).count == 1
+                      }),
+                      ordinaryFocus(), stopped(), custody(allowingLevelChange: true), ordinaryFocus(),
+                      let finalMembers = windows(), finalMembers.count == members.count,
+                      zip(finalMembers, members).allSatisfy({ CFEqual($0, $1) }),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                committedFocusReturned = true
+                return true
+            }
+            guard members.filter({ CFEqual($0, editorWindow) }).count == 1,
                   let fieldWindow: AXUIElement = AXHelpers.getAttribute(field, kAXWindowAttribute as String, runtime: runtime.ax),
                   CFEqual(fieldWindow, editorWindow),
                   let value: String = AXHelpers.getAttribute(field, kAXValueAttribute as String, runtime: runtime.ax),
