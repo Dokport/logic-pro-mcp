@@ -188,7 +188,7 @@ struct OperationRegistryTests {
             #expect(spec.target == (targetBearingCommands.contains(command) ? .acceptsStableTarget : .none))
             #expect(spec.verification == .readbackRequired)
             #expect(spec.retry == .neverAutomatic)
-            #expect(spec.deadline == ([OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(id) ? .medium : .short))
+            #expect(spec.deadline == ([OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified].contains(id) ? .medium : .short))
             #expect(spec.availability == .defaultInstall)
             #expect(spec.capability.rawValue == id.rawValue)
         }
@@ -198,7 +198,7 @@ struct OperationRegistryTests {
     func mixerLegacyParity() {
         #expect(OperationRegistry.mutatingCommands(tool: .logicMixer) == Set(Self.mixerCommands.map(\.1)).subtracting(["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"]))
         for (id, command) in Self.mixerCommands {
-            let expectedDeadline = [OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(id) ? 90.0 : 25.0
+            let expectedDeadline = [OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified].contains(id) ? 90.0 : 25.0
             #expect(OperationRegistry.deadlineSeconds(tool: ToolID.logicMixer.rawValue, command: command) == expectedDeadline)
             let isMutating = LogicProServer.isMutatingCommand(tool: ToolID.logicMixer.rawValue, command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"].contains(command) { #expect(!isMutating) }
@@ -231,6 +231,33 @@ struct OperationRegistryTests {
             return toolTextResult(.success("owned input deadline observed without AX"))
         }
         #expect(sharedToolText(result) == "owned input deadline observed without AX")
+        #expect(!gate.isHeldByEntitledHolder())
+    }
+
+    @Test("Checked occupied-Send mode editing receives one medium deadline under its real owned gate")
+    func sendModeWriterReceivesCompoundDeadlineUnderRealOwnedGate() async throws {
+        let spec = try #require(OperationRegistry.spec(tool: "logic_mixer", command: "set_send_mode_verified"))
+        try #require(spec.deadline == .medium)
+        #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: "set_send_mode_verified") == 90)
+        for command in ["get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified",
+                        "set_send_bypass_verified", "get_output_verified", "set_output_verified", "set_volume", "set_pan"] {
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == 25)
+        }
+        let gate = LogicMutationGate()
+        let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_mode_verified",
+            mutationGate: gate) {
+            guard let context = OperationTraceContext.current, let deadline = context.deadline else {
+                Issue.record("The mode wrapper must provide one owned absolute deadline")
+                return toolTextResult(.error("missing owned mode deadline"))
+            }
+            #expect(context.mutationGateAcquired)
+            #expect(context.ownsGate())
+            #expect(ContinuousClock.now.duration(to: deadline) > .seconds(DeadlineClass.short.seconds))
+            do { try SessionPopulationObservation.requireOwnedAcquisition() }
+            catch { Issue.record("The registered mode execution must retain acquisition ownership: \(error)") }
+            return toolTextResult(.success("owned mode deadline observed without AX"))
+        }
+        #expect(sharedToolText(result) == "owned mode deadline observed without AX")
         #expect(!gate.isHeldByEntitledHolder())
     }
 
@@ -289,7 +316,7 @@ struct OperationRegistryTests {
             let isMutating = LogicProServer.isMutatingCommand(tool: "logic_mixer", command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"].contains(command) { #expect(!isMutating) }
             else { #expect(isMutating) }
-            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (["set_input_bus_verified", "set_send_level_verified"].contains(command) ? 90.0 : 25.0))
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (["set_input_bus_verified", "set_send_level_verified", "set_send_mode_verified"].contains(command) ? 90.0 : 25.0))
         }
         #expect(!LogicProServer.isMutatingCommand(tool: "logic_mixer", command: "play"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: "play") == 25)
@@ -301,7 +328,7 @@ struct OperationRegistryTests {
             let isMutating = LogicProServer.isMutatingCommand(tool: "logic_mixer", command: command)
             if ["get_output_verified", "get_input_bus_verified", "get_send_destination_verified", "get_send_bypass_verified"].contains(command) { #expect(!isMutating) }
             else { #expect(isMutating) }
-            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (["set_input_bus_verified", "set_send_level_verified"].contains(command) ? 90.0 : 25.0))
+            #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: command) == (["set_input_bus_verified", "set_send_level_verified", "set_send_mode_verified"].contains(command) ? 90.0 : 25.0))
         }
         #expect(!LogicProServer.isMutatingCommand(tool: "logic_mixer", command: "play"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_mixer", command: "import_file") == 25)
@@ -313,7 +340,7 @@ struct OperationRegistryTests {
         for spec in OperationRegistry.specs where [
             ToolID.logicTransport, .logicMixer, .logicNavigate,
         ].contains(spec.tool) {
-            let expectedDeadline = [OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(spec.id) ? 90.0 : 25.0
+            let expectedDeadline = [OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified].contains(spec.id) ? 90.0 : 25.0
             #expect(spec.deadline.seconds == expectedDeadline)
             #expect(OperationRegistry.deadlineSeconds(tool: spec.tool.rawValue, command: spec.command) == expectedDeadline)
             #expect(LogicProServer.commandDeadlineSeconds(tool: spec.tool.rawValue, command: spec.command) == expectedDeadline)
@@ -339,7 +366,7 @@ struct OperationRegistryTests {
             if [.mixerGetOutputVerified, .mixerGetInputBusVerified, .mixerGetSendDestinationVerified, .mixerGetSendBypassVerified].contains(spec.id) { #expect(!isMutating) }
             else { #expect(isMutating) }
             #expect(LogicProServer.commandDeadlineSeconds(tool: spec.tool.rawValue, command: spec.command)
-                == ([OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified].contains(spec.id) ? 90.0 : 25.0))
+                == ([OperationID.mixerSetInputBusVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified].contains(spec.id) ? 90.0 : 25.0))
         }
         #expect(LogicProServer.isMutatingCommand(tool: "logic_midi", command: "import_file"))
         #expect(LogicProServer.commandDeadlineSeconds(tool: "logic_midi", command: "import_file") == 300)
