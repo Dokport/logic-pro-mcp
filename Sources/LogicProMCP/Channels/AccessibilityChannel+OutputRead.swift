@@ -1549,7 +1549,7 @@ extension AccessibilityChannel {
     /// Measured native No Output wrapper. A hit-test only obtains an object;
     /// the original Mixer/window path, reciprocal root and matching CG frame
     /// must independently agree. No coordinates are used to perform an action.
-    private struct NativeOutputReadPopup: @unchecked Sendable {
+    struct NativeOutputReadPopup: @unchecked Sendable {
         let root: AXUIElement
         let wrapper: AXUIElement
         let window: LogicOnScreenWindows.Entry

@@ -38,6 +38,7 @@ struct Issue291PhysicalStripReferenceTests {
         var onActionNamesRead: (@Sendable (AXUIElement) -> Void)?
         var outputPressFailure: AXHelpers.AXStatusError?
         var outputPressOpensMenu = true
+        var outputLeafLabel = "Output 3-4"
         var outputMenuWrapper: AXUIElement?
         var popupFrame: CGRect?
         var popupWindowsOverride: [[String: Any]]?
@@ -170,7 +171,7 @@ struct Issue291PhysicalStripReferenceTests {
                     return true
                 }
                 if CFEqual(element, pair), let slot = openedSlot {
-                    b.setAttribute(slot, kAXDescriptionAttribute as String, "Output 3-4")
+                    b.setAttribute(slot, kAXDescriptionAttribute as String, outputLeafLabel)
                     openedSlot = nil; b.setChildren(mixer, currentStrips); return true
                 }
             }
@@ -287,6 +288,179 @@ struct Issue291PhysicalStripReferenceTests {
                 confirmNewTrackDialog: { Issue.record("Return forbidden") }, canPostEvents: { false }, logicRuntime: runtime
             ))
         }
+    }
+
+    @Test("A held No Output source recovers only through its owned checked popup and current source",
+          arguments: ["owned", "legacy", "missing_expected", "other_destination", "missing_press",
+                      "label_changed_at_capability", "contradictory_check", "late_source_label",
+                      "late_document", "late_transport", "late_slot", "late_popup", "disabled_leaf"])
+    func physicalNoOutputRecoveryUsesOwnedNativePopup(fault: String) async throws {
+        let f = try Fixture()
+        let wrapper = f.b.element(2_919_980), noOutput = f.b.element(2_919_981)
+        f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+        f.b.setRole(wrapper, kAXPopUpButtonRole as String)
+        f.b.setAttribute(wrapper, kAXParentAttribute as String, f.mixer)
+        f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.window)
+        f.b.setRole(noOutput, kAXMenuItemRole as String)
+        f.b.setAttribute(noOutput, kAXTitleAttribute as String, "No Output")
+        f.b.setAttribute(noOutput, "AXMenuItemMarkChar", "✓")
+        f.b.setChildren(noOutput, [])
+        let readBranches = try f.logic.ax.childrenResult?(f.root).get()
+        let branches = try #require(readBranches)
+        f.b.setChildren(f.root, [noOutput] + branches)
+        f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "No Output")
+        f.b.setAttribute(f.pair, kAXTitleAttribute as String, "Stereo Output")
+        f.outputLeafLabel = "Stereo Output"
+        f.b.setActionNames(f.outputs[0], [kAXPressAction as String])
+        f.b.setFrame(f.root, x: 20, y: 100, width: 230, height: 175)
+        f.outputMenuWrapper = wrapper
+        f.popupFrame = CGRect(x: 20, y: 100, width: 230, height: 175)
+        f.outputPressFailure = .init(raw: AXError.cannotComplete.rawValue)
+        f.outputHitTest = { app, _ in
+            #expect(CFEqual(app, f.app))
+            return .success(noOutput)
+        }
+        if fault == "missing_press" { f.b.setActionNames(f.outputs[0], []) }
+        if fault == "contradictory_check" { f.b.setAttribute(f.pair, "AXMenuItemMarkChar", "✓") }
+        if fault == "label_changed_at_capability" {
+            f.onActionNamesRead = { node in
+                if CFEqual(node, f.outputs[0]) {
+                    f.b.setAttribute(node, kAXDescriptionAttribute as String, "Bus 1")
+                }
+            }
+        }
+        f.onAttributeRead = { node, attribute in
+            guard CFEqual(node, f.pair), attribute == kAXEnabledAttribute as String else { return }
+            switch fault {
+            case "late_source_label": f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "Bus 1")
+            case "late_document": f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///wrong.logicx")
+            case "late_transport": f.b.setAttribute(f.b.element(2_910_301), kAXValueAttribute as String, 1)
+            case "late_popup": f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.b.element(2_919_982))
+            case "disabled_leaf": f.b.setAttribute(f.pair, kAXEnabledAttribute as String, false)
+            case "late_slot":
+                let slot = f.b.element(2_919_983)
+                f.b.setButton(slot, description: "No Output", help: "Output slot.", x: 0, y: 150, width: 60, height: 20)
+                f.b.setChildren(f.strips[0], f.logic.ax.children(f.strips[0]).map { CFEqual($0, f.outputs[0]) ? slot : $0 })
+            default: break
+            }
+        }
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let params = ["index": "0",
+            "destination": fault == "other_destination" ? OutputAssignment.physical(3, 4).token : OutputAssignment.stereoOutput.token]
+            .merging(fault == "missing_expected" ? [:] : ["expected_current": OutputAssignment.noOutput.token]) { _, value in value }
+        let reading = await AXMixerStripBinding.$current.withValue(fault == "legacy" ? nil : binding) {
+            await AccessibilityChannel.setOutputVerified(params: params, runtime: f.logic, timing: .immediate,
+                popupCleaner: { _ in
+                    Issue.record("A native popup must not use generic cleanup")
+                    return .couldNotDismiss(initialPopupCount: 1, remainingPopupCount: 1)
+                })
+        }
+        let body = try #require(sharedJSONObject(reading.message))
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        if fault != "owned" {
+            #expect(body["state"] as? String == "C")
+            #expect(!attempted)
+            #expect(f.mutations.allSatisfy { (CFEqual($0.0, f.outputs[0]) && $0.1 == kAXPressAction as String)
+                || (CFEqual($0.0, f.root) && $0.1 == kAXCancelAction as String) })
+            if ["legacy", "missing_expected", "other_destination", "missing_press", "label_changed_at_capability"].contains(fault) {
+                #expect(f.mutations.isEmpty)
+            }
+            return
+        }
+        #expect(body["state"] as? String == "A")
+        #expect((body["before"] as? [String: Any])?["kind"] as? String == "no_output")
+        #expect((body["after"] as? [String: Any])?["kind"] as? String == "stereo_output")
+        #expect(attempted)
+        #expect(f.mutations.count == 2)
+        let firstAction = try #require(f.mutations.first)
+        let lastAction = try #require(f.mutations.last)
+        #expect(CFEqual(firstAction.0, f.outputs[0]))
+        #expect(CFEqual(lastAction.0, f.pair))
+    }
+
+    @Test("An explicit held Stereo Output source can choose the unique No Output leaf without legacy or canonical admission",
+          arguments: ["owned", "legacy", "missing_expected", "wrong_before", "canonical", "missing_leaf", "duplicate_leaf", "disabled_leaf",
+                      "late_leaf_retired", "late_second_popup", "late_root_owner"])
+    func physicalNoOutputDestinationRequiresItsOwnSafeRecoveryContract(fault: String) async throws {
+        let f = try Fixture()
+        f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+        let echo = f.b.element(2_919_984), stereo = f.b.element(2_919_985)
+        let parent = f.b.element(2_910_202), submenu = f.b.element(2_910_203)
+        for row in [echo, stereo] {
+            f.b.setRole(row, kAXMenuItemRole as String)
+            f.b.setAttribute(row, kAXTitleAttribute as String, "Stereo Output")
+            f.b.setAttribute(row, "AXMenuItemMarkChar", "✓")
+            f.b.setChildren(row, [])
+        }
+        f.b.setChildren(submenu, [stereo])
+        f.b.setChildren(parent, [submenu])
+        f.b.setAttribute(f.pair, kAXTitleAttribute as String, "No Output")
+        f.b.setChildren(f.root, [echo, f.pair, parent])
+        f.b.setActionNames(f.outputs[0], [kAXPressAction as String])
+        f.outputLeafLabel = "No Output"
+        if fault == "wrong_before" { f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "Bus 1") }
+        if fault == "missing_leaf" { f.b.setChildren(f.root, [echo, parent]) }
+        if fault == "disabled_leaf" { f.b.setAttribute(f.pair, kAXEnabledAttribute as String, false) }
+        if fault == "duplicate_leaf" {
+            let duplicate = f.b.element(2_919_986)
+            f.b.setRole(duplicate, kAXMenuItemRole as String)
+            f.b.setAttribute(duplicate, kAXTitleAttribute as String, "No Output")
+            f.b.setChildren(duplicate, [])
+            f.b.setChildren(f.root, [echo, f.pair, duplicate, parent])
+        }
+        f.onAttributeRead = { element, attribute in
+            guard CFEqual(element, f.pair), attribute == kAXEnabledAttribute as String else { return }
+            f.onAttributeRead = nil
+            if fault == "late_leaf_retired" {
+                let replacement = f.b.element(2_919_987)
+                f.b.setRole(replacement, kAXMenuItemRole as String)
+                f.b.setAttribute(replacement, kAXTitleAttribute as String, "No Output")
+                f.b.setAttribute(replacement, kAXEnabledAttribute as String, true)
+                f.b.setChildren(replacement, [])
+                f.b.setChildren(f.root, [echo, replacement, parent])
+            } else if fault == "late_second_popup" {
+                let foreign = f.b.element(2_919_988)
+                f.b.setRole(foreign, kAXMenuRole as String)
+                f.b.setChildren(foreign, [])
+                f.b.setChildren(f.mixer, f.strips + [f.root, foreign])
+            } else if fault == "late_root_owner" {
+                f.b.setAttribute(f.root, kAXParentAttribute as String, f.b.element(2_919_989))
+            }
+        }
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let params = ["index": "0", "destination": OutputAssignment.noOutput.token]
+            .merging(fault == "missing_expected" ? [:] : ["expected_current": OutputAssignment.stereoOutput.token]) { _, value in value }
+        let permission: (@Sendable (AXUIElement) -> Bool)?
+        if fault == "canonical" { permission = { (_: AXUIElement) -> Bool in true } }
+        else { permission = nil }
+        let reading = await ApprovedSessionRepair.$outputLeafPermission.withValue(permission) {
+            await AXMixerStripBinding.$current.withValue(fault == "legacy" ? nil : binding) {
+                await AccessibilityChannel.setOutputVerified(params: params, runtime: f.logic, timing: .immediate,
+                    popupCleaner: { runtime in
+                        _ = AXHelpers.performActionResult(f.root, kAXCancelAction as String, runtime: runtime.ax)
+                        return .dismissed
+                    })
+            }
+        }
+        let body = try #require(sharedJSONObject(reading.message))
+        if fault != "owned" {
+            #expect(body["state"] as? String == "C")
+            if let attempted = body["write_attempted"] as? Bool { #expect(!attempted) }
+            #expect(!f.mutations.contains { CFEqual($0.0, f.pair) })
+            if ["legacy", "missing_expected", "wrong_before", "canonical"].contains(fault) { #expect(f.mutations.isEmpty) }
+            return
+        }
+        #expect(body["state"] as? String == "A")
+        #expect((body["before"] as? [String: Any])?["kind"] as? String == "stereo_output")
+        #expect((body["after"] as? [String: Any])?["kind"] as? String == "no_output")
+        #expect(body["menu_path"] as? [String] == ["No Output"])
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(attempted)
+        #expect(f.mutations.count == 2)
+        let lastAction = try #require(f.mutations.last)
+        #expect(CFEqual(lastAction.0, f.pair))
     }
 
     private func publish(_ fixture: Fixture, background: Bool = false, tracksFirst: Bool = false) async throws -> (StateCache, TargetRegistry, ChannelRouter, [[String: Any]]) {
