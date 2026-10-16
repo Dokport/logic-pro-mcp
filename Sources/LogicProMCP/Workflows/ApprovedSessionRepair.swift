@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 import MCP
 
-/// The native counterpart of one retained canonical view or coupled name task. It is not a wire
+/// The native counterpart of retained canonical goals, including zero-write receiver KEEP. It is not a wire
 /// token: only the retained capture supplies its process-local AX custody.
 final class ApprovedSessionRepair: @unchecked Sendable {
     struct ApplyRequest: Sendable {
@@ -59,6 +59,19 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let capture: SessionPopulationObservation.Capture
         let handle: String
     }
+    private struct ReceiverKeep: Sendable {
+        let bus: Int
+        let reference: TargetReference
+        let input: AXMixerInputSlotBinding
+        let label: AXMixerTypeLabelBinding
+        let presentation: SessionPopulationObservation.PresentationBinding
+        let pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
+    }
+    private struct ReceiverRenewal: Sendable {
+        let source: AccessibilityChannel.OriginalHeaderSourceRenewal
+        let input: AXMixerInputSlotBinding
+        let label: AXMixerTypeLabelBinding
+    }
     private struct CapturedGoals: Sendable {
         let projectRef: TargetReference
         let document: String
@@ -68,6 +81,68 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         var selectionOrigin: AXTrackBinding.Binding? = nil
         var sort: SortTask? = nil
         var output: OutputTask? = nil
+        var receivers: [ReceiverKeep] = []
+    }
+
+    /// Positive own-control facts only. This does not enumerate every receiver of a bus.
+    private static func capturedReceiverKeeps(policy: ProjectSessionAudit.IntentPolicy,
+        source: SessionPopulationObservation.Capture,
+        request: SessionPopulationObservation.Request) -> [ReceiverKeep]? {
+        guard FeatureFlags.adr002TargetRef, FeatureFlags.adr004MutationSaga,
+              !policy.receivers.isEmpty, policy.receivers.values.allSatisfy({ $0 == .keep }),
+              policy.targets.isEmpty, policy.roles.isEmpty, policy.outputs.isEmpty, policy.sends.isEmpty,
+              policy.protectedPaths.isEmpty, policy.mixerVisible == nil, policy.trackSort == nil,
+              request.allowUINavigation, Set([SessionPopulationObservation.Domain.strips, .routing]).isSubset(of: request.domains),
+              source.before == source.after, source.referencesEnabled, !source.referencesStale,
+              source.requestedProjectMatches != false, !source.before.axOccluded,
+              case .issued(let project)? = source.projectIssuance, policy.projectRef == project,
+              let fresh = source.freshPopulation, fresh.stable, fresh.uiEffects.restoration == "restored",
+              let presentation = fresh.presentationBinding, let path = source.project.filePath,
+              URL(string: presentation.document)?.path == path else { return nil }
+        var goals: [ReceiverKeep] = []
+        for bus in policy.receivers.keys.sorted() {
+            guard OutputAssignment.busNumbers.contains(bus) else { return nil }
+            let beforeCount = goals.count
+            for (row, strip) in source.channelStrips.enumerated() {
+                guard let owner = strip.physicalBinding else { continue }
+                let checked = fresh.checkedInputs.filter { $0.receiver.matches(owner) }
+                guard checked.contains(where: { $0.busNumber == bus }),
+                      SessionPopulationObservation.reportedTypeLabel(of: strip, capture: source)?.observesAux == true else { continue }
+                guard checked.count == 1, let label = strip.typeLabelBinding,
+                      let input = strip.inputSlotBinding, input.owner.matches(owner),
+                      let observedInput = strip.inputObservation, observedInput.state == .observedSource,
+                      observedInput.source?.utf8.elementsEqual(input.source.utf8) == true,
+                      let mixer = presentation.mixer,
+                      CFEqual(presentation.window, owner.window), CFEqual(mixer, owner.mixer),
+                      presentation.document.utf8.elementsEqual(owner.document.utf8),
+                      fresh.strips?.filter({ $0.typeLabelBinding?.matches(label) == true
+                          && $0.inputSlotBinding?.matches(input) == true }).count == 1,
+                      let reference = source.mixerReference(at: row),
+                      !goals.contains(where: { $0.reference == reference || $0.input.owner.matches(owner) }) else { return nil }
+                let pairs = fresh.selectionAssociations.filter { $0.strip.matches(owner) }
+                let pair = pairs.count == 1 && fresh.selectionAssociations.filter { candidate in
+                    pairs.first.map { candidate.track.matches($0.track) } ?? false
+                }.count == 1 ? pairs.first : nil
+                goals.append(.init(bus: bus, reference: reference, input: input, label: label,
+                    presentation: presentation, pair: pair))
+            }
+            guard goals.count > beforeCount else { return nil }
+        }
+        return goals.sorted { $0.bus == $1.bus ? $0.reference.rawValue < $1.reference.rawValue : $0.bus < $1.bus }
+    }
+
+    static func capturedReceiverKeepObservations(policy: ProjectSessionAudit.IntentPolicy,
+        source: SessionPopulationObservation.Capture, request: SessionPopulationObservation.Request) -> [Value]? {
+        guard let goals = capturedReceiverKeeps(policy: policy, source: source, request: request) else { return nil }
+        return policy.receivers.keys.sorted().map { bus in
+            .object(["bus": .int(bus), "state": .string("observed"),
+                "scope": .string("approved_observed_receivers"), "exhaustive": .bool(false),
+                "namespace_availability": .string("not_observed"),
+                "candidates": .array(goals.filter { $0.bus == bus }.map { goal in
+                    .object(["node_id": .string(goal.reference.rawValue), "target_ref": .string(goal.reference.rawValue),
+                        "observed_type_label": .string(goal.label.label)])
+                })])
+        }
     }
 
     private static func localAssignment(_ destination: ProjectSessionAudit.IntentMainOutput) -> OutputAssignment? {
@@ -185,6 +260,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             capture: source, request: request)
         guard naming.reasons.isEmpty else { return nil }
         let policy = naming.policy
+        if names.isEmpty, let receivers = capturedReceiverKeeps(policy: policy, source: source, request: request),
+           case .issued(let project)? = source.projectIssuance, let document = receivers.first?.input.owner.document {
+            return .init(projectRef: project, document: document, mixer: nil, names: [], renameCapture: nil,
+                receivers: receivers)
+        }
         let output = capturedOutput(policy: policy, names: names, source: source, request: request)
         if let output, names.isEmpty,
            case .issued(let project)? = source.projectIssuance {
@@ -334,6 +414,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     // Cache observations and issued references have independently owned epochs.
     private let cacheProjectEpoch: UInt64
     private let registryProjectEpoch: UInt64
+    private let receiverKeeps: [ReceiverKeep]
     private var ran = false
     private var ownedVisibility: Bool?
     private var ownedMixer: AXUIElement?
@@ -344,6 +425,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                  selectionOrigin: AXTrackBinding.Binding? = nil, cacheProjectEpoch: UInt64,
                  sortTask: SortTask? = nil,
                  outputTask: OutputTask? = nil,
+                 receiverKeeps: [ReceiverKeep] = [],
                  registryProjectEpoch: UInt64,
                  cache: StateCache, registry: TargetRegistry, journal: SagaJournal) {
         self.plan = plan; self.projectRef = projectRef; self.document = document
@@ -352,6 +434,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         self.selectionOrigin = selectionOrigin
         self.sortTask = sortTask
         self.outputTask = outputTask
+        self.receiverKeeps = receiverKeeps
         self.cacheProjectEpoch = cacheProjectEpoch; self.registryProjectEpoch = registryProjectEpoch
         self.cache = cache; self.registry = registry; self.journal = journal
     }
@@ -388,8 +471,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     && goal.before.utf8.elementsEqual(goal.name.utf8)
             }
         }
-        guard unchanged.count == unchangedNames.count,
-              Set(unchanged.compactMap(\.stringValue)) == Set(unchangedNames.map { "name_" + $0.target }) else { return nil }
+        let unchangedIDs = unchangedNames.map { "name_" + $0.target }
+            + Set(captured.receivers.map(\.bus)).sorted().map { "receiver_keep_bus_\($0)" }
+        guard unchanged.count == unchangedIDs.count,
+              Set(unchanged.compactMap(\.stringValue)) == Set(unchangedIDs) else { return nil }
         let issued = captured.projectRef
         let goals = captured.names
         // Ordinary polls advance content revisions even for identical values.
@@ -491,10 +576,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         if steps.isEmpty {
             guard captured.mixer == nil else { return nil }
+            if !captured.receivers.isEmpty {
+                guard let observed = capturedReceiverKeepObservations(policy: policy, source: source.capture, request: source.request),
+                      object["existing_receiver_observations"] == .array(observed) else { return nil }
+            }
             return .init(plan: .init(steps: [], idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest),
                 projectRef: issued, document: captured.document, nameGoals: goals,
                 renameCapture: captured.renameCapture,
-                cacheProjectEpoch: source.capture.projectEpoch, registryProjectEpoch: targetSnapshot.projectEpoch,
+                cacheProjectEpoch: source.capture.projectEpoch, receiverKeeps: captured.receivers,
+                registryProjectEpoch: targetSnapshot.projectEpoch,
                 cache: cache, registry: registry, journal: journal)
         }
         guard steps.count == 1,
@@ -1021,6 +1111,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     var verifiesMatchingNamesOnly: Bool { !nameGoals.isEmpty && mixerTask == nil && plan.steps.isEmpty }
+    var verifiesReceiverKeepsOnly: Bool { !receiverKeeps.isEmpty && nameGoals.isEmpty && mixerTask == nil && plan.steps.isEmpty }
     var hasMatchingNameGoals: Bool { !nameGoals.isEmpty }
 
     /// The same issued-name proof is used before a composed forward action and
@@ -1199,6 +1290,90 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 "plan_id": plan.canonicalPlanID as Any, "digest": plan.canonicalDigest as Any,
                 "goal_verification_failure": "approved_name_set_unverified",
                 "write_attempted": false, "writes_performed": 0]))
+    }
+
+    private func receiverCurrent(_ goal: ReceiverKeep, renewal: ReceiverRenewal? = nil) async -> Bool {
+        let original = goal.input.owner, runtime = goal.presentation.runtime
+        let inputBinding = renewal?.input ?? goal.input
+        let labelBinding = renewal?.label ?? goal.label
+        let owner = inputBinding.owner
+        func renewalHeld() -> Bool {
+            guard let renewal else { return true }
+            guard let pair = goal.pair, pair.strip.matches(original),
+                  renewal.source.original.matches(original), renewal.source.originalTrack.matches(pair.track),
+                  renewal.source.pair.track.matches(pair.track), renewal.source.pair.strip.matches(owner),
+                  renewal.label.owner.matches(owner),
+                  renewal.input.source.utf8.elementsEqual(goal.input.source.utf8),
+                  renewal.label.label.utf8.elementsEqual(goal.label.label.utf8) else { return false }
+            return renewal.source.permits(runtime: runtime)
+        }
+        // The registry still names the originally approved object. A request-held
+        // original-header renewal can verify continuity, never rebind that reference.
+        guard await projectIsCurrent(), let reference = await registry.resolve(goal.reference),
+              reference.kind == .mixerStrip, reference.physicalMixerStrip?.matches(original) == true,
+              renewalHeld(), owner.currentIndex(runtime: runtime) != nil,
+              let label = AXLogicProElements.typeNumberLabel(in: owner.strip, runtime: runtime.ax),
+              CFEqual(label.control, labelBinding.control), label.label.utf8.elementsEqual(labelBinding.label.utf8) else { return false }
+        let input = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
+        guard let control = input.control, CFEqual(control, inputBinding.control),
+              case .source(let source) = input.reading, source.utf8.elementsEqual(inputBinding.source.utf8),
+              owner.currentIndex(runtime: runtime) != nil, await projectIsCurrent(), renewalHeld() else { return false }
+        return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+    }
+
+    /// Re-observe these approved native receivers without assigning an input or creating anything.
+    func verifyReceiverKeeps() async -> SagaJournal.StoredOutcome {
+        func refused(_ read: AccessibilityChannel.CheckedOutputReading? = nil) -> SagaJournal.StoredOutcome {
+            var extras: [String: Any] = ["goal_verification_failure": "approved_receiver_keep_unverified",
+                "idempotency_key": plan.idempotencyKey, "write_attempted": false, "writes_performed": 0]
+            if let read, let receipt = decodedJSONObject(read.result.message) {
+                // Read-only popup/focus cleanup uncertainty must survive this wrapper.
+                // The receipt is diagnostic data, never a substitute for typed native custody.
+                extras["receiver_read_receipt"] = receipt
+            }
+            return SagaWire.storedOutcome(from: SagaWire.scopedStateC(.staleTargetReference,
+                hint: "The approved observed receiver's original type/input custody or checked Bus no longer agrees.",
+                extras: extras))
+        }
+        guard verifiesReceiverKeepsOnly else { return refused() }
+        var evidence: [[String: Any]] = []
+        var renewals: [TargetReference: ReceiverRenewal] = [:]
+        for goal in receiverKeeps {
+            guard await receiverCurrent(goal) else { return refused() }
+            let read = await AXMixerStripBinding.$current.withValue(goal.input.owner) {
+                await AXMixerStripBinding.$outputAssociation.withValue(goal.pair) {
+                    await AccessibilityChannel.getInputBusObservation(runtime: goal.presentation.runtime)
+                }
+            }
+            guard read.assignment == .bus(goal.bus) else { return refused(read) }
+            if let source = read.inputRenewal {
+                guard let input = read.inputSlot, input.owner.matches(source.pair.strip),
+                      source.permits(runtime: goal.presentation.runtime),
+                      let label = AXLogicProElements.typeNumberLabel(in: input.owner.strip,
+                        runtime: goal.presentation.runtime.ax) else { return refused(read) }
+                let renewal = ReceiverRenewal(source: source, input: input,
+                    label: .init(owner: input.owner, control: label.control, label: label.label))
+                guard await receiverCurrent(goal, renewal: renewal) else { return refused(read) }
+                renewals[goal.reference] = renewal
+            } else {
+                guard read.inputSlot?.matches(goal.input) == true, await receiverCurrent(goal) else { return refused(read) }
+            }
+            evidence.append(["target_ref": goal.reference.rawValue, "bus": goal.bus,
+                "scope": "approved_observed_receiver", "namespace_availability": "not_observed",
+                "read": ["read_source": "ax_input_menu_checkmark", "provenance": "live_independent",
+                    "observed_bus": goal.bus, "observed_type_label": goal.label.label]])
+        }
+        // A later receiver's popup can invalidate an earlier observation's native custody.
+        for goal in receiverKeeps {
+            guard await receiverCurrent(goal, renewal: renewals[goal.reference]) else { return refused() }
+        }
+        let outcome = SagaOutcome(idempotencyKey: plan.idempotencyKey, state: .completed, complete: true,
+            journal: [], stateHistory: [.validated, .running, .completed], preflightIssues: [])
+        let stored = SagaWire.storedOutcome(plan: plan, outcome: outcome)
+        guard var body = decodedJSONObject(stored.body) else { return refused() }
+        body["write_attempted"] = false; body["writes_performed"] = 0
+        body["goal_evidence"] = evidence
+        return .init(body: HonestContract.jsonString(body), isError: stored.isError)
     }
 
     func perform(_ desired: Bool, runtime: AXLogicProElements.Runtime) async -> ChannelResult {

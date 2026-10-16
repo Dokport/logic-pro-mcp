@@ -186,6 +186,9 @@ struct ChannelStripState: Sendable, Codable {
     var physicalBinding: AXMixerStripBinding.Binding? = nil
     /// Unique input-control custody from typed AX extraction only; omitted from Codable.
     var inputSlotBinding: AXMixerInputSlotBinding? = nil
+    /// Historical fixed-label display; only the separate native custody can authenticate it.
+    var typeLabelObservation: StripTypeLabelObservation? = nil
+    var typeLabelBinding: AXMixerTypeLabelBinding? = nil
     /// Original bytes from the strip's displayed semantic Name field, when observed.
     var name: String?
     /// An attempted name read was unidentified, ambiguous, or failed; nil with no name is not read.
@@ -242,8 +245,25 @@ struct ChannelStripState: Sendable, Codable {
         case nameReadError = "name_read_error"
         case sendSlots = "send_slots"
         case inputObservation = "input_observation"
+        case typeLabelObservation = "observed_type_label"
         case pluginsSource = "plugins_source"
         case pluginsReadError = "plugins_read_error"
+    }
+}
+
+/// Optional own-strip fixed label, not a bus number, track identity or namespace census.
+struct StripTypeLabelObservation: Sendable, Codable, Equatable {
+    let label: String
+    let source: String
+
+    init(label: String) { self.label = label; source = "ax_type_number_label" }
+
+    /// Only the measured EN fixed Aux form is classified; other labels stay observations.
+    var observesAux: Bool {
+        guard label.hasPrefix("Aux ") else { return false }
+        let suffix = label.utf8.dropFirst(4)
+        return suffix.first.map { (49...57).contains($0) } == true
+            && suffix.allSatisfy { (48...57).contains($0) }
     }
 }
 

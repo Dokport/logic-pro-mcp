@@ -33,6 +33,8 @@ enum RoutingProjectBinding: Sendable {
 /// receiving-strip identity or complete graph coverage.
 /// Checked input menus bind a bus to its request-held physical receiver only;
 /// they do not establish aux kind, track attribution or receiving completeness.
+/// A separate native own Type and Number Label can establish Aux kind for this fresh
+/// capture; its suffix is not a bus number and does not close receiving coverage.
 ///
 /// This function is pure: it never sees the registry and never reads another resource. Every
 /// domain it cannot answer carries its reasons in `coverage`, and `partialReason` is those reasons
@@ -152,6 +154,15 @@ enum RoutingGraphPublication {
             if let owner = strip.physicalBinding {
                 if let reference = capture.mixerReference(at: row) {
                     let label = nonEmptyObservedLabel(strip.output)
+                    let typeLabel = SessionPopulationObservation.reportedTypeLabel(of: strip, capture: capture)
+                    // Only this fresh capture's same native owner/control can establish Aux.
+                    // Cached or decoded label shape alone cannot promote a node's kind.
+                    let freshTypeHeld = capture.freshPopulation?.stable == true
+                        && strip.typeLabelBinding.map { binding in
+                            capture.freshPopulation?.strips?.filter {
+                                $0.typeLabelBinding?.matches(binding) == true
+                            }.count == 1
+                        } == true
                     let input: InputSlotObservation?
                     if let slot = strip.inputSlotBinding, let owner = strip.physicalBinding,
                        slot.owner.matches(owner),
@@ -160,11 +171,11 @@ enum RoutingGraphPublication {
                         input = observed
                     } else { input = nil }
                     nodesByID[reference.rawValue] = RoutingNode(
-                        id: reference.rawValue, kind: .physicalStrip,
+                        id: reference.rawValue, kind: freshTypeHeld && typeLabel?.observesAux == true ? .aux : .physicalStrip,
                         displayName: strip.name ?? "", busNumber: nil, targetRef: reference,
                         observedOutputLabel: label,
                         outputClassification: label.map { classifyOutputLabel($0).0 },
-                        observedInputSlot: input
+                        observedInputSlot: input, observedTypeLabel: typeLabel
                     )
                     if capture.freshPopulation?.stable == true {
                         let inputs = capture.freshPopulation?.checkedInputs.filter {

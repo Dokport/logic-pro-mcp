@@ -129,6 +129,11 @@ extension AccessibilityChannel {
                     state.physicalBinding = .init(window: window, mixer: mixer, strip: strip, document: document)
                 }
                 readStripName(of: strip, into: &state, runtime: runtime)
+                if let owner = state.physicalBinding,
+                   let observed = AXLogicProElements.typeNumberLabel(in: strip, runtime: runtime.ax) {
+                    state.typeLabelObservation = .init(label: observed.label)
+                    state.typeLabelBinding = .init(owner: owner, control: observed.control, label: observed.label)
+                }
                 if readingPlugins { readPluginChain(of: strip, into: &state, runtime: runtime) }
                 // #291: `output` has been on this model since it was written and nothing ever set it, so
                 // `logic://mixer` published a field that was always null. It is read now; `nil` still

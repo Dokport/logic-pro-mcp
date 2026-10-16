@@ -850,6 +850,7 @@ enum SessionPopulationObservation {
         let pluginsSource: String?
         var mixerStripRef: String? = nil
         var sendSlots: [SendSlotObservation]? = nil
+        var observedTypeLabel: StripTypeLabelObservation? = nil
 
         enum CodingKeys: String, CodingKey {
             case stripIndex = "strip_index"
@@ -864,6 +865,7 @@ enum SessionPopulationObservation {
             case pluginsSource = "plugins_source"
             case mixerStripRef = "mixer_strip_ref"
             case sendSlots = "send_slots"
+            case observedTypeLabel = "observed_type_label"
         }
 
         // Unknown and legacy not-read names remain explicit nulls, never empty names.
@@ -885,6 +887,7 @@ enum SessionPopulationObservation {
             try container.encodeIfPresent(pluginsSource, forKey: .pluginsSource)
             try container.encodeIfPresent(mixerStripRef, forKey: .mixerStripRef)
             try container.encodeIfPresent(sendSlots, forKey: .sendSlots)
+            try container.encodeIfPresent(observedTypeLabel, forKey: .observedTypeLabel)
         }
     }
 
@@ -1045,6 +1048,19 @@ enum SessionPopulationObservation {
     }
 
     // MARK: - Build
+
+    /// A display observation needs its own native label-control and physical-owner custody.
+    /// Imported label bytes cannot reconstruct that custody; this projection performs no AX read.
+    static func reportedTypeLabel(of strip: ChannelStripState, capture: Capture) -> StripTypeLabelObservation? {
+        guard capture.before == capture.after, capture.freshPopulation?.stable != false,
+              let owner = strip.physicalBinding, let binding = strip.typeLabelBinding,
+              binding.owner.matches(owner),
+              capture.channelStrips.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1,
+              let observed = strip.typeLabelObservation,
+              observed.source == "ax_type_number_label",
+              observed.label.utf8.elementsEqual(binding.label.utf8) else { return nil }
+        return observed
+    }
 
     /// Qualify only this immutable capture's checked send. Cached/decoded values cannot
     /// provide the physical source witness, and no extra read or UI action occurs here.
@@ -1286,7 +1302,8 @@ enum SessionPopulationObservation {
                     pluginsSource: strip.pluginsSource,
                     mixerStripRef: capture.mixerReference(at: row)?.rawValue,
                     sendSlots: reportedSendSlots(of: strip, capture: capture,
-                        qualified: !moved && !referencesStale)
+                        qualified: !moved && !referencesStale),
+                    observedTypeLabel: reportedTypeLabel(of: strip, capture: capture)
                 )
             }
         )
