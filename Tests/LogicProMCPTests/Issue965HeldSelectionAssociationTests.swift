@@ -93,9 +93,11 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("One coupled-editor decision reuses its already-held stopped transport",
         arguments: ["held", "fallback", "play", "record", "bad_play", "bad_record", "play_role", "record_role",
                     "replaced_bar", "replaced_record", "competing_bar", "late_competing_bar",
-                    "late_focus", "late_document", "late_source", "cancel", "lost", "fresh_values"])
+                    "late_focus", "late_document", "late_source", "late_header", "late_header_role", "late_mixer", "late_peer",
+                    "cancel", "lost", "fresh_values"])
     func coupledEditorGuardDoesNotRediscoverItsHeldTransport(_ fault: String) async throws {
         let f = try Fixture(), gate = LogicMutationGate()
+        f.useBulkReads = true
         defer { try? FileManager.default.removeItem(at: f.bundle) }
         let claim = try #require(gate.tryAcquire(operation: "coupled-editor-transport"))
         defer { gate.release(claim) }
@@ -154,6 +156,10 @@ struct Issue965HeldSelectionAssociationTests {
                         if fault == "late_focus" { f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, otherRecord) }
                         if fault == "late_document" { f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/foreign.logicx") }
                         if fault == "late_source" { f.builder.setChildren(f.mixer, [f.strips[0]]) }
+                        if fault == "late_header" { f.builder.setChildren(f.rail, [f.headers[1]]) }
+                        if fault == "late_header_role" { f.builder.setRole(f.headers[0], kAXTextFieldRole as String) }
+                        if fault == "late_mixer" { f.builder.setChildren(f.window, [f.rail, f.builder.element(1_965_720)]) }
+                        if fault == "late_peer" { f.builder.setChildren(f.mixer, [otherRecord, f.strips[1]]) }
                         if fault == "cancel" { f.routingLateScopeInjected = true }
                     }
                 }
@@ -166,6 +172,7 @@ struct Issue965HeldSelectionAssociationTests {
             let oneDiscoveryReads = f.coupledGuardBarReads
             #expect(oneDiscoveryReads > 0)
             f.coupledGuardBarReads = 0
+            f.coupledGuardPopulationScans = 0
             let admitted = ExactTrackNameAdapter.permitsCoupledEditorRead(editor, pair: pair, names: ["Duplicate"],
                 transportProof: fault == "fallback" ? nil : held)
             if ["held", "fallback", "fresh_values"].contains(fault) {
@@ -173,17 +180,25 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.coupledGuardPlayReads > 0 && f.coupledGuardRecordReads > 0,
                     "Reach both actual deciding values, not an earlier refusal")
                 if fault != "fallback" {
+                    #expect(f.coupledGuardPopulationScans == 0,
+                        "Renew the original complete owned paths/census instead of globally rediscovering a held Mixer")
                     #expect(f.coupledGuardBarReads <= oneDiscoveryReads,
                         "Do not repeat whole Control Bar discovery before deciding Record")
-                }
+                } else { #expect(f.coupledGuardPopulationScans > 0) }
                 if fault == "held" {
-                    // Measure the entire transport-only decision as well: the
-                    // final uniqueness discovery occurs after the Record value.
+                    // The original Track renewal also visits Control Bar
+                    // metadata. Measure it separately; the source/transport
+                    // decision still adds only one uniqueness discovery.
                     f.coupledGuardBarReads = 0
                     f.coupledGuardCountDiscovery = true
+                    let trackIndex = try #require(pair.track.currentIndex())
+                    #expect(trackIndex == 0)
+                    let headerRenewalReads = f.coupledGuardBarReads
+                    f.coupledGuardBarReads = 0
                     let playReads = f.coupledGuardPlayReads, recordReads = f.coupledGuardRecordReads
                     #expect(held.permitsCoupledEditorTransportRead(pair: pair))
-                    #expect(f.coupledGuardBarReads == oneDiscoveryReads)
+                    #expect(f.coupledGuardBarReads == oneDiscoveryReads + headerRenewalReads)
+                    #expect(f.coupledGuardPopulationScans == 0)
                     #expect(f.coupledGuardPlayReads > playReads && f.coupledGuardRecordReads > recordReads)
                     f.coupledGuardCountDiscovery = false
                 }
@@ -499,6 +514,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
         var coupledGuardBarReads = 0
+        var coupledGuardPopulationScans = 0
         var coupledGuardPlayReads = 0
         var coupledGuardRecordReads = 0
         var coupledGuardCountDiscovery = false
@@ -868,6 +884,10 @@ struct Issue965HeldSelectionAssociationTests {
                     elementAtPosition: levelHit,
                     attributeValuesResult: { [self] element, attributes in
                         batchReadCalls += 1
+                        if CFEqual(element, window), attributes == [kAXRoleAttribute, kAXIdentifierAttribute,
+                            kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as [String] {
+                            coupledGuardPopulationScans += 1
+                        }
                         activeBulkAttributes = attributes
                         defer { activeBulkAttributes = nil }
                         if CFEqual(element, app), attributes == [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String] {

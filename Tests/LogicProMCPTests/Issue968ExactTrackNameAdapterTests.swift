@@ -74,6 +74,8 @@ private final class ExactNameFixture: @unchecked Sendable {
     var coupledPeerNameField: AXUIElement?
     var onMirrorReadAfterWrite: (@Sendable () -> Void)?
     var peerNameReadsAfterWrite = 0
+    var peerNameReadsAtLastMirror = 0
+    var mostPeerReadsBeforeMirror = 0
     var onPeerNameReadAfterWrite: (@Sendable (Int) -> Void)?
     var rawHelpReads = 0
     var countRawHelpReads = false
@@ -122,7 +124,11 @@ private final class ExactNameFixture: @unchecked Sendable {
                         onPeerNameReadAfterWrite?(peerNameReadsAfterWrite)
                     }
                     if !writes.isEmpty, let coupledNameField, CFEqual(element, coupledNameField),
-                       attribute == kAXValueAttribute as String { onMirrorReadAfterWrite?() }
+                       attribute == kAXValueAttribute as String {
+                        mostPeerReadsBeforeMirror = max(mostPeerReadsBeforeMirror, peerNameReadsAfterWrite - peerNameReadsAtLastMirror)
+                        peerNameReadsAtLastMirror = peerNameReadsAfterWrite
+                        onMirrorReadAfterWrite?()
+                    }
                     if let renameMenuItem, CFEqual(element, renameMenuItem), attribute == kAXTitleAttribute as String {
                         onRenameMenuRead?()
                     }
@@ -1849,6 +1855,8 @@ struct Issue968ExactTrackNameAdapterTests {
             #expect((await healthy.applyCoupled(baseline, project: baselineProject, target: baselineTarget)).status == .applied)
             let finalRead = healthy.peerNameReadsAfterWrite
             #expect(finalRead > 0)
+            #expect(healthy.mostPeerReadsBeforeMirror == 1,
+                "One fresh peer-name pass before each deciding pair read; do not repeat the complete peer census")
             let f = ExactNameFixture()
             _ = f.appendTrack(name: "Peer", selected: false)
             let (capture, project, target, _, mirror) = try await f.coupledCapture()

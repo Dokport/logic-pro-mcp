@@ -296,7 +296,8 @@ extension AccessibilityChannel {
             return document.utf8.elementsEqual(currentDocument.utf8)
         }
 
-        private func owned(checkingAssociation: Bool = true, ownedPopup: AXUIElement? = nil) -> Bool {
+        private func owned(checkingAssociation: Bool = true, ownedPopup: AXUIElement? = nil,
+                           checkingStoppedTransport: Bool = true) -> Bool {
             func railMatches() -> Bool {
                 guard checkingAssociation else { return true }
                 guard let currentRailPath = Self.path(rail, to: window, ax: logic.ax), Self.same(railPath, currentRailPath),
@@ -355,7 +356,7 @@ extension AccessibilityChannel {
                 Log.info("Held association ownership refused: original rail/Mixer census", subsystem: "ax")
                 lost = true; return false
             }
-            guard stoppedTransportPathsMatch() else {
+            guard !checkingStoppedTransport || stoppedTransportPathsMatch() else {
                 Log.info("Held association ownership refused: original transport path/value", subsystem: "ax")
                 lost = true; return false
             }
@@ -388,8 +389,9 @@ extension AccessibilityChannel {
                   })
         }
 
-        /// The coupled writer already owns its editor; renew only this proof's
-        /// original stopped controls, not passive-focus permission or stored values.
+        /// The coupled writer already owns its editor. Renew this proof's
+        /// complete original source paths/census and stopped controls, never
+        /// passive-focus permission, stored values or globally rediscovered rows.
         func permitsCoupledEditorTransportRead(pair: Pair) -> Bool {
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   CFEqual(pair.track.window, window), CFEqual(pair.strip.window, window),
@@ -407,6 +409,12 @@ extension AccessibilityChannel {
                   // including one appearing during the deciding Play/Record reads.
                   let currentBar = AXLogicProElements.getControlBar(in: window, runtime: logic.ax),
                   CFEqual(currentBar, transport.controlBar),
+                  // Match the original editor guard's ordering: source custody
+                  // is decided after the transport reads, not before them.
+                  pair.track.exposure?.isCurrent ?? true,
+                  pair.track.currentIndex() != nil,
+                  owned(checkingStoppedTransport: false),
+                  pair.track.exposure?.isCurrent ?? true,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
             return true
         }

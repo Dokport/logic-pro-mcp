@@ -261,7 +261,10 @@ enum ExactTrackNameAdapter {
               transportProof.map({ $0.permitsCoupledEditorTransportRead(pair: pair) })
                 ?? (AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
                     && AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false),
-              pair.track.currentIndex() != nil, pair.strip.currentIndex(runtime: runtime) != nil,
+              // The held proof above freshly renews the complete original
+              // native paths/census. Do not repeat global Mixer discovery for each
+              // guarded Help read; unowned callers keep both original checks.
+              transportProof != nil || (pair.track.currentIndex() != nil && pair.strip.currentIndex(runtime: runtime) != nil),
               let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
               CFEqual(final, editor), operationPermitted() else { return false }
         return true
@@ -456,7 +459,7 @@ enum ExactTrackNameAdapter {
                 }
                 let names = [before] + (after.map { [$0] } ?? [])
                 guard ownedEditor.map({ permitsCoupledEditorRead($0, pair: pair, names: names) }) ?? true,
-                      operationPermitted(), peerNamesStillHeld(ownedEditor: ownedEditor), pair.track.currentIndex() != nil,
+                      operationPermitted(), membershipStillHeld(ownedEditor: ownedEditor), pair.track.currentIndex() != nil,
                       pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
                       // Peer reads can redraw or change the pair. Its deciding
                       // native name/custody reads must follow the last peer read.
