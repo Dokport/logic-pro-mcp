@@ -1046,6 +1046,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
 
     private func readOutputState(_ step: SagaStep) async -> ObservedState? {
         guard supports(step), let task = outputTask, let assignment = await outputReading() else { return nil }
+        if changedNameGoals.isEmpty {
+            // The existing Saga's independent readback establishes whether our
+            // attempted output is applied; a scalar acknowledgement does not.
+            outputApplied = outputAttempted && assignment == task.desired
+        }
         let evidence = SagaReadEvidence(readSource: .axOutputMenuCheckmark, provenance: .liveIndependent,
             trackIndex: task.pair.track.currentIndex(), projectReference: projectRef.rawValue, field: "output",
             observed: .string(assignment.token), sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
@@ -1058,9 +1063,22 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let expected = inverse ? task.desired : task.before
         let desired = inverse ? task.before : task.desired
         guard (!inverse || (outputApplied && !outputInverseConsumed)),
-              step.params["destination"] == .string(desired.token),
-              let before = await outputReading(), before == expected,
-              await projectIsCurrent(allowPendingCancellation: inverse) else {
+              step.params["destination"] == .string(desired.token) else {
+            return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+        }
+        if changedNameGoals.isEmpty {
+            // The Saga just read the owned before-state. The scalar writer
+            // independently checks expected_current and the full protected
+            // footprint at its final leaf boundary; do not repeat that scan.
+            guard outputProof?.permitsRead() == true else {
+                return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+            }
+        } else {
+            guard let before = await outputReading(), before == expected else {
+                return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+            }
+        }
+        guard await projectIsCurrent(allowPendingCancellation: inverse) else {
             return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
         }
         let pair = outputPair ?? task.pair, runtime = pair.track.runtime
@@ -1105,6 +1123,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             outputRenewal = owned
             renewedThisOutput = owned
         }
+        // A single-output step is verified by the Saga's mandatory independent
+        // read below. Coupled naming retains its separate renewal/read contract.
+        if changedNameGoals.isEmpty { return response }
         if let after = await outputReading(), after == desired {
             if let renewal = renewedThisOutput,
                let goal = changedNameGoals.first(where: { $0.reference == task.reference }),

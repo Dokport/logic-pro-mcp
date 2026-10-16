@@ -1021,6 +1021,15 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: mode)
     }
 
+    @Test("Canonical output cancellation retains independent Saga reads without duplicate adapter popup reads")
+    func canonicalOutputCancellationDoesNotRepeatTheSagasIndependentReadback() async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "cancel", fixture: f)
+        #expect(f.routingDestinationPresses == 2)
+        #expect(f.inputMenuPresses <= 8,
+                "Keep the captured baseline, Saga before/after and inverse-ownership reads, and each checked scalar writer; duplicate adapter reads consume the same bounded native lifecycle")
+    }
+
     @Test("An owned output may redraw a peer while its exact source survives; changed protected state remains unknown",
           arguments: ["redraw", "foreign", "scalar", "input", "send", "plugin", "header", "project"])
     func canonicalOutputRenewsAnOwnedCensusWithASurvivingSource(fault: String) async throws {
