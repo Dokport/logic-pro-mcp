@@ -475,6 +475,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingLevelHit: AXUIElement?
         var routingLevelHitEffect: (@Sendable () -> Void)?
         var routingLevelClicks: [Int64] = []
+        var routingLevelPairExpired = false
         var creationForwardReceipt: String?
         var routingLevelWrites: [String] = []
         var routingLevelCommits = 0
@@ -486,6 +487,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingLevelTransientSourceLost = false
         var routingLevelTransientGateLost = false
         var routingChildrenRead: (@Sendable (AXUIElement) -> Void)?
+        var routingLegacyChildrenRead: (@Sendable (AXUIElement) -> Void)?
         var routingRemovalPublications = 0
         var routingRemovedSend: AccessibilityChannel.RemovedSendObservation?
         var routingRemovalPermittedAtPublication: Bool?
@@ -711,7 +713,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     return nil
                 },
-                childrenResultHandler: { [self] element in
+                childrenHandler: { [self] element in
+                    routingLegacyChildrenRead?(element)
+                    return nil
+                }, childrenResultHandler: { [self] element in
                     routingChildrenRead?(element)
                     guard inputRetirementCensusLag, CFEqual(element, mixer) else { return nil }
                     inputRetirementCensusLag = false
@@ -2138,6 +2143,14 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "roundtrip")
     }
 
+    @Test func registeredSendLevelKeepsSlowDiscoveryOutsideItsNativeClickPair() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "slow_pair")
+    }
+
+    @Test func registeredSendLevelKeepsWholeTransportWalkOutsideItsNativeClickPair() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "slow_transport_pair")
+    }
+
     @Test func registeredSendLevelOwnsOnlyItsExactFirstClickFocusTransition() async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "first_click_source_focus")
     }
@@ -2146,7 +2159,8 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "first_click_deferred_source_focus")
     }
 
-    @Test(arguments: ["first_click_foreign_focus", "first_click_document", "first_click_control", "first_click_play"])
+    @Test(arguments: ["first_click_foreign_focus", "first_click_document", "first_click_control", "first_click_play",
+        "first_click_knob_window", "first_click_window_type", "first_click_window_unreadable", "first_click_population"])
     func registeredSendLevelFirstClickCannotAdoptForeignOrChangedCustody(_ fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: fault)
     }
@@ -2198,12 +2212,16 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
     }
 
-    @Test(arguments: ["return_window", "return_window_minus95"])
+    @Test(arguments: ["return_window", "return_window_minus95", "return_window_before_fields",
+        "return_window_before_fields_retired_peer"])
     func registeredSendLevelAcceptsOnlyItsObservedWindowReturn(mode: String) async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
     }
 
-    @Test(arguments: ["return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate"])
+    @Test(arguments: ["return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate",
+        "return_window_before_fields_foreign_focus", "return_window_before_fields_foreign_window",
+        "return_window_before_fields_source", "return_window_before_fields_new_window",
+        "return_window_before_fields_duplicate_source"])
     func registeredSendLevelWindowReturnCannotReviveLostCustody(mode: String) async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: mode)
     }
@@ -2743,6 +2761,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let knob = b.element(1_965_2624), editor = b.element(1_965_2800), field = b.element(1_965_2801)
                 b.setFrame(knob, x: 20, y: 30, width: 40, height: 20)
                 b.setAttribute(knob, kAXValueDescriptionAttribute as String, "-∞")
+                b.setAttribute(knob, kAXWindowAttribute as String, f.window)
                 b.setRole(editor, kAXWindowRole as String); b.setChildren(editor, [field])
                 b.setRole(field, kAXTextFieldRole as String); b.setChildren(field, [])
                 b.setAttribute(field, kAXWindowAttribute as String, editor)
@@ -2778,6 +2797,7 @@ struct Issue965HeldSelectionAssociationTests {
                     guard type == .leftMouseDown || type == .leftMouseUp else { Issue.record("Only paired click"); return false }
                     if type == .leftMouseUp {
                         f.routingLevelClicks.append(count)
+                        if count == 1 { f.routingLevelPairExpired = false }
                         if levelMode == "incomplete_up" { return false }
                         if count == 1, levelMode?.hasPrefix("first_click_") == true,
                            levelMode != "first_click_deferred_source_focus" {
@@ -2793,11 +2813,23 @@ struct Issue965HeldSelectionAssociationTests {
                             if levelMode == "first_click_play" {
                                 b.setAttribute(b.element(1_965_721), kAXValueAttribute as String, 1)
                             }
+                            if levelMode == "first_click_knob_window" {
+                                b.setAttribute(knob, kAXWindowAttribute as String, b.element(1_965_2897))
+                            }
+                            if levelMode == "first_click_window_type" {
+                                b.setAttribute(knob, kAXWindowAttribute as String, "not a native window")
+                            }
+                            if levelMode == "first_click_population" { b.setChildren(f.mixer, [f.strips[1]]) }
                         }
-                        if count == 2, levelMode != "no_editor" {
+                        if count == 2, levelMode != "no_editor",
+                           !(["slow_pair", "slow_transport_pair"].contains(levelMode ?? "") && f.routingLevelPairExpired) {
                             let display = b.attributeValue(knob, kAXValueDescriptionAttribute as String) as? String ?? ""
                             b.setAttribute(field, kAXValueAttribute as String, display == "-6.0" ? "-6" : display == "-95.0" ? "-95" : display)
                             b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, editor])
+                            if levelMode == "return_window_before_fields_retired_peer" {
+                                b.setAttribute(f.app, kAXWindowsAttribute as String,
+                                    [f.window, b.element(1_965_2892), editor])
+                            }
                             b.setAttribute(f.app, kAXFocusedWindowAttribute as String, editor)
                             b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, field)
                             switch levelMode {
@@ -3424,6 +3456,11 @@ struct Issue965HeldSelectionAssociationTests {
                 if levelMode == "preexisting_editor" {
                     b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, b.element(1_965_2800)])
                 }
+                if levelMode == "return_window_before_fields_retired_peer" {
+                    // The measured host retired a different original window
+                    // along with its numeric editor, not the owned source.
+                    b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, b.element(1_965_2892)])
+                }
                 var prepared: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
                     "level_db": .string(desired), "expected_current": .string("-∞")]
                 switch levelMode {
@@ -3445,6 +3482,15 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 let priorRead = f.routingRead
+                if levelMode == "slow_transport_pair" {
+                    f.routingLegacyChildrenRead = { element in
+                        // This unrelated peer subtree is reached by the full
+                        // transport-bar search, never a held control/path read.
+                        if f.routingLevelClicks.last == 1, CFEqual(element, f.strips[0]) {
+                            f.routingLevelPairExpired = true
+                        }
+                    }
+                }
                 @Sendable func returnedWindow() {
                     let text = b.attributeValue(field, kAXValueAttribute as String) as? String ?? ""
                     b.setAttribute(knob, kAXValueAttribute as String, text == "-∞" ? 0 : 123456)
@@ -3454,18 +3500,28 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
                     f.routingLevelReturnTransitions += 1
                     f.routingLevelCommitPending = false
-                    if levelMode == "return_window_foreign_focus" {
+                    if ["return_window_foreign_focus", "return_window_before_fields_foreign_focus"].contains(levelMode ?? "") {
                         let foreign = b.element(1_965_2895)
                         b.setRole(foreign, kAXTextFieldRole as String)
                         b.setAttribute(foreign, kAXWindowAttribute as String, f.window)
                         b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
                     }
-                    if levelMode == "return_window_foreign_window" {
+                    if ["return_window_foreign_window", "return_window_before_fields_foreign_window"].contains(levelMode ?? "") {
                         b.setAttribute(f.app, kAXFocusedWindowAttribute as String, b.element(1_965_2894))
                     }
                 }
                 let priorResult = f.routingReadResult
                 f.routingReadResult = { element, attribute in
+                    if levelMode == "first_click_window_unreadable", f.routingLevelClicks.last == 1,
+                       CFEqual(element, knob), attribute == kAXWindowAttribute as String {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                    // Virtual host clock at the strict metadata seam used by
+                    // the expensive complete Mixer discovery, not a sleep/SLA.
+                    if levelMode == "slow_pair", f.routingLevelClicks.last == 1,
+                       attribute == kAXIdentifierAttribute as String {
+                        f.routingLevelPairExpired = true
+                    }
                     if levelMode == "return_window_source", f.routingLevelCommitPending,
                        f.routingLevelPendingFieldReads > 0, CFEqual(element, f.window),
                        attribute == kAXDocumentAttribute as String, !f.routingLevelTransientSourceLost {
@@ -3478,6 +3534,26 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.routingRead = { element, attribute in
                     priorRead?(element, attribute)
+                    if levelMode?.hasPrefix("return_window_before_fields") == true, f.routingLevelCommitPending,
+                       CFEqual(element, f.app), attribute == kAXMainWindowAttribute as String {
+                        // Return completed while the first ownership census
+                        // ran, before any read of the retiring editor field.
+                        returnedWindow()
+                        if levelMode == "return_window_before_fields_source" {
+                            f.routingLevelTransientSourceLost = true
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                        if levelMode == "return_window_before_fields_new_window" {
+                            b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, b.element(1_965_2893)])
+                        }
+                        if levelMode == "return_window_before_fields_duplicate_source" {
+                            b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, f.window])
+                        }
+                    }
+                    if levelMode == "slow_pair", f.routingLevelClicks.last == 1,
+                       attribute == kAXIdentifierAttribute as String {
+                        f.routingLevelPairExpired = true
+                    }
                     if levelMode?.hasPrefix("return_window") == true, f.routingLevelCommitPending {
                         if CFEqual(element, field), attribute == kAXValueAttribute as String {
                             f.routingLevelPendingFieldReads += 1
@@ -3633,10 +3709,13 @@ struct Issue965HeldSelectionAssociationTests {
                     return await set(dependencies, params)
                 }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
-                if !["roundtrip", "first_click_source_focus", "first_click_deferred_source_focus", "minus95", "noop", "deferred", "deferred_minus95", "return_window", "return_window_minus95"].contains(levelMode ?? "") {
+                if !["roundtrip", "slow_pair", "slow_transport_pair", "first_click_source_focus", "first_click_deferred_source_focus", "minus95", "noop", "deferred", "deferred_minus95", "return_window", "return_window_minus95", "return_window_before_fields", "return_window_before_fields_retired_peer"].contains(levelMode ?? "") {
                     if ["setter_ack_only", "commit_ack_only", "source_lost_after", "route_changed_after",
                         "deferred_foreign", "deferred_window", "deferred_source", "deferred_cancel", "deferred_never",
-                        "return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate"].contains(levelMode ?? "") {
+                        "return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate",
+                        "return_window_before_fields_foreign_focus", "return_window_before_fields_foreign_window",
+                        "return_window_before_fields_source", "return_window_before_fields_new_window",
+                        "return_window_before_fields_duplicate_source"].contains(levelMode ?? "") {
                         #expect(body["state"] as? String == "B", "\(sharedToolText(result))")
                         let attempted = try #require(body["write_attempted"] as? Bool)
                         #expect(attempted)
@@ -3649,7 +3728,7 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         if levelMode?.hasPrefix("return_window") == true {
                             #expect(f.routingLevelReturnTransitions == 1 && f.routingLevelWaits == 0)
-                            if levelMode == "return_window_source" { #expect(f.routingLevelTransientSourceLost) }
+                            if ["return_window_source", "return_window_before_fields_source"].contains(levelMode ?? "") { #expect(f.routingLevelTransientSourceLost) }
                             if levelMode == "return_window_gate" { #expect(f.routingLevelTransientGateLost) }
                         }
                         return
@@ -3677,6 +3756,11 @@ struct Issue965HeldSelectionAssociationTests {
                         "Verified level data must not impersonate restoration of the original Tracks focus")
                 }
                 guard body["state"] as? String == "A" else {
+                    if ["slow_pair", "slow_transport_pair"].contains(levelMode ?? "") {
+                        #expect(f.routingLevelPairExpired && f.routingLevelClicks == [1, 2],
+                            "Reach the costly discovery between the actual paired clicks")
+                        return
+                    }
                     if ["first_click_source_focus", "first_click_deferred_source_focus"].contains(levelMode ?? "") { return }
                     if levelMode?.hasPrefix("return_window") == true {
                         #expect(f.routingLevelCommits == 1 && f.routingLevelReturnTransitions == 1 && !f.routingLevelCommitPending)
