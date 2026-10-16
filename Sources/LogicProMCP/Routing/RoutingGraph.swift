@@ -260,9 +260,12 @@ struct RoutingGraph: Codable, Equatable, Sendable {
         }
 
         var occupiedSlots = Set<SendSlot>()
+        var inputReceivers = Set<String>()
         for edge in edges {
             if edge.kind != .send {
                 guard edge.send == nil else { return false }
+                if edge.kind == .inputAssignment,
+                   !inputReceivers.insert(edge.destination).inserted { return false }
                 continue
             }
             guard let send = edge.send,
