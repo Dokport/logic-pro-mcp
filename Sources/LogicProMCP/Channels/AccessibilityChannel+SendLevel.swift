@@ -144,6 +144,7 @@ extension AccessibilityChannel {
             guard click.postDown() else { return refused(.readbackUnavailable, "Numeric editor mouse-down was not accepted.") }
             guard click.postUp() else { return refused(.readbackUnavailable, "Numeric editor paired release was not accepted.") }
             if count == 1 {
+                mouse.sleepMicros(40_000)
                 // Logic's first exact-knob click can land on its containing
                 // physical strip before the second click opens the editor.
                 // Observe only this actual paired-click transition; another
@@ -156,7 +157,6 @@ extension AccessibilityChannel {
                         "attempted": ["send_numeric_editor"], "changed": ["keyboard_focus"],
                         "restoration": "not_restored"]
                 }
-                mouse.sleepMicros(40_000)
             }
         }
         guard custody(), let members = windows(),

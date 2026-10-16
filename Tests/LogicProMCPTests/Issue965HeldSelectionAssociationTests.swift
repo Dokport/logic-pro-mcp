@@ -2135,6 +2135,10 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "first_click_source_focus")
     }
 
+    @Test func registeredSendLevelObservesItsDelayedFirstClickSourceFocus() async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "first_click_deferred_source_focus")
+    }
+
     @Test(arguments: ["first_click_foreign_focus", "first_click_document", "first_click_control", "first_click_play"])
     func registeredSendLevelFirstClickCannotAdoptForeignOrChangedCustody(_ fault: String) async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: fault)
@@ -2629,7 +2633,8 @@ struct Issue965HeldSelectionAssociationTests {
                     if type == .leftMouseUp {
                         f.routingLevelClicks.append(count)
                         if levelMode == "incomplete_up" { return false }
-                        if count == 1, levelMode?.hasPrefix("first_click_") == true {
+                        if count == 1, levelMode?.hasPrefix("first_click_") == true,
+                           levelMode != "first_click_deferred_source_focus" {
                             f.routingLateScopeInjected = true
                             b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
                                 levelMode == "first_click_foreign_focus" ? f.strips[0] : f.strips[1])
@@ -2686,6 +2691,10 @@ struct Issue965HeldSelectionAssociationTests {
                     finishLevelCommit()
                     return true
                 }, postUnicodeScalar: { _ in Issue.record("No Unicode typing fallback"); return false }, sleepMicros: { delay in
+                    if delay == 40_000, levelMode == "first_click_deferred_source_focus" {
+                        f.routingLateScopeInjected = true
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                    }
                     guard delay == 25_000, f.routingLevelCommitPending else { return }
                     f.routingLevelWaits += 1
                     if levelMode == "deferred" || levelMode == "deferred_minus95" { finishLevelCommit() }
@@ -3449,7 +3458,7 @@ struct Issue965HeldSelectionAssociationTests {
                     return await set(dependencies, params)
                 }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
-                if !["roundtrip", "first_click_source_focus", "minus95", "noop", "deferred", "deferred_minus95", "return_window", "return_window_minus95"].contains(levelMode ?? "") {
+                if !["roundtrip", "first_click_source_focus", "first_click_deferred_source_focus", "minus95", "noop", "deferred", "deferred_minus95", "return_window", "return_window_minus95"].contains(levelMode ?? "") {
                     if ["setter_ack_only", "commit_ack_only", "source_lost_after", "route_changed_after",
                         "deferred_foreign", "deferred_window", "deferred_source", "deferred_cancel", "deferred_never",
                         "return_window_foreign_focus", "return_window_foreign_window", "return_window_source", "return_window_gate"].contains(levelMode ?? "") {
@@ -3486,14 +3495,14 @@ struct Issue965HeldSelectionAssociationTests {
                     return
                 }
                 #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
-                if levelMode == "first_click_source_focus" {
+                if ["first_click_source_focus", "first_click_deferred_source_focus"].contains(levelMode ?? "") {
                     #expect(f.routingLateScopeInjected && f.routingLevelClicks == [1, 2],
                         "Reach the native-shaped exact-source focus landing after the first paired click")
                     #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "not_restored",
                         "Verified level data must not impersonate restoration of the original Tracks focus")
                 }
                 guard body["state"] as? String == "A" else {
-                    if levelMode == "first_click_source_focus" { return }
+                    if ["first_click_source_focus", "first_click_deferred_source_focus"].contains(levelMode ?? "") { return }
                     if levelMode?.hasPrefix("return_window") == true {
                         #expect(f.routingLevelCommits == 1 && f.routingLevelReturnTransitions == 1 && !f.routingLevelCommitPending)
                     } else {
