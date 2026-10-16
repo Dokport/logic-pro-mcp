@@ -176,7 +176,8 @@ struct Issue291OwnedCurrentOutputTests {
             strip: f.strips[0], document: f.bundle.absoluteString)
         let observed = AccessibilityChannel.NativeOutputReadPopup.read(
             physical: physical, app: f.app, pid: f.pid, runtime: runtime)
-        #expect((observed != nil) == (focus == "owned"))
+        if focus == "owned" { #expect(observed != nil) }
+        else { #expect(observed == nil) }
         #expect(f.mutations.isEmpty)
     }
 
@@ -206,6 +207,12 @@ struct Issue291OwnedCurrentOutputTests {
           arguments: ["unchecked_neutral", "duplicate_neutral", "conflicting_checked_root",
                       "checked_input_leaf", "unread_neutral_mark", "wrong_neutral_label"])
     func nativeNoInputRejectsAmbiguousMarks(fault: String) async throws {
+        try await assertOwnedNativeNeutralPopup(fault: fault, input: true)
+    }
+
+    @Test("Neutral input refuses foreign or unread keyboard focus before opening a popup",
+          arguments: ["foreign_application_focus", "unread_application_focus"])
+    func nativeNeutralInputRequiresFocusedProcessBeforePress(fault: String) async throws {
         try await assertOwnedNativeNeutralPopup(fault: fault, input: true)
     }
 
@@ -317,9 +324,16 @@ struct Issue291OwnedCurrentOutputTests {
         }
         let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
             strip: f.strips[0], document: f.bundle.absoluteString)
+        let base = f.logic
+        let runtime: AXLogicProElements.Runtime
+        if fault == "foreign_application_focus" || fault == "unread_application_focus" {
+            runtime = .init(logicProPID: base.logicProPID, ax: base.ax,
+                onScreenWindowList: base.onScreenWindowList,
+                focusedApplicationPID: { fault == "foreign_application_focus" ? f.pid + 1 : nil })
+        } else { runtime = base }
         let reading = await AXMixerStripBinding.$current.withValue(binding) {
-            if input { return await AccessibilityChannel.getInputBusVerified(runtime: f.logic, timing: .immediate) }
-            return await AccessibilityChannel.getOutputVerified(params: [:], runtime: f.logic, timing: .immediate)
+            if input { return await AccessibilityChannel.getInputBusVerified(runtime: runtime, timing: .immediate) }
+            return await AccessibilityChannel.getOutputVerified(params: [:], runtime: runtime, timing: .immediate)
         }
         let body = try #require(sharedJSONObject(reading.message))
         if fault != "owned" {
@@ -328,7 +342,8 @@ struct Issue291OwnedCurrentOutputTests {
             let attempted = try #require(body["write_attempted"] as? Bool)
             #expect(!attempted)
             #expect(f.mutations.allSatisfy { CFEqual($0.0, f.outputs[0]) && $0.1 == kAXPressAction as String })
-            #expect(f.mutations.count == (["preexisting_popup", "missing_press_capability"].contains(fault) ? 0 : 1))
+            #expect(f.mutations.count == (["preexisting_popup", "missing_press_capability",
+                "foreign_application_focus", "unread_application_focus"].contains(fault) ? 0 : 1))
             return
         }
         if input {

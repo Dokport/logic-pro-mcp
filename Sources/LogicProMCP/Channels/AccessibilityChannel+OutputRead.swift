@@ -625,6 +625,17 @@ extension AccessibilityChannel {
             extras.merge(facts) { _, new in new }
             return refuse(error, hint + "; nothing was pressed.")
         }
+        if inputBusOnly, AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact) {
+            // A foreign system alert can own the keyboard while Logic still
+            // reports AXFrontmost. Refuse before opening a native popup that
+            // the same keyboard-ownership boundary would forbid us to acquire.
+            guard let app, let windows = runtime.onScreenWindowList(),
+                  runtime.focusedApplicationPID() == pid,
+                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
+                  LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 else {
+                return refuse(.readbackUnavailable, "The neutral input read requires current Logic keyboard ownership; nothing was pressed.")
+            }
+        }
         guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
             return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed.")
         }
