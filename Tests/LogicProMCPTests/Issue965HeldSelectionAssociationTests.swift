@@ -4790,7 +4790,10 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setChildren(button, [])
                 f.builder.setActionNames(button, [kAXPressAction as String])
             }
-            if graph { f.builder.setAttribute(decoy, kAXDescriptionAttribute as String, "Input 1") }
+            // This Bus-renewal fixture deliberately supplies no owned physical-input
+            // menu for the sibling. Keep it unknown, rather than advertising the
+            // physical-input capability exercised by the separate input-domain suite.
+            if graph { f.builder.setAttribute(decoy, kAXDescriptionAttribute as String, "Input unavailable") }
             if !unpairedRows.isEmpty {
                 f.builder.setRole(unpairedStrip, kAXLayoutItemRole as String)
                 f.builder.setButton(unpairedInput, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
