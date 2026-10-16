@@ -497,7 +497,7 @@ struct Issue291OwnedInputBusMenuTests {
         }
     }
 
-    @Test("Fresh routing inspection retains checked non-Bus inputs without inventing bus edges",
+    @Test("Fresh routing inspection projects checked physical inputs, not Bus or No Input edges",
           arguments: ["mono", "stereo", "no_input"], [false, true])
     func inspectionPublishesCheckedNonBusInput(kind: String, navigation: Bool) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
@@ -537,7 +537,23 @@ struct Issue291OwnedInputBusMenuTests {
                 #expect(f.mutations.isEmpty)
             }
             let graph = SessionPopulationObservation.routingGraph(capture: capture)
-            #expect(!graph.edges.contains { $0.kind == .inputAssignment })
+            let inputs = graph.edges.filter { $0.kind == .inputAssignment }
+            if navigation && kind != "no_input" {
+                let receiver = try #require(base.mixerReference(at: 0))
+                let edge = try #require(inputs.first)
+                #expect(inputs.count == 1)
+                #expect(edge.source == (kind == "mono" ? "input_physical_1" : "input_physical_1_2"))
+                #expect(edge.destination == receiver.rawValue)
+                #expect(edge.provenance == .axInputMenuCheckmark)
+                let endpoint = try #require(graph.nodes.first { $0.id == edge.source })
+                #expect(endpoint.kind == .input)
+                #expect(endpoint.targetRef == nil && endpoint.busNumber == nil)
+                #expect(graph.coverage.busToAuxInput.state == .partial)
+            } else {
+                #expect(inputs.isEmpty)
+                #expect(!graph.nodes.contains { $0.kind == .input })
+            }
+            #expect(!graph.nodes.contains { $0.kind == .bus || $0.kind == .aux })
             #expect(!graph.complete)
             #expect(f.mutations.allSatisfy { $0.1 == "AXPress" || $0.1 == "AXCancel" })
         }
@@ -545,7 +561,8 @@ struct Issue291OwnedInputBusMenuTests {
 
     @Test("Checked non-Bus publication refuses missing, conflicting or foreign capture witnesses",
           arguments: ["held", "absent", "other_owner", "duplicate", "unstable", "missing_slot",
-                      "missing_observation", "different_fresh_slot", "wrong_document", "unqualified", "invalid_ports"])
+                      "missing_observation", "different_fresh_slot", "wrong_document", "unqualified", "invalid_ports",
+                      "cached", "wrong_fresh_project", "duplicate_fresh_owner"])
     func checkedNonBusPublicationRequiresHeldCapture(fault: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let (p, _) = try prepareInputDomain("stereo"), f = p.f
@@ -563,7 +580,10 @@ struct Issue291OwnedInputBusMenuTests {
                 targetRegistry: registry, fileReader: .unavailable)
             var freshStates = states
             if fault == "different_fresh_slot" { freshStates[0].inputSlotBinding = nil }
-            var fresh = SessionPopulationObservation.FreshPopulation(project: base.project,
+            if fault == "duplicate_fresh_owner" { freshStates.append(states[0]) }
+            let freshProject = fault == "wrong_fresh_project"
+                ? ProjectInfo(name: "Other", filePath: "/tmp/Other.logicx", source: "fixture") : base.project
+            var fresh = SessionPopulationObservation.FreshPopulation(project: freshProject,
                 tracks: base.tracks, strips: freshStates, fileTrackCount: nil,
                 beganAt: base.beganAt, endedAt: base.endedAt, stable: fault != "unstable")
             if fault != "absent" {
@@ -577,14 +597,32 @@ struct Issue291OwnedInputBusMenuTests {
                     assignment: .physical(fault == "invalid_ports" ? [2, 1] : [1, 2]))]
                 if fault == "duplicate" { fresh.checkedInputs.append(fresh.checkedInputs[0]) }
             }
-            let capture = inputCapture(base, fresh: fresh)
+            let capture = inputCapture(base, fresh: fault == "cached" ? nil : fresh)
             let checked = SessionPopulationObservation.reportedCheckedInput(of: states[0],
                 capture: capture, qualified: fault != "unqualified")
             if fault == "held" {
                 #expect(checked?.kind == "physical")
                 #expect(checked?.ports == [1, 2])
             } else { #expect(checked == nil) }
-            #expect(!SessionPopulationObservation.routingGraph(capture: capture).edges.contains { $0.kind == .inputAssignment })
+            let graph = SessionPopulationObservation.routingGraph(capture: capture)
+            let inputs = graph.edges.filter { $0.kind == .inputAssignment }
+            // `unqualified` above exercises the report caller's explicit switch;
+            // this otherwise valid capture still qualifies its own graph projection.
+            if fault == "held" || fault == "unqualified" {
+                let edge = try #require(inputs.first)
+                #expect(inputs.count == 1 && edge.source == "input_physical_1_2")
+                #expect(edge.destination == base.mixerReference(at: 0)?.rawValue)
+                #expect(graph.coverage.busToAuxInput.state == .partial)
+            } else {
+                #expect(inputs.isEmpty)
+                #expect(!graph.nodes.contains { $0.kind == .input })
+                #expect(!graph.provenance.contains(.axInputMenuCheckmark))
+            }
+            #expect(!graph.complete)
+            let write = evaluate(RoutingWriteRequest(sourceTrackRef: try #require(base.mixerReference(at: 0)),
+                physicalSlot: 1, destinationBusNumber: nil, destinationRef: nil,
+                expectedProjectEpoch: graph.projectEpoch), against: graph)
+            #expect(!write.allowed && !write.writeAttempted)
             #expect(f.mutations.isEmpty)
         }
     }

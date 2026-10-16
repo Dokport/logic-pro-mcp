@@ -197,8 +197,8 @@ struct RoutingCoverage: Codable, Equatable, Sendable {
         domains.allSatisfy { $0.state == .complete }
     }
 
-    /// The domain whose evidence an edge of `kind` rests on. An input assignment is the receiving
-    /// side of a bus-to-aux edge, the one input edge this model publishes.
+    /// The domain whose evidence an edge of `kind` rests on. The legacy `bus_to_aux_input`
+    /// wire key also covers checked bus/physical inputs to a request-held physical receiver.
     func domain(for kind: RoutingEdgeKind) -> RoutingDomainCoverage {
         switch kind {
         case .mainOutput: return mainOutput
