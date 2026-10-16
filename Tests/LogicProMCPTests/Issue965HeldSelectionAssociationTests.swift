@@ -9,28 +9,38 @@ private actor SendRemovalSagaResultBoundary: Channel {
     let base: AccessibilityChannel
     let journal: SagaJournal
     let mode: String
+    let operation: String
+    let idempotencyKey: String
     let afterForward: @Sendable () -> Void
     init(base: AccessibilityChannel, journal: SagaJournal, mode: String,
+         operation: String = "mixer.set_send_output_verified", idempotencyKey: String = "owned-send-removal-saga",
          afterForward: @escaping @Sendable () -> Void = {}) {
         self.base = base; self.journal = journal; self.mode = mode; self.afterForward = afterForward
+        self.operation = operation; self.idempotencyKey = idempotencyKey
     }
     func start() async throws {}
     func stop() async {}
     func healthCheck() async -> ChannelHealth { await base.healthCheck() }
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
-        if operation == "mixer.set_send_output_verified", mode == "no_observer" {
+        if operation == self.operation, mode == "no_observer" {
             return .success(HonestContract.encodeStateA(extras: ["verified": true, "write_attempted": true]))
         }
         let result: ChannelResult
-        if operation == "mixer.set_send_output_verified", mode == "lost_observer" {
-            result = await AccessibilityChannel.$sendChangeObserver.withValue(nil) {
-                await base.execute(operation: operation, params: params)
+        if operation == self.operation, mode == "lost_observer" {
+            if operation == "mixer.set_send_mode_verified" {
+                result = await AccessibilityChannel.$sendModeChangeObserver.withValue(nil) {
+                    await base.execute(operation: operation, params: params)
+                }
+            } else {
+                result = await AccessibilityChannel.$sendChangeObserver.withValue(nil) {
+                    await base.execute(operation: operation, params: params)
+                }
             }
         } else { result = await base.execute(operation: operation, params: params) }
-        if operation == "mixer.set_send_output_verified",
+        if operation == self.operation,
            sharedJSONObject(result.message)?["state"] as? String == "A" {
             afterForward()
-            if mode == "cancel" { _ = await journal.cancel(idempotencyKey: "owned-send-removal-saga") }
+            if mode == "cancel" { _ = await journal.cancel(idempotencyKey: idempotencyKey) }
             if mode == "failure" || mode.hasPrefix("late_inverse_") {
                 return .error(HonestContract.encodeStateC(error: .readbackUnavailable, extras: ["write_attempted": true]))
             }
@@ -2380,6 +2390,54 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip")
     }
 
+    @Test(arguments: ["preflight", "failure", "cancel"])
+    func registeredSendModeSagaOwnsItsActualCompensation(_ outcome: String) async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeSaga: outcome)
+    }
+
+    @Test(arguments: ["no_observer", "lost_observer", "late_inverse_mode", "late_inverse_level",
+        "late_inverse_document", "wrong_hash", "wrong_project", "wrong_target", "wrong_slot"])
+    func registeredSendModeSagaRefusesUnownedOrChangedEffects(_ fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeSaga: fault)
+    }
+
+    private final class ModeEffectBoundary: @unchecked Sendable {
+        var observed: [AccessibilityChannel.ChangedSendModeObservation] = []
+        var permittedAtCapture: [Bool] = []
+        var fault: String?
+        var faultReached = false
+        var permittedAfterFault: [Bool] = []
+    }
+
+    @Test
+    func registeredSendModePublishesOnlyItsOwnNativeEffect() async throws {
+        let boundary = ModeEffectBoundary()
+        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeEffectBoundary: boundary)
+        #expect(boundary.observed.count == 2, "Both real registered leaves must publish their own native mode proof")
+        guard boundary.observed.count == 2 else { return }
+        #expect(boundary.permittedAtCapture == [true, true])
+        let forward = boundary.observed[0], inverse = boundary.observed[1]
+        #expect(forward.before.mode == .postFader && forward.after.mode == .preFader)
+        #expect(inverse.before.mode == .preFader && inverse.after.mode == .postFader)
+        #expect(forward.checkedDestination == .stereoOutput && inverse.checkedDestination == .stereoOutput)
+        if forward.before.independentPan { #expect(forward.after.independentPan) }
+        else { #expect(!forward.after.independentPan) }
+        #expect(forward.original.track.matches(forward.current.track))
+    }
+
+    @Test(arguments: ["foreign_document", "changed_control", "changed_peer", "boolean_raw"])
+    func nativeSendModeEffectRejectsChangedCustody(_ fault: String) async throws {
+        let boundary = ModeEffectBoundary()
+        boundary.fault = fault
+        let leaf = ModePeerBoundary()
+        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip",
+            modePeerBoundary: leaf, modeEffectBoundary: boundary)
+        #expect(leaf.leafCount == 1, "Invalidate only an effect from the actual mode leaf")
+        #expect(boundary.observed.count == 1 && boundary.permittedAtCapture == [true])
+        #expect(boundary.faultReached, "Reach the actual native mode effect before changing its protected facts")
+        #expect(boundary.permittedAfterFault == [false])
+    }
+
     private final class ModePeerBoundary: @unchecked Sendable {
         var peerReads = 0, beforeLeafPeerReads = 0, mutations = 0, leafCount = 0
         var injectAt = -1
@@ -2458,7 +2516,9 @@ struct Issue965HeldSelectionAssociationTests {
                                                freshEmpty: String? = nil, freshAfterTargetReads: Int? = nil,
                                                recordFreshFinalPeerRead: (@Sendable (Int) -> Void)? = nil,
                                                modeCommand: String? = nil,
-                                               modePeerBoundary: ModePeerBoundary? = nil) async throws {
+                                               modePeerBoundary: ModePeerBoundary? = nil,
+                                               modeSaga: String? = nil,
+                                               modeEffectBoundary: ModeEffectBoundary? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
@@ -3423,6 +3483,42 @@ struct Issue965HeldSelectionAssociationTests {
                 return
             }
             if let modeCommand {
+                let effectObserver: (@Sendable (AccessibilityChannel.ChangedSendModeObservation) -> Void)?
+                if let boundary = modeEffectBoundary {
+                    effectObserver = { proof in
+                        boundary.observed.append(proof)
+                        boundary.permittedAtCapture.append(proof.permits(runtime: proof.current.track.runtime))
+                        switch boundary.fault {
+                        case "foreign_document":
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            boundary.faultReached = true
+                        case "changed_control":
+                            if let parent: AXUIElement = AXHelpers.getAttribute(proof.control.group,
+                                kAXParentAttribute as String, runtime: b.makeAXRuntime()),
+                               let role = AXHelpers.getRole(proof.control.group, runtime: b.makeAXRuntime()) {
+                                let replacement = b.element(1_965_2698)
+                                b.setRole(replacement, role)
+                                b.setChildren(replacement, b.makeAXRuntime().children(proof.control.group))
+                                b.setChildren(parent, b.makeAXRuntime().children(parent).map {
+                                    CFEqual($0, proof.control.group) ? replacement : $0
+                                })
+                                boundary.faultReached = true
+                            }
+                        case "changed_peer":
+                            b.setChildren(f.strips[0], peerChildren + extraSend)
+                            boundary.faultReached = true
+                        case "boolean_raw":
+                            if let level = proof.control.level {
+                                b.setAttribute(level, kAXValueAttribute as String, false)
+                                boundary.faultReached = true
+                            }
+                        default: break
+                        }
+                        if boundary.fault != nil {
+                            boundary.permittedAfterFault.append(proof.permits(runtime: proof.current.track.runtime))
+                        }
+                    }
+                } else { effectObserver = nil }
                 let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_mode_verified"))
                 var prepared: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
                     "mode": .string(modeCommand == "noop" ? "post_fader" : "pre_fader"), "expected_current": .string("post_fader")]
@@ -3464,8 +3560,101 @@ struct Issue965HeldSelectionAssociationTests {
                     f.routingLateScopeInjected = true; return nil
                 }
                 let params = prepared
+                if let modeSaga {
+                    let journal = SagaJournal(maxRecords: 1), key = "owned-send-mode-saga"
+                    await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
+                        mode: modeSaga, operation: "mixer.set_send_mode_verified", idempotencyKey: key,
+                        afterForward: {
+                            switch modeSaga {
+                            case "late_inverse_mode":
+                                b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
+                                b.setAttribute(preFader, "AXMenuItemMarkChar", "")
+                            case "late_inverse_level": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 99)
+                            case "late_inverse_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            default: return
+                            }
+                            f.routingLateScopeInjected = true
+                        }))
+                    let sagaDependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                        poller: StatePoller(axChannel: f.channel(), cache: cache,
+                            runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                        dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                        mutationGate: gate, liveTrackNames: { [:] })
+                    var stepParams = params
+                    stepParams.removeValue(forKey: "target_ref")
+                    if case .issued(let project)? = capture.projectIssuance { stepParams["project_ref"] = .string(project.rawValue) }
+                    if modeSaga == "wrong_project" { stepParams["project_ref"] = .string("prj_foreign") }
+                    if modeSaga == "wrong_slot" { stepParams["ordinal"] = .int(0) }
+                    let modeTarget = modeSaga == "wrong_target" ? try #require(capture.mixerReference(at: 0)) : reference
+                    var wire: [String: Value] = ["idempotency_key": .string(key), "steps": .array([.object([
+                        "operation_id": .string(OperationID.mixerSetSendModeVerified.rawValue),
+                        "target_ref": .string(modeTarget.rawValue), "params": .object(stepParams),
+                        "expected_inverse": .object(["operation_id": .string(OperationID.mixerSetSendModeVerified.rawValue),
+                            "value_parameter": .string("mode")])])])]
+                    wire["confirmed_plan_hash"] = .string(SagaJournal.planHash(try SagaWire.plan(from: wire)))
+                    if modeSaga == "wrong_hash" { wire["confirmed_plan_hash"] = .string(String(repeating: "0", count: 64)) }
+                    let preflight = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_preflight"))
+                    let preview = await FeatureFlags.withAdr004MutationSagaForTests(true) { await preflight(sagaDependencies, wire) }
+                    let previewBody = try #require(sharedJSONObject(sharedToolText(preview)))
+                    let ready = try #require(previewBody["ok"] as? Bool,
+                        "Actual registered mode preflight response: \(sharedToolText(preview))")
+                    if ["wrong_project", "wrong_target", "wrong_slot"].contains(modeSaga) {
+                        #expect(!ready)
+                        #expect(f.routingModePresses == 0 && f.routingDestinationPresses == 0)
+                        return
+                    }
+                    #expect(ready, "Actual registered mode preflight: \(sharedToolText(preview))")
+                    #expect(f.routingModePresses == 0 && f.routingDestinationPresses == 0)
+                    if modeSaga == "preflight" { return }
+                    let execute = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_execute"))
+                    let result = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
+                    let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if modeSaga == "wrong_hash" {
+                        #expect(body["state"] as? String == "C")
+                        let wrote = try #require(body["write_attempted"] as? Bool); #expect(!wrote)
+                        #expect(f.routingModePresses == 0 && f.routingDestinationPresses == 0)
+                        return
+                    }
+                    if ["no_observer", "lost_observer"].contains(modeSaga) || modeSaga.hasPrefix("late_inverse_") {
+                        let terminal = try #require(body["saga_state"] as? String)
+                        #expect(terminal != "completed" && terminal != "fullyCompensated", "\(sharedToolText(result))")
+                        #expect(body["state"] as? String == "B", "\(sharedToolText(result))")
+                        #expect(f.routingModePresses == (modeSaga == "no_observer" ? 0 : 1))
+                        #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
+                        if modeSaga.hasPrefix("late_inverse_") { #expect(f.routingLateScopeInjected) }
+                        if modeSaga == "late_inverse_mode" {
+                            #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "✓")
+                            #expect(b.attributeValue(preFader, "AXMenuItemMarkChar") as? String == "")
+                        }
+                        let count = f.routingModePresses
+                        let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
+                        let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                        let duplicate = try #require(replayBody["duplicate"] as? Bool); #expect(duplicate)
+                        #expect(replayBody["state"] as? String == "B")
+                        #expect(f.routingModePresses == count, "An uncertain same-key replay must not repeat a mode leaf")
+                        return
+                    }
+                    #expect(body["saga_state"] as? String == "fullyCompensated", "\(sharedToolText(result))")
+                    #expect(f.routingModePresses == 2 && f.routingDestinationPresses == 0)
+                    #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "✓")
+                    #expect(b.attributeValue(preFader, "AXMenuItemMarkChar") as? String == "")
+                    #expect(!gate.isHeldByEntitledHolder())
+                    let count = f.routingModePresses
+                    let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
+                    let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                    if modeSaga == "cancel" {
+                        #expect(replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue)
+                    } else {
+                        let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                        #expect(duplicate)
+                    }
+                    #expect(f.routingModePresses == count)
+                    return
+                }
                 let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_mode_verified",
-                    commandParams: params, mutationGate: gate) { await handler(dependencies, params) }
+                    commandParams: params, mutationGate: gate) {
+                    await AccessibilityChannel.$sendModeChangeObserver.withValue(effectObserver) { await handler(dependencies, params) }
+                }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
                 if let boundary = modePeerBoundary {
                     boundary.state = body["state"] as? String ?? "missing"
@@ -3489,7 +3678,9 @@ struct Issue965HeldSelectionAssociationTests {
                 if modeCommand == "noop" { #expect(f.routingModePresses == 0); return }
                 let inverse = params.merging(["mode": Value.string("post_fader"), "expected_current": .string("pre_fader")]) { _, new in new }
                 let restored = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_mode_verified",
-                    commandParams: inverse, mutationGate: gate) { await handler(dependencies, inverse) }
+                    commandParams: inverse, mutationGate: gate) {
+                    await AccessibilityChannel.$sendModeChangeObserver.withValue(effectObserver) { await handler(dependencies, inverse) }
+                }
                 #expect(sharedJSONObject(sharedToolText(restored))?["state"] as? String == "A", "\(sharedToolText(restored))")
                 #expect(f.routingModePresses == 2 && f.routingDestinationPresses == 0)
                 #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "✓")
