@@ -625,6 +625,17 @@ extension AccessibilityChannel {
             extras.merge(facts) { _, new in new }
             return refuse(error, hint + "; nothing was pressed.")
         }
+        if inputBusOnly, AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact) {
+            // A foreign system alert can own the keyboard while Logic still
+            // reports AXFrontmost. Refuse before opening a native popup that
+            // the same keyboard-ownership boundary would forbid us to acquire.
+            guard let app, let windows = runtime.onScreenWindowList(),
+                  runtime.focusedApplicationPID() == pid,
+                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
+                  LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 else {
+                return refuse(.readbackUnavailable, "The neutral input read requires current Logic keyboard ownership; nothing was pressed.")
+            }
+        }
         guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
             return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed.")
         }
@@ -639,14 +650,24 @@ extension AccessibilityChannel {
             if opened == nil || !(opened?.isEmpty ?? true) || !sourceOwned() { break }
             if timing.pollIntervalMs > 0 { try? await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) }
         } while !Task.isCancelled && Date() < deadline
-        // No Output's native menu is not among the Mixer's AXChildren. This
+        // Neutral input/output native menus are not among the Mixer's AXChildren. This
         // read-only alternate discovery is scoped to our own just-issued press,
         // absent pre-existing AX/CG popups and the unchanged original source.
         let nativePopup: NativeOutputReadPopup?
-        if sendOrdinal == nil, !inputBusOnly, sendReplacement == nil,
-           OutputAssignment.observed(slotLabel: originalLabel) == .noOutput,
+        @Sendable func nativeNeutralScope(_ root: AXUIElement) -> Bool {
+            if inputBusOnly {
+                return AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+                    && hasCheckedNoInputMenu(in: root, runtime: runtime.ax)
+            }
+            return OutputAssignment.observed(slotLabel: originalLabel) == .noOutput
+        }
+        if sendOrdinal == nil, sendReplacement == nil,
+           (inputBusOnly
+                ? AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+                : OutputAssignment.observed(slotLabel: originalLabel) == .noOutput),
            opened?.isEmpty == true, let app, sourceOwned(),
            let observed = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
+           nativeNeutralScope(observed.root),
            sourceOwned() {
             nativePopup = observed
             opened = [observed.root]
@@ -657,7 +678,7 @@ extension AccessibilityChannel {
             guard ordinary.isEmpty, let app, let windows = runtime.onScreenWindowList() else { return nil }
             if LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 { return [] }
             guard let current = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
-                  current.matches(nativePopup) else { return nil }
+                  current.matches(nativePopup), nativeNeutralScope(current.root) else { return nil }
             return [nativePopup.root]
         }
         defer { observingPopupFocus(nil) }
@@ -1560,9 +1581,11 @@ extension AccessibilityChannel {
 
         static func read(physical: AXMixerStripBinding.Binding, app: AXUIElement, pid: pid_t,
                          runtime: AXLogicProElements.Runtime) -> Self? {
-            guard !Task.isCancelled, runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
-                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
-                  let windows = runtime.onScreenWindowList() else { return nil }
+            // The focused-application AX read needs the current CG census first
+            // (ProcessUtils.focusedApplicationPID); unread/foreign focus still refuses.
+            guard !Task.isCancelled, runtime.logicProPID() == pid,
+                  let windows = runtime.onScreenWindowList(), runtime.focusedApplicationPID() == pid,
+                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true else { return nil }
             let popups = LogicOnScreenWindows.logicOwned(windows, logicPID: pid)
                 .filter { $0.layer == LogicOnScreenWindows.popupMenuLevel }
             guard popups.count == 1, let frame = popups[0].bounds,
