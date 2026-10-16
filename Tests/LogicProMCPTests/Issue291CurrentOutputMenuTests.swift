@@ -141,6 +141,45 @@ func currentOutputMenuRefusesMalformedWitness(_ malformedRole: Bool) {
 
 @Suite("#291 owned checked-output acquisition", .serialized)
 struct Issue291OwnedCurrentOutputTests {
+    @Test("Native popup focus is read beside a fresh CG census, and unread or foreign focus refuses",
+          arguments: ["owned", "unread", "foreign"])
+    func nativePopupReadsCurrentWindowsBeforeFocusedApplication(focus: String) throws {
+        let f = try Issue291PhysicalStripReferenceTests.Fixture()
+        let wrapper = f.b.element(291_870), item = f.b.element(291_871)
+        f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+        f.b.setRole(wrapper, kAXPopUpButtonRole as String)
+        f.b.setAttribute(wrapper, kAXParentAttribute as String, f.mixer)
+        f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.window)
+        f.b.setChildren(wrapper, [f.root])
+        f.b.setRole(f.root, kAXMenuRole as String)
+        f.b.setFrame(f.root, x: 20, y: 100, width: 230, height: 175)
+        f.b.setRole(item, kAXMenuItemRole as String)
+        f.b.setChildren(f.root, [item])
+        f.outputHitTest = { _, _ in .success(item) }
+        final class FocusProbe: @unchecked Sendable {
+            var currentCGRead = false
+        }
+        let probe = FocusProbe()
+        let runtime = AXLogicProElements.Runtime(logicProPID: { f.pid }, ax: f.logic.ax,
+            onScreenWindowList: {
+                probe.currentCGRead = true
+                return [[kCGWindowOwnerPID as String: f.pid, kCGWindowNumber as String: 291_901,
+                         kCGWindowLayer as String: LogicOnScreenWindows.popupMenuLevel,
+                         kCGWindowBounds as String: CGRect(x: 20, y: 100, width: 230, height: 175).dictionaryRepresentation]]
+            }, focusedApplicationPID: {
+                let current = probe.currentCGRead
+                probe.currentCGRead = false
+                if focus == "foreign" { return f.pid + 1 }
+                return focus == "owned" && current ? f.pid : nil
+            })
+        let physical = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let observed = AccessibilityChannel.NativeOutputReadPopup.read(
+            physical: physical, app: f.app, pid: f.pid, runtime: runtime)
+        #expect((observed != nil) == (focus == "owned"))
+        #expect(f.mutations.isEmpty)
+    }
+
     @Test("No Output native popup requires the same owned native path and CG frame, never a destination press",
           arguments: ["owned", "wrong_window", "wrong_mixer", "wrong_wrapper_role", "wrong_root_role",
                       "wrong_hit_role", "nonreciprocal_hit", "nonreciprocal_root", "frame_disagrees",

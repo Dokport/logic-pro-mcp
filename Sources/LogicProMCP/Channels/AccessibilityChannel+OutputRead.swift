@@ -1570,9 +1570,11 @@ extension AccessibilityChannel {
 
         static func read(physical: AXMixerStripBinding.Binding, app: AXUIElement, pid: pid_t,
                          runtime: AXLogicProElements.Runtime) -> Self? {
-            guard !Task.isCancelled, runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
-                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
-                  let windows = runtime.onScreenWindowList() else { return nil }
+            // The focused-application AX read needs the current CG census first
+            // (ProcessUtils.focusedApplicationPID); unread/foreign focus still refuses.
+            guard !Task.isCancelled, runtime.logicProPID() == pid,
+                  let windows = runtime.onScreenWindowList(), runtime.focusedApplicationPID() == pid,
+                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true else { return nil }
             let popups = LogicOnScreenWindows.logicOwned(windows, logicPID: pid)
                 .filter { $0.layer == LogicOnScreenWindows.popupMenuLevel }
             guard popups.count == 1, let frame = popups[0].bounds,
