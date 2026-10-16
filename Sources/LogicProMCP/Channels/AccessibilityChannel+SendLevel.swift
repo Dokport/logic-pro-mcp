@@ -28,7 +28,7 @@ extension AccessibilityChannel {
     }
 
     static func setSendLevelVerified(params: [String: String], runtime: AXLogicProElements.Runtime,
-        mouse: AXMouseHelper.Runtime?, canPostEvents: @Sendable () -> Bool) async -> ChannelResult {
+        mouse: AXMouseHelper.Runtime?, canPostEvents: @escaping @Sendable () -> Bool) async -> ChannelResult {
         var extras: [String: Any] = ["operation": "mixer.set_send_level_verified", "write_attempted": false,
             "snapshot_atomic": false]
         func refused(_ error: HonestContract.FailureError, _ hint: String) -> ChannelResult {
@@ -114,6 +114,20 @@ extension AccessibilityChannel {
               size.width > 0, size.height > 0, let hitTest = runtime.ax.elementAtPosition else {
             return refused(.unsupportedState, "A stopped, owned exact-knob numeric editor transport is required.")
         }
+        let originalPair = AXMixerStripBinding.outputAssociation
+        let observingEffect = sendLevelChangeObserver != nil
+        var peerFootprints: [[SendSlotObservation]] = []
+        if observingEffect {
+            guard let originalPair, originalPair.strip.matches(before.physical) else {
+                return refused(.staleSnapshot, "Native level effect observation requires the retained original-header pair.")
+            }
+            for strip in before.population {
+                guard let slots = AXLogicProElements.sendSlotObservations(in: strip, runtime: runtime.ax) else {
+                    return refused(.readbackUnavailable, "Native level effect observation requires complete peer Send footprints.")
+                }
+                peerFootprints.append(slots)
+            }
+        }
         // One native double-click, not AXValue stepping or a popup fallback.
         let point = CGPoint(x: position.x + size.width / 2, y: position.y + size.height / 2)
         for count: Int64 in [1, 2] {
@@ -197,6 +211,23 @@ extension AccessibilityChannel {
         }
         extras["level_db"] = afterDisplay; extras["level_raw"] = afterRaw
         extras["changed"] = true; extras["verify_source"] = "ax_owned_send_numeric_editor"
+        if observingEffect {
+            guard let originalPair,
+                  let observation = HeldSelectionAssociation(window: originalPair.strip.window, logic: runtime,
+                    expectedProject: nil, requiresProjectReference: false, allowsSelectedChildRailEntry: true) else {
+                return refused(.readbackUnavailable, "The actual level commit lost its original-header observation.")
+            }
+            for index in before.population.indices {
+                if CFEqual(before.population[index], before.physical.strip) { peerFootprints[index] = after.slots }
+            }
+            let proof = ChangedSendLevelObservation(pair: originalPair, snapshot: after,
+                peerFootprints: peerFootprints, before: current, after: desired, observation: observation,
+                mouse: mouse, canPostEvents: canPostEvents)
+            guard proof.permits() else {
+                return refused(.readbackUnavailable, "The actual level commit lost native control, peer or numeric custody before publication.")
+            }
+            sendLevelChangeObserver?(proof)
+        }
         return .success(HonestContract.encodeStateA(extras: extras))
     }
 }

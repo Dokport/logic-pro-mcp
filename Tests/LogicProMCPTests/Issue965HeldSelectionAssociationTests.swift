@@ -27,7 +27,11 @@ private actor SendRemovalSagaResultBoundary: Channel {
         }
         let result: ChannelResult
         if operation == self.operation, mode == "lost_observer" {
-            if operation == "mixer.set_send_mode_verified" {
+            if operation == "mixer.set_send_level_verified" {
+                result = await AccessibilityChannel.$sendLevelChangeObserver.withValue(nil) {
+                    await base.execute(operation: operation, params: params)
+                }
+            } else if operation == "mixer.set_send_mode_verified" {
                 result = await AccessibilityChannel.$sendModeChangeObserver.withValue(nil) {
                     await base.execute(operation: operation, params: params)
                 }
@@ -2127,6 +2131,18 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "roundtrip")
     }
 
+    @Test(arguments: ["preflight", "failure", "cancel"])
+    func registeredSendLevelSagaOwnsItsActualCompensation(_ outcome: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "roundtrip", levelSaga: outcome)
+    }
+
+    @Test(arguments: ["no_observer", "lost_observer", "late_inverse_level", "late_inverse_document",
+        "late_inverse_mode", "late_inverse_bypass", "late_inverse_peer", "late_inverse_control",
+        "wrong_hash", "wrong_project", "wrong_target", "wrong_slot"])
+    func registeredSendLevelSagaRefusesUnownedOrChangedEffects(_ fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "roundtrip", levelSaga: fault)
+    }
+
     @Test func registeredSendLevelCannotAdoptAPreexistingNumericWindow() async throws {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, levelMode: "preexisting_editor")
     }
@@ -2518,7 +2534,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                modeCommand: String? = nil,
                                                modePeerBoundary: ModePeerBoundary? = nil,
                                                modeSaga: String? = nil,
-                                               modeEffectBoundary: ModeEffectBoundary? = nil) async throws {
+                                               modeEffectBoundary: ModeEffectBoundary? = nil,
+                                               levelSaga: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
@@ -3278,6 +3295,115 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 let params = prepared
+                if let levelSaga {
+                    let journal = SagaJournal(maxRecords: 1), key = "owned-send-level-saga"
+                    await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
+                        mode: levelSaga, operation: "mixer.set_send_level_verified", idempotencyKey: key,
+                        afterForward: {
+                            if levelSaga == "late_inverse_level" {
+                                b.setAttribute(knob, kAXValueAttribute as String, 99)
+                                b.setAttribute(knob, kAXValueDescriptionAttribute as String, "-95")
+                                f.routingLateScopeInjected = true
+                            }
+                            if levelSaga == "late_inverse_document" {
+                                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                                f.routingLateScopeInjected = true
+                            }
+                            if levelSaga == "late_inverse_mode" {
+                                b.setAttribute(mode, kAXTitleAttribute as String, "Post Pan")
+                                f.routingLateScopeInjected = true
+                            }
+                            if levelSaga == "late_inverse_bypass" {
+                                b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, true)
+                                f.routingLateScopeInjected = true
+                            }
+                            if levelSaga == "late_inverse_peer" {
+                                b.setChildren(f.strips[0], peerChildren + [extraSend[0]])
+                                f.routingLateScopeInjected = true
+                            }
+                            if levelSaga == "late_inverse_control" {
+                                let originalGroup = b.element(1_965_2621), replacementGroup = b.element(1_965_2899)
+                                b.setRole(replacementGroup, kAXGroupRole as String)
+                                b.setChildren(replacementGroup, b.makeAXRuntime().children(originalGroup))
+                                b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).map {
+                                    CFEqual($0, originalGroup) ? replacementGroup : $0
+                                })
+                                f.routingLateScopeInjected = true
+                            }
+                        }))
+                    let sagaDependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                        poller: StatePoller(axChannel: f.channel(), cache: cache,
+                            runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                        dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                        mutationGate: gate, liveTrackNames: { [:] })
+                    var stepParams = params
+                    stepParams.removeValue(forKey: "target_ref")
+                    stepParams["level_db"] = .string("-6")
+                    if case .issued(let project)? = capture.projectIssuance { stepParams["project_ref"] = .string(project.rawValue) }
+                    if levelSaga == "wrong_project" { stepParams["project_ref"] = .string("prj_foreign") }
+                    if levelSaga == "wrong_slot" { stepParams["ordinal"] = .int(0) }
+                    let levelTarget = levelSaga == "wrong_target" ? try #require(capture.mixerReference(at: 0)) : reference
+                    var wire: [String: Value] = ["idempotency_key": .string(key), "steps": .array([.object([
+                        "operation_id": .string(OperationID.mixerSetSendLevelVerified.rawValue),
+                        "target_ref": .string(levelTarget.rawValue), "params": .object(stepParams),
+                        "expected_inverse": .object(["operation_id": .string(OperationID.mixerSetSendLevelVerified.rawValue),
+                            "value_parameter": .string("level_db")])])])]
+                    wire["confirmed_plan_hash"] = .string(SagaJournal.planHash(try SagaWire.plan(from: wire)))
+                    if levelSaga == "wrong_hash" { wire["confirmed_plan_hash"] = .string(String(repeating: "0", count: 64)) }
+                    let preflight = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_preflight"))
+                    let preview = await FeatureFlags.withAdr004MutationSagaForTests(true) { await preflight(sagaDependencies, wire) }
+                    let previewBody = try #require(sharedJSONObject(sharedToolText(preview)))
+                    let ready = try #require(previewBody["ok"] as? Bool,
+                        "Actual registered level preflight: \(sharedToolText(preview))")
+                    if ["wrong_project", "wrong_target", "wrong_slot"].contains(levelSaga) {
+                        #expect(!ready)
+                        #expect(f.routingLevelWrites.isEmpty && f.routingLevelCommits == 0)
+                        return
+                    }
+                    #expect(ready)
+                    #expect(f.routingLevelWrites.isEmpty && f.routingLevelCommits == 0)
+                    if levelSaga == "preflight" { return }
+                    let execute = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_execute"))
+                    let result = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
+                    let resultBody = try #require(sharedJSONObject(sharedToolText(result)))
+                    if levelSaga == "wrong_hash" {
+                        #expect(resultBody["state"] as? String == "C")
+                        let wrote = try #require(resultBody["write_attempted"] as? Bool); #expect(!wrote)
+                        #expect(f.routingLevelWrites.isEmpty && f.routingLevelCommits == 0)
+                        return
+                    }
+                    if ["no_observer", "lost_observer"].contains(levelSaga) || levelSaga.hasPrefix("late_inverse_") {
+                        let terminal = try #require(resultBody["saga_state"] as? String)
+                        #expect(terminal != "completed" && terminal != "fullyCompensated")
+                        #expect(resultBody["state"] as? String == "B", "\(sharedToolText(result))")
+                        let expectedWrites = levelSaga == "no_observer" ? 0 : 1
+                        #expect(f.routingLevelWrites.count == expectedWrites && f.routingLevelCommits == expectedWrites)
+                        #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
+                        if levelSaga.hasPrefix("late_inverse_") { #expect(f.routingLateScopeInjected) }
+                        if levelSaga == "late_inverse_level" {
+                            #expect(b.attributeValue(knob, kAXValueDescriptionAttribute as String) as? String == "-95")
+                        }
+                        let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
+                        let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                        let duplicate = try #require(replayBody["duplicate"] as? Bool); #expect(duplicate)
+                        #expect(replayBody["state"] as? String == "B")
+                        #expect(f.routingLevelWrites.count == expectedWrites && f.routingLevelCommits == expectedWrites)
+                        return
+                    }
+                    #expect(resultBody["saga_state"] as? String == "fullyCompensated", "\(sharedToolText(result))")
+                    #expect(f.routingLevelWrites == ["-6", "-∞"] && f.routingLevelCommits == 2)
+                    #expect(b.attributeValue(knob, kAXValueDescriptionAttribute as String) as? String == "-∞")
+                    #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
+                    let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
+                    let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                    if levelSaga == "cancel" {
+                        #expect(replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue)
+                    } else {
+                        let duplicate = try #require(replayBody["duplicate"] as? Bool); #expect(duplicate)
+                    }
+                    #expect(f.routingLevelWrites.count == 2 && f.routingLevelCommits == 2)
+                    return
+                }
                 let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_level_verified",
                     commandParams: params, mutationGate: gate) {
                     if ["expired_deadline", "lost_gate", "deferred_cancel", "return_window_gate"].contains(levelMode ?? "") {

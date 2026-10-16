@@ -368,6 +368,8 @@ actor MutationSaga {
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_send_output_verified", valueParameter: "destination", tolerance: .exact)
                 : SendModeSagaAdapter.accepts(plan)
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_send_mode_verified", valueParameter: "mode", tolerance: .exact)
+                : SendLevelSagaAdapter.accepts(plan)
+                ? ReversibleDefinition(tool: .logicMixer, command: "set_send_level_verified", valueParameter: "level_db", tolerance: .exact)
                 : approvedSort ? ReversibleDefinition(tool: .logicTracks, command: "sort_verified",
                 valueParameter: "expected_order", tolerance: .exact)
                 : approvedOutput ? ReversibleDefinition(tool: .logicMixer, command: "set_output_verified",
@@ -943,7 +945,7 @@ actor MutationSaga {
         desiredValue: Value,
         step: SagaStep
     ) -> VerificationDisposition {
-        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified || step.operationID == .mixerSetOutputVerified || step.operationID == .mixerSetSendOutputVerified || step.operationID == .mixerSetSendModeVerified ? .unknown : .applied }
+        guard let readback else { return step.operationID == .pluginsSetParamVerified || step.operationID == .pluginsSetEQBandVerified || step.operationID == .mixerSetOutputVerified || step.operationID == .mixerSetSendOutputVerified || step.operationID == .mixerSetSendModeVerified || step.operationID == .mixerSetSendLevelVerified ? .unknown : .applied }
         if step.operationID == .pluginsSetEQBandVerified {
             return SelectedEQParameterSaga.comparison(readback, desired: desiredValue, step: step).equal ? .applied : .unknown
         }
