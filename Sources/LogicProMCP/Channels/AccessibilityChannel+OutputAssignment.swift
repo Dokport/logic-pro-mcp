@@ -862,6 +862,33 @@ extension AccessibilityChannel {
         return number
     }
 
+    /// Ownership scope for a native neutral-input popup only. This is deliberately
+    /// not an assignment reader: the public checked-input capability remains bus-only.
+    static func hasCheckedNoInputMenu(in root: AXUIElement, runtime: AXHelpers.Runtime) -> Bool {
+        guard let roots = titledMenuItems(of: root, runtime: runtime) else { return false }
+        let neutral = roots.filter { AXLocalePolicy.noInputMenuLabel.matches($0.title, mode: .exact) }
+        guard neutral.count == 1, let item = neutral.first, !item.hasSubmenu else { return false }
+        func mark(_ element: AXUIElement) -> String? {
+            let read: Result<AnyObject?, AXHelpers.AXStatusError> =
+                AXHelpers.getAttributeResult(element, "AXMenuItemMarkChar", runtime: runtime)
+            switch read {
+            case .success(nil): return ""
+            case .success(.some(let value)): return value as? String
+            case .failure(let error) where error.raw == -25212: return ""
+            case .failure: return nil
+            }
+        }
+        guard mark(item.element) == "✓" else { return false }
+        for other in roots where !CFEqual(other.element, item.element) {
+            guard mark(other.element) == "" else { return false }
+            if let submenu = other.submenu {
+                guard let leaves = leafItems(under: submenu, path: [other.title], depth: 0, runtime: runtime),
+                      leaves.allSatisfy({ mark($0.element) == "" }) else { return false }
+            }
+        }
+        return true
+    }
+
     private static func currentRoutingMenuAssignment(
         in root: AXUIElement, runtime: AXHelpers.Runtime, inputBusOnly: Bool
     ) -> OutputAssignment? {

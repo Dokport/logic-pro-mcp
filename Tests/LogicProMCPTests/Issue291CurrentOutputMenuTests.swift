@@ -149,6 +149,28 @@ struct Issue291OwnedCurrentOutputTests {
                       "document_changed_during_hit", "foreign_focus_during_hit", "wrapper_changed_after_mark",
                       "other_output_state", "missing_press_capability"])
     func ownedNativeNoOutputPopupAcquiresAndCleansUp(fault: String) async throws {
+        try await assertOwnedNativeNeutralPopup(fault: fault, input: false)
+    }
+
+    @Test("A native No Input popup can be owned and cancelled without becoming a checked Bus assignment",
+          arguments: ["owned", "wrong_window", "wrong_mixer", "wrong_wrapper_role", "wrong_root_role",
+                      "wrong_hit_role", "nonreciprocal_hit", "nonreciprocal_root", "frame_disagrees",
+                      "missing_frame", "hit_unread", "hit_absent", "foreign_popup", "duplicate_popup",
+                      "preexisting_popup", "cg_changed_during_hit", "source_changed_during_hit",
+                      "document_changed_during_hit", "foreign_focus_during_hit", "wrapper_changed_after_mark",
+                      "other_output_state", "missing_press_capability"])
+    func ownedNativeNoInputPopupAcquiresAndCleansUp(fault: String) async throws {
+        try await assertOwnedNativeNeutralPopup(fault: fault, input: true)
+    }
+
+    @Test("No Input cleanup requires one unambiguous checked neutral root and no competing input check",
+          arguments: ["unchecked_neutral", "duplicate_neutral", "conflicting_checked_root",
+                      "checked_input_leaf", "unread_neutral_mark", "wrong_neutral_label"])
+    func nativeNoInputRejectsAmbiguousMarks(fault: String) async throws {
+        try await assertOwnedNativeNeutralPopup(fault: fault, input: true)
+    }
+
+    private func assertOwnedNativeNeutralPopup(fault: String, input: Bool) async throws {
         let f = try Issue291PhysicalStripReferenceTests.Fixture()
         let wrapper = f.b.element(291_860), noOutput = f.b.element(291_861)
         f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
@@ -157,11 +179,14 @@ struct Issue291OwnedCurrentOutputTests {
         f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.window)
         f.b.setAttribute(f.root, kAXWindowAttribute as String, f.window)
         f.b.setRole(noOutput, kAXMenuItemRole as String)
-        f.b.setAttribute(noOutput, kAXTitleAttribute as String, "No Output")
+        f.b.setAttribute(noOutput, kAXTitleAttribute as String, input ? "No Input" : "No Output")
         f.b.setAttribute(noOutput, "AXMenuItemMarkChar", "✓")
         f.b.setChildren(noOutput, [])
         f.b.setChildren(f.root, [noOutput])
-        f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "No Output")
+        f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, input ? "Input" : "No Output")
+        if input {
+            f.b.setAttribute(f.outputs[0], kAXHelpAttribute as String, "Input slot. Choose the channel strip input source.")
+        }
         f.b.setActionNames(f.outputs[0], [kAXPressAction as String])
         f.b.setFrame(f.root, x: 20, y: 100, width: 230, height: 175)
         f.outputMenuWrapper = wrapper
@@ -184,7 +209,32 @@ struct Issue291OwnedCurrentOutputTests {
         case "frame_disagrees": f.b.setFrame(f.root, x: 21, y: 100, width: 230, height: 175)
         case "missing_frame": f.popupFrame = nil
         case "preexisting_popup": f.popupWindowsOverride = [popupWindow(owner: f.pid, number: 291_901)]
-        case "other_output_state": f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "Stereo Output")
+        case "other_output_state": f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, input ? "Input 1" : "Stereo Output")
+        case "unchecked_neutral": f.b.setAttribute(noOutput, "AXMenuItemMarkChar", "")
+        case "unread_neutral_mark":
+            f.attributeReadResult = { node, attribute in
+                if CFEqual(node, noOutput), attribute == "AXMenuItemMarkChar" {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return nil
+            }
+        case "wrong_neutral_label": f.b.setAttribute(noOutput, kAXTitleAttribute as String, "No Output")
+        case "duplicate_neutral", "conflicting_checked_root", "checked_input_leaf":
+            let other = f.b.element(291_863)
+            f.b.setRole(other, kAXMenuItemRole as String)
+            f.b.setAttribute(other, kAXTitleAttribute as String, fault == "duplicate_neutral" ? "No Input" : "Input 1")
+            f.b.setAttribute(other, "AXMenuItemMarkChar", "✓")
+            f.b.setChildren(other, [])
+            if fault == "checked_input_leaf" {
+                let parent = f.b.element(291_864), submenu = f.b.element(291_865)
+                f.b.setRole(parent, kAXMenuItemRole as String)
+                f.b.setAttribute(parent, kAXTitleAttribute as String, "Input")
+                f.b.setAttribute(parent, "AXMenuItemMarkChar", "")
+                f.b.setRole(submenu, kAXMenuRole as String)
+                f.b.setChildren(submenu, [other])
+                f.b.setChildren(parent, [submenu])
+                f.b.setChildren(f.root, [noOutput, parent])
+            } else { f.b.setChildren(f.root, [noOutput, other]) }
         default: break
         }
         if ["foreign_popup", "duplicate_popup"].contains(fault) {
@@ -229,7 +279,8 @@ struct Issue291OwnedCurrentOutputTests {
         let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
             strip: f.strips[0], document: f.bundle.absoluteString)
         let reading = await AXMixerStripBinding.$current.withValue(binding) {
-            await AccessibilityChannel.getOutputVerified(params: [:], runtime: f.logic, timing: .immediate)
+            if input { return await AccessibilityChannel.getInputBusVerified(runtime: f.logic, timing: .immediate) }
+            return await AccessibilityChannel.getOutputVerified(params: [:], runtime: f.logic, timing: .immediate)
         }
         let body = try #require(sharedJSONObject(reading.message))
         if fault != "owned" {
@@ -241,8 +292,13 @@ struct Issue291OwnedCurrentOutputTests {
             #expect(f.mutations.count == (["preexisting_popup", "missing_press_capability"].contains(fault) ? 0 : 1))
             return
         }
-        #expect(body["state"] as? String == "A")
-        #expect((body["current_output"] as? [String: Any])?["kind"] as? String == "no_output")
+        if input {
+            #expect(body["state"] as? String == "C", "No Input is still outside the bus-only capability")
+            #expect(body["current_input"] == nil)
+        } else {
+            #expect(body["state"] as? String == "A")
+            #expect((body["current_output"] as? [String: Any])?["kind"] as? String == "no_output")
+        }
         #expect(body["popup_menu_state"] as? String == "closed")
         let attempted = try #require(body["write_attempted"] as? Bool)
         let pressSucceeded = try #require(body["popup_press_succeeded"] as? Bool)

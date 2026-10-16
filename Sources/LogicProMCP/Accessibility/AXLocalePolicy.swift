@@ -3012,6 +3012,26 @@ enum AXLocalePolicy {
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FMAMixer.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/No%20Output#value"
     )
 
+    /// Generic caption on an already Help-identified, unassigned input control.
+    /// This label never identifies a control or establishes its assignment.
+    static let unassignedInputSlotLabel = LabelSet(
+        canonical: "Input",
+        variants: ["입력", "入力", "Eingang", "Entrada", "Entrée", "Ingresso", "输入", "輸入"],
+        rationale: "Restricts native read-only popup acquisition on the held input control;"
+            + " all ten locale values are derived from Apple's MAMixer Input row.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FMAMixer.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Input#value"
+    )
+
+    /// A positively checked neutral input-menu item, not a Bus assignment.
+    static let noInputMenuLabel = LabelSet(
+        canonical: "No Input",
+        variants: ["입력 없음", "Kein Eingang", "Sin entrada", "Pas d’entrée", "Nessun input",
+                   "Sem Entrada", "没有输入", "沒有輸入項目"],
+        rationale: "Scopes cleanup of the request's own native No Input popup, without"
+            + " widening the bus-only getter; all ten locales derive from Apple's MAMixer row.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FMAMixer.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/No%20Input#value"
+    )
+
     /// The word an output slot's description BEGINS with when the strip goes to a bus (#291).
     ///
     /// Logic composes the label from the template `Bus %d` in the same table as the cited row, and
@@ -3724,6 +3744,8 @@ enum AXLocalePolicy {
         sendLevelKnobHelpKeyword,
         stereoOutputLabel,
         noOutputLabel,
+        unassignedInputSlotLabel,
+        noInputMenuLabel,
         busOutputLabelPrefix,
         physicalOutputLabelPrefix,
         midiEffectSlotHelpKeyword,

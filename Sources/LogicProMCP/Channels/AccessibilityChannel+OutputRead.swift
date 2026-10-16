@@ -639,14 +639,24 @@ extension AccessibilityChannel {
             if opened == nil || !(opened?.isEmpty ?? true) || !sourceOwned() { break }
             if timing.pollIntervalMs > 0 { try? await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) }
         } while !Task.isCancelled && Date() < deadline
-        // No Output's native menu is not among the Mixer's AXChildren. This
+        // Neutral input/output native menus are not among the Mixer's AXChildren. This
         // read-only alternate discovery is scoped to our own just-issued press,
         // absent pre-existing AX/CG popups and the unchanged original source.
         let nativePopup: NativeOutputReadPopup?
-        if sendOrdinal == nil, !inputBusOnly, sendReplacement == nil,
-           OutputAssignment.observed(slotLabel: originalLabel) == .noOutput,
+        @Sendable func nativeNeutralScope(_ root: AXUIElement) -> Bool {
+            if inputBusOnly {
+                return AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+                    && hasCheckedNoInputMenu(in: root, runtime: runtime.ax)
+            }
+            return OutputAssignment.observed(slotLabel: originalLabel) == .noOutput
+        }
+        if sendOrdinal == nil, sendReplacement == nil,
+           (inputBusOnly
+                ? AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+                : OutputAssignment.observed(slotLabel: originalLabel) == .noOutput),
            opened?.isEmpty == true, let app, sourceOwned(),
            let observed = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
+           nativeNeutralScope(observed.root),
            sourceOwned() {
             nativePopup = observed
             opened = [observed.root]
@@ -657,7 +667,7 @@ extension AccessibilityChannel {
             guard ordinary.isEmpty, let app, let windows = runtime.onScreenWindowList() else { return nil }
             if LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 { return [] }
             guard let current = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
-                  current.matches(nativePopup) else { return nil }
+                  current.matches(nativePopup), nativeNeutralScope(current.root) else { return nil }
             return [nativePopup.root]
         }
         defer { observingPopupFocus(nil) }
