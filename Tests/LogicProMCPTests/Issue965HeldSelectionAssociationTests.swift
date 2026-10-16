@@ -2448,8 +2448,34 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(modeCommand: "post_pan_roundtrip")
     }
 
-    @Test func scalarPostPanDoesNotGrantUnqualifiedSagaPermission() async throws {
-        try await assertOccupiedSingleSendRenewal(modeCommand: "post_pan_roundtrip", modeSaga: "post_pan_rejected")
+    @Test(arguments: ["preflight", "failure", "cancel"])
+    func registeredPostPanSagaOwnsItsActualCompensation(_ outcome: String) async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: "post_pan_roundtrip", modeSaga: outcome)
+    }
+
+    @Test(arguments: ["canonical_plan", "canonical_digest", "multiple_steps", "wrong_before", "noop",
+        "unknown_mode", "boolean_mode", "extra_param", "missing_target", "negative_slot", "wrong_inverse", "blank_project"])
+    func postPanSagaRetainsItsExactSingletonAdmission(_ fault: String) {
+        var params: [String: Value] = ["ordinal": .int(1), "mode": .string("post_pan"),
+            "expected_current": .string("post_fader")]
+        switch fault {
+        case "wrong_before": params["expected_current"] = .string("pre_fader")
+        case "noop": params["mode"] = .string("post_fader")
+        case "unknown_mode": params["mode"] = .string("post_pan_extra")
+        case "boolean_mode": params["mode"] = .bool(true)
+        case "extra_param": params["allow_create"] = .bool(true)
+        case "negative_slot": params["ordinal"] = .int(-1)
+        case "blank_project": params["project_ref"] = .string(" ")
+        default: break
+        }
+        let step = SagaStep(operationID: .mixerSetSendModeVerified,
+            targetRef: fault == "missing_target" ? nil : .init(rawValue: "mix_source"), params: params,
+            expectedInverse: .init(operationID: .mixerSetSendModeVerified,
+                valueParameter: fault == "wrong_inverse" ? "level_db" : "mode"))
+        var plan = SagaPlan(steps: fault == "multiple_steps" ? [step, step] : [step], idempotencyKey: "mode-admission")
+        if fault == "canonical_plan" { plan.canonicalPlanID = "plan_foreign" }
+        if fault == "canonical_digest" { plan.canonicalDigest = String(repeating: "a", count: 64) }
+        #expect(!SendModeSagaAdapter.accepts(plan))
     }
 
     @Test(arguments: ["roundtrip", "post_pan_roundtrip"])
@@ -2466,9 +2492,9 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(boundary.leafCount == 1, "Unknown after-state must not cause another mode leaf")
     }
 
-    @Test(arguments: ["failure", "cancel"])
-    func existingModeSagaKeepsOwnedCompensationAfterControlRetirement(outcome: String) async throws {
-        try await assertOccupiedSingleSendRenewal(survivingSource: true, modeCommand: "roundtrip", modeSaga: outcome)
+    @Test(arguments: ["roundtrip", "post_pan_roundtrip"], ["failure", "cancel"])
+    func existingModeSagaKeepsOwnedCompensationAfterControlRetirement(mode: String, outcome: String) async throws {
+        try await assertOccupiedSingleSendRenewal(survivingSource: true, modeCommand: mode, modeSaga: outcome)
     }
 
     @Test(arguments: ["preflight", "failure", "cancel"])
@@ -2476,10 +2502,10 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeSaga: outcome)
     }
 
-    @Test(arguments: ["no_observer", "lost_observer", "late_inverse_mode", "late_inverse_level",
+    @Test(arguments: ["roundtrip", "post_pan_roundtrip"], ["no_observer", "lost_observer", "late_inverse_mode", "late_inverse_level",
         "late_inverse_document", "wrong_hash", "wrong_project", "wrong_target", "wrong_slot"])
-    func registeredSendModeSagaRefusesUnownedOrChangedEffects(_ fault: String) async throws {
-        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeSaga: fault)
+    func registeredSendModeSagaRefusesUnownedOrChangedEffects(mode: String, fault: String) async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: mode, modeSaga: fault)
     }
 
     private final class ModeEffectBoundary: @unchecked Sendable {
@@ -2490,28 +2516,29 @@ struct Issue965HeldSelectionAssociationTests {
         var permittedAfterFault: [Bool] = []
     }
 
-    @Test
-    func registeredSendModePublishesOnlyItsOwnNativeEffect() async throws {
+    @Test(arguments: ["roundtrip", "post_pan_roundtrip"])
+    func registeredSendModePublishesOnlyItsOwnNativeEffect(mode: String) async throws {
         let boundary = ModeEffectBoundary()
-        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeEffectBoundary: boundary)
+        try await assertOccupiedSingleSendRenewal(modeCommand: mode, modeEffectBoundary: boundary)
         #expect(boundary.observed.count == 2, "Both real registered leaves must publish their own native mode proof")
         guard boundary.observed.count == 2 else { return }
         #expect(boundary.permittedAtCapture == [true, true])
         let forward = boundary.observed[0], inverse = boundary.observed[1]
-        #expect(forward.before.mode == .postFader && forward.after.mode == .preFader)
-        #expect(inverse.before.mode == .preFader && inverse.after.mode == .postFader)
+        let desired: AccessibilityChannel.SendMode = mode == "post_pan_roundtrip" ? .postPan : .preFader
+        #expect(forward.before.mode == .postFader && forward.after.mode == desired)
+        #expect(inverse.before.mode == desired && inverse.after.mode == .postFader)
         #expect(forward.checkedDestination == .stereoOutput && inverse.checkedDestination == .stereoOutput)
         if forward.before.independentPan { #expect(forward.after.independentPan) }
         else { #expect(!forward.after.independentPan) }
         #expect(forward.original.track.matches(forward.current.track))
     }
 
-    @Test(arguments: ["foreign_document", "changed_control", "changed_peer", "boolean_raw"])
-    func nativeSendModeEffectRejectsChangedCustody(_ fault: String) async throws {
+    @Test(arguments: ["roundtrip", "post_pan_roundtrip"], ["foreign_document", "changed_control", "changed_peer", "boolean_raw"])
+    func nativeSendModeEffectRejectsChangedCustody(mode: String, fault: String) async throws {
         let boundary = ModeEffectBoundary()
         boundary.fault = fault
         let leaf = ModePeerBoundary()
-        try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip",
+        try await assertOccupiedSingleSendRenewal(modeCommand: mode,
             modePeerBoundary: leaf, modeEffectBoundary: boundary)
         #expect(leaf.leafCount == 1, "Invalidate only an effect from the actual mode leaf")
         #expect(boundary.observed.count == 1 && boundary.permittedAtCapture == [true])
@@ -4057,6 +4084,7 @@ struct Issue965HeldSelectionAssociationTests {
                             case "late_inverse_mode":
                                 b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
                                 b.setAttribute(preFader, "AXMenuItemMarkChar", "")
+                                b.setAttribute(postPan, "AXMenuItemMarkChar", "")
                             case "late_inverse_level": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 99)
                             case "late_inverse_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                             default: return
@@ -4084,20 +4112,6 @@ struct Issue965HeldSelectionAssociationTests {
                     let preflight = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_preflight"))
                     let preview = await FeatureFlags.withAdr004MutationSagaForTests(true) { await preflight(sagaDependencies, wire) }
                     let previewBody = try #require(sharedJSONObject(sharedToolText(preview)))
-                    if modeSaga == "post_pan_rejected" {
-                        #expect(previewBody["state"] as? String == "C")
-                        let previewWrote = try #require(previewBody["write_attempted"] as? Bool)
-                        #expect(!previewWrote)
-                        let execute = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_execute"))
-                        let result = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
-                        let body = try #require(sharedJSONObject(sharedToolText(result)))
-                        #expect(body["state"] as? String == "C")
-                        let wrote = try #require(body["write_attempted"] as? Bool)
-                        #expect(!wrote)
-                        #expect(f.routingModePresses == 0 && f.routingDestinationPresses == 0)
-                        #expect(!gate.isHeldByEntitledHolder())
-                        return
-                    }
                     let ready = try #require(previewBody["ok"] as? Bool,
                         "Actual registered mode preflight response: \(sharedToolText(preview))")
                     if ["wrong_project", "wrong_target", "wrong_slot"].contains(modeSaga) {
@@ -4127,6 +4141,7 @@ struct Issue965HeldSelectionAssociationTests {
                         if modeSaga == "late_inverse_mode" {
                             #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "✓")
                             #expect(b.attributeValue(preFader, "AXMenuItemMarkChar") as? String == "")
+                            #expect(b.attributeValue(postPan, "AXMenuItemMarkChar") as? String == "")
                         }
                         let count = f.routingModePresses
                         let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
@@ -4140,6 +4155,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingModePresses == 2 && f.routingDestinationPresses == 0)
                     #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "✓")
                     #expect(b.attributeValue(preFader, "AXMenuItemMarkChar") as? String == "")
+                    #expect(b.attributeValue(postPan, "AXMenuItemMarkChar") as? String == "")
                     #expect(!gate.isHeldByEntitledHolder())
                     let count = f.routingModePresses
                     let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
