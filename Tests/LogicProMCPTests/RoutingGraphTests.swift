@@ -259,6 +259,50 @@ struct RoutingGraphTests {
         #expect(diff.outputChanges.isEmpty)
     }
 
+    private func inputReceiverGraph(_ edges: [RoutingEdge]) -> RoutingGraph {
+        let receivers = ["receiver-a", "receiver-b"].map {
+            RoutingNode(id: $0, kind: .aux, displayName: "Same", busNumber: nil, targetRef: nil)
+        }
+        let result = graph(nodes: [busNode(1), busNode(2)] + receivers, edges: edges)
+        #expect(result.isConsistent, "The fanout counterexample must be a valid graph")
+        return result
+    }
+
+    @Test(arguments: [false, true])
+    func inputDiffRetainsMultipleReceiversOnOneBus(reversed: Bool) {
+        let first = assignment(.inputAssignment, source: "bus-1", destination: "receiver-a")
+        let second = assignment(.inputAssignment, source: "bus-1", destination: "receiver-b")
+        let rows = reversed ? [second, first] : [first, second]
+        let removed = routingDiff(before: inputReceiverGraph(rows), after: inputReceiverGraph([second]))
+        #expect(removed.inputChanges == [.init(before: first, after: nil)])
+        let added = routingDiff(before: inputReceiverGraph([second]), after: inputReceiverGraph(rows))
+        #expect(added.inputChanges == [.init(before: nil, after: first)])
+        #expect(removed.outputChanges.isEmpty && added.outputChanges.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func inputDiffPairsTheSameReceiverWhenItsBusChanges(reversed: Bool) {
+        let old = assignment(.inputAssignment, source: "bus-1", destination: "receiver-a")
+        let new = assignment(.inputAssignment, source: "bus-2", destination: "receiver-a")
+        let peer = assignment(.inputAssignment, source: "bus-1", destination: "receiver-b")
+        let before = inputReceiverGraph(reversed ? [peer, old] : [old, peer])
+        let after = inputReceiverGraph(reversed ? [peer, new] : [new, peer])
+        let diff = routingDiff(before: before, after: after)
+        #expect(diff.inputChanges == [.init(before: old, after: new)])
+        #expect(diff.addedSends.isEmpty && diff.removedSends.isEmpty && diff.changedSends.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func inputDiffPreservesTwoReceiversExchangingBuses(reversed: Bool) {
+        let oldA = assignment(.inputAssignment, source: "bus-1", destination: "receiver-a")
+        let oldB = assignment(.inputAssignment, source: "bus-2", destination: "receiver-b")
+        let newA = assignment(.inputAssignment, source: "bus-2", destination: "receiver-a")
+        let newB = assignment(.inputAssignment, source: "bus-1", destination: "receiver-b")
+        let diff = routingDiff(before: inputReceiverGraph(reversed ? [oldB, oldA] : [oldA, oldB]),
+            after: inputReceiverGraph(reversed ? [newB, newA] : [newA, newB]))
+        #expect(diff.inputChanges == [.init(before: oldA, after: newA), .init(before: oldB, after: newB)])
+    }
+
     @Test func graphDiffDetectsInputAndOutputChanges() {
         let input = RoutingNode(id: "input-1", kind: .input, displayName: "Input 1", busNumber: nil, targetRef: nil)
         let outputA = RoutingNode(id: "output-1", kind: .output, displayName: "Stereo Out", busNumber: nil, targetRef: nil)
