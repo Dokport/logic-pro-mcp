@@ -281,6 +281,22 @@ struct RoutingGraphTests {
     }
 
     @Test(arguments: [false, true])
+    func completeGraphRefusesCompetingInputsForOneReceiver(duplicate: Bool) {
+        let first = assignment(.inputAssignment, source: "bus-1", destination: "receiver-a")
+        let second = assignment(.inputAssignment, source: duplicate ? "bus-1" : "bus-2", destination: "receiver-a")
+        let valid = inputReceiverGraph([first])
+        let control = graph(nodes: [trackNode] + valid.nodes, edges: [first])
+        #expect(control.isConsistent)
+        #expect(evaluate(request(replaceExisting: true), against: control).allowed)
+        let invalid = graph(nodes: control.nodes, edges: [first, second])
+        #expect(!invalid.isConsistent)
+        let refused = evaluate(request(replaceExisting: true), against: invalid)
+        #expect(!refused.allowed)
+        #expect(refused.rejections.contains(.partialGraphUnsafe(reason: "routing graph is incomplete or inconsistent")))
+        #expect(!refused.writeAttempted)
+    }
+
+    @Test(arguments: [false, true])
     func inputDiffPairsTheSameReceiverWhenItsBusChanges(reversed: Bool) {
         let old = assignment(.inputAssignment, source: "bus-1", destination: "receiver-a")
         let new = assignment(.inputAssignment, source: "bus-2", destination: "receiver-a")
