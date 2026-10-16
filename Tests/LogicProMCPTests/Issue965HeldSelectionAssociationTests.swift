@@ -2444,6 +2444,14 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip")
     }
 
+    @Test func registeredSendPostPanPreservesItsOccupiedSendRoundtrip() async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: "post_pan_roundtrip")
+    }
+
+    @Test func scalarPostPanDoesNotGrantUnqualifiedSagaPermission() async throws {
+        try await assertOccupiedSingleSendRenewal(modeCommand: "post_pan_roundtrip", modeSaga: "post_pan_rejected")
+    }
+
     @Test(arguments: ["preflight", "failure", "cancel"])
     func registeredSendModeSagaOwnsItsActualCompensation(_ outcome: String) async throws {
         try await assertOccupiedSingleSendRenewal(modeCommand: "roundtrip", modeSaga: outcome)
@@ -2975,12 +2983,14 @@ struct Issue965HeldSelectionAssociationTests {
             }
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
-                if modeCommand != nil, action == kAXPressAction as String, CFEqual(element, mode) || CFEqual(element, preFader) {
+                if modeCommand != nil, action == kAXPressAction as String,
+                   CFEqual(element, mode) || CFEqual(element, preFader) || CFEqual(element, postPan) {
                     modePeerBoundary?.beforeLeafPeerReads = modePeerBoundary?.peerReads ?? 0
                     f.routingModePresses += 1
                     if modeCommand != "after_ack_only" {
                         b.setAttribute(mode, "AXMenuItemMarkChar", CFEqual(element, mode) ? "✓" : "")
                         b.setAttribute(preFader, "AXMenuItemMarkChar", CFEqual(element, preFader) ? "✓" : "")
+                        b.setAttribute(postPan, "AXMenuItemMarkChar", CFEqual(element, postPan) ? "✓" : "")
                     }
                     switch modeCommand {
                     case "after_route":
@@ -3951,13 +3961,15 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 } else { effectObserver = nil }
                 let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_mode_verified"))
+                let desiredMode = modeCommand == "noop" ? "post_fader"
+                    : modeCommand == "post_pan_roundtrip" ? "post_pan" : "pre_fader"
                 var prepared: [String: Value] = ["target_ref": .string(reference.rawValue), "ordinal": .int(1),
-                    "mode": .string(modeCommand == "noop" ? "post_fader" : "pre_fader"), "expected_current": .string("post_fader")]
+                    "mode": .string(desiredMode), "expected_current": .string("post_fader")]
                 switch modeCommand {
                 case "boolean_raw": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, false)
                 case "wrong_target": prepared["target_ref"] = .string(try #require(capture.mixerReference(at: 0)).rawValue)
                 case "wrong_project": prepared["project_ref"] = .string("prj_foreign")
-                case "unsupported_mode": prepared["mode"] = .string("post_pan")
+                case "unsupported_mode": prepared["mode"] = .string("post_pan_extra")
                 case "boolean_mode": prepared["mode"] = .bool(true)
                 case "extra_param": prepared["value"] = .double(0.5)
                 case "missing": b.setChildren(root, [echo, independentPan, mode, preFader, parent])
@@ -4027,6 +4039,20 @@ struct Issue965HeldSelectionAssociationTests {
                     let preflight = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_preflight"))
                     let preview = await FeatureFlags.withAdr004MutationSagaForTests(true) { await preflight(sagaDependencies, wire) }
                     let previewBody = try #require(sharedJSONObject(sharedToolText(preview)))
+                    if modeSaga == "post_pan_rejected" {
+                        #expect(previewBody["state"] as? String == "C")
+                        let previewWrote = try #require(previewBody["write_attempted"] as? Bool)
+                        #expect(!previewWrote)
+                        let execute = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_execute"))
+                        let result = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(sagaDependencies, wire) }
+                        let body = try #require(sharedJSONObject(sharedToolText(result)))
+                        #expect(body["state"] as? String == "C")
+                        let wrote = try #require(body["write_attempted"] as? Bool)
+                        #expect(!wrote)
+                        #expect(f.routingModePresses == 0 && f.routingDestinationPresses == 0)
+                        #expect(!gate.isHeldByEntitledHolder())
+                        return
+                    }
                     let ready = try #require(previewBody["ok"] as? Bool,
                         "Actual registered mode preflight response: \(sharedToolText(preview))")
                     if ["wrong_project", "wrong_target", "wrong_slot"].contains(modeSaga) {
@@ -4098,7 +4124,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingModePresses == 1 && f.routingDestinationPresses == 0)
                     return
                 }
-                if !["roundtrip", "noop", "independent_pan"].contains(modeCommand) {
+                if !["roundtrip", "post_pan_roundtrip", "noop", "independent_pan"].contains(modeCommand) {
                     #expect(body["state"] as? String == "C", "\(sharedToolText(result))")
                     #expect(f.routingModePresses == 0 && f.routingDestinationPresses == 0)
                     if modeCommand.hasPrefix("late_") || modeCommand == "unread_mark" { #expect(f.routingLateScopeInjected) }
@@ -4107,7 +4133,13 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
                 guard body["state"] as? String == "A" else { return }
                 if modeCommand == "noop" { #expect(f.routingModePresses == 0); return }
-                let inverse = params.merging(["mode": Value.string("post_fader"), "expected_current": .string("pre_fader")]) { _, new in new }
+                #expect(body["after"] as? String == desiredMode)
+                if modeCommand == "post_pan_roundtrip" {
+                    #expect(b.attributeValue(postPan, "AXMenuItemMarkChar") as? String == "✓")
+                    #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "")
+                    #expect(b.attributeValue(independentPan, "AXMenuItemMarkChar") as? String == "")
+                }
+                let inverse = params.merging(["mode": Value.string("post_fader"), "expected_current": .string(desiredMode)]) { _, new in new }
                 let restored = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_send_mode_verified",
                     commandParams: inverse, mutationGate: gate) {
                     await AccessibilityChannel.$sendModeChangeObserver.withValue(effectObserver) { await handler(dependencies, inverse) }
@@ -4115,6 +4147,10 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(sharedJSONObject(sharedToolText(restored))?["state"] as? String == "A", "\(sharedToolText(restored))")
                 #expect(f.routingModePresses == 2 && f.routingDestinationPresses == 0)
                 #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "✓")
+                if modeCommand == "post_pan_roundtrip" {
+                    #expect(b.attributeValue(postPan, "AXMenuItemMarkChar") as? String == "")
+                    #expect(b.attributeValue(independentPan, "AXMenuItemMarkChar") as? String == "")
+                }
                 return
             }
             let handler = try #require(OperationHandlerRegistry.handler(tool: "logic_mixer", command: "set_send_output_verified"))

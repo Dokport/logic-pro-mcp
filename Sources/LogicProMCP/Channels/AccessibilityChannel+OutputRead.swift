@@ -317,12 +317,12 @@ extension AccessibilityChannel {
         timing: OutputAssignmentTiming = .live) async -> ChannelResult {
         guard params.keys.allSatisfy({ ["ordinal", "mode", "expected_current"].contains($0) }),
               let ordinal = params["ordinal"].flatMap(Int.init), ordinal >= 0,
-              let desired = params["mode"].flatMap(SendMode.init(rawValue:)), desired != .postPan,
-              let expected = params["expected_current"].flatMap(SendMode.init(rawValue:)), expected != .postPan,
+              let desired = params["mode"].flatMap(SendMode.init(rawValue:)),
+              let expected = params["expected_current"].flatMap(SendMode.init(rawValue:)),
               let source = AXMixerStripBinding.current, let pair = AXMixerStripBinding.outputAssociation,
               pair.strip.matches(source), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
             return .error(HonestContract.encodeStateC(error: .invalidParams,
-                hint: "An exact retained occupied Send and explicit post_fader/pre_fader current and desired modes are required.",
+                hint: "An exact retained occupied Send and explicit post_pan/post_fader/pre_fader current and desired modes are required.",
                 extras: ["operation": "mixer.set_send_mode_verified", "write_attempted": false]))
         }
         return await getCheckedRoutingDestination(params: [:], sendOrdinal: ordinal, runtime: runtime, timing: timing,
