@@ -624,7 +624,7 @@ enum OperationRegistry {
             verification: .readbackRequired,
             retry: .neverAutomatic,
             // Compound routing edits retain source renewal, protected peer reads and owned acquisitions.
-            deadline: [.mixerSetInputBusVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified].contains(entry.0) ? .medium : .short,
+            deadline: [.mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified].contains(entry.0) ? .medium : .short,
             availability: .defaultInstall,
             allowedParams: allowedParams(
                 for: entry.0,
