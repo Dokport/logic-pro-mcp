@@ -1301,17 +1301,17 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingClassifierHelpReads += 1
                     }
                     if mode == "late_peer", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
-                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
                     }
                     if mode == "late_project", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
-                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     }
                     if mode == "late_peer_send", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
-                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 2, !f.routingLateScopeInjected {
+                       f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.builder.element(1_973_151), kAXDescriptionAttribute as String, "Bus 1")
                     }
@@ -1534,7 +1534,7 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(capture.freshPopulation?.checkedOutputs.filter {
                     $0.source.matches(pair.strip) && $0.assignment == (mode == "stereo" ? .physical(3, 4) : .stereoOutput) && $0.sendOrdinal == nil
                 }.count == 1, "Actual outputs=\(capture.channelStrips.map(\.output)), Help reads=\(f.routingClassifierHelpReads), presses=\(f.inputMenuPresses), stable=\(capture.freshPopulation?.stable)")
-                #expect(f.inputMenuPresses == 2 && f.inputMenuCancels == 2 && f.routingDestinationPresses == 0)
+                #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1 && f.routingDestinationPresses == 0)
                 let target = try #require(capture.issued?.byRow[0])
                 guard case .issued(let project)? = capture.projectIssuance else {
                     Issue.record("Actual capture must issue the project"); return
@@ -1703,7 +1703,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingDestinationPresses == 0, "Unchanged source and document alone cannot authorize the changed footprint")
                     #expect(result["saga_state"] as? String != "completed")
                 } else if mode == "unoffered_physical" {
-                    #expect(f.inputMenuPresses > 2, "The actual source menu must be read before refusing a missing destination")
+                    #expect(f.inputMenuPresses > 1, "The actual source menu must be read before refusing a missing destination")
                     #expect(f.routingDestinationPresses == 0)
                     #expect(result["saga_state"] as? String != "completed")
                 } else if mode == "newer" || mode == "ack_only" || mode == "post_write_loss" || (redrawsCensus && mode != "census_redraw") {
@@ -5804,8 +5804,8 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.selections == [1, 0])
     }
 
-    @Test("Selection challenge evidence cannot authorize an unselected peer's input popup")
-    func selectionChallengeDoesNotPromotePeerRoutingAuthority() async throws {
+    @Test("Selection challenge evidence cannot authorize an unselected peer's routing popup", arguments: ["input", "output"])
+    func selectionChallengeDoesNotPromotePeerRoutingAuthority(kind: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), cache = StateCache()
             let mixerOwner = f.builder.element(1_974_101)
@@ -5816,8 +5816,9 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setChildren(mixerOwner, [f.mixer])
             f.builder.setChildren(f.window, [f.rail, mixerOwner, f.builder.element(1_965_720)])
             let peerInput = f.builder.element(1_974_100)
-            f.builder.setButton(peerInput, description: "Bus 1",
-                help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 1, height: 1)
+            f.builder.setButton(peerInput, description: kind == "input" ? "Bus 1" : "Stereo Output",
+                help: kind == "input" ? "Input slot. Choose the channel strip input source." : "Output slot. Choose the channel strip output.",
+                x: 0, y: 0, width: 1, height: 1)
             f.builder.setChildren(peerInput, [])
             f.builder.setActionNames(peerInput, [kAXPressAction as String])
             f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [peerInput])
@@ -5835,8 +5836,10 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(population.selectionAssociations.count == 1)
             let pair = try #require(population.selectionAssociations.first)
             #expect(CFEqual(pair.track.header, f.headers[0]) && CFEqual(pair.strip.strip, f.strips[1]))
-            #expect(retained.capture.channelStrips[0].inputObservation?.source == "Bus 1")
-            #expect(retained.capture.channelStrips[0].inputObservation?.state == .observedSource)
+            if kind == "input" {
+                #expect(retained.capture.channelStrips[0].inputObservation?.source == "Bus 1")
+                #expect(retained.capture.channelStrips[0].inputObservation?.state == .observedSource)
+            } else { #expect(retained.capture.channelStrips[0].output == "Stereo Output") }
             #expect(population.checkedInputs.isEmpty)
             #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
         }
