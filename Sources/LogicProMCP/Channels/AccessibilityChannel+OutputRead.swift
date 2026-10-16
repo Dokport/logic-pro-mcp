@@ -1193,6 +1193,13 @@ extension AccessibilityChannel {
                     change = proof
                     if request.occupiedInverse == nil { sendChangeObserver?(proof) }
                 } else { change = nil }
+                if request.modeChange != nil,
+                   !recordSendModeEffect(original: AXMixerStripBinding.outputAssociation, renewal: source,
+                    control: final.control, footprint: final.slots, population: verifiedPopulation,
+                    peerFootprints: modePeerFootprints, destination: after.assignment,
+                    before: modeEvidence, after: after.sendMode, runtime: runtime) {
+                    return uncertain("The changed mode lost its request-local native effect custody before publication.")
+                }
                 return .init(result: .success(HonestContract.encodeStateA(extras: extras)),
                     assignment: after.assignment, sendNonRoutingChecks: after.sendNonRoutingChecks,
                     restoredSend: request.occupiedInverse == nil ? nil : change.map {
@@ -1226,6 +1233,13 @@ extension AccessibilityChannel {
             extras["strip_count_after"] = population.count
             extras["changed"] = request.modeChange.map({ $0.expected != $0.desired }) ?? (request.expected != request.destination)
             extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
+            if request.modeChange != nil,
+               !recordSendModeEffect(original: AXMixerStripBinding.outputAssociation, renewal: nil,
+                control: assigned, footprint: protectedSends, population: populationAfter,
+                peerFootprints: modePeerFootprints, destination: after.assignment,
+                before: modeEvidence, after: after.sendMode, runtime: runtime) {
+                return uncertain("The changed mode lost its request-local native effect custody before publication.")
+            }
             return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: request.destination,
                 sendNonRoutingChecks: after.sendNonRoutingChecks)
         }

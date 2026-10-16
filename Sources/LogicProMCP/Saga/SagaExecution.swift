@@ -388,6 +388,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     private let confirmedCompressorPlan: Bool
     private let confirmedSelectedEQPlan: Bool
     private let sendRemoval: SendRemovalSagaAdapter?
+    private let sendMode: SendModeSagaAdapter?
     /// ADR-004 / issue #287 — qualification-only fault seam. nil in all normal
     /// operation (env unset); non-nil ONLY when the operator explicitly set
     /// `LOGIC_PRO_MCP_FAULT_INJECT=partial_state` to qualify compensation. A
@@ -412,7 +413,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         approvedSessionRepair: ApprovedSessionRepair? = nil,
         confirmedCompressorPlan: Bool = false,
         confirmedSelectedEQPlan: Bool = false,
-        sendRemoval: SendRemovalSagaAdapter? = nil
+        sendRemoval: SendRemovalSagaAdapter? = nil,
+        sendMode: SendModeSagaAdapter? = nil
     ) {
         self.router = router
         self.cache = cache
@@ -427,6 +429,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         self.confirmedCompressorPlan = confirmedCompressorPlan
         self.confirmedSelectedEQPlan = confirmedSelectedEQPlan
         self.sendRemoval = sendRemoval
+        self.sendMode = sendMode
     }
     #else
     init(
@@ -441,7 +444,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         approvedSessionRepair: ApprovedSessionRepair? = nil,
         confirmedCompressorPlan: Bool = false,
         confirmedSelectedEQPlan: Bool = false,
-        sendRemoval: SendRemovalSagaAdapter? = nil
+        sendRemoval: SendRemovalSagaAdapter? = nil,
+        sendMode: SendModeSagaAdapter? = nil
     ) {
         self.router = router
         self.cache = cache
@@ -455,6 +459,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         self.confirmedCompressorPlan = confirmedCompressorPlan
         self.confirmedSelectedEQPlan = confirmedSelectedEQPlan
         self.sendRemoval = sendRemoval
+        self.sendMode = sendMode
     }
     #endif
 
@@ -478,7 +483,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         let parentTraceID = OperationTraceContext.current?.traceID
         let parent = OperationTraceContext.current
         let child: OperationTraceContext
-        if approvedSessionRepair == nil && sendRemoval == nil && step.operationID != .pluginsSetParamVerified && step.operationID != .pluginsSetEQBandVerified {
+        if approvedSessionRepair == nil && sendRemoval == nil && sendMode == nil && step.operationID != .pluginsSetParamVerified && step.operationID != .pluginsSetEQBandVerified {
             child = OperationTraceContext(parentTraceID: parentTraceID)
         }
         else {
@@ -493,6 +498,9 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     }
 
     private func runInChildTraceScope(_ step: SagaStep) async -> StepResult {
+        if let sendMode, sendMode.supports(step) {
+            return await sendMode.run(step, router: router, cache: cache, registry: targetRegistry)
+        }
         if let sendRemoval, sendRemoval.supports(step) {
             return await sendRemoval.run(step, router: router, cache: cache, registry: targetRegistry)
         }
@@ -667,6 +675,9 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
     /// returns nil, which the engine treats as `unknown` (fail-closed), rather
     /// than a mirror value that could be stale by a poll interval.
     func readState(_ step: SagaStep) async -> ObservedState? {
+        if let sendMode, sendMode.supports(step) {
+            return await sendMode.read(step, cache: cache, registry: targetRegistry)
+        }
         if let sendRemoval, sendRemoval.supports(step) {
             return await sendRemoval.read(step, cache: cache, registry: targetRegistry)
         }
@@ -753,7 +764,7 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
         ))
     }
 
-    fileprivate static func mapResponse(
+    static func mapResponse(
         _ response: CallTool.Result,
         operationID: OperationID
     ) -> StepResult {
