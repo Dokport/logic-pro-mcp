@@ -688,6 +688,30 @@ extension AccessibilityChannel {
         func interrupted() -> Bool {
             Task.isCancelled || OperationTraceContext.current?.cancellationRequested() == true
         }
+        // A retired element can remain in AXFocusedUIElement. Pointer equality
+        // is not restoration unless that exact focus still has its current
+        // reciprocal path in the original focused window. These receipt reads
+        // grant no assignment or cleanup authority.
+        @Sendable func focusRestorationProved() -> Bool {
+            guard let originalFocus, let app,
+                  let currentFocus: AXUIElement = AXHelpers.getAttribute(app,
+                    kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+                  CFEqual(originalFocus, currentFocus),
+                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(app,
+                    kAXFocusedWindowAttribute as String, runtime: runtime.ax),
+                  CFEqual(focusedWindow, physical.window),
+                  case .success(.elements(let windows)) = AXHelpers.getAXUIElementArrayRead(app,
+                    kAXWindowsAttribute as String, runtime: runtime.ax),
+                  windows.filter({ CFEqual($0, physical.window) }).count == 1,
+                  HeldSelectionAssociation.path(currentFocus, to: physical.window, ax: runtime.ax) != nil,
+                  let finalFocus: AXUIElement = AXHelpers.getAttribute(app,
+                    kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+                  CFEqual(finalFocus, currentFocus),
+                  let finalWindow: AXUIElement = AXHelpers.getAttribute(app,
+                    kAXFocusedWindowAttribute as String, runtime: runtime.ax),
+                  CFEqual(finalWindow, physical.window) else { return false }
+            return true
+        }
         // Cleanup renews the exact already-acquired output control without Help.
         // A stopped reading stays stopped: no checkmark, scan result or assignment
         // is recovered or published by this private cancellation inverse.
@@ -719,14 +743,14 @@ extension AccessibilityChannel {
                 Self.$interruptedOutputPopupInverse.withValue(true) {
                     let noHelp = AXHelpers.HelpReadGuard(allowHelpReads: false,
                         stop: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil })
-                    return AXHelpers.HelpReadGuard.$current.withValue(noHelp) { () -> (Bool, Bool) in
+                    return AXHelpers.HelpReadGuard.$current.withValue(noHelp) { () -> (Bool, Bool, Bool) in
                         if cleanupSourceOwned(),
                            checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true,
                            runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true {
-                            return (false, true)
+                            return (false, true, focusRestorationProved())
                         }
                         guard cleanupMenuOwned(), runtime.ax.actionNames(root).contains(kAXCancelAction as String),
-                              cleanupMenuOwned() else { return (false, false) }
+                              cleanupMenuOwned() else { return (false, false, focusRestorationProved()) }
                         let accepted: Bool
                         if case .success = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax) {
                             accepted = true
@@ -734,15 +758,13 @@ extension AccessibilityChannel {
                         let closed = cleanupSourceOwned()
                             && checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
                             && runtime.onScreenWindowList().map { LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 } == true
-                        return (accepted, closed)
+                        return (accepted, closed, focusRestorationProved())
                     }
                 }
             }.value
             extras["popup_cancel_succeeded"] = priorCancelSucceeded || cleanup.0
             extras["popup_menu_state"] = cleanup.1 ? "closed" : "not_restored"
-            let focus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
-            extras["focus_restoration"] = originalFocus.flatMap { old in focus.map { CFEqual(old, $0) } } == true
-                ? "restored" : "not_restored"
+            extras["focus_restoration"] = cleanup.2 ? "restored" : "not_restored"
             return refuse(.cancelled, "The output reading was cancelled; no assignment is published and only its still-owned popup may be reversed.")
         }
         if interrupted() { return await cancelledReading() }
@@ -1317,6 +1339,8 @@ extension AccessibilityChannel {
         }
         let currentFocus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
         let focusRestored = originalFocus.flatMap { old in currentFocus.map { CFEqual(old, $0) } } == true
+        // Observe the receipt before the ordinary deciding source/menu checks.
+        let restoredFocusReceipt = focusRestorationProved()
         // Cancel can move focus to the renewed strip before the Mixer census
         // retires its old entry. Do not touch the old input's guarded Help in
         // that gap. Focus agreement only permits the ordinary source checks;
@@ -1350,7 +1374,7 @@ extension AccessibilityChannel {
             && runtime.onScreenWindowList().map { LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 } == true
         extras["popup_menu_state"] = closed ? "closed" : "not_restored"
         extras["popup_cancel_succeeded"] = cancelSucceeded
-        extras["focus_restoration"] = focusRestored ? "restored" : "not_restored"
+        extras["focus_restoration"] = restoredFocusReceipt ? "restored" : "not_restored"
         var sourceAfter = originalSourcePresent() && originalInputFocusCurrent && sourceOwned()
         var inputRenewal: OriginalHeaderSourceRenewal?
         var inputSlot: AXMixerInputSlotBinding?

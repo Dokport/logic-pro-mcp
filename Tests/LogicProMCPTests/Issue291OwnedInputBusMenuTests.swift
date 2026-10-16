@@ -472,6 +472,35 @@ struct Issue291OwnedInputBusMenuTests {
         if fault == "not_restored" { #expect(fresh.uiEffects.reason == "routing_popup_not_restored") }
         #expect(f.mutations.allSatisfy { $0.1 == "AXPress" || $0.1 == "AXCancel" })
     }
+    @Test("An unchanged focus pointer is restored only while its native path remains current",
+          arguments: [true, false])
+    func inputCleanupDoesNotRestoreDetachedFocus(retired: Bool) async throws {
+        let p = try prepare(), f = p.f
+        let focus = f.volumes[0]
+        f.b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, focus)
+        f.attributeReadResult = { _, _ in
+            if retired, f.mutations.contains(where: {
+                CFEqual($0.0, f.root) && $0.1 == kAXCancelAction as String
+            }) { f.reorder([1]) }
+            return nil
+        }
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "checked-input-focus-receipt"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let response = await OperationTraceContext.$current.withValue(context) { await read(p) }
+        let body = try #require(sharedJSONObject(response.message))
+        #expect(f.mutations.map { $0.1 } == [kAXPressAction as String, kAXCancelAction as String])
+        #expect(body["output_checkmark_reads_observed"] as? Int == 2)
+        #expect(body["state"] as? String == (retired ? "C" : "A"))
+        #expect(body["focus_restoration"] as? String == (retired ? "not_restored" : "restored"))
+        let actual: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+            kAXFocusedUIElementAttribute as String, runtime: f.logic.ax))
+        #expect(CFEqual(actual, focus), "Reach the same-pointer case, not a different focused element")
+        #expect(AXHelpers.getRole(focus, runtime: f.logic.ax) == kAXSliderRole as String)
+        #expect(f.value(focus) == 100, "No focus or fader setter supplies restoration")
+    }
+
     @Test("Cleanup requires original input membership even when its AX role stays readable",
           arguments: ["healthy", "invalid_element", "readable_nonmember"])
     func originalInputMustSurviveCancel(_ mode: String) async throws {
