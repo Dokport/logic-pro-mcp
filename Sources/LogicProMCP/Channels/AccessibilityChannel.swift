@@ -355,7 +355,7 @@ actor AccessibilityChannel: Channel {
            case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime.logicRuntime),
            let candidate = HeldSelectionAssociation(window: window, logic: runtime.logicRuntime,
                 expectedProject: navigationProject, requiresProjectReference: request.projectRef != nil,
-                allowsSelectedChildRailEntry: request.scope == .wholeProject) {
+                allowsSelectedChildRailEntry: true) {
             association = candidate
             readFocusScope?.retainAssociation(candidate)
         }

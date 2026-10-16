@@ -5371,6 +5371,9 @@ struct Issue965HeldSelectionAssociationTests {
         defer { gate.release(claim) }
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
         try await OperationTraceContext.$current.withValue(context) {
+            let scalarDefault = AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false)
+            #expect(scalarDefault == nil, "Request-owned rail entry must not change scalar/default acquisition")
             let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
                 logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
                 allowsSelectedChildRailEntry: true))
@@ -6066,10 +6069,11 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.focusRestorationWrites.isEmpty)
     }
 
-    @Test("Whole-held selected-child observation can enter from its exact nonediting rail without changing scalar entry",
-          arguments: [false, true])
-    func mixerSelectedChildrenCanEnterFromTheOriginalPassiveRail(whole: Bool) async throws {
+    @Test("Request-owned selected-child observation can enter from its exact nonediting rail without changing scalar entry",
+          arguments: ["whole", "selection", "unchanged", "wrong_return"])
+    func mixerSelectedChildrenCanEnterFromTheOriginalPassiveRail(profile: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
+        let whole = profile == "whole"
         let mapping = [0, 3, 1, 2]
         f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
         f.routingRead = { element, attribute in
@@ -6077,7 +6081,9 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setAttribute(f.app, attribute, f.rail)
             }
             if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
-                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[f.selections.last ?? 0]]])
+                let index = profile == "unchanged" ? 0
+                    : (profile == "wrong_return" && f.selections == [1, 0] ? 1 : f.selections.last ?? 0)
+                f.builder.setAttribute(f.mixer, attribute, [f.strips[mapping[index]]])
             }
         }
         f.routingReadResult = { element, attribute in
@@ -6087,25 +6093,27 @@ struct Issue965HeldSelectionAssociationTests {
             }
             return nil
         }
-        let body = try await inspect(f, scope: whole ? "whole_project" : "selected_only")
+        let body = try await inspect(f, scope: whole ? "whole_project" : "selection")
         let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
-        #expect(rows.count == (whole ? 4 : 0))
-        if whole {
+        #expect(rows.count == (whole ? 4 : profile == "selection" ? 1 : 0),
+            "Only a changed-strip challenge and exact original return establish the selected source pair")
+        if !rows.isEmpty {
             let stripRows = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
-            for index in mapping.indices {
+            for index in (whole ? Array(mapping.indices) : [0]) {
                 let row = try #require(rows.first { $0["track_index"] as? Int == index })
                 #expect(row["mixer_strip_ref"] as? String == stripRows[mapping[index]]["mixer_strip_ref"] as? String)
                 #expect(row["source"] as? String == "held_exclusive_selection_selected_child")
             }
             #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
         }
-        #expect(f.selections == (whole ? [1, 2, 3, 0] : []))
+        #expect(f.selections == (whole ? [1, 2, 3, 0] : [1, 0]))
         #expect(f.focusRestorationWrites.isEmpty)
     }
 
     @Test("Passive rail entry refuses editing, unknown metadata and lost exact custody before navigation",
-          arguments: ["text_role", "settable", "zero_insertion", "unreadable", "nil_metadata", "foreign_focus", "detached_rail", "retired_strip", "foreign_document", "missing_relationship"])
-    func passiveRailSelectedChildEntryMustRetainExactNoneditingCustody(fault: String) async throws {
+          arguments: ["text_role", "settable", "zero_insertion", "unreadable", "nil_metadata", "foreign_focus", "detached_rail", "retired_strip", "foreign_document", "missing_relationship"],
+          ["whole_project", "selection"])
+    func passiveRailSelectedChildEntryMustRetainExactNoneditingCustody(fault: String, scope: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
         let mapping = [0, 3, 1, 2]
         let foreign = f.builder.element(1_965_998)
@@ -6143,7 +6151,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             return nil
         }
-        let body = try await inspect(f)
+        let body = try await inspect(f, scope: scope)
         let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
         #expect(rows.isEmpty)
         #expect(f.selections.isEmpty, "An unknown/editor/foreign rail must not authorize a selection")

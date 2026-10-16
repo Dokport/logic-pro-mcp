@@ -895,8 +895,7 @@ extension AccessibilityChannel {
             guard let firstChallenge else {
                 effects.reason = "association_selection_unverified"; return []
             }
-            guard allHeldHeaders || originalRailFocus == nil,
-                  await referenceIsCurrent(), permitsRead(), !stop() else { return [] }
+            guard await referenceIsCurrent(), permitsRead(), !stop() else { return [] }
             switch selectedChildRead() {
             case .observed(let child):
                 originalSelectedChild = child; expectedSelectedChild = child
@@ -931,7 +930,7 @@ extension AccessibilityChannel {
             // An initially selected header and passive focus are not a pair
             // witness. Whole-held collection needs its own changed-strip return
             // to that header, just as it does for every challenged header.
-            var originalPairVerified = !allHeldHeaders
+            var originalPairVerified = !allHeldHeaders && originalRailFocus == nil
             func selectedChildRestored() -> Bool {
                 guard let originalSelectedChild, let expectedSelectedChild else { return true }
                 return CFEqual(originalSelectedChild, expectedSelectedChild)
@@ -989,6 +988,9 @@ extension AccessibilityChannel {
                 guard advanced, !CFEqual(challengeStrip, originalAssociationStrip) else {
                     selectionsVerified = false; break
                 }
+                // A passive rail's selected-child hint becomes a pair only
+                // after this actual changed-strip challenge and exact return.
+                if CFEqual(associationStrip, originalAssociationStrip) { originalPairVerified = true }
                 observed.append((challenge, challengeStrip))
             }
             if allHeldHeaders {
