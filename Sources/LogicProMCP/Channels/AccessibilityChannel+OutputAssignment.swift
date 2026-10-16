@@ -55,7 +55,7 @@ extension AccessibilityChannel {
         params: [String: String],
         runtime: AXLogicProElements.Runtime = .production,
         timing: OutputAssignmentTiming = .live,
-        popupCleaner: PluginPopupMenuCleaner = livePluginPopupMenuCleaner
+        popupCleaner: @escaping PluginPopupMenuCleaner = livePluginPopupMenuCleaner
     ) async -> ChannelResult {
         let operation = "mixer.set_output_verified"
         guard let requestedIndex = params["index"].flatMap({ Int($0) }), requestedIndex >= 0 else {
@@ -84,13 +84,12 @@ extension AccessibilityChannel {
         }
         // The historical No Output menu-discovery failure is preserved in
         // docs/observations/2026-09-11-routing-slots-open-their-menus-and-a-destination-can-be-selected.json.
-        // The separately qualified read-only native wrapper does not qualify
-        // this writer's destination selection or recovery from No Output.
-        guard destination != .noOutput else {
+        // Legacy index selectors retain their refusal. The held-source scalar
+        // Stereo Output/No Output cycle below requires explicit before-state.
+        guard destination != .noOutput || physical != nil else {
             return .error(HonestContract.encodeStateC(
-                error: .invalidParams, hint: "\(operation) does not set No Output: assignment and "
-                    + "recovery through its native popup are not qualified for this writer. "
-                    + "'no_output' is accepted only as 'expected_current'."
+                error: .invalidParams, hint: "\(operation) requires a current held physical source "
+                    + "for No Output; legacy selectors cannot grant recovery authority."
             ))
         }
         var expected: OutputAssignment?
@@ -177,18 +176,21 @@ extension AccessibilityChannel {
                 + "output; re-read it and retry. Nothing was pressed.",
                 ["expected_current": expected.json])
         }
+        let noOutputChange = before == .noOutput || destination == .noOutput
+        if noOutputChange {
+            guard physical != nil, expected == before,
+                  ApprovedSessionRepair.current == nil, ApprovedSessionRepair.outputLeafPermission == nil,
+                  (before == .noOutput && destination == .stereoOutput)
+                    || (before == .stereoOutput && destination == .noOutput) else {
+                return refusal(.unsupportedState, "No Output changes require the current physical source, "
+                    + "explicit matching expected_current and a noncanonical Stereo Output/No Output change; nothing was pressed.")
+            }
+        }
         if before == destination {
             extras["after"] = before.json
             extras["changed"] = false
             extras["verify_source"] = "ax_output_slot"
             return .success(HonestContract.encodeStateA(extras: extras))
-        }
-        // Read-only native popup acquisition does not grant this writer's
-        // missing destination-selection/recovery authority.
-        if before == .noOutput {
-            return refusal(.unsupportedState, "The strip's output is No Output; assignment and "
-                + "recovery through its native popup are not qualified for this writer. "
-                + "Choose its output in Logic; nothing was pressed.")
         }
 
         // Stopped, as a reading. Either checkbox unread refuses: it cannot be shown stopped.
@@ -231,19 +233,54 @@ extension AccessibilityChannel {
         guard let slotButton = AXLogicProElements.outputSlotButton(in: strip, runtime: runtime.ax) else {
             return refusal(.elementNotFound, "The strip's output slot button was not found; nothing was pressed.")
         }
+        if noOutputChange {
+            guard checkedOutputPopupMenus(in: mixer, runtime: runtime.ax)?.isEmpty == true,
+                  case .success(let actions) = AXHelpers.getActionNamesResult(slotButton, runtime: runtime.ax),
+                  actions.contains(kAXPressAction as String),
+                  AXLogicProElements.outputSlotDestination(in: strip, runtime: runtime.ax) == beforeLabel,
+                  physical?.currentIndex(runtime: runtime) == index else {
+                return refusal(.readbackUnavailable, "No Output recovery requires the current original slot's "
+                    + "press capability and no pre-existing menu; nothing was pressed.")
+            }
+        }
 
+        let sourceIndex = index
         var heldPopup: AXUIElement?
-        func popupSourceStillCurrent() -> Bool {
+        var heldNativePopup: NativeOutputReadPopup?
+        @Sendable func sourceStillCurrent(root: AXUIElement, native: NativeOutputReadPopup?) -> Bool {
             guard let physical else { return true } // Preserve the explicit legacy selector path.
-            guard !Task.isCancelled, let root = heldPopup,
+            guard !Task.isCancelled,
                   AXHelpers.getRole(physical.strip, runtime: runtime.ax) == kAXLayoutItemRole as String,
                   let currentSlot = AXLogicProElements.outputSlotButton(in: physical.strip, runtime: runtime.ax),
                   CFEqual(currentSlot, slotButton),
                   case .success(let sourceChildren) = AXHelpers.childrenResult(physical.strip, runtime: runtime.ax),
-                  sourceChildren.filter({ CFEqual($0, slotButton) }).count == 1,
-                  case .success(let children) = AXHelpers.childrenResult(mixer, runtime: runtime.ax),
-                  children.filter({ CFEqual($0, root) }).count == 1,
-                  physical.currentIndex(runtime: runtime) == index,
+                  sourceChildren.filter({ CFEqual($0, slotButton) }).count == 1 else { return false }
+            if let native {
+                guard let app = AXLogicProElements.appRoot(runtime: runtime),
+                      checkedOutputPopupMenus(in: mixer, runtime: runtime.ax)?.isEmpty == true,
+                      let current = NativeOutputReadPopup.read(physical: physical, app: app, pid: logicPID, runtime: runtime),
+                      current.matches(native), CFEqual(root, native.root) else { return false }
+            } else {
+                guard case .success(let children) = AXHelpers.childrenResult(mixer, runtime: runtime.ax),
+                      children.filter({ CFEqual($0, root) }).count == 1 else { return false }
+                if noOutputChange {
+                    guard let menus = checkedOutputPopupMenus(in: mixer, runtime: runtime.ax),
+                          menus.count == 1, CFEqual(menus[0], root),
+                          let parent: AXUIElement = AXHelpers.getAttribute(root, kAXParentAttribute, runtime: runtime.ax),
+                          CFEqual(parent, mixer) else { return false }
+                }
+            }
+            if noOutputChange {
+                guard let app = AXLogicProElements.appRoot(runtime: runtime), runtime.focusedApplicationPID() == logicPID,
+                      AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
+                      !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked,
+                      AXLogicProElements.outputSlotDestination(in: physical.strip, runtime: runtime.ax) == beforeLabel,
+                      currentOutputMenuAssignment(in: root, runtime: runtime.ax) == before,
+                      AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
+                      AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false else { return false }
+            }
+            guard
+                  physical.currentIndex(runtime: runtime) == sourceIndex,
                   runtime.logicProPID() == logicPID,
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
                   CFEqual(currentWindow, physical.window),
@@ -252,6 +289,29 @@ extension AccessibilityChannel {
                   currentDocument.utf8.elementsEqual(physical.document.utf8), !Task.isCancelled else { return false }
             return true
         }
+        func popupSourceStillCurrent() -> Bool {
+            guard let root = heldPopup else { return physical == nil }
+            return sourceStillCurrent(root: root, native: heldNativePopup)
+        }
+        func acquiredPopupCleaner() -> PluginPopupMenuCleaner {
+            guard let native = heldNativePopup else { return popupCleaner }
+            return { runtime in
+                guard let windows = runtime.onScreenWindowList() else { return .popupCountUnavailable }
+                let count = LogicOnScreenWindows.popupMenuCount(windows, logicPID: logicPID)
+                if count == 0 { return .noPopupObserved }
+                guard sourceStillCurrent(root: native.root, native: native),
+                      case .success(let actions) = AXHelpers.getActionNamesResult(native.root, runtime: runtime.ax),
+                      actions.contains(kAXCancelAction as String),
+                      sourceStillCurrent(root: native.root, native: native) else {
+                    return .couldNotDismiss(initialPopupCount: count, remainingPopupCount: count)
+                }
+                _ = AXHelpers.performActionResult(native.root, kAXCancelAction as String, runtime: runtime.ax)
+                guard let after = runtime.onScreenWindowList() else { return .popupCountUnavailable }
+                let remaining = LogicOnScreenWindows.popupMenuCount(after, logicPID: logicPID)
+                return remaining == 0 ? .dismissed
+                    : .couldNotDismiss(initialPopupCount: count, remainingPopupCount: remaining)
+            }
+        }
 
         // Open the popup of THIS strip and find the menu it opened: a new AXMenu among the Mixer
         // layout area's children, which is where Logic parents it (measured in ko and de).
@@ -259,11 +319,32 @@ extension AccessibilityChannel {
         if let physical, physical.currentIndex(runtime: runtime) != index {
             return refusal(.staleTargetReference, "The referenced source changed before its output popup opened; nothing was pressed.")
         }
+        if noOutputChange, let physical {
+            guard let app = AXLogicProElements.appRoot(runtime: runtime), runtime.focusedApplicationPID() == logicPID,
+                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
+                  !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked,
+                  AXLogicProElements.outputSlotDestination(in: physical.strip, runtime: runtime.ax) == beforeLabel,
+                  physical.currentIndex(runtime: runtime) == sourceIndex,
+                  case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+                  CFEqual(window, physical.window),
+                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime),
+                  document.utf8.elementsEqual(physical.document.utf8), !Task.isCancelled else {
+                return refusal(.staleTargetReference, "The No Output source changed during final acquisition reads; nothing was pressed.")
+            }
+        }
         _ = AXHelpers.performAction(slotButton, kAXPressAction, runtime: runtime.ax)
-        let opened = await newPopupMenus(in: mixer, excluding: menusBefore, timing: timing, runtime: runtime.ax)
-        guard opened.count == 1, let root = opened.first else {
+        var opened = await newPopupMenus(in: mixer, excluding: menusBefore, timing: timing, runtime: runtime.ax)
+        if before == .noOutput, opened.isEmpty, let physical,
+           let app = AXLogicProElements.appRoot(runtime: runtime), physical.currentIndex(runtime: runtime) == index,
+           let native = NativeOutputReadPopup.read(physical: physical, app: app, pid: logicPID, runtime: runtime),
+           sourceStillCurrent(root: native.root, native: native) {
+            heldNativePopup = native
+            opened = [native.root]
+        }
+        guard opened.count == 1, let root = opened.first,
+              before != .noOutput || heldNativePopup != nil else {
             let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: false,
-                                                 cleaner: popupCleaner, permittingCleanup: popupSourceStillCurrent)
+                                                 cleaner: acquiredPopupCleaner(), permittingCleanup: popupSourceStillCurrent)
             return refusal(.elementNotFound, opened.isEmpty
                 ? "The output slot press opened no popup menu under the Mixer; nothing was selected."
                 : "The output slot press opened \(opened.count) menus under the Mixer, so which one is "
@@ -277,7 +358,7 @@ extension AccessibilityChannel {
         let choice = outputMenuChoice(for: destination, in: root, runtime: runtime.ax)
         guard case .item(let item, let path) = choice else {
             let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: false,
-                                                 cleaner: popupCleaner, permittingCleanup: popupSourceStillCurrent)
+                                                 cleaner: acquiredPopupCleaner(), permittingCleanup: popupSourceStillCurrent)
             var more = cleanup
             more["menu_failure"] = choice.failureLabel
             switch choice {
@@ -300,7 +381,7 @@ extension AccessibilityChannel {
         }
         guard (AXHelpers.getAttribute(item, kAXEnabledAttribute, runtime: runtime.ax) as Bool?) == true else {
             let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: false,
-                                                 cleaner: popupCleaner, permittingCleanup: popupSourceStillCurrent)
+                                                 cleaner: acquiredPopupCleaner(), permittingCleanup: popupSourceStillCurrent)
             return refusal(.elementNotFound, "The popup entry for this destination is disabled or its "
                 + "enabled state did not read; nothing was selected.",
                 cleanup.merging(["menu_failure": "destination_entry_not_enabled", "menu_path": path]) { _, new in new })
@@ -334,16 +415,27 @@ extension AccessibilityChannel {
         }
         if let (error, hint, more) = refused {
             let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: false,
-                                                 cleaner: popupCleaner, permittingCleanup: popupSourceStillCurrent)
+                                                 cleaner: acquiredPopupCleaner(), permittingCleanup: popupSourceStillCurrent)
             return refusal(error, hint + ", read again with the popup open; nothing was selected.",
                 cleanup.merging(more.merging(["read_with_popup_open": true]) { _, new in new }) { _, new in new })
         }
 
         if let permission = ApprovedSessionRepair.outputLeafPermission, !permission(root) {
             let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: false,
-                                                 cleaner: popupCleaner, permittingCleanup: popupSourceStillCurrent)
+                                                 cleaner: acquiredPopupCleaner(), permittingCleanup: popupSourceStillCurrent)
             return refusal(.staleTargetReference,
                 "The approved output's retained footprint changed; nothing was selected.", cleanup)
+        }
+
+        if noOutputChange {
+            guard case .item(let currentItem, let currentPath) = outputMenuChoice(for: destination, in: root, runtime: runtime.ax),
+                  CFEqual(currentItem, item), currentPath == path,
+                  AXHelpers.getAttribute(currentItem, kAXEnabledAttribute, runtime: runtime.ax) as Bool? == true else {
+                let cleanup = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: false,
+                                                     cleaner: acquiredPopupCleaner(), permittingCleanup: popupSourceStillCurrent)
+                return refusal(.staleTargetReference,
+                    "The original No Output destination entry changed during final acquisition reads; nothing was selected.", cleanup)
+            }
         }
 
         if physical != nil {
@@ -365,7 +457,7 @@ extension AccessibilityChannel {
         extras["menu_path"] = path
         _ = AXHelpers.performAction(item, kAXPressAction, runtime: runtime.ax)
         let closed = await closeOutputPopup(runtime: runtime, timing: timing, waitForSelfClose: true,
-                                            cleaner: popupCleaner, permittingCleanup: popupSourceStillCurrent)
+                                            cleaner: acquiredPopupCleaner(), permittingCleanup: popupSourceStillCurrent)
         extras.merge(closed) { _, new in new }
 
         // The committed output, by R1's reader, from the strip at the SAME ordinal, found again on
@@ -398,19 +490,28 @@ extension AccessibilityChannel {
                 }
             }
             after = afterLabel.flatMap(OutputAssignment.observed(slotLabel:))
-            if afterLabel == nil, !attemptedAssociation, let physical, let outputAssociation,
-               enumeration?.strips.count == strips.count, physical.currentIndex(runtime: runtime) == nil {
-                attemptedAssociation = true
-                let observed = await readOutputThroughOriginalHeader(outputAssociation, original: physical, runtime: runtime)
-                extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
-                    "attempted": observed.effects.attempted, "changed": observed.effects.changed,
-                    "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
-                if let label = observed.label, let renewedIndex = observed.index {
-                    afterLabel = label
-                    after = OutputAssignment.observed(slotLabel: label)
-                    extras["source_renewal"] = observed.source
-                    extras["reference_reread_required"] = true
-                    extras["source_index_after"] = renewedIndex
+            if !attemptedAssociation, let physical, let outputAssociation,
+               enumeration?.strips.count == strips.count {
+                let currentIndex = physical.currentIndex(runtime: runtime)
+                let retired = afterLabel == nil && currentIndex == nil
+                // A No Output transition can commit while the exact surviving
+                // slot retains its old AX label. Re-observe only that original
+                // source through its retained header, never retry the setter.
+                let surviving = noOutputChange && after != destination && currentIndex == index
+                if retired || surviving {
+                    attemptedAssociation = true
+                    let observed = await readOutputThroughOriginalHeader(outputAssociation, original: physical, runtime: runtime,
+                        sourceDisposition: retired ? .retiredOriginal : .survivingOriginal)
+                    extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
+                        "attempted": observed.effects.attempted, "changed": observed.effects.changed,
+                        "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
+                    if let label = observed.label, let renewedIndex = observed.index {
+                        afterLabel = label
+                        after = OutputAssignment.observed(slotLabel: label)
+                        extras["source_renewal"] = observed.source
+                        extras["reference_reread_required"] = true
+                        extras["source_index_after"] = renewedIndex
+                    }
                 }
             }
             if after == destination { break }
@@ -449,9 +550,11 @@ extension AccessibilityChannel {
     /// ordinal, destination or unchanged population count.
     private static func readOutputThroughOriginalHeader(
         _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
-        runtime: AXLogicProElements.Runtime
+        runtime: AXLogicProElements.Runtime,
+        sourceDisposition: OriginalHeaderSourceDisposition = .retiredOriginal
     ) async -> (label: String?, index: Int?, source: String?, effects: SessionPopulationObservation.UIEffects) {
-        let observed = await renewSourceThroughOriginalHeader(originalPair, original: original, runtime: runtime)
+        let observed = await renewSourceThroughOriginalHeader(originalPair, original: original, runtime: runtime,
+            sourceDisposition: sourceDisposition)
         guard let source = observed.source,
               let label = AXLogicProElements.outputSlotDestination(in: source.pair.strip.strip, runtime: runtime.ax),
               source.permits(runtime: runtime) else { return (nil, nil, nil, observed.effects) }
@@ -540,8 +643,11 @@ extension AccessibilityChannel {
         guard let rootItems = titledMenuItems(of: root, runtime: runtime) else { return .menuUnread(path: []) }
         switch destination {
         case .noOutput:
-            // Never asked: `setOutputVerified` refuses No Output before any popup opens.
-            return .notOffered(offered: [])
+            let choices = rootItems.filter { OutputAssignment.observed(slotLabel: $0.title) == .noOutput }
+            guard choices.count <= 1 else { return .repeated(count: choices.count) }
+            guard let choice = choices.first else { return .notOffered(offered: []) }
+            guard !choice.hasSubmenu else { return .menuUnread(path: [choice.title]) }
+            return .item(choice.element, path: [choice.title])
         case .stereoOutput:
             let parent = submenu(titled: AXLocalePolicy.outputPopupOutputSubmenuTitle, among: rootItems, runtime: runtime)
             guard case .found(let title, let submenu) = parent else { return parent.choice }
