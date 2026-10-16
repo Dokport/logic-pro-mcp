@@ -41,6 +41,117 @@ struct Issue291OwnedInputBusMenuTests {
         }
     }
 
+    private func prepareInputDomain(_ kind: String) throws -> (Prepared, InputAssignment) {
+        let p = try prepare(), f = p.f
+        f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+        let neutral = f.b.element(291_947)
+        let expected: InputAssignment
+        switch kind {
+        case "mono", "stereo":
+            let title = kind == "mono" ? "Input 1" : "Input 1-2"
+            f.b.setAttribute(p.echo, kAXTitleAttribute as String, title)
+            f.b.setAttribute(p.inputLeaf, kAXTitleAttribute as String, title)
+            f.b.setAttribute(p.leaf, "AXMenuItemMarkChar", "")
+            f.b.setAttribute(p.inputLeaf, "AXMenuItemMarkChar", "✓")
+            expected = .physical(kind == "mono" ? [1] : [1, 2])
+        case "no_input":
+            f.b.setAttribute(p.leaf, "AXMenuItemMarkChar", "")
+            f.b.setAttribute(neutral, "AXMenuItemMarkChar", "✓")
+            f.b.setChildren(f.root, [neutral, f.b.element(291_944), f.b.element(291_942)])
+            expected = .noInput
+        default: expected = .bus(1)
+        }
+        return (p, expected)
+    }
+
+    @Test("Checked input facts distinguish mono, stereo, no-input and Bus without widening the bus-only facade",
+          arguments: ["mono", "stereo", "no_input", "bus"])
+    func checkedInputDomainKeepsNonBusKindsDistinct(kind: String) throws {
+        let (p, expected) = try prepareInputDomain(kind), f = p.f
+        #expect(AccessibilityChannel.currentInputMenuAssignment(in: f.root, runtime: f.logic.ax) == expected)
+        if kind == "bus" {
+            #expect(AccessibilityChannel.currentInputMenuBusAssignment(in: f.root, runtime: f.logic.ax) == 1)
+        } else {
+            #expect(AccessibilityChannel.currentInputMenuBusAssignment(in: f.root, runtime: f.logic.ax) == nil)
+        }
+        #expect(f.mutations.isEmpty)
+    }
+
+    @Test("The owned internal input reader retains qualified non-Bus facts without publishing them through the bus-only facade",
+          arguments: ["mono", "stereo", "no_input"])
+    func ownedNonBusInputFactsStayPrivate(kind: String) async throws {
+        let (p, expected) = try prepareInputDomain(kind), f = p.f
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let reading = await AXMixerStripBinding.$current.withValue(binding) {
+            await AccessibilityChannel.getCheckedInputObservation(runtime: f.logic, timing: .immediate)
+        }
+        #expect(reading.inputAssignment == expected)
+        #expect(reading.assignment == nil)
+        let body = try #require(sharedJSONObject(reading.result.message))
+        #expect(body["state"] as? String == "C", "the wire facet remains bus-only")
+        #expect(body["current_input"] == nil)
+        #expect(body["popup_menu_state"] as? String == "closed")
+        #expect(f.mutations.count == 2)
+        #expect(f.mutations.last?.1 == kAXCancelAction as String)
+    }
+
+    @Test("A checked non-Bus menu cannot retain input facts after original source, document or label custody is lost",
+          arguments: ["source", "document", "label"])
+    func nonBusInputFactsRequireFinalSourceCustody(fault: String) async throws {
+        let (p, _) = try prepareInputDomain("stereo"), f = p.f
+        f.onActionNamesRead = { node in
+            guard CFEqual(node, f.root) else { return }
+            f.onActionNamesRead = nil
+            switch fault {
+            case "source": f.reorder([1])
+            case "document": f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///foreign.logicx")
+            case "label": f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "Input 3-4")
+            default: Issue.record("unhandled custody fault")
+            }
+        }
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let reading = await AXMixerStripBinding.$current.withValue(binding) {
+            await AccessibilityChannel.getCheckedInputObservation(runtime: f.logic, timing: .immediate)
+        }
+        #expect(reading.inputAssignment == nil)
+        #expect(reading.assignment == nil)
+        #expect(f.mutations.count == 1)
+    }
+
+    @Test("A physical input needs agreeing checked root and Input leaf, never output aliases or a competing route",
+          arguments: ["output_alias", "neutral_output_alias", "missing_echo", "conflicting_bus",
+                      "mismatched_leaf", "wrong_parent", "duplicate_echo", "unknown_mark"])
+    func checkedNonBusInputRejectsContradictions(fault: String) throws {
+        let p = try prepare(), f = p.f
+        f.b.setAttribute(p.echo, kAXTitleAttribute as String, "Input 1-2")
+        f.b.setAttribute(p.leaf, "AXMenuItemMarkChar", "")
+        f.b.setAttribute(p.inputLeaf, "AXMenuItemMarkChar", "✓")
+        switch fault {
+        case "output_alias": f.b.setAttribute(p.echo, kAXTitleAttribute as String, "Output 1-2")
+        case "neutral_output_alias": f.b.setAttribute(p.echo, kAXTitleAttribute as String, "No Output")
+        case "missing_echo": f.b.setAttribute(p.echo, "AXMenuItemMarkChar", "")
+        case "conflicting_bus": f.b.setAttribute(p.leaf, "AXMenuItemMarkChar", "✓")
+        case "mismatched_leaf": f.b.setAttribute(p.inputLeaf, kAXTitleAttribute as String, "Input 3-4")
+        case "wrong_parent":
+            f.b.setChildren(f.b.element(291_943), [p.inputLeaf])
+            f.b.setChildren(f.b.element(291_945), [])
+        case "duplicate_echo":
+            let duplicate = f.b.element(291_948)
+            f.b.setRole(duplicate, kAXMenuItemRole as String)
+            f.b.setAttribute(duplicate, kAXTitleAttribute as String, "Input 1-2")
+            f.b.setAttribute(duplicate, "AXMenuItemMarkChar", "✓")
+            f.b.setChildren(duplicate, [])
+            f.b.setChildren(f.root, f.logic.ax.children(f.root) + [duplicate])
+        case "unknown_mark": f.b.setAttribute(p.inputLeaf, "AXMenuItemMarkChar", "?")
+        default: Issue.record("unhandled input counterexample")
+        }
+        #expect(AccessibilityChannel.currentInputMenuAssignment(in: f.root, runtime: f.logic.ax) == nil)
+        #expect(AccessibilityChannel.currentInputMenuBusAssignment(in: f.root, runtime: f.logic.ax) == nil)
+        #expect(f.mutations.isEmpty)
+    }
+
     @Test(arguments: ["healthy", "two_same_name", "no_type", "no_checked_input", "ambiguous_input", "changed_input",
         "changed_input_control", "changed_label_control", "changed_label", "changed_source", "wrong_project", "wrong_registry",
         "foreign_editor", "unread_checked_input", "not_restored"])
@@ -383,6 +494,98 @@ struct Issue291OwnedInputBusMenuTests {
             #expect(!graph.complete)
             #expect(!graph.nodes.contains { $0.kind == .aux })
             #expect(graph.snapshotId == base.captureID)
+        }
+    }
+
+    @Test("Fresh routing inspection retains checked non-Bus inputs without inventing bus edges",
+          arguments: ["mono", "stereo", "no_input"], [false, true])
+    func inspectionPublishesCheckedNonBusInput(kind: String, navigation: Bool) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let (p, _) = try prepareInputDomain(kind), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let caption = kind == "no_input" ? "Input" : (kind == "mono" ? "Input 1" : "Input 1-2")
+            f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, caption)
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            let fresh = try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
+                    allowUINavigation: navigation), fileReader: .unavailable, stoppingWhen: { false })
+            }
+            #expect(fresh.stable)
+            let cache = StateCache(), registry = TargetRegistry()
+            await cache.updateProject(try #require(fresh.project))
+            await cache.updateDocumentState(true)
+            await cache.updateChannelStrips(try #require(fresh.strips))
+            let base = await SessionPopulationObservation.capture(cache: cache,
+                targetRegistry: registry, fileReader: .unavailable)
+            let capture = inputCapture(base, fresh: fresh)
+            let report = SessionPopulationObservation.build(request: .init(domains: [.routing]), capture: capture)
+            let row = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(report.strips.rows[0])) as? [String: Any])
+            if navigation {
+                #expect(fresh.checkedInputs.count == 1)
+                let checked = try #require(row["checked_input"] as? [String: Any])
+                #expect(checked["kind"] as? String == (kind == "no_input" ? "no_input" : "physical"))
+                #expect(checked["source"] as? String == "ax_input_menu_checkmark")
+                if kind == "no_input" { #expect(checked["ports"] == nil) }
+                else { #expect(checked["ports"] as? [Int] == (kind == "mono" ? [1] : [1, 2])) }
+                #expect(f.mutations.count == 4)
+            } else {
+                #expect(fresh.checkedInputs.isEmpty)
+                #expect(row["checked_input"] == nil)
+                #expect(f.mutations.isEmpty)
+            }
+            let graph = SessionPopulationObservation.routingGraph(capture: capture)
+            #expect(!graph.edges.contains { $0.kind == .inputAssignment })
+            #expect(!graph.complete)
+            #expect(f.mutations.allSatisfy { $0.1 == "AXPress" || $0.1 == "AXCancel" })
+        }
+    }
+
+    @Test("Checked non-Bus publication refuses missing, conflicting or foreign capture witnesses",
+          arguments: ["held", "absent", "other_owner", "duplicate", "unstable", "missing_slot",
+                      "missing_observation", "different_fresh_slot", "wrong_document", "unqualified", "invalid_ports"])
+    func checkedNonBusPublicationRequiresHeldCapture(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let (p, _) = try prepareInputDomain("stereo"), f = p.f
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            var states = try #require(AccessibilityChannel.defaultGetMixerStates(
+                runtime: f.logic, stoppingWhen: { false }).states)
+            let owner = try #require(states[0].physicalBinding)
+            if fault == "missing_slot" { states[0].inputSlotBinding = nil }
+            if fault == "missing_observation" { states[0].inputObservation = nil }
+            let cache = StateCache(), registry = TargetRegistry()
+            await cache.updateProject(.init(name: "Session", filePath: f.bundle.path, source: "fixture"))
+            await cache.updateDocumentState(true)
+            await cache.updateChannelStrips(states)
+            let base = await SessionPopulationObservation.capture(cache: cache,
+                targetRegistry: registry, fileReader: .unavailable)
+            var freshStates = states
+            if fault == "different_fresh_slot" { freshStates[0].inputSlotBinding = nil }
+            var fresh = SessionPopulationObservation.FreshPopulation(project: base.project,
+                tracks: base.tracks, strips: freshStates, fileTrackCount: nil,
+                beganAt: base.beganAt, endedAt: base.endedAt, stable: fault != "unstable")
+            if fault != "absent" {
+                let receiver: AXMixerStripBinding.Binding
+                if fault == "other_owner" { receiver = try #require(states[1].physicalBinding) }
+                else if fault == "wrong_document" {
+                    receiver = .init(window: owner.window, mixer: owner.mixer, strip: owner.strip,
+                        document: "file:///unrelated.logicx")
+                } else { receiver = owner }
+                fresh.checkedInputs = [.init(receiver: receiver,
+                    assignment: .physical(fault == "invalid_ports" ? [2, 1] : [1, 2]))]
+                if fault == "duplicate" { fresh.checkedInputs.append(fresh.checkedInputs[0]) }
+            }
+            let capture = inputCapture(base, fresh: fresh)
+            let checked = SessionPopulationObservation.reportedCheckedInput(of: states[0],
+                capture: capture, qualified: fault != "unqualified")
+            if fault == "held" {
+                #expect(checked?.kind == "physical")
+                #expect(checked?.ports == [1, 2])
+            } else { #expect(checked == nil) }
+            #expect(!SessionPopulationObservation.routingGraph(capture: capture).edges.contains { $0.kind == .inputAssignment })
+            #expect(f.mutations.isEmpty)
         }
     }
 

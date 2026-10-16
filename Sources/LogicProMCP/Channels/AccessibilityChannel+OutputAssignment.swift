@@ -862,6 +862,12 @@ extension AccessibilityChannel {
         return number
     }
 
+    static func currentInputMenuAssignment(in root: AXUIElement, runtime: AXHelpers.Runtime) -> InputAssignment? {
+        checkedRoutingMenuAssignment(in: root, runtime: runtime, isInput: true, neutral: .noInput,
+            destination: InputAssignment.classifiedMenuTitle,
+            isBus: { if case .bus = $0 { return true }; return false })
+    }
+
     /// Ownership scope for a native neutral-input popup only. This is deliberately
     /// not an assignment reader: the public checked-input capability remains bus-only.
     static func hasCheckedNoInputMenu(in root: AXUIElement, runtime: AXHelpers.Runtime) -> Bool {
@@ -892,7 +898,26 @@ extension AccessibilityChannel {
     private static func currentRoutingMenuAssignment(
         in root: AXUIElement, runtime: AXHelpers.Runtime, inputBusOnly: Bool
     ) -> OutputAssignment? {
-        let receiverArrow: Character = inputBusOnly ? "\u{2190}" : "\u{2192}"
+        if inputBusOnly {
+            guard case .bus(let number)? = currentInputMenuAssignment(in: root, runtime: runtime) else { return nil }
+            return .bus(number)
+        }
+        func destination(_ title: String) -> OutputAssignment? {
+            if let bus = OutputAssignment.busNumber(ofMenuItemTitle: title) { return .bus(bus) }
+            guard let observed = OutputAssignment.observed(slotLabel: title) else { return nil }
+            // Display classification cannot re-authorize a bus rejected by the checked domain.
+            if case .bus = observed { return nil }
+            return observed
+        }
+        return checkedRoutingMenuAssignment(in: root, runtime: runtime, isInput: false, neutral: .noOutput,
+            destination: destination, isBus: { if case .bus = $0 { return true }; return false })
+    }
+
+    private static func checkedRoutingMenuAssignment<Assignment: Equatable>(
+        in root: AXUIElement, runtime: AXHelpers.Runtime, isInput: Bool, neutral: Assignment,
+        destination: (String) -> Assignment?, isBus: (Assignment) -> Bool
+    ) -> Assignment? {
+        let receiverArrow: Character = isInput ? "←" : "→"
         func mark(_ item: AXUIElement) -> String? {
             let result: Result<AnyObject?, AXHelpers.AXStatusError> =
                 AXHelpers.getAttributeResult(item, "AXMenuItemMarkChar", runtime: runtime)
@@ -903,19 +928,11 @@ extension AccessibilityChannel {
             case .failure: return nil
             }
         }
-        func destination(_ title: String) -> OutputAssignment? {
-            if let bus = OutputAssignment.busNumber(ofMenuItemTitle: title, receiverArrow: receiverArrow) { return .bus(bus) }
-            guard !inputBusOnly else { return nil }
-            guard let observed = OutputAssignment.observed(slotLabel: title) else { return nil }
-            // Display classification cannot re-authorize a bus rejected by the checked domain.
-            if case .bus = observed { return nil }
-            return observed
-        }
         guard let roots = titledMenuItems(of: root, runtime: runtime) else { return nil }
-        var echo: [OutputAssignment] = []
+        var echo: [Assignment] = []
         for item in roots where !item.hasSubmenu {
             guard let assignment = destination(item.title) else {
-                if inputBusOnly || OutputAssignment.isBusMenuItemTitle(item.title, receiverArrow: receiverArrow) {
+                if isInput || OutputAssignment.isBusMenuItemTitle(item.title, receiverArrow: receiverArrow) {
                     guard mark(item.element) == "" else { return nil }
                 }
                 continue
@@ -924,10 +941,13 @@ extension AccessibilityChannel {
             if checked == "✓" { echo.append(assignment) }
         }
         guard echo.count == 1, let current = echo.first else { return nil }
-        var checkedLeaves: [OutputAssignment] = []
+        var checkedLeaves: [Assignment] = []
         var branches: [(String,AXUIElement)] = []
-        if inputBusOnly {
+        if isInput {
             guard case .found = submenu(titled: AXLocalePolicy.outputPopupBusSubmenuTitle, among: roots, runtime: runtime) else { return nil }
+            if current != neutral, !isBus(current) {
+                guard case .found = submenu(titled: AXLocalePolicy.unassignedInputSlotLabel, among: roots, runtime: runtime) else { return nil }
+            }
             // Every other input branch must also read as unselected; it cannot be hidden behind
             // the bus-only capability's narrower result type.
             branches = roots.compactMap { item in item.submenu.map { (item.title,$0) } }
@@ -948,13 +968,16 @@ extension AccessibilityChannel {
                     guard let assignment = destination(item.title) else { return nil }
                     // Bus numbers only have authority under Bus, never a panner/Output branch.
                     let isBusParent = AXLocalePolicy.outputPopupBusSubmenuTitle.matches(title, mode: .exact)
-                    if case .bus = assignment { guard isBusParent else { return nil } }
-                    else { guard !isBusParent else { return nil } }
+                    if isBus(assignment) { guard isBusParent else { return nil } }
+                    else {
+                        guard !isBusParent,
+                              !isInput || AXLocalePolicy.unassignedInputSlotLabel.matches(title, mode: .exact) else { return nil }
+                    }
                     checkedLeaves.append(assignment)
                 }
             }
         }
-        if current == .noOutput { return checkedLeaves.isEmpty ? current : nil }
+        if current == neutral { return checkedLeaves.isEmpty ? current : nil }
         return checkedLeaves.count == 1 && checkedLeaves.first == current ? current : nil
     }
 

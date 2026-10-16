@@ -94,6 +94,8 @@ extension AccessibilityChannel {
     struct CheckedOutputReading: Sendable {
         let result: ChannelResult
         let assignment: OutputAssignment?
+        /// Internal independently checked input fact; not a public Bus result.
+        var inputAssignment: InputAssignment? = nil
         var inputRenewal: OriginalHeaderSourceRenewal? = nil
         var inputSlot: AXMixerInputSlotBinding? = nil
         /// Raw checked non-routing root entries: preservation witness only,
@@ -475,6 +477,15 @@ extension AccessibilityChannel {
             observingRenewedFocus: observingRenewedFocus)
     }
 
+    static func getCheckedInputObservation(runtime: AXLogicProElements.Runtime,
+        timing: OutputAssignmentTiming = .live,
+        observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
+        observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in }) async -> CheckedOutputReading {
+        await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
+            includingNonBusInputs: true, runtime: runtime, timing: timing,
+            observingPopupFocus: observingPopupFocus, observingRenewedFocus: observingRenewedFocus)
+    }
+
     /// Shares the exact owned reader; wire receipt decoding never supplies graph identity.
     static func getOutputObservation(runtime: AXLogicProElements.Runtime, sendOrdinal: Int? = nil,
                                      timing: OutputAssignmentTiming = .live,
@@ -487,7 +498,8 @@ extension AccessibilityChannel {
     }
 
     private static func getCheckedRoutingDestination(
-        params: [String: String], sendOrdinal: Int?, inputBusOnly: Bool = false, runtime: AXLogicProElements.Runtime,
+        params: [String: String], sendOrdinal: Int?, inputBusOnly: Bool = false,
+        includingNonBusInputs: Bool = false, runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
@@ -625,7 +637,7 @@ extension AccessibilityChannel {
             extras.merge(facts) { _, new in new }
             return refuse(error, hint + "; nothing was pressed.")
         }
-        if inputBusOnly, AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact) {
+        if inputBusOnly, includingNonBusInputs || AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact) {
             // A foreign system alert can own the keyboard while Logic still
             // reports AXFrontmost. Refuse before opening a native popup that
             // the same keyboard-ownership boundary would forbid us to acquire.
@@ -656,6 +668,10 @@ extension AccessibilityChannel {
         let nativePopup: NativeOutputReadPopup?
         @Sendable func nativeNeutralScope(_ root: AXUIElement) -> Bool {
             if inputBusOnly {
+                if includingNonBusInputs {
+                    guard let input = currentInputMenuAssignment(in: root, runtime: runtime.ax) else { return false }
+                    return input != .noInput || hasCheckedNoInputMenu(in: root, runtime: runtime.ax)
+                }
                 return AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
                     && hasCheckedNoInputMenu(in: root, runtime: runtime.ax)
             }
@@ -663,7 +679,8 @@ extension AccessibilityChannel {
         }
         if sendOrdinal == nil, sendReplacement == nil,
            (inputBusOnly
-                ? AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+                ? (AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+                    || (includingNonBusInputs && InputAssignment.classifiedMenuTitle(originalLabel) != nil))
                 : OutputAssignment.observed(slotLabel: originalLabel) == .noOutput),
            opened?.isEmpty == true, let app, sourceOwned(),
            let observed = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
@@ -829,8 +846,12 @@ extension AccessibilityChannel {
             if inputBusOnly { return currentInputMenuBusAssignment(in: root, runtime: runtime.ax).map(OutputAssignment.bus) }
             return currentOutputMenuAssignment(in: root, runtime: runtime.ax)
         }
-        let first = checkedChoice()
-        let second = menuOwned() ? checkedChoice() : nil
+        let firstInput = includingNonBusInputs ? currentInputMenuAssignment(in: root, runtime: runtime.ax) : nil
+        let first = includingNonBusInputs ? firstInput?.busOutputAssignment : checkedChoice()
+        let secondOwned = menuOwned()
+        let secondInput = includingNonBusInputs && secondOwned ? currentInputMenuAssignment(in: root, runtime: runtime.ax) : nil
+        let second = includingNonBusInputs ? secondInput?.busOutputAssignment : (secondOwned ? checkedChoice() : nil)
+        let inputFactsAgree = firstInput != nil && secondInput == firstInput
         let sendChecks = sendOrdinal == nil ? nil : sendMenuNonRoutingChecks(in: root, runtime: runtime.ax)
         let firstMode = observingSendMode ? currentSendMode(in: root, runtime: runtime.ax) : nil
         let secondMode = observingSendMode && menuOwned() ? currentSendMode(in: root, runtime: runtime.ax) : nil
@@ -1430,7 +1451,8 @@ extension AccessibilityChannel {
         var sourceAfter = originalSourcePresent() && originalInputFocusCurrent && sourceOwned()
         var inputRenewal: OriginalHeaderSourceRenewal?
         var inputSlot: AXMixerInputSlotBinding?
-        if inputBusOnly, !sourceAfter, dataOwned, first != nil, second == first,
+        if inputBusOnly, !sourceAfter, dataOwned,
+           (first != nil && second == first) || inputFactsAgree,
            let originalPair = AXMixerStripBinding.outputAssociation, originalPair.strip.matches(physical) {
             func popupAbsent() -> Bool {
                 !interrupted()
@@ -1494,6 +1516,30 @@ extension AccessibilityChannel {
         if inputBusOnly, !sourceAfter, !closed, popupAbsenceObserved() {
             extras["popup_menu_state"] = "closed"
         }
+        // Only the internal inspection reader retains this independently checked
+        // fact, after the original source (or existing original-header renewal)
+        // and its exact current input control survive cleanup. Its wire result
+        // stays bus-only; a non-Bus fact grants no scalar or inverse authority.
+        var checkedInputFact: InputAssignment?
+        if includingNonBusInputs, inputFactsAgree, dataOwned, sourceAfter,
+           extras["popup_menu_state"] as? String == "closed", let firstInput {
+            if inputSlot == nil {
+                let current = AXLogicProElements.inputSlotRead(in: physical.strip, runtime: runtime.ax)
+                if case .source(let label) = current.reading, let control = current.control,
+                   CFEqual(control, slot), label.utf8.elementsEqual(originalLabel.utf8), sourceOwned(), closed {
+                    inputSlot = .init(owner: physical, control: control, source: label)
+                }
+            }
+            if inputSlot != nil {
+                checkedInputFact = firstInput
+                if firstInput.busOutputAssignment == nil {
+                    let unsupported = refuse(.unsupportedState,
+                        "The checked non-Bus input is outside the bus-only wire result; its internal observation grants no write authority.")
+                    return .init(result: unsupported.result, assignment: nil, inputAssignment: firstInput,
+                        inputRenewal: inputRenewal, inputSlot: inputSlot)
+                }
+            }
+        }
         // Logic can report a failed AXPress after actually opening this popup. The
         // acknowledgement is a receipt, not read authority: require the newly
         // observed, unchanged source/menu and two agreeing checked choices instead.
@@ -1520,7 +1566,8 @@ extension AccessibilityChannel {
         if inputBusOnly { extras["input_scope"] = "bus_only" }
         extras["snapshot_atomic"] = false
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
-            inputRenewal: inputRenewal, inputSlot: inputSlot, sendNonRoutingChecks: sendChecks, sendMode: modeEvidence)
+            inputAssignment: checkedInputFact, inputRenewal: inputRenewal, inputSlot: inputSlot,
+            sendNonRoutingChecks: sendChecks, sendMode: modeEvidence)
     }
 
     static func outputReadContextFailure(_ result: ChannelResult, operation: String) -> ChannelResult {

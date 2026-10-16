@@ -551,22 +551,23 @@ actor AccessibilityChannel: Channel {
                     // The graph still publishes only checked bus edges. Acquire supported
                     // non-bus before-assignments too; the display label selects a reader,
                     // never supplies assignment, source or destination identity.
-                    var candidates: [(input: Bool, ordinal: Int?)] = []
+                    var candidates: [(input: Bool, ordinal: Int?, nonBusInput: Bool)] = []
                     if let slot = strip.inputSlotBinding, let owner = strip.physicalBinding,
                        slot.owner.matches(owner),
                        let observed = strip.inputObservation, observed.state == .observedSource,
                        let label = observed.source, label.utf8.elementsEqual(slot.source.utf8),
-                       RoutingGraphPublication.classifyOutputLabel(label).0 == .bus {
-                        candidates.append((true, nil))
+                       InputAssignment.classifiedMenuTitle(label) != nil
+                        || AXLocalePolicy.unassignedInputSlotLabel.matches(label, mode: .exact) {
+                        candidates.append((true, nil, RoutingGraphPublication.classifyOutputLabel(label).0 != .bus))
                     }
                     if let label = strip.output, let assignment = OutputAssignment.observed(slotLabel: label),
                        assignment != .noOutput {
-                        candidates.append((false, nil))
+                        candidates.append((false, nil, false))
                     }
                     let slots = strip.sendSlots ?? []
                     for slot in slots where slot.state == .occupiedUnknownDestination && slot.ordinal >= 0 {
                         if slots.filter({ $0.ordinal == slot.ordinal }).count == 1 {
-                            candidates.append((false, slot.ordinal))
+                            candidates.append((false, slot.ordinal, false))
                         }
                     }
                     guard !candidates.isEmpty else { continue }
@@ -590,7 +591,12 @@ actor AccessibilityChannel: Channel {
                         let read = await AXMixerStripBinding.$current.withValue(owner) {
                             if candidate.input {
                                 return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
-                                    await Self.getInputBusObservation(runtime: runtime.logicRuntime,
+                                    if candidate.nonBusInput {
+                                        return await Self.getCheckedInputObservation(runtime: runtime.logicRuntime,
+                                            observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
+                                            observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
+                                    }
+                                    return await Self.getInputBusObservation(runtime: runtime.logicRuntime,
                                         observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
                                         observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
                                 }
@@ -635,23 +641,26 @@ actor AccessibilityChannel: Channel {
                                 break stripReads
                             }
                         }
-                        if let assignment = read.assignment {
-                            if candidate.input {
-                                if case .bus(let number) = assignment, OutputAssignment.busNumbers.contains(number) {
-                                    if let renewal = read.inputRenewal, let slot = read.inputSlot {
-                                        renewals.append(renewal)
-                                        renewedSlots.append(slot)
-                                        checkedInputs.append(.init(receiver: renewal.pair.strip, busNumber: number))
-                                        population.uiEffects = mergedEffects(population.uiEffects, renewal.observation.effects)
-                                    } else {
-                                        checkedInputs.append(.init(receiver: owner, busNumber: number))
-                                        if let slot = strip.inputSlotBinding { renewedSlots.append(slot) }
-                                    }
-                                }
-                            } else {
-                                checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal,
-                                    sendNonRoutingChecks: read.sendNonRoutingChecks, sendMode: read.sendMode))
+                        if candidate.input {
+                            let input = read.inputAssignment ?? read.assignment.flatMap { assignment -> InputAssignment? in
+                                guard case .bus(let number) = assignment,
+                                      OutputAssignment.busNumbers.contains(number) else { return nil }
+                                return .bus(number)
                             }
+                            if let input {
+                                if let renewal = read.inputRenewal, let slot = read.inputSlot {
+                                    renewals.append(renewal)
+                                    renewedSlots.append(slot)
+                                    checkedInputs.append(.init(receiver: renewal.pair.strip, assignment: input))
+                                    population.uiEffects = mergedEffects(population.uiEffects, renewal.observation.effects)
+                                } else {
+                                    checkedInputs.append(.init(receiver: owner, assignment: input))
+                                    if let slot = strip.inputSlotBinding { renewedSlots.append(slot) }
+                                }
+                            }
+                        } else if let assignment = read.assignment {
+                            checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal,
+                                sendNonRoutingChecks: read.sendNonRoutingChecks, sendMode: read.sendMode))
                         }
                     }
                 }
