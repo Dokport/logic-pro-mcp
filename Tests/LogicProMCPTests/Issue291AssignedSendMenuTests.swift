@@ -1053,7 +1053,12 @@ struct Issue291AssignedSendMenuTests {
         let p = try prepare(), f = p.f
         let focus = try passivePhysicalFocus(f)
         #expect(AccessibilityChannel.readLogicKeyboardFocus(of: focus, runtime: f.logic) != .notTextEditing)
-        let body = try #require(sharedJSONObject(await read(p).message))
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "checked-send-focus-receipt"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let response = await OperationTraceContext.$current.withValue(context) { await read(p) }
+        let body = try #require(sharedJSONObject(response.message))
         #expect(body["state"] as? String == "A")
         #expect((body["current_destination"] as? [String: Any])?["number"] as? Int == 1)
         #expect(body["popup_menu_state"] as? String == "closed")

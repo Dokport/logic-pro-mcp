@@ -227,12 +227,16 @@ struct Issue291OwnedCurrentOutputTests {
     }
 
     @Test("Cancellation reverses only an already-owned popup under its live original scope",
-          arguments: ["owned", "remembered", "source_read", "document", "source", "slot", "popup", "gate", "deadline"])
+          arguments: ["owned", "remembered", "source_read", "live_focus", "detached_focus", "document", "source", "slot", "popup", "gate", "deadline"])
     func cancelledOutputReadCleansOnlyItsOwnedPopup(_ revocation: String) async throws {
         let f = try Issue291PhysicalStripReferenceTests.Fixture()
         defer { try? FileManager.default.removeItem(at: f.bundle) }
         prepare(f)
         f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+        let checksNativeFocus = revocation == "live_focus" || revocation == "detached_focus"
+        if checksNativeFocus {
+            f.b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.volumes[1])
+        }
         let interrupted = "291-interrupted-popup"
         f.onActionNamesRead = { node in
             guard revocation != "source_read" else { return }
@@ -259,6 +263,9 @@ struct Issue291OwnedCurrentOutputTests {
             _ = AXHelpers.getHelp(f.outputs[0], runtime: f.logic.ax)
         }
         f.onAttributeRead = { node, attribute in
+            if revocation == "detached_focus", f.mutations.contains(where: { $0.1 == kAXCancelAction as String }) {
+                f.b.setChildren(f.mixer, [f.strips[0]])
+            }
             if revocation == "source_read", CFEqual(node, f.outputs[0]),
                attribute == kAXDescriptionAttribute as String, f.mutations.count == 1,
                f.b.attributeValue(f.window, interrupted) as? Bool != true {
@@ -299,14 +306,20 @@ struct Issue291OwnedCurrentOutputTests {
         let writeAttempted = try #require(body["write_attempted"] as? Bool)
         #expect(!writeAttempted)
         let cancels = f.mutations.filter { $0.1 == kAXCancelAction as String }
-        let cleanupOwned = revocation == "owned" || revocation == "remembered" || revocation == "source_read"
+        let cleanupOwned = revocation == "owned" || revocation == "remembered" || revocation == "source_read" || checksNativeFocus
         #expect(cancels.count == (cleanupOwned ? 1 : 0))
         #expect(f.mutations.filter { $0.1 == kAXPressAction as String }.count == 1)
         if cleanupOwned {
             let cancel = try #require(cancels.first)
             #expect(CFEqual(cancel.0, f.root))
             #expect(body["popup_menu_state"] as? String == "closed")
-            #expect(body["focus_restoration"] as? String == "restored")
+            #expect(body["focus_restoration"] as? String == (revocation == "detached_focus" ? "not_restored" : "restored"))
+            if checksNativeFocus {
+                let actual: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+                    kAXFocusedUIElementAttribute as String, runtime: f.logic.ax))
+                #expect(CFEqual(actual, f.volumes[1]))
+                #expect(AXHelpers.getRole(actual, runtime: f.logic.ax) == kAXSliderRole as String)
+            }
         } else {
             #expect(body["popup_menu_state"] as? String != "closed")
         }
