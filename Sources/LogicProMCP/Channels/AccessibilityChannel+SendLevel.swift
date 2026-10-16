@@ -86,9 +86,11 @@ extension AccessibilityChannel {
             AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
                 && AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false
         }
+        var observedOwnSourceFocus = false
         func ordinaryFocus() -> Bool {
             guard let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
-                  CFEqual(focus, before.focus) || CFEqual(focus, knob),
+                  CFEqual(focus, before.focus) || CFEqual(focus, knob)
+                    || (observedOwnSourceFocus && CFEqual(focus, before.physical.strip)),
                   let window: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax),
                   CFEqual(window, before.physical.window) else { return false }
             return AXHelpers.getRole(focus, runtime: runtime.ax) != kAXTextFieldRole as String
@@ -141,7 +143,21 @@ extension AccessibilityChannel {
             }
             guard click.postDown() else { return refused(.readbackUnavailable, "Numeric editor mouse-down was not accepted.") }
             guard click.postUp() else { return refused(.readbackUnavailable, "Numeric editor paired release was not accepted.") }
-            if count == 1 { mouse.sleepMicros(40_000) }
+            if count == 1 {
+                mouse.sleepMicros(40_000)
+                // Logic's first exact-knob click can land on its containing
+                // physical strip before the second click opens the editor.
+                // Observe only this actual paired-click transition; another
+                // strip, editor or document never gains focus authority.
+                if let focus: AXUIElement = AXHelpers.getAttribute(app,
+                    kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+                   CFEqual(focus, before.physical.strip), !CFEqual(focus, before.focus) {
+                    observedOwnSourceFocus = true
+                    extras["ui_effects"] = ["navigation_performed": true,
+                        "attempted": ["send_numeric_editor"], "changed": ["keyboard_focus"],
+                        "restoration": "not_restored"]
+                }
+            }
         }
         guard custody(), let members = windows(),
               let editorWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax),
