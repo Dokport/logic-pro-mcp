@@ -1930,6 +1930,92 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("A No Output after-read renews a surviving source's stale label only through its original header",
+          arguments: ["refreshed", "mismatch", "missing_pair", "lost_inverse", "late_document", "changed_header", "late_population"])
+    func noOutputAfterReadRenewsSurvivingOriginalSource(fault: String) async throws {
+        let f = try Fixture(), b = f.builder
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let output = b.element(1_325_001), root = b.element(1_325_002), echo = b.element(1_325_003)
+        let leaf = b.element(1_325_004), parent = b.element(1_325_005)
+        let submenu = b.element(1_325_006), stereo = b.element(1_325_007)
+        b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output.",
+                    x: 0, y: 0, width: 60, height: 20)
+        b.setChildren(output, []); b.setActionNames(output, [kAXPressAction as String])
+        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [output])
+        for menu in [root, submenu] { b.setRole(menu, kAXMenuRole as String) }
+        for (item, title) in [(echo, "Stereo Output"), (leaf, "No Output"), (parent, "Output"), (stereo, "Stereo Output")] {
+            b.setRole(item, kAXMenuItemRole as String)
+            b.setAttribute(item, kAXTitleAttribute as String, title)
+            b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
+        }
+        for item in [echo, stereo] { b.setAttribute(item, "AXMenuItemMarkChar", "✓") }
+        b.setChildren(submenu, [stereo]); b.setChildren(parent, [submenu]); b.setChildren(root, [echo, leaf, parent])
+        f.routingAction = { element, action in
+            guard action == kAXPressAction as String else { Issue.record("No cleanup fallback is authorized"); return false }
+            if CFEqual(element, output) { b.setChildren(f.mixer, f.strips + [root]); return true }
+            guard CFEqual(element, leaf) else { Issue.record("Only the original output and unique destination may be pressed"); return false }
+            f.routingDestinationPresses += 1
+            b.setChildren(f.mixer, f.strips)
+            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+            // The host committed the change, but this exact surviving slot
+            // continues to report its old label until original-header acquisition.
+            if fault == "changed_header" {
+                let replacement = b.element(1_325_008)
+                b.setRole(replacement, kAXLayoutItemRole as String); b.setChildren(replacement, [])
+                b.setChildren(f.rail, [replacement, f.headers[1]])
+                f.routingLateScopeInjected = true
+            }
+            return true
+        }
+        f.routingSelection = { index in
+            guard f.routingDestinationPresses == 1 else { return }
+            if fault == "lost_inverse" {
+                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                f.routingLateScopeInjected = true
+            } else if index == 0, fault != "mismatch" {
+                b.setAttribute(output, kAXDescriptionAttribute as String, "No Output")
+                if fault == "late_population" {
+                    let added = b.element(1_325_009)
+                    b.setRole(added, kAXLayoutItemRole as String); b.setChildren(added, [])
+                    b.setChildren(f.mixer, f.strips + [added])
+                    f.routingLateScopeInjected = true
+                }
+            }
+        }
+        f.routingRead = { element, attribute in
+            if fault == "late_document", f.selections.count >= 4,
+               CFEqual(element, output), attribute == kAXDescriptionAttribute as String {
+                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                f.routingLateScopeInjected = true
+            }
+        }
+        let result = await LogicProServer.runWithDeadline(tool: "logic_mixer", command: "set_output_verified", mutationGate: LogicMutationGate()) {
+            let runtime = f.logic()
+            guard let observation = AccessibilityChannel.HeldSelectionAssociation(window: f.window, logic: runtime,
+                expectedProject: nil, requiresProjectReference: false) else { Issue.record("Original acquisition must start"); return toolTextResult(.error("fixture")) }
+            let pairs = await observation.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            guard let pair = pairs.first(where: { CFEqual($0.track.header, f.headers[0]) }), observation.effects.restoration == "restored"
+            else { Issue.record("Original source requires its actual restored header association"); return toolTextResult(.error("fixture")) }
+            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.window)
+            return await AXMixerStripBinding.$current.withValue(pair.strip) {
+                await AXMixerStripBinding.$outputAssociation.withValue(fault == "missing_pair" ? nil : pair) {
+                    toolTextResult(await AccessibilityChannel.setOutputVerified(params: ["index": "1", "destination": "no_output", "expected_current": "stereo_output"],
+                        runtime: runtime, timing: .immediate))
+                }
+            }
+        }
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(body["state"] as? String == (fault == "refreshed" ? "A" : "B"), "Actual writer receipt: \(body)")
+        let attempted = try #require(body["write_attempted"] as? Bool); #expect(attempted)
+        #expect(f.routingDestinationPresses == 1, "After-read acquisition must never retry the setter")
+        if fault == "refreshed" {
+            #expect(body["after"] as? [String: String] == ["kind": "no_output"])
+            #expect(f.selections == [1, 0, 1, 0])
+            let reread = try #require(body["reference_reread_required"] as? Bool); #expect(reread)
+        }
+        if ["lost_inverse", "late_document", "changed_header", "late_population"].contains(fault) { #expect(f.routingLateScopeInjected) }
+    }
+
     @Test(arguments: ["paired", "missing_pair", "replaced_header", "foreign_project", "foreign_focus", "deciding_read", "partial_restore", "track_ref", "track_ref_missing_pair", "track_ref_replaced_strip", "rail", "rail_editor", "rail_missing_relationship", "rail_unselected_header"])
     func outputReadbackRenewsRetiredSourceOnlyThroughOriginalCapturedHeader(condition: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {

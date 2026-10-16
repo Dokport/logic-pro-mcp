@@ -490,19 +490,28 @@ extension AccessibilityChannel {
                 }
             }
             after = afterLabel.flatMap(OutputAssignment.observed(slotLabel:))
-            if afterLabel == nil, !attemptedAssociation, let physical, let outputAssociation,
-               enumeration?.strips.count == strips.count, physical.currentIndex(runtime: runtime) == nil {
-                attemptedAssociation = true
-                let observed = await readOutputThroughOriginalHeader(outputAssociation, original: physical, runtime: runtime)
-                extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
-                    "attempted": observed.effects.attempted, "changed": observed.effects.changed,
-                    "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
-                if let label = observed.label, let renewedIndex = observed.index {
-                    afterLabel = label
-                    after = OutputAssignment.observed(slotLabel: label)
-                    extras["source_renewal"] = observed.source
-                    extras["reference_reread_required"] = true
-                    extras["source_index_after"] = renewedIndex
+            if !attemptedAssociation, let physical, let outputAssociation,
+               enumeration?.strips.count == strips.count {
+                let currentIndex = physical.currentIndex(runtime: runtime)
+                let retired = afterLabel == nil && currentIndex == nil
+                // A No Output transition can commit while the exact surviving
+                // slot retains its old AX label. Re-observe only that original
+                // source through its retained header, never retry the setter.
+                let surviving = noOutputChange && after != destination && currentIndex == index
+                if retired || surviving {
+                    attemptedAssociation = true
+                    let observed = await readOutputThroughOriginalHeader(outputAssociation, original: physical, runtime: runtime,
+                        sourceDisposition: retired ? .retiredOriginal : .survivingOriginal)
+                    extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
+                        "attempted": observed.effects.attempted, "changed": observed.effects.changed,
+                        "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
+                    if let label = observed.label, let renewedIndex = observed.index {
+                        afterLabel = label
+                        after = OutputAssignment.observed(slotLabel: label)
+                        extras["source_renewal"] = observed.source
+                        extras["reference_reread_required"] = true
+                        extras["source_index_after"] = renewedIndex
+                    }
                 }
             }
             if after == destination { break }
@@ -541,9 +550,11 @@ extension AccessibilityChannel {
     /// ordinal, destination or unchanged population count.
     private static func readOutputThroughOriginalHeader(
         _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
-        runtime: AXLogicProElements.Runtime
+        runtime: AXLogicProElements.Runtime,
+        sourceDisposition: OriginalHeaderSourceDisposition = .retiredOriginal
     ) async -> (label: String?, index: Int?, source: String?, effects: SessionPopulationObservation.UIEffects) {
-        let observed = await renewSourceThroughOriginalHeader(originalPair, original: original, runtime: runtime)
+        let observed = await renewSourceThroughOriginalHeader(originalPair, original: original, runtime: runtime,
+            sourceDisposition: sourceDisposition)
         guard let source = observed.source,
               let label = AXLogicProElements.outputSlotDestination(in: source.pair.strip.strip, runtime: runtime.ax),
               source.permits(runtime: runtime) else { return (nil, nil, nil, observed.effects) }
