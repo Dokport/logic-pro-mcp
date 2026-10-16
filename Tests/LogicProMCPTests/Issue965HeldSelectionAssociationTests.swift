@@ -1021,6 +1021,16 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: mode)
     }
 
+    @Test("An owned output may redraw a peer while its exact source survives; changed protected state remains unknown",
+          arguments: ["redraw", "foreign", "scalar", "input", "send", "plugin", "header", "project"])
+    func canonicalOutputRenewsAnOwnedCensusWithASurvivingSource(fault: String) async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "surviving_census_" + fault, fixture: f)
+        #expect(f.routingReplacement == nil, "The original source itself must not be retired in this counterexample")
+        #expect(f.routingOtherReplacement != nil)
+        #expect(f.routingDestinationPresses == 1, "No setter retry or guessed inverse is authorized")
+    }
+
     @Test func lateOwnedEditorFocusAtFinalDocumentRefusesTheFirstSetter() async throws {
         let calibration = try Fixture()
         try await assertCanonicalPhysicalOutput(mode: "coupled_editor", fixture: calibration)
@@ -1110,8 +1120,10 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.routingFocusClickEvents == (["ack_only", "release"].contains(fault) ? [.leftMouseDown, .leftMouseUp] : []))
     }
 
-    private func assertCanonicalPhysicalOutput(mode: String, fixture: Fixture? = nil,
+    private func assertCanonicalPhysicalOutput(mode requestedMode: String, fixture: Fixture? = nil,
                                                foreignFocusAtDocumentRead: Int? = nil) async throws {
+        let survivingSource = requestedMode.hasPrefix("surviving_")
+        let mode = survivingSource ? String(requestedMode.dropFirst("surviving_".count)) : requestedMode
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
@@ -1471,7 +1483,8 @@ struct Issue965HeldSelectionAssociationTests {
                                 CFEqual(element, physical) ? "Output 3-4" : "Stereo Output")
                         }
                         f.routingOpenedOutputIndex = nil
-                        if mode == "retired" || mode.hasPrefix("coupled_retired") || redrawsCensus, f.routingReplacement == nil {
+                        if !survivingSource,
+                           mode == "retired" || mode.hasPrefix("coupled_retired") || redrawsCensus, f.routingReplacement == nil {
                             let replacement = f.builder.element(1_973_140)
                             f.builder.setRole(replacement, kAXLayoutItemRole as String)
                             f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
@@ -1480,6 +1493,9 @@ struct Issue965HeldSelectionAssociationTests {
                             f.routingReplacement = replacement
                             f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
                             if redrawsCensus { f.routingOtherReplacement = redrawPeer(f.strips[0], key: 1_974_200) }
+                        }
+                        if survivingSource, f.routingOtherReplacement == nil {
+                            f.routingOtherReplacement = redrawPeer(f.strips[0], key: 1_974_200)
                         }
                         f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
                         if menuOverlay, let replacement = f.routingReplacement {
@@ -1645,7 +1661,7 @@ struct Issue965HeldSelectionAssociationTests {
                             if mode == "census_foreign", let peer = f.routingOtherReplacement {
                                 f.routingLateScopeInjected = true
                                 f.routingOtherReplacement = redrawPeer(peer, key: 1_975_200)
-                                f.builder.setChildren(f.mixer, [f.routingOtherReplacement!, f.routingReplacement!])
+                                f.builder.setChildren(f.mixer, [f.routingOtherReplacement!, f.routingReplacement ?? f.strips[1]])
                             }
                             if mode == "post_write_loss" {
                                 f.routingLateScopeInjected = true
@@ -1741,8 +1757,8 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingReplacement != nil && !f.selections.isEmpty, "Renewal must re-observe the original header's actual pair")
                 }
                 if redrawsCensus {
-                    #expect(f.routingReplacement != nil && f.routingOtherReplacement != nil)
-                    #expect(pair.strip.currentIndex(runtime: f.logic()) == nil)
+                    #expect((f.routingReplacement == nil) == survivingSource && f.routingOtherReplacement != nil)
+                    #expect(pair.strip.currentIndex(runtime: f.logic()) == (survivingSource && mode != "census_project" ? 1 : nil))
                     #expect(capture.channelStrips[0].physicalBinding?.currentIndex(runtime: f.logic()) == nil)
                     let oldPeerName = try #require(f.builder.makeAXRuntime().children(f.strips[0]).first)
                     let stillContainsOldName = try #require(f.routingOtherReplacement.map {
