@@ -611,7 +611,8 @@ extension AccessibilityChannel {
         let app = AXLogicProElements.appRoot(runtime: runtime)
         let originalFocus: AXUIElement? = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
         guard sourceFactsCurrent() else { return refuse(.staleTargetReference, "Source custody changed before acquisition; nothing was pressed.") }
-        if sendOrdinal != nil || inputBusOnly {
+        if sendOrdinal != nil || inputBusOnly
+            || (sendReplacement == nil && OutputAssignment.observed(slotLabel: originalLabel) == .noOutput) {
             guard case .success(let actions) = AXHelpers.getActionNamesResult(slot, runtime: runtime.ax),
                   actions.contains(kAXPressAction as String), sourceFactsCurrent() else {
                 return refuse(.readbackUnavailable, "The held routing control does not advertise a current press capability; nothing was pressed.")
@@ -638,8 +639,29 @@ extension AccessibilityChannel {
             if opened == nil || !(opened?.isEmpty ?? true) || !sourceOwned() { break }
             if timing.pollIntervalMs > 0 { try? await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) }
         } while !Task.isCancelled && Date() < deadline
+        // No Output's native menu is not among the Mixer's AXChildren. This
+        // read-only alternate discovery is scoped to our own just-issued press,
+        // absent pre-existing AX/CG popups and the unchanged original source.
+        let nativePopup: NativeOutputReadPopup?
+        if sendOrdinal == nil, !inputBusOnly, sendReplacement == nil,
+           OutputAssignment.observed(slotLabel: originalLabel) == .noOutput,
+           opened?.isEmpty == true, let app, sourceOwned(),
+           let observed = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
+           sourceOwned() {
+            nativePopup = observed
+            opened = [observed.root]
+        } else { nativePopup = nil }
+        @Sendable func currentPopupMenus() -> [AXUIElement]? {
+            guard let ordinary = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax) else { return nil }
+            guard let nativePopup else { return ordinary }
+            guard ordinary.isEmpty, let app, let windows = runtime.onScreenWindowList() else { return nil }
+            if LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 { return [] }
+            guard let current = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
+                  current.matches(nativePopup) else { return nil }
+            return [nativePopup.root]
+        }
         defer { observingPopupFocus(nil) }
-        if let opened, opened.count == 1, let root = opened.first {
+        if nativePopup == nil, let opened, opened.count == 1, let root = opened.first {
             observingPopupFocus {
                 // Permit guarded reads for this exact menu's search field, not arbitrary
                 // text focus. This uses no Help, and the ordinary source/menu checks still
@@ -734,7 +756,7 @@ extension AccessibilityChannel {
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
         }
         @Sendable func cleanupMenuOwned() -> Bool {
-            guard cleanupSourceOwned(), let current = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
+            guard cleanupSourceOwned(), let current = currentPopupMenus(),
                   current.count == 1, CFEqual(current[0], root) else { return false }
             return cleanupSourceOwned()
         }
@@ -778,7 +800,7 @@ extension AccessibilityChannel {
             // complete physical/window/document boundary. Neither grants action
             // authority on its own, and no earlier census is reused as permission.
             guard sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel),
-                  let current = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax) else { return false }
+                  let current = currentPopupMenus() else { return false }
             return current.count == 1 && CFEqual(current[0], root) && ownerBoundaryStillCurrent()
         }
         // Two agreeing reads bracketed by the same source/menu, not an atomic graph snapshot.
@@ -1328,7 +1350,7 @@ extension AccessibilityChannel {
             let closeDeadline = Date().addingTimeInterval(Double(timing.popupCloseTimeoutMs) / 1_000)
             repeat {
                 guard !interrupted(), runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
-                      let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
+                      let menus = currentPopupMenus(),
                       menus.isEmpty || (menus.count == 1 && CFEqual(menus[0], root)),
                       let windows = runtime.onScreenWindowList() else { break }
                 if OperationTraceContext.current != nil,
@@ -1522,5 +1544,51 @@ extension AccessibilityChannel {
             if role == kAXMenuRole as String { menus.append(child) }
         }
         return menus
+    }
+
+    /// Measured native No Output wrapper. A hit-test only obtains an object;
+    /// the original Mixer/window path, reciprocal root and matching CG frame
+    /// must independently agree. No coordinates are used to perform an action.
+    private struct NativeOutputReadPopup: @unchecked Sendable {
+        let root: AXUIElement
+        let wrapper: AXUIElement
+        let window: LogicOnScreenWindows.Entry
+
+        func matches(_ other: Self) -> Bool {
+            CFEqual(root, other.root) && CFEqual(wrapper, other.wrapper) && window == other.window
+        }
+
+        static func read(physical: AXMixerStripBinding.Binding, app: AXUIElement, pid: pid_t,
+                         runtime: AXLogicProElements.Runtime) -> Self? {
+            guard !Task.isCancelled, runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
+                  AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
+                  let windows = runtime.onScreenWindowList() else { return nil }
+            let popups = LogicOnScreenWindows.logicOwned(windows, logicPID: pid)
+                .filter { $0.layer == LogicOnScreenWindows.popupMenuLevel }
+            guard popups.count == 1, let frame = popups[0].bounds,
+                  !frame.isNull, !frame.isInfinite, frame.width > 0, frame.height > 0,
+                  let hitTest = runtime.ax.elementAtPosition,
+                  case .success(.some(let hit)) = hitTest(app, CGPoint(x: frame.midX, y: frame.midY)),
+                  AXHelpers.getRole(hit, runtime: runtime.ax) == kAXMenuItemRole as String,
+                  let root: AXUIElement = AXHelpers.getAttribute(hit, kAXParentAttribute as String, runtime: runtime.ax),
+                  AXHelpers.getRole(root, runtime: runtime.ax) == kAXMenuRole as String,
+                  case .success(let rows) = AXHelpers.childrenResult(root, runtime: runtime.ax),
+                  rows.filter({ CFEqual($0, hit) }).count == 1,
+                  AXHelpers.getPosition(root, runtime: runtime.ax) == frame.origin,
+                  AXHelpers.getSize(root, runtime: runtime.ax) == frame.size,
+                  let wrapper: AXUIElement = AXHelpers.getAttribute(root, kAXParentAttribute as String, runtime: runtime.ax),
+                  AXHelpers.getRole(wrapper, runtime: runtime.ax) == kAXPopUpButtonRole as String,
+                  case .success(let roots) = AXHelpers.childrenResult(wrapper, runtime: runtime.ax),
+                  roots.count == 1, CFEqual(roots[0], root),
+                  let mixer: AXUIElement = AXHelpers.getAttribute(wrapper, kAXParentAttribute as String, runtime: runtime.ax),
+                  CFEqual(mixer, physical.mixer),
+                  let owner: AXUIElement = AXHelpers.getAttribute(wrapper, kAXWindowAttribute as String, runtime: runtime.ax),
+                  CFEqual(owner, physical.window),
+                  let finalWindows = runtime.onScreenWindowList(),
+                  LogicOnScreenWindows.logicOwned(finalWindows, logicPID: pid)
+                    .filter({ $0.layer == LogicOnScreenWindows.popupMenuLevel }) == popups,
+                  !Task.isCancelled, runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid else { return nil }
+            return .init(root: root, wrapper: wrapper, window: popups[0])
+        }
     }
 }

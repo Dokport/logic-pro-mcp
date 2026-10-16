@@ -82,14 +82,14 @@ extension AccessibilityChannel {
                 error: .invalidParams, hint: "\(operation) requires a valid 'destination'"
             ))
         }
-        // No Output has no way back through this command: after it was selected, pressing the slot
-        // opened no menu on three attempts, nor 0, 5, 15 or 30 seconds later (docs/observations/
-        // 2026-09-11-routing-slots-open-their-menus-and-a-destination-can-be-selected.json). It is
-        // a value this reads, never one it sets.
+        // The historical No Output menu-discovery failure is preserved in
+        // docs/observations/2026-09-11-routing-slots-open-their-menus-and-a-destination-can-be-selected.json.
+        // The separately qualified read-only native wrapper does not qualify
+        // this writer's destination selection or recovery from No Output.
         guard destination != .noOutput else {
             return .error(HonestContract.encodeStateC(
-                error: .invalidParams, hint: "\(operation) does not set No Output: a strip set to it "
-                    + "was measured to open no output menu, so this command could not set it back. "
+                error: .invalidParams, hint: "\(operation) does not set No Output: assignment and "
+                    + "recovery through its native popup are not qualified for this writer. "
                     + "'no_output' is accepted only as 'expected_current'."
             ))
         }
@@ -183,11 +183,11 @@ extension AccessibilityChannel {
             extras["verify_source"] = "ax_output_slot"
             return .success(HonestContract.encodeStateA(extras: extras))
         }
-        // The same measurement as the refusal of `no_output` above: this strip's slot is not
-        // expected to open a menu, and a press on it is not one this command can account for.
+        // Read-only native popup acquisition does not grant this writer's
+        // missing destination-selection/recovery authority.
         if before == .noOutput {
-            return refusal(.unsupportedState, "The strip's output is No Output, and a slot set to No "
-                + "Output was measured to open no menu when pressed, so this command cannot change it. "
+            return refusal(.unsupportedState, "The strip's output is No Output; assignment and "
+                + "recovery through its native popup are not qualified for this writer. "
                 + "Choose its output in Logic; nothing was pressed.")
         }
 
