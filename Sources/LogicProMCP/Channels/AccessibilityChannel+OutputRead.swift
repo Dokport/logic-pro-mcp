@@ -1234,6 +1234,24 @@ extension AccessibilityChannel {
             if case .success = AXHelpers.performActionResult(root, kAXCancelAction as String, runtime: runtime.ax) { cancelSucceeded = true }
         }
         if interrupted() { return await cancelledReading(priorCancelSucceeded: cancelSucceeded) }
+        if cancelSucceeded, timing.popupCloseTimeoutMs > 0 {
+            // Cancel can acknowledge before the native menu and its CG window disappear.
+            // Observe only this acquired root (or absence), without another action or Help.
+            // The ordinary source/document/focus checks below still decide publication.
+            let closeDeadline = Date().addingTimeInterval(Double(timing.popupCloseTimeoutMs) / 1_000)
+            repeat {
+                guard !interrupted(), runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
+                      let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
+                      menus.isEmpty || (menus.count == 1 && CFEqual(menus[0], root)),
+                      let windows = runtime.onScreenWindowList() else { break }
+                if OperationTraceContext.current != nil,
+                   (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil { break }
+                if menus.isEmpty && LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 { break }
+                if Date() >= closeDeadline { break }
+                if timing.pollIntervalMs > 0 { try? await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) }
+            } while Date() < closeDeadline
+        }
+        if interrupted() { return await cancelledReading(priorCancelSucceeded: cancelSucceeded) }
         // Absence in the held Mixer's complete non-Help census prevents reading
         // a retired object's old controls. Presence alone grants no authority:
         // the ordinary complete source/window/document proof remains decisive.
