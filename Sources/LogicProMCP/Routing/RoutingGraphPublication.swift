@@ -181,9 +181,9 @@ enum RoutingGraphPublication {
                         let inputs = capture.freshPopulation?.checkedInputs.filter {
                             $0.receiver.matches(owner)
                         } ?? []
-                        if input != nil, inputs.count == 1,
-                           OutputAssignment.busNumbers.contains(inputs[0].busNumber) {
-                            let number = inputs[0].busNumber, busID = "bus_\(number)"
+                        if input != nil, inputs.count == 1, let number = inputs[0].busNumber,
+                           OutputAssignment.busNumbers.contains(number) {
+                            let busID = "bus_\(number)"
                             nodesByID[busID] = RoutingNode(id: busID, kind: .bus,
                                 displayName: "Bus \(number)", busNumber: number, targetRef: nil)
                             edges.append(RoutingEdge(kind: .inputAssignment, source: busID,

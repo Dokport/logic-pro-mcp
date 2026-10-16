@@ -59,7 +59,18 @@ enum SessionPopulationObservation {
 
     struct HeldCheckedInput: Sendable {
         let receiver: AXMixerStripBinding.Binding
-        let busNumber: Int
+        let assignment: InputAssignment
+        var busNumber: Int? {
+            guard case .bus(let number) = assignment else { return nil }
+            return number
+        }
+        init(receiver: AXMixerStripBinding.Binding, busNumber: Int) {
+            self.init(receiver: receiver, assignment: .bus(busNumber))
+        }
+        init(receiver: AXMixerStripBinding.Binding, assignment: InputAssignment) {
+            self.receiver = receiver
+            self.assignment = assignment
+        }
     }
 
     struct HeldCheckedOutput: Sendable {
@@ -837,6 +848,13 @@ enum SessionPopulationObservation {
         }
     }
 
+    struct CheckedInputObservation: Encodable, Sendable {
+        let kind: String
+        let number: Int?
+        let ports: [Int]?
+        let source = "ax_input_menu_checkmark"
+    }
+
     struct StripRow: Encodable, Sendable {
         let stripIndex: Int
         let name: String?
@@ -851,6 +869,7 @@ enum SessionPopulationObservation {
         var mixerStripRef: String? = nil
         var sendSlots: [SendSlotObservation]? = nil
         var observedTypeLabel: StripTypeLabelObservation? = nil
+        var checkedInput: CheckedInputObservation? = nil
 
         enum CodingKeys: String, CodingKey {
             case stripIndex = "strip_index"
@@ -866,6 +885,7 @@ enum SessionPopulationObservation {
             case mixerStripRef = "mixer_strip_ref"
             case sendSlots = "send_slots"
             case observedTypeLabel = "observed_type_label"
+            case checkedInput = "checked_input"
         }
 
         // Unknown and legacy not-read names remain explicit nulls, never empty names.
@@ -888,6 +908,7 @@ enum SessionPopulationObservation {
             try container.encodeIfPresent(mixerStripRef, forKey: .mixerStripRef)
             try container.encodeIfPresent(sendSlots, forKey: .sendSlots)
             try container.encodeIfPresent(observedTypeLabel, forKey: .observedTypeLabel)
+            try container.encodeIfPresent(checkedInput, forKey: .checkedInput)
         }
     }
 
@@ -1100,6 +1121,36 @@ enum SessionPopulationObservation {
         }
     }
 
+    /// Only the same fresh capture's unique held source/control can publish a
+    /// checked input. This projection does not grant setter or namespace authority.
+    static func reportedCheckedInput(of strip: ChannelStripState, capture: Capture,
+                                     qualified: Bool) -> CheckedInputObservation? {
+        guard qualified, capture.requestedProjectMatches != false, !capture.before.axOccluded,
+              let fresh = capture.freshPopulation, fresh.stable,
+              let owner = strip.physicalBinding, let slot = strip.inputSlotBinding,
+              slot.owner.matches(owner), let path = capture.project.filePath,
+              fresh.project?.filePath == path, URL(string: owner.document)?.path == path,
+              let observed = strip.inputObservation, observed.state == .observedSource,
+              observed.source?.utf8.elementsEqual(slot.source.utf8) == true,
+              capture.channelStrips.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1,
+              fresh.strips?.filter({ $0.physicalBinding?.matches(owner) == true
+                  && $0.inputSlotBinding?.matches(slot) == true }).count == 1 else { return nil }
+        let held = fresh.checkedInputs.filter { $0.receiver.matches(owner) }
+        guard held.count == 1, let assignment = held.first?.assignment else { return nil }
+        switch assignment {
+        case .bus(let number):
+            guard OutputAssignment.busNumbers.contains(number) else { return nil }
+            return .init(kind: "bus", number: number, ports: nil)
+        case .physical(let ports):
+            guard ports.count == 1 || ports.count == 2,
+                  ports.allSatisfy({ (1...999_999).contains($0) }),
+                  ports.count == 1 || ports[0] < ports[1] else { return nil }
+            return .init(kind: "physical", number: nil, ports: ports)
+        case .noInput:
+            return .init(kind: "no_input", number: nil, ports: nil)
+        }
+    }
+
     /// Pure: the same capture and request always produce the same report.
     static func build(request: Request, capture: Capture) -> Report {
         let movementReason = captureMovementReason(capture: capture)
@@ -1303,7 +1354,9 @@ enum SessionPopulationObservation {
                     mixerStripRef: capture.mixerReference(at: row)?.rawValue,
                     sendSlots: reportedSendSlots(of: strip, capture: capture,
                         qualified: !moved && !referencesStale),
-                    observedTypeLabel: reportedTypeLabel(of: strip, capture: capture)
+                    observedTypeLabel: reportedTypeLabel(of: strip, capture: capture),
+                    checkedInput: capture.mixerReference(at: row) == nil ? nil : reportedCheckedInput(
+                        of: strip, capture: capture, qualified: !moved && !referencesStale)
                 )
             }
         )
