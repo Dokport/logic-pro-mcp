@@ -353,10 +353,14 @@ extension AXLogicProElements {
         // find a transport control in. `findControlBarCheckbox` and its siblings all immediately
         // search it for a checkbox, so a candidate holding none cannot be what they meant, whatever
         // it is called.
-        let labelled = AXHelpers.findAllDescendants(
-            of: window, role: kAXGroupRole, maxDepth: 8, runtime: runtime,
-            batchingRoleAndChildren: true
-        ).filter { group in
+        // Use the existing status-bearing whole-window census (the same bound
+        // as approval transport observations). A failed/malformed branch must
+        // not disappear and turn two bars into an apparently unique one.
+        guard case .success(let groups) = AXHelpers.censusDescendantResult(
+            of: window, role: kAXGroupRole, maxDepth: 32, runtime: runtime,
+            requiresCompleteTraversal: true, batchingRoleAndChildren: true
+        ) else { return nil }
+        let labelled = groups.matches.filter { group in
             AXLocalePolicy.controlBarGroupLabel.matches(
                 AXHelpers.getDescription(group, runtime: runtime) ?? "", mode: .exactStrict
             )
