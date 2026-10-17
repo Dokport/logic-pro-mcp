@@ -412,6 +412,103 @@ struct Issue291OwnedCurrentOutputTests {
         f.b.setChildren(f.root, [echo, parent])
     }
 
+    private func prepareBusNamespace(_ f: Issue291PhysicalStripReferenceTests.Fixture, fault: String = "healthy") {
+        prepare(f)
+        guard fault != "missing" else { return }
+        let parent = f.b.element(967_101), menu = f.b.element(967_102)
+        let first = f.b.element(967_103), group = f.b.element(967_104)
+        let nested = f.b.element(967_105), last = f.b.element(967_106)
+        for (node, title) in [(parent, "Bus"), (first, "Bus 1 → Aux 1"),
+                              (group, "33 - 64"), (last, fault == "unknown" ? "Unrecognized entry" : "Bus 33")] {
+            f.b.setRole(node, kAXMenuItemRole as String)
+            f.b.setAttribute(node, kAXTitleAttribute as String, title)
+            f.b.setChildren(node, [])
+        }
+        for node in [menu, nested] { f.b.setRole(node, kAXMenuRole as String) }
+        f.b.setChildren(nested, [last])
+        f.b.setChildren(group, [nested])
+        f.b.setChildren(menu, [first, group])
+        f.b.setChildren(parent, [menu])
+        if fault == "duplicate" { f.b.setAttribute(last, kAXTitleAttribute as String, "Bus 1") }
+        if fault == "unread" {
+            f.childrenReadResult = { node in
+                CFEqual(node, nested) ? .failure(.init(raw: -25204)) : nil
+            }
+        }
+        f.b.setChildren(f.root, f.b.makeAXRuntime().children(f.root) + [parent])
+    }
+
+    @Test("An owned output read retains the actual nested Bus menu inventory without allocation claims")
+    func checkedOutputPublishesObservedBusNumbersWithoutAllocationAuthority() async throws {
+        let f = try Issue291PhysicalStripReferenceTests.Fixture()
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        prepareBusNamespace(f)
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let result = await AXMixerStripBinding.$current.withValue(binding) {
+            await AccessibilityChannel.getOutputVerified(params: [:], runtime: f.logic, timing: .immediate)
+        }
+        let body = try #require(sharedJSONObject(result.message))
+        #expect(body["state"] as? String == "A")
+        #expect((body["current_output"] as? [String: Any])?["kind"] as? String == "stereo_output")
+        let inventory = try #require(body["observed_bus_namespace"] as? [String: Any])
+        #expect(inventory["bus_numbers"] as? [Int] == [1, 33])
+        #expect(inventory["source"] as? String == "ax_output_bus_menu")
+        #expect(inventory["namespace_availability"] as? String == "not_observed")
+        let writeAttempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!writeAttempted)
+        #expect(f.mutations.count == 2)
+        #expect(CFEqual(f.mutations[0].0, f.outputs[0]))
+        #expect(CFEqual(f.mutations[1].0, f.root))
+        #expect(f.mutations[0].1 == kAXPressAction as String)
+        #expect(f.mutations[1].1 == kAXCancelAction as String)
+    }
+
+    @Test("Missing, unknown, duplicate or unread Bus menus do not become an empty usable namespace",
+          arguments: ["missing", "unknown", "duplicate", "unread"])
+    func checkedOutputWithholdsUnqualifiedBusNamespace(fault: String) async throws {
+        let f = try Issue291PhysicalStripReferenceTests.Fixture()
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        prepareBusNamespace(f, fault: fault)
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let result = await AXMixerStripBinding.$current.withValue(binding) {
+            await AccessibilityChannel.getOutputVerified(params: [:], runtime: f.logic, timing: .immediate)
+        }
+        let body = try #require(sharedJSONObject(result.message))
+        #expect(body["observed_bus_namespace"] == nil)
+        if fault != "unread" {
+            #expect(body["state"] as? String == "A", "Optional namespace evidence must not erase the existing checked assignment")
+        }
+        let writeAttempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!writeAttempted)
+    }
+
+    @Test("An unchanged checked output cannot authenticate two different Bus menu inventories")
+    func checkedOutputWithholdsDisagreeingBusNamespace() async throws {
+        let f = try Issue291PhysicalStripReferenceTests.Fixture()
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        prepareBusNamespace(f)
+        let last = f.b.element(967_106), counter = "967-bus-mark-reads"
+        f.attributeReadResult = { node, attribute in
+            guard CFEqual(node, last), attribute == "AXMenuItemMarkChar" else { return nil }
+            let reads = (f.b.attributeValue(f.window, counter) as? Int ?? 0) + 1
+            f.b.setAttribute(f.window, counter, reads)
+            if reads == 1 { f.b.setAttribute(last, kAXTitleAttribute as String, "Bus 34") }
+            return .success("" as NSString)
+        }
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let result = await AXMixerStripBinding.$current.withValue(binding) {
+            await AccessibilityChannel.getOutputVerified(params: [:], runtime: f.logic, timing: .immediate)
+        }
+        let body = try #require(sharedJSONObject(result.message))
+        #expect(f.b.attributeValue(f.window, counter) as? Int == 2)
+        #expect(body["state"] as? String == "A")
+        #expect(body["observed_bus_namespace"] == nil)
+        #expect(f.mutations.count == 2)
+    }
+
     @Test("Owned read opens and cancels only the held source popup, never presses a destination")
     func ownedCurrentOutputAcquiresAndCleansUp() async throws {
         let f = try Issue291PhysicalStripReferenceTests.Fixture()
