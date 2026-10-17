@@ -2627,6 +2627,66 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, bypassMode: fault)
     }
 
+    @Test func registeredPhysicalOutputSendSagaCompletesAndReplaysWithoutAnotherWrite() async throws {
+        try await assertOccupiedSingleSendRenewal(restoring: true,
+            emptyModeMenu: true, sagaMode: "completed")
+    }
+
+    @Test func physicalSendSagaKeepsTheSharedPairValidationAndExactNativeScope() throws {
+        func plan(_ destination: Value) -> SagaPlan {
+            .init(steps: [.init(operationID: .mixerSetSendOutputVerified,
+                targetRef: .init(rawValue: "mix_physical_send"), params: ["ordinal": .int(1),
+                    "destination": destination, "expected_current": .object(["kind": .string("stereo_output")]),
+                    "replace_existing": .bool(true)],
+                expectedInverse: .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination"))],
+                idempotencyKey: "physical-send-pair-contract")
+        }
+        func physical(_ ports: [Value]) -> Value {
+            .object(["kind": .string("physical"), "ports": .array(ports)])
+        }
+        let accepted = plan(physical([.int(3), .int(4)]))
+        #expect(SendRemovalSagaAdapter.accepts(accepted))
+        #expect(SendRemovalSagaAdapter.journalValue(try #require(accepted.steps.first)) == .string("physical:3-4"))
+        for ports: [Value] in [[.int(4), .int(3)], [.int(3), .int(3)], [.int(0), .int(4)], [.int(3)],
+                               [.int(3), .int(4), .int(5)], [.bool(true), .int(4)], [.double(3.5), .int(4)],
+                               [.string("3"), .int(4)]] {
+            #expect(!SendRemovalSagaAdapter.accepts(plan(physical(ports))))
+        }
+        #expect(!SendRemovalSagaAdapter.accepts(plan(.object(["kind": .string("physical"),
+            "ports": .array([.int(3), .int(4)]), "number": .int(1)]))))
+        #expect(!SendRemovalSagaAdapter.accepts(plan(.object(["kind": .string("physical"),
+            "ports": .array([.int(3), .int(4)]), "native_proof": .object([:])]))))
+        var forgedCanonical = accepted
+        forgedCanonical.canonicalPlanID = "unowned_plan"; forgedCanonical.canonicalDigest = "unowned_digest"
+        #expect(!SendRemovalSagaAdapter.accepts(forgedCanonical))
+    }
+
+    @Test(arguments: ["failure", "cancel", "unverified"])
+    func registeredPhysicalOutputSendSagaCompensatesOnlyItsActualNativeChange(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(restoring: true,
+            emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["external_destination", "external_level", "external_mode", "replaced_control",
+                      "unknown_after", "foreign_after", "no_observer", "lost_observer", "late_inverse_mode"])
+    func registeredPhysicalOutputSendSagaCannotInvertUnobservedOrNewerState(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(restoring: true,
+            emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["wrong_project", "wrong_target", "missing_confirmation", "wrong_confirmation", "invalid_later",
+                      "multiple", "raw_level", "raw_bypass", "nondefault_mode", "expired_pair", "extra_param"])
+    func registeredPhysicalOutputSendSagaRefusesInvalidRequestsBeforeAnyLeaf(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(restoring: true,
+            emptyModeMenu: true, sagaMode: mode)
+    }
+
+    @Test(arguments: ["preflight", "wrong_project", "foreign_document", "refs_disabled"])
+    func registeredPhysicalOutputSendSagaPreflightUsesActualRetainedCustody(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(restoring: true,
+            emptyModeMenu: true, sagaMode: mode)
+    }
+
     @Test(arguments: ["failure", "cancel", "unverified"])
     func registeredExistingBusSendSagaCompensatesOnlyItsActualNativeChange(mode: String) async throws {
         try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
@@ -4707,11 +4767,12 @@ struct Issue965HeldSelectionAssociationTests {
                         } else if sagaMode == "foreign_after" {
                             b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                             f.routingLateScopeInjected = true
-                        } else if existingBus {
+                        } else if existingBus || !removing {
                             switch sagaMode {
                             case "external_destination":
-                                b.setAttribute(echo, kAXTitleAttribute as String, "Bus 2 → Existing")
-                                b.setAttribute(destination, kAXTitleAttribute as String, "Bus 2 → Existing")
+                                let changed = existingBus ? "Bus 2 → Existing" : "Output 5-6"
+                                b.setAttribute(echo, kAXTitleAttribute as String, changed)
+                                b.setAttribute(destination, kAXTitleAttribute as String, changed)
                             case "external_level": b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1)
                             case "external_mode": b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader")
                             case "replaced_control":
@@ -4798,11 +4859,20 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(!gate.isHeldByEntitledHolder())
                     return
                 }
-                #expect(f.routingDestinationPresses == 2, "Actual registered removal/inverse response: \(sharedToolText(result))")
-                let compensation = try #require(body["compensation"] as? [String: Any])
-                let fullyCompensated = try #require(compensation["fully_compensated"] as? Bool)
-                #expect(fullyCompensated)
-                let slots = try #require(AXLogicProElements.sendSlotObservations(in: restoredSource, runtime: f.logic().ax))
+                let completed = sagaMode == "completed"
+                #expect(f.routingDestinationPresses == (completed ? 1 : 2), "Actual registered Send response: \(sharedToolText(result))")
+                if completed {
+                    #expect(body["state"] as? String == "A")
+                    #expect(body["saga_state"] as? String == "completed")
+                    let verified = try #require(body["verified"] as? Bool)
+                    #expect(verified)
+                } else {
+                    let compensation = try #require(body["compensation"] as? [String: Any])
+                    let fullyCompensated = try #require(compensation["fully_compensated"] as? Bool)
+                    #expect(fullyCompensated)
+                }
+                let slots = try #require(AXLogicProElements.sendSlotObservations(in: completed ? replacement : restoredSource,
+                    runtime: f.logic().ax))
                 #expect(slots.filter { $0.state == .occupiedUnknownDestination }.count == 1)
                 #expect(!gate.isHeldByEntitledHolder())
                 let beforeReplay = f.routingDestinationPresses
