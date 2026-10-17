@@ -1,4 +1,5 @@
 @preconcurrency import ApplicationServices
+import Foundation
 import Testing
 @testable import LogicProMCP
 
@@ -73,6 +74,36 @@ struct Issue965TransportCensusDepthTests {
         f.builder.setChildren(f.window, [f.bar, f.nested(12, children: [competitor])])
         #expect(try AXLogicProElements.observedTransportActivity(
             in: f.window, runtime: f.runtime, checking: {}) == nil)
+    }
+
+    @Test("a group that becomes a competing bar during the complete census is not an earlier absence")
+    func descriptionChangedDuringCensusRefuses() throws {
+        let f = Fixture()
+        let competitor = f.builder.element(965_706)
+        let later = f.builder.element(965_707)
+        f.builder.setRole(competitor, kAXGroupRole as String)
+        f.builder.setAttribute(competitor, kAXDescriptionAttribute as String, "Other group")
+        f.builder.setChildren(competitor, [f.play, f.record])
+        f.builder.setRole(later, kAXGroupRole as String)
+        f.builder.setChildren(later, [])
+        f.builder.setChildren(f.window, [f.bar, competitor, later])
+        let base = f.runtime.ax
+        let runtime = AXHelpers.Runtime(axApp: base.axApp, attributeValue: base.attributeValue,
+            attributeIsSettable: base.attributeIsSettable, setAttributeValue: base.setAttributeValue,
+            children: base.children, performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult, attributeValueResult: base.attributeValueResult,
+            attributeValuesResult: { node, attributes in
+                if CFEqual(node, later) {
+                    f.builder.setAttribute(competitor, kAXDescriptionAttribute as String, "Control Bar")
+                }
+                return .success(attributes.map { attribute in
+                    if attribute == kAXChildrenAttribute as String { return base.children(node) as NSArray }
+                    return base.attributeValue(node, attribute) ?? NSNull()
+                })
+            })
+        #expect(AXLogicProElements.getControlBar(in: f.window, runtime: runtime) == nil,
+            "The completed census must not authorize the earlier label of a now-competing bar")
+        #expect(f.builder.actionCalls.isEmpty && f.builder.setCalls.isEmpty)
     }
 
     @Test("an unvisited subtree remains a refusal, not proof of absence")
