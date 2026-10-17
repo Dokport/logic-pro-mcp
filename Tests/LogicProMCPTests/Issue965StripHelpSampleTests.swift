@@ -43,8 +43,8 @@ struct Issue965StripHelpSampleTests {
             let occupied = AXLogicProElements.isOccupiedPluginSlotElement(group, runtime: runtime)
             #expect(occupied == !["unmatched", "cutoff"].contains(mode))
             if metadataPositive {
-                #expect(calls.help == 1 && calls.guards == 1,
-                    "Keep the unresolved Open check on the Bypass child; omit only the two already-positive predicate reads")
+                #expect(calls.help == 0 && calls.guards == 0,
+                    "Fresh sibling metadata already proves both positive controls; no unresolved sibling needs focus-moving Help")
                 #expect(!failures.any)
             } else if mode == "cutoff" {
                 #expect(calls.guards > 0 && calls.help == 0 && guardian.stopped)
@@ -128,7 +128,7 @@ struct Issue965StripHelpSampleTests {
     @Test("the actual owned strip reader retains failure-noting plugin provenance over both input runtimes",
           arguments: [false, true])
     func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool) throws {
-        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0 }
+        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0, bypassHelp = 0 }
         let builder = FakeAXRuntimeBuilder(), calls = Calls()
         let strip = builder.element(1_965_860), insert = builder.element(1_965_861)
         let bypass = builder.element(1_965_862), open = builder.element(1_965_863)
@@ -150,10 +150,14 @@ struct Issue965StripHelpSampleTests {
         builder.setChildren(mixer, [strip]); builder.setChildren(window, [mixer])
         let base = builder.makeAXRuntime()
         let metadata = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
-        let raw = AXHelpers.Runtime(axApp: base.axApp, attributeValue: base.attributeValue,
+        let native: @Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError> = { element, attribute in
+            if attribute == kAXHelpAttribute as String, CFEqual(element, bypass) { calls.bypassHelp += 1 }
+            return base.attributeValueResult?(element, attribute) ?? .success(base.attributeValue(element, attribute))
+        }
+        let raw = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { try? native($0, $1).get() },
             attributeIsSettable: base.attributeIsSettable, setAttributeValue: base.setAttributeValue,
             children: base.children, performAction: base.performAction, childCount: base.childCount,
-            childrenResult: base.childrenResult, attributeValueResult: base.attributeValueResult,
+            childrenResult: base.childrenResult, attributeValueResult: native,
             attributeValuesResult: { element, attributes in
                 if attributes == metadata { calls.metadataBatches += 1 }
                 return .success(attributes.map { attribute -> AnyObject in
@@ -177,7 +181,10 @@ struct Issue965StripHelpSampleTests {
                 let fullyObserved = try #require(states.first?.pluginsFullyObserved)
                 #expect(fullyObserved)
                 #expect(calls.metadataBatches == 0)
-                #expect(calls.helpGuardCalls > 0 && !guardian.stopped && !failures.any)
+                #expect(calls.helpGuardCalls > 0 && !guardian.stopped && !failures.any,
+                    "Independent MIDI/instrument absence still requires its guarded Help census")
+                #expect(calls.bypassHelp == 0,
+                    "The actual owned reader must not read Bypass Help just to find an Open control already present in sibling metadata")
             }
         }
         #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)

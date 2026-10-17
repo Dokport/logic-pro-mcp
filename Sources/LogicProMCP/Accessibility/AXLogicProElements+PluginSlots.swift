@@ -270,12 +270,8 @@ extension AXLogicProElements {
             return false
         }
         let children = AXHelpers.getChildren(element, runtime: runtime)
-        let hasBypass = children.contains { child in
-            elementMatchesPluginControl(child, labels: AXLocalePolicy.pluginBypassControl, runtime: runtime)
-        }
-        let hasOpen = children.contains { child in
-            elementMatchesPluginControl(child, labels: AXLocalePolicy.pluginSlotOpenControl, runtime: runtime)
-        }
+        let hasBypass = pluginChildrenContainControl(children, labels: AXLocalePolicy.pluginBypassControl, runtime: runtime)
+        let hasOpen = pluginChildrenContainControl(children, labels: AXLocalePolicy.pluginSlotOpenControl, runtime: runtime)
         if hasBypass && hasOpen {
             return true
         }
@@ -505,6 +501,20 @@ extension AXLogicProElements {
     ) -> String {
         (elementSearchMetadata(element, runtime: runtime) + [AXHelpers.getHelp(element, runtime: runtime)])
             .compactMap { $0 }.joined(separator: " ").lowercased()
+    }
+
+    private static func pluginChildrenContainControl(
+        _ children: [AXUIElement], labels: AXLocalePolicy.LabelSet, runtime: AXHelpers.Runtime
+    ) -> Bool {
+        // A positive sibling sample settles this existential predicate without
+        // focus-moving Help on an earlier unrelated control. These samples are
+        // fresh for this predicate only; unresolved cases keep the original
+        // separately guarded per-control fallback, including its failure seam.
+        if children.contains(where: { child in
+            labels.containsAny(in: elementSearchMetadata(child, runtime: runtime)
+                .compactMap { $0 }.joined(separator: " ").lowercased())
+        }) { return true }
+        return children.contains { elementMatchesPluginControl($0, labels: labels, runtime: runtime) }
     }
 
     private static func elementMatchesPluginControl(
