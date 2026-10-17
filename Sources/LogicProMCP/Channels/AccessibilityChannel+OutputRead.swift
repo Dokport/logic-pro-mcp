@@ -1331,9 +1331,9 @@ extension AccessibilityChannel {
                 extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
                 let change: ChangedSendObservation?
                 let observingChange = request.occupiedInverse != nil || (sendChangeObserver != nil
-                    && request.expected == .stereoOutput && request.destination.map {
-                        switch $0 { case .bus, .physical: return true; default: return false }
-                    } == true)
+                    && request.expected.flatMap { before in request.destination.map {
+                        supportsOccupiedSendChange(before: before, after: $0)
+                    } } == true)
                 if observingChange, let checkedAfter = after.assignment, let checkedBefore = request.expected, let verifiedPopulation {
                     let proof = ChangedSendObservation(source: source, control: final.control, footprint: final.slots,
                         checkedBefore: checkedBefore, checkedAfter: checkedAfter,
