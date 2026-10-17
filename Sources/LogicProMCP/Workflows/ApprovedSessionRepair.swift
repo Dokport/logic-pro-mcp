@@ -1552,7 +1552,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     requiringOriginalSendControl: task.control)
             }
         }
-        guard read.assignment == task.before, read.sendControl?.matches(task.control) == true,
+        guard read.result.isSuccess, let receipt = decodedJSONObject(read.result.message),
+              receipt["popup_menu_state"] as? String == "closed",
+              receipt["focus_restoration"] as? String == "restored",
+              read.assignment == task.before, read.sendControl?.matches(task.control) == true,
               read.sendNonRoutingChecks == ["Post Fader"] || read.sendNonRoutingChecks == ["포스트 페이더"],
               await current() else { return refused(read) }
         let outcome = SagaOutcome(idempotencyKey: plan.idempotencyKey, state: .completed, complete: true,

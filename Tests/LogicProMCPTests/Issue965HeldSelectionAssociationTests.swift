@@ -2823,7 +2823,7 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: ["replacement", "late_replacement", "wrong_project", "destination", "level", "bypass", "mode", "unread_mark", "source_retired", "wrong_digest", "unconfirmed"], [false, true])
+    @Test(arguments: ["replacement", "late_replacement", "wrong_project", "destination", "level", "bypass", "mode", "unread_mark", "source_retired", "wrong_digest", "unconfirmed", "cleanup_focus"], [false, true])
     func matchingCanonicalSendRefusesStaleOrUnapprovedGoalsWithoutASetter(fault: String, physical: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
@@ -3998,6 +3998,16 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(echo, "AXMenuItemMarkChar", "")
                         b.setAttribute(stereo, "AXMenuItemMarkChar", "")
                     case "source_retired": b.setChildren(f.mixer, [f.strips[0]])
+                    case "cleanup_focus":
+                        let prior = f.routingAction
+                        f.routingAction = { element, action in
+                            let result = prior?(element, action) ?? false
+                            if CFEqual(element, root), action == kAXCancelAction as String {
+                                f.routingLateScopeInjected = true
+                                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[0])
+                            }
+                            return result
+                        }
                     default: break
                     }
                     let readsBeforeApply = f.routingBypassMenuOpens
@@ -4006,6 +4016,12 @@ struct Issue965HeldSelectionAssociationTests {
                     if let matchingFault {
                         #expect(body["state"] as? String == "C", "Actual refusal for \(matchingFault): \(sharedToolText(result))")
                         #expect(f.routingDestinationPresses == 0)
+                        if matchingFault == "cleanup_focus" {
+                            #expect(f.routingLateScopeInjected)
+                            let receipt = try #require(body["send_read_receipt"] as? [String: Any])
+                            #expect(receipt["focus_restoration"] as? String == "not_restored")
+                            #expect(receipt["popup_menu_state"] as? String == "closed")
+                        }
                         if matchingFault == "late_replacement" { #expect(f.routingLateScopeInjected) }
                         if ["replacement", "late_replacement", "wrong_project", "level", "bypass", "source_retired", "wrong_digest", "unconfirmed"].contains(matchingFault) {
                             #expect(f.routingBypassMenuOpens == readsBeforeApply, "Invalid custody/approval refuses before opening a popup")
