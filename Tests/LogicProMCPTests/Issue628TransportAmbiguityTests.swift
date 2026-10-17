@@ -79,6 +79,102 @@ struct Issue628TransportAmbiguityTests {
         #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
     }
 
+    @Test("An unreadable or malformed group description cannot hide a competing Control Bar",
+          arguments: ["unreadable", "malformed"])
+    func batchedControlBarDescriptionMustBeKnown(fault: String) throws {
+        final class Reads: @unchecked Sendable { var failedDescription = 0 }
+        let reads = Reads()
+        let b = FakeAXRuntimeBuilder()
+        let window = b.element(1_971_980)
+        let bar = transportish(b, 1_971_981, labels: ["Play", "Record"])
+        let other = transportish(b, 1_971_982, labels: ["Play", "Record"])
+        b.setRole(window, kAXWindowRole as String)
+        for group in [bar, other] {
+            b.setAttribute(group, kAXDescriptionAttribute as String, "Control Bar")
+            for child in b.makeAXRuntime().children(group) { b.setRole(child, kAXCheckBoxRole as String) }
+        }
+        b.setChildren(window, [bar, other])
+        var nativeError = AXError.cannotComplete
+        let unreadable = try #require(AXValueCreate(.axError, &nativeError))
+        let base = b.makeAXRuntime()
+        let ax = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { element, attribute in
+            if CFEqual(element, other), attribute == kAXDescriptionAttribute as String {
+                reads.failedDescription += 1
+                return fault == "unreadable" ? nil : NSNumber(value: 1)
+            }
+            return base.attributeValue(element, attribute)
+        },
+            setAttributeValue: base.setAttributeValue, children: base.children,
+            performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult, attributeValueResult: { element, attribute in
+                if CFEqual(element, other), attribute == kAXDescriptionAttribute as String {
+                    reads.failedDescription += 1
+                    return fault == "unreadable" ? .failure(.init(raw: AXError.cannotComplete.rawValue))
+                        : .success(NSNumber(value: 1))
+                }
+                return AXHelpers.getAttributeResult(element, attribute, runtime: base)
+            },
+            attributeValuesResult: { element, attributes in
+                .success(attributes.map { attribute -> AnyObject in
+                    if CFEqual(element, other), attribute == kAXDescriptionAttribute as String {
+                        reads.failedDescription += 1
+                        return fault == "unreadable" ? unreadable : NSNumber(value: 1)
+                    }
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        #expect(AXLogicProElements.getControlBar(in: window, runtime: ax) == nil,
+            "A group's unknown label is not evidence that it is not another Control Bar")
+        #expect(reads.failedDescription > 0)
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
+    @Test("Fresh post-census child and role failures cannot conceal a competing Control Bar",
+          arguments: ["children", "role"])
+    func lateControlBarDiscriminatorFailureRefuses(fault: String) {
+        let b = FakeAXRuntimeBuilder()
+        let window = b.element(1_971_983)
+        let bar = transportish(b, 1_971_984, labels: ["Play", "Record"])
+        let other = transportish(b, 1_971_985, labels: ["Play", "Record"])
+        b.setRole(window, kAXWindowRole as String)
+        for group in [bar, other] {
+            b.setAttribute(group, kAXDescriptionAttribute as String, "Control Bar")
+            for child in b.makeAXRuntime().children(group) { b.setRole(child, kAXCheckBoxRole as String) }
+        }
+        b.setChildren(window, [bar, other])
+        let base = b.makeAXRuntime()
+        let otherChildren = base.children(other)
+        let unavailable = AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue)
+        let ax = AXHelpers.Runtime(axApp: base.axApp,
+            attributeValue: { element, attribute in
+                if fault == "role", attribute == kAXRoleAttribute as String,
+                   otherChildren.contains(where: { CFEqual($0, element) }) { return nil }
+                return base.attributeValue(element, attribute)
+            }, setAttributeValue: base.setAttributeValue,
+            children: { element in
+                if fault == "children", CFEqual(element, other) { return [] }
+                return base.children(element)
+            }, performAction: base.performAction, childCount: base.childCount,
+            childrenResult: { element in
+                if fault == "children", CFEqual(element, other) { return .failure(unavailable) }
+                return AXHelpers.childrenResult(element, runtime: base)
+            }, attributeValueResult: { element, attribute in
+                if fault == "role", attribute == kAXRoleAttribute as String,
+                   otherChildren.contains(where: { CFEqual($0, element) }) { return .failure(unavailable) }
+                return AXHelpers.getAttributeResult(element, attribute, runtime: base)
+            }, attributeValuesResult: { element, attributes in
+                // The initial census is genuinely complete. The later deciding
+                // read fails through both scalar seams, not through this batch.
+                .success(attributes.map { attribute -> AnyObject in
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        #expect(AXLogicProElements.getControlBar(in: window, runtime: ax) == nil)
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
     @Test("An unreadable batched branch cannot conceal a competing Control Bar",
           arguments: ["bulk_error", "malformed_children", "malformed_role", "malformed_child_array"])
     func incompleteBatchedDiscoveryCannotCertifyAUniqueControlBar(_ fault: String) {
