@@ -93,9 +93,11 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("One coupled-editor decision reuses its already-held stopped transport",
         arguments: ["held", "fallback", "play", "record", "bad_play", "bad_record", "play_role", "record_role",
                     "replaced_bar", "replaced_record", "competing_bar", "late_competing_bar",
-                    "late_focus", "late_document", "late_source", "cancel", "lost", "fresh_values"])
+                    "late_focus", "late_document", "late_source", "late_header", "late_header_role", "late_mixer", "late_peer",
+                    "cancel", "lost", "fresh_values"])
     func coupledEditorGuardDoesNotRediscoverItsHeldTransport(_ fault: String) async throws {
         let f = try Fixture(), gate = LogicMutationGate()
+        f.useBulkReads = true
         defer { try? FileManager.default.removeItem(at: f.bundle) }
         let claim = try #require(gate.tryAcquire(operation: "coupled-editor-transport"))
         defer { gate.release(claim) }
@@ -154,6 +156,10 @@ struct Issue965HeldSelectionAssociationTests {
                         if fault == "late_focus" { f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, otherRecord) }
                         if fault == "late_document" { f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/foreign.logicx") }
                         if fault == "late_source" { f.builder.setChildren(f.mixer, [f.strips[0]]) }
+                        if fault == "late_header" { f.builder.setChildren(f.rail, [f.headers[1]]) }
+                        if fault == "late_header_role" { f.builder.setRole(f.headers[0], kAXTextFieldRole as String) }
+                        if fault == "late_mixer" { f.builder.setChildren(f.window, [f.rail, f.builder.element(1_965_720)]) }
+                        if fault == "late_peer" { f.builder.setChildren(f.mixer, [otherRecord, f.strips[1]]) }
                         if fault == "cancel" { f.routingLateScopeInjected = true }
                     }
                 }
@@ -166,6 +172,7 @@ struct Issue965HeldSelectionAssociationTests {
             let oneDiscoveryReads = f.coupledGuardBarReads
             #expect(oneDiscoveryReads > 0)
             f.coupledGuardBarReads = 0
+            f.coupledGuardPopulationScans = 0
             let admitted = ExactTrackNameAdapter.permitsCoupledEditorRead(editor, pair: pair, names: ["Duplicate"],
                 transportProof: fault == "fallback" ? nil : held)
             if ["held", "fallback", "fresh_values"].contains(fault) {
@@ -173,17 +180,25 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.coupledGuardPlayReads > 0 && f.coupledGuardRecordReads > 0,
                     "Reach both actual deciding values, not an earlier refusal")
                 if fault != "fallback" {
+                    #expect(f.coupledGuardPopulationScans == 0,
+                        "Renew the original complete owned paths/census instead of globally rediscovering a held Mixer")
                     #expect(f.coupledGuardBarReads <= oneDiscoveryReads,
                         "Do not repeat whole Control Bar discovery before deciding Record")
-                }
+                } else { #expect(f.coupledGuardPopulationScans > 0) }
                 if fault == "held" {
-                    // Measure the entire transport-only decision as well: the
-                    // final uniqueness discovery occurs after the Record value.
+                    // The original Track renewal also visits Control Bar
+                    // metadata. Measure it separately; the source/transport
+                    // decision still adds only one uniqueness discovery.
                     f.coupledGuardBarReads = 0
                     f.coupledGuardCountDiscovery = true
+                    let trackIndex = try #require(pair.track.currentIndex())
+                    #expect(trackIndex == 0)
+                    let headerRenewalReads = f.coupledGuardBarReads
+                    f.coupledGuardBarReads = 0
                     let playReads = f.coupledGuardPlayReads, recordReads = f.coupledGuardRecordReads
                     #expect(held.permitsCoupledEditorTransportRead(pair: pair))
-                    #expect(f.coupledGuardBarReads == oneDiscoveryReads)
+                    #expect(f.coupledGuardBarReads == oneDiscoveryReads + headerRenewalReads)
+                    #expect(f.coupledGuardPopulationScans == 0)
                     #expect(f.coupledGuardPlayReads > playReads && f.coupledGuardRecordReads > recordReads)
                     f.coupledGuardCountDiscovery = false
                 }
@@ -499,6 +514,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
         var coupledGuardBarReads = 0
+        var coupledGuardPopulationScans = 0
         var coupledGuardPlayReads = 0
         var coupledGuardRecordReads = 0
         var coupledGuardCountDiscovery = false
@@ -868,6 +884,10 @@ struct Issue965HeldSelectionAssociationTests {
                     elementAtPosition: levelHit,
                     attributeValuesResult: { [self] element, attributes in
                         batchReadCalls += 1
+                        if CFEqual(element, window), attributes == [kAXRoleAttribute, kAXIdentifierAttribute,
+                            kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as [String] {
+                            coupledGuardPopulationScans += 1
+                        }
                         activeBulkAttributes = attributes
                         defer { activeBulkAttributes = nil }
                         if CFEqual(element, app), attributes == [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String] {
@@ -1155,6 +1175,12 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(census.strips.allSatisfy { current in f.strips.allSatisfy { !CFEqual(current, $0) } })
     }
 
+    @Test("Cancellation after the actual name writer preserves only its owned cleanup and inverse",
+          arguments: ["healthy", "peer", "project", "source"])
+    func coupledNameWriterCancellationFinishesOwnedFocusBeforeCompensation(fault: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_name_cancel_" + fault)
+    }
+
     @Test func ownedWholeCensusContinuationCanCompensateBothActualLeaves() async throws {
         let f = try Fixture()
         try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_census_second_failure", fixture: f)
@@ -1185,6 +1211,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
                 let composed = mode.hasPrefix("coupled")
                 let menuOverlay = mode.hasPrefix("coupled_menu_overlay")
+                let cancelsAfterName = mode.hasPrefix("coupled_menu_overlay_name_cancel_")
                 let ownsEditor = ["coupled_editor", "coupled_retired_editor", "coupled_late_editor", "coupled_late_confirm"].contains(mode)
                 let compensatesBoth = ["coupled_cancel", "coupled_second_failure", "coupled_retired", "coupled_retired_editor", "coupled_menu_overlay_second_failure", "coupled_menu_overlay_census_second_failure"].contains(mode)
                 let nameField = f.builder.element(1_971_400)
@@ -1668,7 +1695,26 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(approval.plan.steps.count == (composed && mode != "coupled_same" ? 2 : 1) && approval.plan.steps.last?.operationID == .mixerSetOutputVerified)
                 #expect(approval.plan.steps[0].targetRef == target)
                 let router = ChannelRouter()
-                if mode.hasPrefix("coupled_menu_overlay_census") {
+                if cancelsAfterName {
+                    await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
+                        mode: "cancel", operation: "track.rename", idempotencyKey: key,
+                        afterForward: {
+                            guard f.routingNameWrites.count == 1 else { return }
+                            f.routingLateScopeInjected = true
+                            if mode.hasSuffix("_peer") {
+                                f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
+                            } else if mode.hasSuffix("_project") {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            } else if mode.hasSuffix("_source") {
+                                let replacement = f.builder.element(1_971_409)
+                                f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                                f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[1]))
+                                f.builder.setChildren(f.mixer, [f.strips[0], replacement])
+                            }
+                        }, observedResult: { response in
+                            f.routingOutputChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
+                        }))
+                } else if mode.hasPrefix("coupled_menu_overlay_census") {
                     await router.register(SelectedOutputSagaResultBoundary(f.channel(), shouldFail: mode.hasSuffix("second_failure"), observed: { response in
                         f.routingOutputChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
                     }))
@@ -1730,6 +1776,31 @@ struct Issue965HeldSelectionAssociationTests {
                         }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let result = try #require(sharedJSONObject(sharedToolText(await run())))
+                if cancelsAfterName {
+                    #expect(f.routingOutputChannelStates.first == "A", "Reach the actual verified name channel before cancellation")
+                    #expect(f.routingLateScopeInjected)
+                    let healthy = mode.hasSuffix("_healthy")
+                    #expect(result["saga_state"] as? String == (healthy ? "fullyCompensated" : "rollbackUncertain"))
+                    #expect(f.routingDestinationPresses == 0, "A pending cancellation cannot start the output writer")
+                    #expect(f.routingNameWrites == (healthy ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
+                    if healthy {
+                        #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == "Duplicate")
+                        guard case .cancelled(_, verified: true)? = await journal.record(for: key) else {
+                            Issue.record("The actual journal must retain verified owned compensation"); return
+                        }
+                    }
+                    let writes = f.routingNameWrites
+                    let replay = try #require(sharedJSONObject(sharedToolText(await run())))
+                    if healthy {
+                        #expect(replay["state"] as? String == "C")
+                    } else {
+                        #expect(replay["state"] as? String == "B")
+                        let duplicate = try #require(replay["duplicate"] as? Bool)
+                        #expect(duplicate)
+                    }
+                    #expect(f.routingNameWrites == writes && f.routingDestinationPresses == 0)
+                    return
+                }
                 if mode.hasPrefix("coupled_menu_overlay_census") {
                     #expect(f.routingOutputChannelStates.first == "A", "Reach the verified real channel before judging the owned-name continuation")
                 }

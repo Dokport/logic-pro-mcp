@@ -3440,7 +3440,7 @@ extension AccessibilityChannel {
                 guard AXHelpers.setAttribute(editor, kAXValueAttribute as String, desired as CFTypeRef, runtime: runtime.ax) else {
                     return refusal("Ordinary rename editor value was attempted but its committed readback is unavailable")
                 }
-                if !editorIsHeld(allowOwnNamePreview: true) {
+                func committedSetterResult() -> ChannelResult {
                     // Logic can commit the String setter and close its editor itself.
                     // Never send Return into a different focus. Verify the original
                     // physical target and coupled footprint instead; an ack, preview,
@@ -3469,9 +3469,19 @@ extension AccessibilityChannel {
                         "track_index": physical?.currentIndex() ?? index,
                     ]))
                 }
-                guard let value: String = AXHelpers.getAttribute(editor, kAXValueAttribute as String, runtime: runtime.ax),
+                if !editorIsHeld(allowOwnNamePreview: true) { return committedSetterResult() }
+                let editorValue: String? = AXHelpers.getAttribute(editor, kAXValueAttribute as String, runtime: runtime.ax)
+                let editorFocus = readLogicKeyboardFocus(runtime: runtime)
+                // The owned setter may close its editor during that value read,
+                // after the earlier held-editor check. Verify the same original
+                // target/footprint; never post Return into the replacement focus.
+                if case .notTextEditing = editorFocus,
+                   editorValue == nil || editorValue?.utf8.elementsEqual(desired.utf8) == true {
+                    return committedSetterResult()
+                }
+                guard let value = editorValue,
                       value.utf8.elementsEqual(desired.utf8),
-                      case .textEditing = readLogicKeyboardFocus(runtime: runtime),
+                      case .textEditing = editorFocus,
                       ExactTrackNameAdapter.coupledMenuWritePermitted(allowOwnPreview: true, ownedEditor: editor),
                       editorIsHeld(allowOwnNamePreview: true), mouseRuntime.postKeyEvent(0x24),
                       targetStillHeld(requiringExclusiveSelection: true),
