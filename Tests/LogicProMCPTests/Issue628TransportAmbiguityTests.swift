@@ -22,6 +22,57 @@ import Testing
 @Suite("Issue #628 — the transport scan's candidate list is a value")
 struct Issue628TransportAmbiguityTests {
 
+    @Test("Control Bar discovery batches fresh node metadata without changing ambiguity or fallback",
+          arguments: ["bulk", "scalar", "competing", "refresh"])
+    func controlBarDiscoveryUsesTheExistingFreshBatchTraversal(_ mode: String) throws {
+        final class Calls: @unchecked Sendable { var bulk = 0, scalarBranch = 0 }
+        let b = FakeAXRuntimeBuilder(), calls = Calls()
+        let window = b.element(1_971_910), branch = b.element(1_971_911), leaf = b.element(1_971_912)
+        b.setRole(window, kAXWindowRole as String)
+        b.setRole(branch, kAXGroupRole as String)
+        b.setRole(leaf, kAXStaticTextRole as String)
+        b.setChildren(branch, [leaf]); b.setChildren(leaf, [])
+        let bar = transportish(b, 1_971_913, labels: ["Play", "Record"])
+        let other = transportish(b, 1_971_914, labels: ["Play", "Record"])
+        for candidate in [bar, other] {
+            b.setAttribute(candidate, kAXDescriptionAttribute as String, "Control Bar")
+        }
+        b.setChildren(window, mode == "competing" ? [branch, bar, other] : [branch, bar])
+        let base = b.makeAXRuntime()
+        let batch: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError>)?
+        if mode == "scalar" { batch = nil }
+        else {
+            batch = { element, attributes in
+                calls.bulk += 1
+                return .success(attributes.map { attribute -> AnyObject in
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            }
+        }
+        let ax = AXHelpers.Runtime(axApp: base.axApp,
+            attributeValue: { element, attribute in
+                if CFEqual(element, branch), attribute == kAXRoleAttribute as String { calls.scalarBranch += 1 }
+                return base.attributeValue(element, attribute)
+            }, setAttributeValue: base.setAttributeValue,
+            children: { element in
+                if CFEqual(element, branch) { calls.scalarBranch += 1 }
+                return base.children(element)
+            }, performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult, attributeValueResult: base.attributeValueResult,
+            attributeValuesResult: batch)
+        let found = AXLogicProElements.getControlBar(in: window, runtime: ax)
+        if mode == "competing" { #expect(found == nil) }
+        else { #expect(CFEqual(try #require(found), bar)) }
+        if mode == "scalar" { #expect(calls.bulk == 0 && calls.scalarBranch > 0) }
+        else { #expect(calls.bulk > 0 && calls.scalarBranch == 0) }
+        if mode == "refresh" {
+            b.setChildren(window, [branch, bar, other])
+            #expect(AXLogicProElements.getControlBar(in: window, runtime: ax) == nil)
+        }
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
     @Test("transport container control evidence reuses the actual localized control authorities",
           arguments: [["lecture", "Enregistrement"], ["Wiedergabe", "Aufnahme"]])
     func localizedOwnTransportControlsQualify(labels: [String]) throws {

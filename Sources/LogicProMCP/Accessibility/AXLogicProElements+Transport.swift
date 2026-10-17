@@ -354,7 +354,8 @@ extension AXLogicProElements {
         // search it for a checkbox, so a candidate holding none cannot be what they meant, whatever
         // it is called.
         let labelled = AXHelpers.findAllDescendants(
-            of: window, role: kAXGroupRole, maxDepth: 8, runtime: runtime
+            of: window, role: kAXGroupRole, maxDepth: 8, runtime: runtime,
+            batchingRoleAndChildren: true
         ).filter { group in
             AXLocalePolicy.controlBarGroupLabel.matches(
                 AXHelpers.getDescription(group, runtime: runtime) ?? "", mode: .exactStrict
