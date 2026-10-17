@@ -5,6 +5,66 @@ import Testing
 
 @Suite("#965 one native Help sample per strip extraction", .serialized)
 struct Issue965StripHelpSampleTests {
+    @Test("positive insert-control metadata avoids only redundant Help and remains fresh",
+          arguments: ["legacy", "noted", "help_only", "unmatched", "cutoff", "fresh"])
+    func positiveInsertControlMetadataDoesNotNeedHelp(mode: String) throws {
+        final class Calls: @unchecked Sendable { var help = 0, guards = 0 }
+        let builder = FakeAXRuntimeBuilder(), calls = Calls()
+        let group = builder.element(1_971_995), bypass = builder.element(1_971_996)
+        let open = builder.element(1_971_997)
+        builder.setRole(group, kAXGroupRole as String)
+        builder.setRole(bypass, kAXCheckBoxRole as String)
+        builder.setRole(open, kAXButtonRole as String)
+        builder.setChildren(group, [bypass, open])
+        builder.setChildren(bypass, []); builder.setChildren(open, [])
+        let metadataPositive = ["legacy", "noted", "fresh"].contains(mode)
+        for (element, label) in [(bypass, "Bypass"), (open, "Open")] {
+            builder.setAttribute(element, kAXDescriptionAttribute as String, metadataPositive ? label : "Unclassified control")
+            builder.setAttribute(element, kAXHelpAttribute as String, mode == "unmatched" ? "Unrelated Help" : label)
+        }
+        let base = builder.makeAXRuntime()
+        let native: @Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError> = { element, attribute in
+            if attribute == kAXHelpAttribute as String { calls.help += 1 }
+            return base.attributeValueResult?(element, attribute) ?? .success(base.attributeValue(element, attribute))
+        }
+        let raw = AXHelpers.Runtime(axApp: base.axApp,
+            attributeValue: { element, attribute in try? native(element, attribute).get() },
+            setAttributeValue: base.setAttributeValue,
+            children: base.children, performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult,
+            attributeValueResult: native)
+        let failures = AXPluginInstanceIdentity.FailedReads()
+        let runtime = mode == "noted" ? AXPluginInstanceIdentity.noting(failures, over: raw) : raw
+        let guardian = AXHelpers.HelpReadGuard(allowHelpReads: true, stop: {
+            calls.guards += 1
+            return mode == "cutoff"
+        })
+        AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+            let occupied = AXLogicProElements.isOccupiedPluginSlotElement(group, runtime: runtime)
+            #expect(occupied == !["unmatched", "cutoff"].contains(mode))
+            if metadataPositive {
+                #expect(calls.help == 1 && calls.guards == 1,
+                    "Keep the unresolved Open check on the Bypass child; omit only the two already-positive predicate reads")
+                #expect(!failures.any)
+            } else if mode == "cutoff" {
+                #expect(calls.guards > 0 && calls.help == 0 && guardian.stopped)
+            } else {
+                #expect(calls.help > 0 && calls.guards == calls.help,
+                    "Unresolved metadata must keep the full guardian on every actual Help read")
+            }
+            if mode == "fresh" {
+                for element in [bypass, open] {
+                    builder.setAttribute(element, kAXDescriptionAttribute as String, "Unclassified control")
+                    builder.setAttribute(element, kAXHelpAttribute as String, "Unrelated Help")
+                }
+                #expect(!AXLogicProElements.isOccupiedPluginSlotElement(group, runtime: runtime))
+                #expect(calls.help > 0 && calls.guards == calls.help,
+                    "The next classification must not reuse an earlier positive metadata sample")
+            }
+        }
+        #expect(builder.actionCalls.isEmpty && builder.setCalls.isEmpty)
+    }
+
     @Test("failure-noting delegation retains one fresh full guard per actual Help read",
           arguments: ["legacy", "typed", "raw_legacy", "raw_typed", "nested", "native_failure", "cutoff", "omitted", "fresh_cutoff"])
     func notedHelpReadGuardsTheNativeBoundaryOnce(mode: String) throws {

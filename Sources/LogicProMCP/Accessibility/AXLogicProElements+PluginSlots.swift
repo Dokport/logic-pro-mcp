@@ -271,12 +271,10 @@ extension AXLogicProElements {
         }
         let children = AXHelpers.getChildren(element, runtime: runtime)
         let hasBypass = children.contains { child in
-            let text = elementSearchText(child, runtime: runtime)
-            return AXLocalePolicy.pluginBypassControl.containsAny(in: text)
+            elementMatchesPluginControl(child, labels: AXLocalePolicy.pluginBypassControl, runtime: runtime)
         }
         let hasOpen = children.contains { child in
-            let text = elementSearchText(child, runtime: runtime)
-            return AXLocalePolicy.pluginSlotOpenControl.containsAny(in: text)
+            elementMatchesPluginControl(child, labels: AXLocalePolicy.pluginSlotOpenControl, runtime: runtime)
         }
         if hasBypass && hasOpen {
             return true
@@ -375,8 +373,7 @@ extension AXLogicProElements {
     ) -> Bool? {
         let children = AXHelpers.getChildren(element, runtime: runtime)
         guard let bypass = children.first(where: { child in
-            let text = elementSearchText(child, runtime: runtime)
-            return AXLocalePolicy.pluginBypassControl.containsAny(in: text)
+            elementMatchesPluginControl(child, labels: AXLocalePolicy.pluginBypassControl, runtime: runtime)
         }) ?? children.first(where: { child in
             (AXHelpers.getRole(child, runtime: runtime) ?? "") == (kAXCheckBoxRole as String)
         }) else {
@@ -508,6 +505,21 @@ extension AXLogicProElements {
     ) -> String {
         (elementSearchMetadata(element, runtime: runtime) + [AXHelpers.getHelp(element, runtime: runtime)])
             .compactMap { $0 }.joined(separator: " ").lowercased()
+    }
+
+    private static func elementMatchesPluginControl(
+        _ element: AXUIElement, labels: AXLocalePolicy.LabelSet, runtime: AXHelpers.Runtime
+    ) -> Bool {
+        let metadata = elementSearchMetadata(element, runtime: runtime)
+        let nonHelp = metadata.compactMap { $0 }.joined(separator: " ").lowercased()
+        // These existing predicates only ask for positive containment. Appending
+        // Help cannot undo a label already present in this fresh sample. Absence
+        // still requires the original separately guarded Help read; do not use
+        // this shortcut for exclusion predicates or MIDI/instrument absence.
+        if labels.containsAny(in: nonHelp) { return true }
+        let text = (metadata + [AXHelpers.getHelp(element, runtime: runtime)])
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        return labels.containsAny(in: text)
     }
 
     private static func elementSearchMetadata(
