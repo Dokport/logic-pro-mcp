@@ -1795,6 +1795,30 @@ struct Issue968ExactTrackNameAdapterTests {
         }
     }
 
+    @Test(arguments: ["healthy", "primary", "mirror", "old_goal_mirror"])
+    func anIndependentMirrorReceiptFreezesBothActualNames(_ change: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            let (capture, project, target, _, mirror) = try await f.coupledCapture()
+            f.onConfirm = nil
+            let forward = await f.applyCoupled(capture, project: project, target: target)
+            #expect(forward.status == .applied)
+            let proof = try #require(forward.inverse)
+            let effect = try #require(ExactTrackNameAdapter.recordedNameEffect(proof))
+            #expect(effect.trackName == "C" && effect.stripName == "A")
+            #expect(await ExactTrackNameAdapter.readOwnedCoupledName(proof) == "C")
+            if change == "primary" { f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "External") }
+            if change == "mirror" { f.builder.setAttribute(mirror, kAXValueAttribute as String, "External") }
+            if change == "old_goal_mirror" { f.builder.setAttribute(mirror, kAXValueAttribute as String, "C") }
+            #expect(await ExactTrackNameAdapter.readOwnedCoupledName(proof) == (change == "healthy" ? "C" : nil))
+            let restored = await f.inverse(proof)
+            #expect(restored.status == (change == "healthy" ? .applied : .rejectedBeforeWrite))
+            #expect(f.writes == (change == "healthy" ? ["C", "A"] : ["C"]))
+            #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String
+                == (change == "mirror" ? "External" : change == "old_goal_mirror" ? "C" : "A"))
+        }
+    }
+
     @Test(arguments: ["before", "after"])
     func coupledRenameDoesNotCertifyAnUnexpectedCapturedPeerRename(phase: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
@@ -2037,16 +2061,18 @@ struct Issue968ExactTrackNameAdapterTests {
         }
     }
 
-    @Test func anUnchangedMirrorAfterTheActualTrackWriteCannotGrantACoupledInverse() async throws {
+    @Test func anUnchangedMirrorAfterTheActualTrackWriteRetainsItsActualNameEffect() async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = ExactNameFixture()
             let (capture, project, target, _, _) = try await f.coupledCapture()
             f.onConfirm = nil
             let result = await f.applyCoupled(capture, project: project, target: target)
-            #expect(result.status == .attemptedUnverified)
-            #expect(result.inverse == nil)
-            #expect(result.survivingReference == nil)
-            #expect(sharedJSONObject(sharedToolText(result.result))?["state"] as? String == "B")
+            #expect(result.status == .applied)
+            let inverse = try #require(result.inverse)
+            let effect = try #require(ExactTrackNameAdapter.recordedNameEffect(inverse))
+            #expect(effect.trackName == "C" && effect.stripName == "A")
+            #expect(result.survivingReference == target)
+            #expect(sharedJSONObject(sharedToolText(result.result))?["state"] as? String == "A")
             #expect(f.writes == ["C"])
         }
     }
