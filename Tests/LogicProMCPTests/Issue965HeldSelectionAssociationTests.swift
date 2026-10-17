@@ -2762,6 +2762,14 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project", "physical_slot", "mixed", "missing_witness", "decoded"])
+    func canonicalPhysicalSendUsesTheSameRetainedControlAndOwnedInverse(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(removing: false, restoring: true,
+                emptyModeMenu: true, canonicalSend: mode, canonicalPhysical: true)
+        }
+    }
+
     @Test("Registered inspection preserves raw checked nonrouting titles without calling them a typed send mode")
     func registeredInspectionPreservesItsCheckedSendNonroutingWitness() async throws {
         try await assertOccupiedSingleSendRenewal(inspectSendWitness: "observed")
@@ -3230,7 +3238,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                modeEffectBoundary: ModeEffectBoundary? = nil,
                                                levelSaga: String? = nil,
                                                creationSaga: String? = nil,
-                                               canonicalSend: String? = nil) async throws {
+                                               canonicalSend: String? = nil,
+                                               canonicalPhysical: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
@@ -3811,7 +3820,7 @@ struct Issue965HeldSelectionAssociationTests {
                     Issue.record("The capture must issue its actual project"); return
                 }
                 let target = try #require(capture.issued?.byRow[0])
-                let key = "canonical-send-" + canonicalSend, journal = SagaJournal()
+                let key = (canonicalPhysical ? "canonical-physical-send-" : "canonical-send-") + canonicalSend, journal = SagaJournal()
                 await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
                     mode: canonicalSend == "cancel" ? "cancel" : "completed", idempotencyKey: key,
                     beforeForward: {
@@ -3829,12 +3838,15 @@ struct Issue965HeldSelectionAssociationTests {
                     dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
                     mutationGate: gate, liveTrackNames: { [:] })
                 let planHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
+                var sendIntent: [String: Value] = ["target": .string("source"),
+                    canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1)]
+                if canonicalPhysical {
+                    sendIntent["output"] = .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
+                } else { sendIntent["remove"] = .bool(true) }
                 var policy: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
                     "project_ref": .string(project.rawValue),
                     "targets": .array([.object(["handle": .string("source"), "track_ref": .string(target.rawValue)])]),
-                    "sends": .array([.object(["target": .string("source"),
-                        canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1),
-                        "remove": .bool(true)])])]
+                    "sends": .array([.object(sendIntent)])]
                 if canonicalSend == "mixed" { policy["presentation"] = .object(["mixer_visible": .bool(true)]) }
                 if ["missing_witness", "decoded"].contains(canonicalSend) {
                     var fresh = capture.freshPopulation
@@ -3879,8 +3891,12 @@ struct Issue965HeldSelectionAssociationTests {
                 let planID = try #require(planned["plan_id"] as? String)
                 let digest = try #require(planned["digest"] as? String)
                 let preview = try #require(planned["steps"] as? [[String: Any]])
-                #expect(preview.count == 1 && preview[0]["kind"] as? String == "local_send_removal")
+                #expect(preview.count == 1 && preview[0]["kind"] as? String == (canonicalPhysical ? "local_send_output" : "local_send_removal"))
                 #expect(preview[0]["observed_ordinal"] as? Int == 1 && preview[0]["physical_slot"] == nil)
+                if canonicalPhysical {
+                    let after = try #require(preview[0]["after"] as? [String: Any])
+                    #expect(after["kind"] as? String == "physical" && after["ports"] as? [Int] == [3, 4])
+                }
                 if canonicalSend == "replacement" {
                     let decoy = b.element(1_965_2799)
                     b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
@@ -3907,6 +3923,18 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(body["saga_state"] as? String == (canonicalSend == "cancel" ? "fullyCompensated" : "completed"),
                         "Actual apply: \(sharedToolText(result))")
                     #expect(f.routingDestinationPresses == (canonicalSend == "cancel" ? 2 : 1))
+                    if canonicalPhysical {
+                        let steps = try #require(body["steps"] as? [[String: Any]])
+                        let evidence = try #require(steps[0]["evidence"] as? [String: Any])
+                        let verification = try #require(evidence["verification"] as? [String: Any])
+                        let readback = try #require(verification["readback"] as? [String: Any])
+                        #expect(readback["observed"] as? String == OutputAssignment.physical(3, 4).token)
+                        if canonicalSend == "cancel" {
+                            let compensation = try #require(steps[0]["compensation"] as? [String: Any])
+                            let inverseRead = try #require(compensation["readback"] as? [String: Any])
+                            #expect(inverseRead["observed"] as? String == OutputAssignment.stereoOutput.token)
+                        }
+                    }
                     let beforeReplay = f.routingDestinationPresses
                     _ = await apply(dependencies, arguments)
                     #expect(f.routingDestinationPresses == beforeReplay)

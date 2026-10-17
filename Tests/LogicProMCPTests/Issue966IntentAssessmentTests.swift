@@ -460,6 +460,40 @@ struct Issue966IntentAssessmentTests {
         #expect(legacyWire[0]["observed_ordinal"] == nil)
     }
 
+    @Test func physicalSendOutputDoesNotEncodeOrAssessAsRemoval() throws {
+        let output: Value = .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
+        var raw = policyObject(targets: [targetEntry("kick", "trk_0")])
+        raw["sends"] = .array([.object([
+            "target": .string("kick"), "observed_ordinal": .int(1), "output": output,
+        ])])
+        let policy = try #require(accepted(Audit.parseIntentPolicy(raw)))
+        let data = try JSONEncoder().encode(policy.sends)
+        let wire = try #require(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let destination = try #require(wire[0]["output"] as? [String: Any])
+        #expect(destination["kind"] as? String == "physical")
+        #expect(destination["ports"] as? [Int] == [3, 4])
+        #expect(wire[0]["remove"] == nil && wire[0]["bus"] == nil && wire[0]["physical_slot"] == nil)
+
+        for bad: Value in [
+            .object(["kind": .string("physical"), "ports": .array([.int(4), .int(3)])]),
+            .object(["kind": .string("physical"), "ports": .array([.bool(true), .int(2)])]),
+            .object(["kind": .string("stereo_output")]),
+            .object(["kind": .string("no_output")]),
+        ] {
+            raw["sends"] = .array([.object(["target": .string("kick"), "observed_ordinal": .int(1), "output": bad])])
+            #expect(rejections(Audit.parseIntentPolicy(raw)) != nil)
+        }
+        raw["sends"] = .array([.object([
+            "target": .string("kick"), "observed_ordinal": .int(1), "output": output, "remove": .bool(true),
+        ])])
+        #expect(rejections(Audit.parseIntentPolicy(raw)) != nil)
+        // A graph's empty physical slot is not compliance with a desired physical destination.
+        raw["sends"] = .array([.object(["target": .string("kick"), "physical_slot": .int(1), "output": output])])
+        let physical = try #require(accepted(Audit.parseIntentPolicy(raw)))
+        let assessment = Audit.assessIntent(policy: physical, capture: threeTrackCapture, graph: correctGraph)
+        #expect(assessment.sendFindings?.first?.status == .unverified)
+    }
+
     @Test(arguments: ["outputs", "sends", "receivers"], [257, Int.max])
     func policyRejectsBusOutsideSharedRoutingRange(_ domain: String, _ bus: Int) throws {
         var raw = policyObject(targets: [targetEntry("kick", "trk_0")])

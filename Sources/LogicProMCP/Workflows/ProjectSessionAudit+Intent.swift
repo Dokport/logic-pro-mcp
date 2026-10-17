@@ -98,15 +98,32 @@ extension ProjectSessionAudit {
     }
 
     /// Physical slots and observed source-census ordinals are distinct selectors. Neither is
-    /// native write authority. A nil bus is explicit removal, never inferred from a scalar.
+    /// native write authority. Removal is explicit, never inferred from a scalar or nil bus.
     struct IntentSend: Equatable, Encodable, Sendable {
         enum Selector: Hashable, Sendable {
             case physicalSlot(Int)
             case observedOrdinal(Int)
         }
+        enum Destination: Equatable, Sendable {
+            case bus(Int)
+            case physical(Int, Int)
+            case remove
+        }
         let target: String
         let selector: Selector
-        let bus: Int?
+        let destination: Destination
+        var bus: Int? { if case .bus(let value) = destination { value } else { nil } }
+        var physicalOutput: OutputAssignment? {
+            if case .physical(let first, let second) = destination { .physical(first, second) } else { nil }
+        }
+        var isRemoval: Bool { destination == .remove }
+        var destinationValue: Value {
+            switch destination {
+            case .bus(let number): .object(["kind": .string("bus"), "number": .int(number)])
+            case .physical(let first, let second): .object(["kind": .string("physical"), "ports": .array([.int(first), .int(second)])])
+            case .remove: .object(["kind": .string("no_send")])
+            }
+        }
         var physicalSlot: Int? { if case .physicalSlot(let value) = selector { value } else { nil } }
         var observedOrdinal: Int? { if case .observedOrdinal(let value) = selector { value } else { nil } }
         var selectorID: String {
@@ -116,14 +133,17 @@ extension ProjectSessionAudit {
             }
         }
         init(target: String, selector: Selector, bus: Int?) {
-            self.target = target; self.selector = selector; self.bus = bus
+            self.init(target: target, selector: selector, destination: bus.map(Destination.bus) ?? .remove)
+        }
+        init(target: String, selector: Selector, destination: Destination) {
+            self.target = target; self.selector = selector; self.destination = destination
         }
         init(target: String, physicalSlot: Int, bus: Int?) {
             self.init(target: target, selector: .physicalSlot(physicalSlot), bus: bus)
         }
 
         enum CodingKeys: String, CodingKey {
-            case target, bus, remove
+            case target, bus, remove, output
             case physicalSlot = "physical_slot", observedOrdinal = "observed_ordinal"
         }
         func encode(to encoder: Encoder) throws {
@@ -131,8 +151,11 @@ extension ProjectSessionAudit {
             try container.encode(target, forKey: .target)
             try container.encodeIfPresent(physicalSlot, forKey: .physicalSlot)
             try container.encodeIfPresent(observedOrdinal, forKey: .observedOrdinal)
-            if let bus { try container.encode(bus, forKey: .bus) }
-            else { try container.encode(true, forKey: .remove) }
+            switch destination {
+            case .bus(let number): try container.encode(number, forKey: .bus)
+            case .physical: try container.encode(destinationValue, forKey: .output)
+            case .remove: try container.encode(true, forKey: .remove)
+            }
         }
     }
 
@@ -886,24 +909,31 @@ extension ProjectSessionAudit {
             guard let entry = rawEntry.objectValue else {
                 rejections.append(.wrongType(path: path, expected: "object")); continue
             }
-            rejectUnknownKeys(entry, allowed: ["target", "physical_slot", "observed_ordinal", "bus", "remove"], path: path, into: &rejections)
+            rejectUnknownKeys(entry, allowed: ["target", "physical_slot", "observed_ordinal", "bus", "remove", "output"], path: path, into: &rejections)
             let target = requiredString(entry, key: "target", path: path, into: &rejections)
             guard (entry["physical_slot"] == nil) != (entry["observed_ordinal"] == nil) else {
                 rejections.append(.sendSelectorBothOrNeither(path: path)); continue
             }
             let key = entry["physical_slot"] != nil ? "physical_slot" : "observed_ordinal"
             let slot = requiredInt(entry, key: key, path: path, into: &rejections)
-            guard (entry["bus"] == nil) != (entry["remove"] == nil) else {
+            guard ["bus", "remove", "output"].filter({ entry[$0] != nil }).count == 1 else {
                 rejections.append(.sendDestinationBothOrNeither(path: path)); continue
             }
-            var bus: Int?
+            let destination: IntentSend.Destination
             if entry["bus"] != nil {
                 guard let number = requiredInt(entry, key: "bus", path: path, into: &rejections) else { continue }
                 guard validateIntentBus(number, path: "\(path).bus", into: &rejections) else { continue }
-                bus = number
+                destination = .bus(number)
+            } else if let raw = entry["output"] {
+                let parsed = MixerDispatcher.outputAssignmentParam(raw, field: "\(path).output")
+                guard case .physical(let first, let second)? = parsed.assignment else {
+                    rejections.append(.unsupportedOutput(path: "\(path).output", value: parsed.problem ?? "physical output required")); continue
+                }
+                destination = .physical(first, second)
             } else {
                 guard let remove = requiredBool(entry, key: "remove", path: path, into: &rejections) else { continue }
                 guard remove else { rejections.append(.sendRemovalMustBeTrue(path: path)); continue }
+                destination = .remove
             }
             guard let target, let slot else { continue }
             guard targets.contains(where: { $0.handle == target }) else {
@@ -916,7 +946,7 @@ extension ProjectSessionAudit {
             guard slots[target, default: []].insert(selector).inserted else {
                 rejections.append(.duplicateSend(target: target, slot: slot)); continue
             }
-            result.append(IntentSend(target: target, selector: selector, bus: bus))
+            result.append(IntentSend(target: target, selector: selector, destination: destination))
         }
         return result.sorted {
             if $0.target != $1.target { return $0.target < $1.target }
@@ -1409,6 +1439,7 @@ extension ProjectSessionAudit {
             }
             return finding(before?.destination == destination.id ? .compliant : .violation, index: index, observed: before)
         }
+        guard intent.isRemoval else { return finding(.unverified, index: index, observed: before, reasons: [.sendEndpointUnverified]) }
         return finding(before == nil ? .compliant : .violation, index: index, observed: before)
     }
 
