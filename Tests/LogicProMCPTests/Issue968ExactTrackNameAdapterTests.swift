@@ -76,6 +76,7 @@ private final class ExactNameFixture: @unchecked Sendable {
     var peerNameReadsAfterWrite = 0
     var peerNameReadsAtLastMirror = 0
     var mostPeerReadsBeforeMirror = 0
+    var physicalOwnerDocumentReads = 0
     var onPeerNameReadAfterWrite: (@Sendable (Int) -> Void)?
     var rawHelpReads = 0
     var countRawHelpReads = false
@@ -112,6 +113,9 @@ private final class ExactNameFixture: @unchecked Sendable {
             ax: builder.makeAXRuntime(
                 appElement: app,
                 attributeValueHandler: { [self] element, attribute in
+                    if CFEqual(element, window), attribute == kAXDocumentAttribute as String {
+                        physicalOwnerDocumentReads += 1
+                    }
                     if menuEditorValueWrites.count > menuEditorValueReadGeneration, let menuFocusedEditor,
                        CFEqual(element, menuFocusedEditor), attribute == kAXValueAttribute as String {
                         menuEditorValueReadGeneration = menuEditorValueWrites.count
@@ -331,8 +335,9 @@ private final class ExactNameFixture: @unchecked Sendable {
     }
 
     func appendTrack(name: String, selected: Bool) -> (AXUIElement, AXUIElement) {
-        let row = builder.element(968_140)
-        let nameField = builder.element(968_141)
+        let identity = additionalNameFields.isEmpty ? 968_140 : 1_968_000 + additionalNameFields.count * 2
+        let row = builder.element(identity)
+        let nameField = builder.element(identity + 1)
         builder.setAttribute(row, kAXRoleAttribute as String, kAXLayoutItemRole as String)
         builder.setAttribute(row, kAXSelectedAttribute as String, selected)
         builder.setAttribute(nameField, kAXRoleAttribute as String, kAXTextFieldRole as String)
@@ -340,7 +345,7 @@ private final class ExactNameFixture: @unchecked Sendable {
         builder.setAttribute(nameField, kAXValueAttribute as String, "1")
         builder.setChildren(nameField, [])
         builder.setChildren(row, [nameField])
-        builder.setChildren(rail, [header, row])
+        builder.setChildren(rail, builder.makeAXRuntime().children(rail) + [row])
         additionalNameFields.append(nameField)
         return (row, nameField)
     }
@@ -379,7 +384,8 @@ private final class ExactNameFixture: @unchecked Sendable {
     }
 
     func coupledCapture(link: String = "observed", peerStripName: String? = nil,
-                        includePeerAssociation: Bool = false) async throws -> (SessionPopulationObservation.Capture, TargetReference, TargetReference, AXUIElement, AXUIElement) {
+                        includePeerAssociation: Bool = false, extraMixerPeerNames: [String] = [],
+                        peerExposure: AXTrackBinding.Exposure? = nil) async throws -> (SessionPopulationObservation.Capture, TargetReference, TargetReference, AXUIElement, AXUIElement) {
         let mixer = builder.element(968_170)
         let strip = builder.element(968_171)
         let name = builder.element(968_172)
@@ -404,10 +410,24 @@ private final class ExactNameFixture: @unchecked Sendable {
             builder.setChildren(peer, [peerName])
             builder.setChildren(mixer, [strip, peer])
         } else { builder.setChildren(mixer, [strip]) }
+        for (offset, peerName) in extraMixerPeerNames.enumerated() {
+            let peer = builder.element(2_968_000 + offset * 2), field = builder.element(2_968_001 + offset * 2)
+            builder.setRole(peer, kAXLayoutItemRole as String)
+            builder.setRole(field, kAXTextFieldRole as String)
+            builder.setAttribute(field, kAXDescriptionAttribute as String, "name")
+            builder.setAttribute(field, kAXValueAttribute as String, peerName)
+            builder.setChildren(field, []); builder.setChildren(peer, [field])
+            builder.setChildren(mixer, builder.makeAXRuntime().children(mixer) + [peer])
+        }
         builder.setChildren(window, [rail, mixer])
         await cache.updateProject(.init(name: "ExactName", filePath: "/tmp/ExactName.logicx"))
         let (project, target) = try await prepare(typedProducer: true)
-        let tracks = await cache.getTracks()
+        var tracks = await cache.getTracks()
+        if let peerExposure, tracks.count > 1, let peer = tracks[1].physicalBinding {
+            tracks[1].physicalBinding = .init(window: peer.window, header: peer.header, document: peer.document,
+                runtime: peer.runtime, exposure: peerExposure)
+            await cache.updateTracks(tracks)
+        }
         let physical = try #require(tracks.first?.physicalBinding)
         let strips = try #require(AccessibilityChannel.defaultGetMixerStates(runtime: runtime, stoppingWhen: { false }).states)
         let source = try #require(strips.first?.physicalBinding)
@@ -1844,6 +1864,54 @@ struct Issue968ExactTrackNameAdapterTests {
             #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == "A")
             #expect(f.builder.attributeValue(peer, kAXDescriptionAttribute as String) as? String == "Newer track")
             #expect(f.builder.attributeValue(stripPeer, kAXValueAttribute as String) as? String == "Newer aux")
+        }
+    }
+
+    @Test func anInverseCannotReviveAnExposedPeerAfterAnEarlierOwnerReadFailed() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            let (peer, field) = f.appendTrack(name: "Peer", selected: false)
+            let disclosure = f.builder.element(3_968_000)
+            f.builder.setRole(disclosure, kAXDisclosureTriangleRole as String)
+            f.builder.setAttribute(disclosure, kAXValueAttribute as String, NSNumber(value: 1))
+            f.builder.setChildren(disclosure, []); f.builder.setChildren(peer, [field, disclosure])
+            let exposure = AXTrackBinding.Exposure(header: peer, disclosure: disclosure, runtime: f.runtime)
+            let (capture, project, target, _, _) = try await f.coupledCapture(peerExposure: exposure)
+            let capturedExposure = try #require(capture.tracks[1].physicalBinding?.exposure)
+            #expect(capturedExposure === exposure)
+            #expect(exposure.isCurrent)
+            let written = await f.applyCoupled(capture, project: project, target: target)
+            #expect(written.status == .applied)
+            let proof = try #require(written.inverse)
+            let document = try #require(f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String)
+            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+            #expect((await f.inverse(proof)).status == .rejectedBeforeWrite)
+            #expect(exposure.hasEnded, "An earlier aggregate cutoff cannot hide the original exposed-peer loss")
+            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, document)
+            #expect((await f.inverse(proof)).status == .rejectedBeforeWrite)
+            #expect(f.writes == ["C"], "Reappearing handles cannot revive an ended exposure or permit another writer")
+        }
+    }
+
+    @Test func anOwnedCoupledNameReadDoesNotRediscoverTheProjectForEveryPeer() async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            var ownerReads: [Int] = []
+            for count in [1, 6] {
+                let f = ExactNameFixture()
+                for ordinal in 0..<count { _ = f.appendTrack(name: "Peer \(ordinal)", selected: false) }
+                let (capture, project, target, _, _) = try await f.coupledCapture(peerStripName: "Aux",
+                    extraMixerPeerNames: (1..<count).map { "Aux \($0)" })
+                let written = await f.applyCoupled(capture, project: project, target: target)
+                #expect(written.status == .applied)
+                let proof = try #require(written.inverse)
+                f.physicalOwnerDocumentReads = 0
+                #expect(await ExactTrackNameAdapter.readOwnedCoupledName(proof) == "C")
+                #expect(f.physicalOwnerDocumentReads > 0, "Reach actual original-project owner reads")
+                ownerReads.append(f.physicalOwnerDocumentReads)
+                #expect(f.writes == ["C"], "An independent name read grants no peer or repeat write")
+            }
+            #expect(ownerReads[1] == ownerReads[0],
+                "Complete original-membership bookends, not a global project rediscovery for each peer: \(ownerReads)")
         }
     }
 

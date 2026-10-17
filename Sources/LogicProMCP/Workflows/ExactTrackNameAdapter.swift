@@ -356,12 +356,22 @@ enum ExactTrackNameAdapter {
 
         private func readCurrentPeerNames() -> CoupledMirror? {
             var renewed = self
+            guard pair.track.currentIndex() != nil, pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
+                  membershipStillHeld() else {
+                // A coalesced early owner failure must not bypass the old
+                // exposed peers' irreversible lifetime cutoff.
+                for row in preservedTracks { row.physicalBinding?.exposure?.end() }
+                return nil
+            }
             for index in preservedTracks.indices {
                 guard operationPermitted(), let source = preservedTracks[index].physicalBinding,
-                      let ordinal = source.currentIndex(),
+                      source.document.utf8.elementsEqual(pair.track.document.utf8),
+                      CFEqual(source.window, pair.track.window) else { return nil }
+                let ordinal = source.exposure == nil ? nil : source.currentIndex()
+                guard source.exposure == nil || ordinal != nil,
                       case .success(.some(let name)) = AXValueExtractors.extractTrackNameResult(
                         from: source.header, runtime: source.runtime.ax),
-                      source.currentIndex() == ordinal else { return nil }
+                      source.exposure == nil || source.currentIndex() == ordinal else { return nil }
                 renewed.preservedTracks[index].name = name
             }
             if renewal != nil {
@@ -371,13 +381,18 @@ enum ExactTrackNameAdapter {
                 for index in preservedStrips.indices { renewed.preservedStrips[index].name = names[index] }
             } else { for index in preservedStrips.indices {
                 guard operationPermitted(), let source = preservedStrips[index].physicalBinding,
-                      let ordinal = source.currentIndex(runtime: pair.track.runtime),
+                      source.document.utf8.elementsEqual(pair.strip.document.utf8),
+                      CFEqual(source.window, pair.strip.window), CFEqual(source.mixer, pair.strip.mixer),
                       case .success(.some(let name)) = AXPluginInstanceIdentity.stripNameResult(
-                        source.strip, runtime: pair.track.runtime.ax),
-                      source.currentIndex(runtime: pair.track.runtime) == ordinal else { return nil }
+                        source.strip, runtime: pair.track.runtime.ax) else { return nil }
                 renewed.preservedStrips[index].name = name
             } }
-            guard renewed.peerNamesStillHeld(), operationPermitted() else { return nil }
+            guard renewed.peerNamesStillHeld() else { return nil }
+            guard pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
+                  pair.track.currentIndex() != nil, operationPermitted() else {
+                for row in preservedTracks { row.physicalBinding?.exposure?.end() }
+                return nil
+            }
             return renewed
         }
 
@@ -424,14 +439,20 @@ enum ExactTrackNameAdapter {
         }
 
         private func peerNamesStillHeld(ownedEditor: AXUIElement? = nil) -> Bool {
+            // These pure name reads share fresh complete CF membership
+            // bookends and the caller's deciding original-pair owner checks.
+            // Exposed headers retain their individual lifetime/ordinal proof.
             guard membershipStillHeld(ownedEditor: ownedEditor) else { return false }
             for row in preservedTracks {
                 guard operationPermitted(), let source = row.physicalBinding,
                       source.document.utf8.elementsEqual(pair.track.document.utf8),
-                      CFEqual(source.window, pair.track.window), let index = source.currentIndex(),
+                      CFEqual(source.window, pair.track.window) else { return false }
+                let index = source.exposure == nil ? nil : source.currentIndex()
+                guard source.exposure == nil || index != nil,
                       case .success(.some(let name)) = AXValueExtractors.extractTrackNameResult(
                         from: source.header, runtime: source.runtime.ax),
-                      name.utf8.elementsEqual(row.name.utf8), source.currentIndex() == index else { return false }
+                      name.utf8.elementsEqual(row.name.utf8),
+                      source.exposure == nil || source.currentIndex() == index else { return false }
             }
             if renewal != nil {
                 guard let names = renewedPeerStripNames(ownedEditor: ownedEditor), names.count == preservedStrips.count,
@@ -442,11 +463,9 @@ enum ExactTrackNameAdapter {
                 guard operationPermitted(), let source = row.physicalBinding, let expected = row.name,
                       source.document.utf8.elementsEqual(pair.strip.document.utf8),
                       CFEqual(source.window, pair.strip.window), CFEqual(source.mixer, pair.strip.mixer),
-                      let index = source.currentIndex(runtime: pair.track.runtime),
                       case .success(.some(let name)) = AXPluginInstanceIdentity.stripNameResult(
                         source.strip, runtime: pair.track.runtime.ax),
-                      name.utf8.elementsEqual(expected.utf8),
-                      source.currentIndex(runtime: pair.track.runtime) == index else { return false }
+                      name.utf8.elementsEqual(expected.utf8) else { return false }
             } }
             return membershipStillHeld(ownedEditor: ownedEditor) && operationPermitted()
         }
