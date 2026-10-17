@@ -353,7 +353,7 @@ extension AXLogicProElements {
         // find a transport control in. `findControlBarCheckbox` and its siblings all immediately
         // search it for a checkbox, so a candidate holding none cannot be what they meant, whatever
         // it is called.
-        let groups: [AXUIElement]
+        var labelled: [AXUIElement] = []
         if runtime.attributeValuesResult != nil {
             // The new batch path uses the existing status-bearing whole-window
             // census and approval transport bound. A failed/malformed branch
@@ -362,22 +362,54 @@ extension AXLogicProElements {
                 of: window, role: kAXGroupRole, maxDepth: 32, runtime: runtime,
                 requiresCompleteTraversal: true, batchingRoleAndChildren: true
             ) else { return nil }
-            groups = census.matches
+            for group in census.matches {
+                let reading: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                    group, kAXDescriptionAttribute as String, runtime: runtime)
+                let description: String?
+                switch reading {
+                case .success(.some(let value)):
+                    guard CFGetTypeID(value) == CFStringGetTypeID(), let text = value as? String else { return nil }
+                    description = text
+                case .failure(let error) where !error.isDefinitiveAbsence: return nil
+                default: description = nil
+                }
+                if AXLocalePolicy.controlBarGroupLabel.matches(description ?? "", mode: .exactStrict) {
+                    labelled.append(group)
+                }
+            }
         } else {
             // Preserve the existing scalar discovery contract for runtimes
             // without batching; do not expand unrelated readers' failure scope.
-            groups = AXHelpers.findAllDescendants(
-                of: window, role: kAXGroupRole, maxDepth: 8, runtime: runtime)
+            labelled = AXHelpers.findAllDescendants(
+                of: window, role: kAXGroupRole, maxDepth: 8, runtime: runtime).filter { group in
+                    AXLocalePolicy.controlBarGroupLabel.matches(
+                        AXHelpers.getDescription(group, runtime: runtime) ?? "", mode: .exactStrict)
+                }
         }
-        let labelled = groups.filter { group in
-            AXLocalePolicy.controlBarGroupLabel.matches(
-                AXHelpers.getDescription(group, runtime: runtime) ?? "", mode: .exactStrict
-            )
-        }
-        let withControls = labelled.filter { group in
-            AXHelpers.getChildren(group, runtime: runtime).contains { child in
-                AXHelpers.getRole(child, runtime: runtime) == kAXCheckBoxRole as String
+        var withControls: [AXUIElement] = []
+        for group in labelled {
+            if runtime.attributeValuesResult == nil {
+                if AXHelpers.getChildren(group, runtime: runtime).contains(where: { child in
+                    AXHelpers.getRole(child, runtime: runtime) == kAXCheckBoxRole as String
+                }) { withControls.append(group) }
+                continue
             }
+            // The deciding reread is fresh too. A failure after the complete
+            // census must not make a competing candidate disappear.
+            let children: [AXUIElement]
+            switch AXHelpers.childrenResult(group, runtime: runtime) {
+            case .success(let observed): children = observed
+            case .failure(let error) where error.isDefinitiveAbsence: children = []
+            case .failure: return nil
+            }
+            var holdsCheckbox = false
+            for child in children {
+                let reading: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                    child, kAXRoleAttribute as String, runtime: runtime)
+                guard case .success(.some(let role)) = reading else { return nil }
+                holdsCheckbox = holdsCheckbox || role == kAXCheckBoxRole as String
+            }
+            if holdsCheckbox { withControls.append(group) }
         }
         // Exactly one, or nothing. Two bars that both hold transport controls is a tree this code
         // has never seen and must not guess about; the callers all fail closed on nil.
