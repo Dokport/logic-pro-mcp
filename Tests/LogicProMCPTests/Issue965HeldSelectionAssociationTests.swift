@@ -2806,6 +2806,14 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project", "physical_slot", "mixed", "missing_witness", "decoded", "unsupported_pair", "physical_removal"])
+    func canonicalPhysicalSendReturnRetainsItsTypedBeforeAndOriginalControl(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, freshPhysicalReturn: true)
+        }
+    }
+
     @Test("Registered inspection preserves raw checked nonrouting titles without calling them a typed send mode")
     func registeredInspectionPreservesItsCheckedSendNonroutingWitness() async throws {
         try await assertOccupiedSingleSendRenewal(inspectSendWitness: "observed")
@@ -3879,8 +3887,13 @@ struct Issue965HeldSelectionAssociationTests {
                 var sendIntent: [String: Value] = ["target": .string("source"),
                     canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1)]
                 if canonicalPhysical {
-                    sendIntent["output"] = .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
+                    sendIntent["output"] = freshPhysicalReturn && canonicalSend != "unsupported_pair" ? .object(["kind": .string("stereo_output")])
+                        : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
                 } else { sendIntent["remove"] = .bool(true) }
+                if canonicalSend == "physical_removal" {
+                    sendIntent["output"] = nil
+                    sendIntent["remove"] = .bool(true)
+                }
                 var policy: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
                     "project_ref": .string(project.rawValue),
                     "targets": .array([.object(["handle": .string("source"), "track_ref": .string(target.rawValue)])]),
@@ -3918,7 +3931,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let plannedText = sharedToolText(await planHandler(dependencies,
                     ["snapshot_id": .string(id), "policy": .object(policy)]))
                 let planned = try #require(sharedJSONObject(plannedText))
-                if ["physical_slot", "mixed"].contains(canonicalSend) {
+                if ["physical_slot", "mixed", "unsupported_pair", "physical_removal"].contains(canonicalSend) {
                     let executable = try #require(planned["executable"] as? Bool)
                     #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
@@ -3932,8 +3945,18 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(preview.count == 1 && preview[0]["kind"] as? String == (canonicalPhysical ? "local_send_output" : "local_send_removal"))
                 #expect(preview[0]["observed_ordinal"] as? Int == 1 && preview[0]["physical_slot"] == nil)
                 if canonicalPhysical {
+                    let before = try #require(preview[0]["before"] as? [String: Any])
                     let after = try #require(preview[0]["after"] as? [String: Any])
-                    #expect(after["kind"] as? String == "physical" && after["ports"] as? [Int] == [3, 4])
+                    if freshPhysicalReturn {
+                        #expect(before["kind"] as? String == "physical" && before["ports"] as? [Int] == [3, 4])
+                        #expect(after["kind"] as? String == "stereo_output" && after["ports"] == nil)
+                    } else {
+                        #expect(before["kind"] as? String == "stereo_output")
+                        #expect(after["kind"] as? String == "physical" && after["ports"] as? [Int] == [3, 4])
+                    }
+                    #expect(before["level_raw"] as? Int == 0)
+                    let bypassed = try #require(before["bypassed"] as? Bool)
+                    #expect(!bypassed)
                 }
                 if canonicalSend == "replacement" {
                     let decoy = b.element(1_965_2799)
@@ -3966,11 +3989,11 @@ struct Issue965HeldSelectionAssociationTests {
                         let evidence = try #require(steps[0]["evidence"] as? [String: Any])
                         let verification = try #require(evidence["verification"] as? [String: Any])
                         let readback = try #require(verification["readback"] as? [String: Any])
-                        #expect(readback["observed"] as? String == OutputAssignment.physical(3, 4).token)
+                        #expect(readback["observed"] as? String == (freshPhysicalReturn ? OutputAssignment.stereoOutput : .physical(3, 4)).token)
                         if canonicalSend == "cancel" {
                             let compensation = try #require(steps[0]["compensation"] as? [String: Any])
                             let inverseRead = try #require(compensation["readback"] as? [String: Any])
-                            #expect(inverseRead["observed"] as? String == OutputAssignment.stereoOutput.token)
+                            #expect(inverseRead["observed"] as? String == (freshPhysicalReturn ? OutputAssignment.physical(3, 4) : .stereoOutput).token)
                         }
                     }
                     let beforeReplay = f.routingDestinationPresses
