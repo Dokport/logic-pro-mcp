@@ -437,7 +437,8 @@ struct Issue966IntentAssessmentTests {
         #expect(encoded.count == 1)
         #expect(encoded[0]["observed_ordinal"] as? Int == 1)
         #expect(encoded[0]["physical_slot"] == nil)
-        #expect(encoded[0]["remove"] as? Bool == true)
+        let remove = try #require(encoded[0]["remove"] as? Bool)
+        #expect(remove)
 
         for selector: [String: Value] in [
             [:], ["observed_ordinal": .int(-1)], ["observed_ordinal": .string("1")],

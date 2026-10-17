@@ -3860,7 +3860,8 @@ struct Issue965HeldSelectionAssociationTests {
                     let request = try #require(await cache.retainedInspection(id: id)).request
                     let blocked = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: parsed, policyValue: .object(policy),
                         names: [], capture: altered, request: request, snapshotCurrent: true)
-                    #expect(sharedJSONObject(blocked.json)?["executable"] as? Bool == false)
+                    let executable = try #require(sharedJSONObject(blocked.json)?["executable"] as? Bool)
+                    #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
                     return
                 }
@@ -3868,11 +3869,13 @@ struct Issue965HeldSelectionAssociationTests {
                     ["snapshot_id": .string(id), "policy": .object(policy)]))
                 let planned = try #require(sharedJSONObject(plannedText))
                 if ["physical_slot", "mixed"].contains(canonicalSend) {
-                    #expect(planned["executable"] as? Bool == false)
+                    let executable = try #require(planned["executable"] as? Bool)
+                    #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
                     return
                 }
-                #expect(planned["executable"] as? Bool == true, "Actual plan: \(plannedText)")
+                let executable = try #require(planned["executable"] as? Bool)
+                #expect(executable, "Actual plan: \(plannedText)")
                 let planID = try #require(planned["plan_id"] as? String)
                 let digest = try #require(planned["digest"] as? String)
                 let preview = try #require(planned["steps"] as? [[String: Any]])

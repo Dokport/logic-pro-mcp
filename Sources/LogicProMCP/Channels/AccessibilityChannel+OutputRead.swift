@@ -1588,7 +1588,7 @@ extension AccessibilityChannel {
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
             inputAssignment: checkedInputFact, inputRenewal: inputRenewal, inputSlot: inputSlot,
             sendNonRoutingChecks: sendChecks, sendMode: modeEvidence, observedBusNumbers: observedBusNumbers,
-            sendControl: sendOrdinal != nil && closed && sourceOwned() ? assigned : nil)
+            sendControl: sendOrdinal != nil && closed && sourceAfter ? assigned : nil)
     }
 
     static func outputReadContextFailure(_ result: ChannelResult, operation: String) -> ChannelResult {
