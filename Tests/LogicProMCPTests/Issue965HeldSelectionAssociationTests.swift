@@ -2691,6 +2691,42 @@ struct Issue965HeldSelectionAssociationTests {
             emptyModeMenu: true, sagaMode: mode)
     }
 
+    @Test(arguments: ["completed", "cancel", "failure", "unverified", "preflight",
+                      "wrong_target", "wrong_project", "missing_confirmation", "wrong_confirmation", "extra_param",
+                      "invalid_later", "multiple", "raw_level", "raw_bypass", "nondefault_mode", "expired_pair",
+                      "external_destination", "external_level", "external_mode", "replaced_control",
+                      "unknown_after", "foreign_after", "no_observer", "lost_observer", "late_inverse_mode"])
+    func registeredFreshPhysicalSendReturnOwnsOnlyItsNewChange(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(restoring: true,
+            emptyModeMenu: true, sagaMode: mode, freshPhysicalReturn: true)
+    }
+
+    @Test func freshPhysicalSendReturnKeepsItsTypedBeforeAndFiniteDirections() throws {
+        func plan(_ before: Value) -> SagaPlan {
+            .init(steps: [.init(operationID: .mixerSetSendOutputVerified,
+                targetRef: .init(rawValue: "mix_fresh_physical_return"), params: ["ordinal": .int(1),
+                    "destination": .object(["kind": .string("stereo_output")]),
+                    "expected_current": before, "replace_existing": .bool(true)],
+                expectedInverse: .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination"))],
+                idempotencyKey: "fresh-physical-return")
+        }
+        let good = plan(.object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]))
+        #expect(SendRemovalSagaAdapter.accepts(good))
+        #expect(SendRemovalSagaAdapter.journalValue(try #require(good.steps.first)) == .string("stereo_output"))
+        for bad: Value in [
+            .object(["kind": .string("physical"), "ports": .array([.int(4), .int(3)])]),
+            .object(["kind": .string("physical"), "ports": .array([.bool(true), .int(4)])]),
+            .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)]), "native_proof": .object([:])]),
+            .object(["kind": .string("bus"), "number": .int(1)]),
+            .object(["kind": .string("stereo_output")]),
+            .object(["kind": .string("no_send")]),
+            .string("physical:3-4"),
+        ] { #expect(!SendRemovalSagaAdapter.accepts(plan(bad))) }
+        var unowned = good
+        unowned.canonicalPlanID = "unowned"; unowned.canonicalDigest = "unowned"
+        #expect(!SendRemovalSagaAdapter.accepts(unowned))
+    }
+
     @Test(arguments: ["failure", "cancel", "unverified"])
     func registeredExistingBusSendSagaCompensatesOnlyItsActualNativeChange(mode: String) async throws {
         try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
@@ -3239,7 +3275,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                levelSaga: String? = nil,
                                                creationSaga: String? = nil,
                                                canonicalSend: String? = nil,
-                                               canonicalPhysical: Bool = false) async throws {
+                                               canonicalPhysical: Bool = false,
+                                               freshPhysicalReturn: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
@@ -3436,8 +3473,9 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(restoredSource, [name] + extraSend)
             b.setActionNames(renewedSend[0], [kAXPressAction as String])
             for container in [root, menu] { b.setRole(container, kAXMenuRole as String) }
-            for (item, title) in [(echo, "Stereo Output"), (mode, emptyModeMenu || modeCommand != nil || inspectTypedMode ? "Post Fader" : "Post Pan"), (parent, "Output"),
-                                  (stereo, "Stereo Output"), (destination, "Output 3-4")] {
+            for (item, title) in [(echo, freshPhysicalReturn ? "Output 3-4" : "Stereo Output"), (mode, emptyModeMenu || modeCommand != nil || inspectTypedMode ? "Post Fader" : "Post Pan"), (parent, "Output"),
+                                  (stereo, freshPhysicalReturn ? "Output 3-4" : "Stereo Output"),
+                                  (destination, freshPhysicalReturn ? "Stereo Output" : "Output 3-4")] {
                 b.setRole(item, kAXMenuItemRole as String); b.setAttribute(item, kAXTitleAttribute as String, title)
                 b.setAttribute(item, kAXEnabledAttribute as String, true); b.setChildren(item, [])
                 b.setActionNames(item, [kAXPressAction as String])
@@ -3625,7 +3663,7 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if action == kAXPressAction as String, CFEqual(element, destination) {
                     f.routingDestinationPresses += 1; f.routingReplacement = replacement
-                    b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : "Output 3-4")
+                    b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
                     if removing {
                         b.setChildren(replacement, [name, renewedSend[0]])
@@ -3666,7 +3704,7 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if restoring, action == kAXPressAction as String, CFEqual(element, stereo) {
                     f.routingDestinationPresses += 1; f.routingReplacement = restoredSource
-                    b.setAttribute(echo, kAXTitleAttribute as String, "Stereo Output")
+                    b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
                     b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
                     b.setAttribute(destination, "AXMenuItemMarkChar", "")
@@ -4896,6 +4934,10 @@ struct Issue965HeldSelectionAssociationTests {
                     : existingBus ? .object(["kind": .string("bus"), "number": .int(1)])
                     : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])]),
                 "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
+            if freshPhysicalReturn {
+                preparedParams["destination"] = .object(["kind": .string("stereo_output")])
+                preparedParams["expected_current"] = .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
+            }
             if let noOpDestination {
                 let value: Value = switch noOpDestination {
                 case .bus(let number): .object(["kind": .string("bus"), "number": .int(number)])
@@ -5024,6 +5066,20 @@ struct Issue965HeldSelectionAssociationTests {
                     let compensation = try #require(body["compensation"] as? [String: Any])
                     let fullyCompensated = try #require(compensation["fully_compensated"] as? Bool)
                     #expect(fullyCompensated)
+                }
+                if freshPhysicalReturn {
+                    let steps = try #require(body["steps"] as? [[String: Any]])
+                    let evidence = try #require(steps[0]["evidence"] as? [String: Any])
+                    let beforeState = try #require(evidence["before_state"] as? [String: Any])
+                    #expect(beforeState["observed"] as? String == "physical:3-4")
+                    let verification = try #require(evidence["verification"] as? [String: Any])
+                    let readback = try #require(verification["readback"] as? [String: Any])
+                    #expect(readback["observed"] as? String == "stereo_output")
+                    if !completed {
+                        let compensation = try #require(steps[0]["compensation"] as? [String: Any])
+                        let inverseReadback = try #require(compensation["readback"] as? [String: Any])
+                        #expect(inverseReadback["observed"] as? String == "physical:3-4")
+                    }
                 }
                 let slots = try #require(AXLogicProElements.sendSlotObservations(in: completed ? replacement : restoredSource,
                     runtime: f.logic().ax))

@@ -5,6 +5,15 @@ extension AccessibilityChannel {
     @TaskLocal static var sendRemovalObserver: (@Sendable (RemovedSendObservation) -> Void)?
     @TaskLocal static var sendChangeObserver: (@Sendable (ChangedSendObservation) -> Void)?
 
+    /// Finite occupied-route changes that can publish an actual native inverse capsule.
+    /// A typed pair alone grants no action or ownership; the native boundary proves both.
+    static func supportsOccupiedSendChange(before: OutputAssignment, after: OutputAssignment) -> Bool {
+        switch (before, after) {
+        case (.stereoOutput, .bus), (.stereoOutput, .physical), (.physical, .stereoOutput): true
+        default: false
+        }
+    }
+
     /// Native occupied-slot custody after one independently verified change.
     /// The prior checked destination is inverse data, not permission to act.
     struct ChangedSendObservation: @unchecked Sendable {

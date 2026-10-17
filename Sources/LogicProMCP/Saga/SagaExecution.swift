@@ -194,9 +194,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
               step.targetRef != nil,
               Set(step.params.keys).subtracting(["ordinal", "destination", "expected_current", "replace_existing", "project_ref"]).isEmpty,
               step.params["ordinal"]?.intValue.map({ $0 >= 0 }) == true,
-              isCreation(step) || ((step.params["destination"] == .object(["kind": .string("no_send")]) || replacementDestination(step) != nil)
-                && step.params["expected_current"] == .object(["kind": .string("stereo_output")])
-                && step.params["replace_existing"] == .bool(true)),
+              isCreation(step) || (expectedBefore(step) != nil && step.params["replace_existing"] == .bool(true)),
               step.expectedInverse == .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination") else { return false }
         if let project = step.params["project_ref"] {
             guard let value = project.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -211,20 +209,21 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
             && step.params["replace_existing"] == .bool(false)
     }
 
-    private static func busDestination(_ step: SagaStep) -> OutputAssignment? {
-        guard let value = step.params["destination"]?.objectValue,
-              Set(value.keys) == ["kind", "number"], value["kind"] == .string("bus"),
-              let number = value["number"]?.intValue, OutputAssignment.busNumbers.contains(number) else { return nil }
-        return .bus(number)
+    private static func changeAssignments(_ step: SagaStep) -> (before: OutputAssignment, after: OutputAssignment)? {
+        guard let rawBefore = step.params["expected_current"], let rawAfter = step.params["destination"],
+              let before = MixerDispatcher.outputAssignmentParam(rawBefore, field: "expected_current").assignment,
+              let after = MixerDispatcher.outputAssignmentParam(rawAfter, field: "destination").assignment,
+              AccessibilityChannel.supportsOccupiedSendChange(before: before, after: after) else { return nil }
+        // Preserve the existing Bus wire contract; the shared physical parser also
+        // accepts exact floating-point integers, which Bus admission never allowed.
+        if case .bus = after, rawAfter.objectValue?["number"]?.intValue == nil { return nil }
+        return (before, after)
     }
 
-    private static func replacementDestination(_ step: SagaStep) -> OutputAssignment? {
-        if let bus = busDestination(step) { return bus }
-        guard let raw = step.params["destination"], let value = raw.objectValue,
-              Set(value.keys) == ["kind", "ports"], value["kind"] == .string("physical"),
-              let assignment = MixerDispatcher.outputAssignmentParam(raw, field: "destination").assignment,
-              case .physical = assignment else { return nil }
-        return assignment
+    private static func expectedBefore(_ step: SagaStep) -> OutputAssignment? {
+        if step.params["destination"] == .object(["kind": .string("no_send")]),
+           step.params["expected_current"] == .object(["kind": .string("stereo_output")]) { return .stereoOutput }
+        return changeAssignments(step)?.before
     }
 
     init?(plan: SagaPlan) {
@@ -245,7 +244,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     func supports(_ step: SagaStep) -> Bool {
         if step == forward { return true }
         var inverse = forward.params
-        inverse["destination"] = .string(Self.isCreation(forward) ? "no_send" : "stereo_output")
+        inverse["destination"] = .string(Self.isCreation(forward) ? "no_send" : Self.expectedBefore(forward)?.token ?? "")
         return (removal != nil || change != nil || creation != nil) && step.operationID == forward.operationID
             && step.targetRef == forward.targetRef && step.params == inverse
             && step.expectedInverse == forward.expectedInverse
@@ -254,7 +253,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     static func journalValue(_ step: SagaStep) -> Value? {
         if isCreation(step) { return .string("stereo_output") }
         if step.params["destination"] == .object(["kind": .string("no_send")]) { return .string("no_send") }
-        return replacementDestination(step).map { .string($0.token) }
+        return changeAssignments(step).map { .string($0.after.token) }
     }
 
     private func scope<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
@@ -328,7 +327,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                             await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
                         }
                     }
-                    guard checked.assignment == .stereoOutput,
+                    guard let before = Self.expectedBefore(self.forward), checked.assignment == before,
                           self.capturedControl.map({ captured in checked.sendControl.map(captured.matches) == true }) ?? true,
                           checked.sendNonRoutingChecks == ["Post Fader"] || checked.sendNonRoutingChecks == ["포스트 페이더"],
                           let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
@@ -338,7 +337,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                           self.footprint.map({ $0 == slots }) ?? true,
                           physical.currentIndex(runtime: runtime) != nil else { return nil }
                     self.pair = held; self.footprint = slots
-                    token = "stereo_output"; source = .axSendMenuCheckmark
+                    token = before.token; source = .axSendMenuCheckmark
                 }
             }
             let evidence = SagaReadEvidence(readSource: source, provenance: .liveIndependent,
@@ -398,7 +397,8 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 }) {
                     await AccessibilityChannel.$sendChangeObserver.withValue({ proof in
                         if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track),
-                           proof.checkedBefore == .stereoOutput, proof.checkedAfter == Self.replacementDestination(self.forward) {
+                           proof.checkedBefore == Self.changeAssignments(self.forward)?.before,
+                           proof.checkedAfter == Self.changeAssignments(self.forward)?.after {
                             self.change = proof
                             upstreamChange?(proof)
                         }
