@@ -523,7 +523,12 @@ struct Issue965HeldSelectionAssociationTests {
         // Retain the actual request-local guards so object IDs cannot be reused
         // between separate footprint reads. These are test observations only.
         var footprintReads: [ObjectIdentifier: (guardOwner: AXHelpers.HelpReadGuard,
-            record: Int, help: Int, names: Set<Int>)] = [:]
+            record: Int, help: Int, names: Set<Int>, firstDocument: Int?)] = [:]
+        var footprintDocumentReads = 0
+        var footprintDocumentFaultAt: Int?
+        var footprintDocumentFault = "foreign"
+        var footprintDocumentInjected = false
+        var footprintDocumentRestored = false
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
         var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingSelection: (@Sendable (Int) -> Void)?
@@ -681,7 +686,27 @@ struct Issue965HeldSelectionAssociationTests {
                     if measuringFootprintReads, !routingNameWrites.isEmpty,
                        let guardian = AXHelpers.HelpReadGuard.current {
                         let key = ObjectIdentifier(guardian)
-                        var sample = footprintReads[key] ?? (guardian, 0, 0, [])
+                        var sample = footprintReads[key] ?? (guardian, 0, 0, [], nil)
+                        if CFEqual(element, window), attribute == kAXDocumentAttribute as String {
+                            footprintDocumentReads += 1
+                            sample.firstDocument = sample.firstDocument ?? footprintDocumentReads
+                            if footprintDocumentReads == footprintDocumentFaultAt {
+                                footprintDocumentInjected = true
+                                switch footprintDocumentFault {
+                                case "foreign": builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                                case "missing": builder.removeAttribute(window, kAXDocumentAttribute as String)
+                                case "malformed": builder.setAttribute(window, kAXDocumentAttribute as String, NSNumber(value: 7))
+                                default: Issue.record("Unknown footprint document fault")
+                                }
+                            }
+                        }
+                        if footprintDocumentInjected, !footprintDocumentRestored,
+                           CFEqual(element, builder.element(1_971_400)), attribute == kAXDescriptionAttribute as String {
+                            // The foreign/unknown scope survives until extraction
+                            // actually starts; the old first-row full check sees it.
+                            builder.setAttribute(window, kAXDocumentAttribute as String, bundle.absoluteString)
+                            footprintDocumentRestored = true
+                        }
                         if attribute == kAXHelpAttribute as String { sample.help += 1 }
                         if attribute == kAXValueAttribute as String {
                             if CFEqual(element, builder.element(1_965_722)) { sample.record += 1 }
@@ -1132,6 +1157,23 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.routingNameWrites == ["Selected Canonical"] && f.routingDestinationPresses == 1)
     }
 
+    @Test("A later restored document cannot authenticate already-sampled foreign or unknown Track footprint rows",
+          arguments: ["foreign", "missing", "malformed"])
+    func sampledTrackFootprintOwnershipCannotDisappearIntoJSON(fault: String) async throws {
+        let calibration = try Fixture()
+        calibration.measuringFootprintReads = true
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay", fixture: calibration)
+        let firstDocument = try #require(calibration.footprintReads.values.filter {
+            $0.names.count == calibration.strips.count && $0.help > 0 && $0.record > 0
+        }.compactMap(\.firstDocument).min())
+        let f = try Fixture()
+        f.measuringFootprintReads = true
+        f.footprintDocumentFaultAt = firstDocument
+        f.footprintDocumentFault = fault
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay", fixture: f,
+            refusingSampledTrackOwnership: true)
+    }
+
     @Test("An owned output may redraw a peer while its exact source survives; changed protected state remains unknown",
           arguments: ["redraw", "foreign", "scalar", "input", "send", "plugin", "header", "project"])
     func canonicalOutputRenewsAnOwnedCensusWithASurvivingSource(fault: String) async throws {
@@ -1246,7 +1288,8 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     private func assertCanonicalPhysicalOutput(mode requestedMode: String, fixture: Fixture? = nil,
-                                               foreignFocusAtDocumentRead: Int? = nil) async throws {
+                                               foreignFocusAtDocumentRead: Int? = nil,
+                                               refusingSampledTrackOwnership: Bool = false) async throws {
         let survivingSource = requestedMode.hasPrefix("surviving_")
         let mode = survivingSource ? String(requestedMode.dropFirst("surviving_".count)) : requestedMode
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
@@ -1837,6 +1880,16 @@ struct Issue965HeldSelectionAssociationTests {
                         }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let result = try #require(sharedJSONObject(sharedToolText(await run())))
+                if refusingSampledTrackOwnership {
+                    #expect(f.footprintDocumentInjected && f.footprintDocumentRestored,
+                        "Reach the initial Track-document sample and keep its contradiction until actual name extraction")
+                    #expect(result["saga_state"] as? String != "completed")
+                    #expect(result["verified"] as? Bool == false)
+                    #expect(f.routingDestinationPresses == 0,
+                        "A restored final scope cannot authorize output from foreign/unknown sampled Track ownership")
+                    #expect(f.routingNameWrites == ["Selected Canonical"])
+                    return
+                }
                 if cancelsAfterName {
                     #expect(f.routingOutputChannelStates.first == "A", "Reach the actual verified name channel before cancellation")
                     #expect(f.routingLateScopeInjected)

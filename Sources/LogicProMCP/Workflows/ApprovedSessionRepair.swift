@@ -971,6 +971,17 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             return (tracks, strips)
         }
         guard let tracks = fields.0, let strips = fields.1, permitted(),
+              tracks.count == task.capture.tracks.count,
+              zip(tracks, task.capture.tracks).allSatisfy({ current, original in
+                  // JSON intentionally omits native custody. A later restored
+                  // scope cannot authenticate an earlier foreign/unknown sample.
+                  // This non-navigating reader does not create a new exposure;
+                  // preserve the original lifetime instead of adopting another.
+                  guard let owner = original.physicalBinding, let observed = current.physicalBinding,
+                        owner.exposure?.isCurrent ?? true else { return false }
+                  return CFEqual(observed.window, owner.window) && CFEqual(observed.header, owner.header)
+                      && observed.document.utf8.elementsEqual(owner.document.utf8)
+              }),
               strips.count == task.capture.channelStrips.count,
               let index = task.capture.channelStrips.firstIndex(where: { $0.physicalBinding?.matches(task.pair.strip) == true }),
               strips[index].physicalBinding?.matches(pair.strip) == true,
