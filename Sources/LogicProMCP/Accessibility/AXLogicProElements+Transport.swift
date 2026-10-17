@@ -403,12 +403,21 @@ extension AXLogicProElements {
             case .failure: return nil
             }
             var holdsCheckbox = false
+            var unreadRole = false
             for child in children {
                 let reading: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
                     child, kAXRoleAttribute as String, runtime: runtime)
-                guard case .success(.some(let role)) = reading else { return nil }
-                holdsCheckbox = holdsCheckbox || role == kAXCheckBoxRole as String
+                guard case .success(.some(let role)) = reading else {
+                    unreadRole = true; continue
+                }
+                if role == kAXCheckBoxRole as String {
+                    holdsCheckbox = true; break
+                }
             }
+            // One actual checkbox establishes presence even when a different
+            // child's role is unknown. Without that positive evidence, unknown
+            // roles cannot establish absence or eliminate this candidate.
+            if !holdsCheckbox && unreadRole { return nil }
             if holdsCheckbox { withControls.append(group) }
         }
         // Exactly one, or nothing. Two bars that both hold transport controls is a tree this code
