@@ -26,6 +26,9 @@ extension AXLogicProElements {
                   CFEqual(current.control, binding.control),
                   current.label.utf8.elementsEqual(binding.label.utf8),
                   binding.owner.currentIndex(runtime: logic) != nil,
+                  // Known editability or an unreadable answer vetoes fixed type.
+                  // A false answer alone supplies neither type nor owner identity.
+                  logic.ax.attributeIsSettable(binding.control, kAXValueAttribute as String) == false,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
             return true
         }
@@ -167,6 +170,7 @@ extension AXLogicProElements {
         runtime: AXHelpers.Runtime,
         nativeAudioType: NativeAudioStripType? = nil
     ) -> [PluginInsertSlot] {
+        guard !found.isEmpty else { return [] }
         let excludesInstrument = nativeAudioType?.isCurrent(children: children) == true
         let result = screenOrderedInsertSlots(found, children: children, runtime: runtime,
             excludesInstrument: excludesInstrument)

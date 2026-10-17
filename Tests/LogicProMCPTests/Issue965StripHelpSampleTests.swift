@@ -127,9 +127,10 @@ struct Issue965StripHelpSampleTests {
 
     @Test("the owned reader omits MIDI disambiguation only for a current native fixed Audio type",
           arguments: [false, true], ["absent", "audio", "instrument", "aux", "duplicate", "malformed", "editable_name",
-              "type_changed", "label_replaced", "source_retired", "document_changed"])
+              "type_changed", "label_replaced", "source_retired", "document_changed",
+              "empty", "editable_static", "editability_changed", "settable_unreadable"])
     func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool, typeLabel: String) throws {
-        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0, bypassHelp = 0, midiHelp = 0, typeValues = 0 }
+        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0, bypassHelp = 0, midiHelp = 0, typeValues = 0, documents = 0 }
         let builder = FakeAXRuntimeBuilder(), calls = Calls()
         let strip = builder.element(1_965_860), insert = builder.element(1_965_861)
         let bypass = builder.element(1_965_862), open = builder.element(1_965_863)
@@ -158,7 +159,7 @@ struct Issue965StripHelpSampleTests {
         builder.setAttribute(app, kAXWindowsAttribute as String, [window])
         builder.setChildren(app, [window])
         let label = builder.element(1_965_867)
-        let losesTypeProof = ["type_changed", "label_replaced", "source_retired", "document_changed"].contains(typeLabel)
+        let losesTypeProof = ["type_changed", "label_replaced", "source_retired", "document_changed", "editability_changed"].contains(typeLabel)
         if typeLabel != "absent" {
             builder.setRole(label, typeLabel == "editable_name" ? kAXTextFieldRole as String : kAXStaticTextRole as String)
             builder.setAttribute(label, kAXDescriptionAttribute as String, typeLabel == "editable_name" ? "name" : "label")
@@ -166,6 +167,10 @@ struct Issue965StripHelpSampleTests {
                 typeLabel == "malformed" ? NSNumber(value: 13) : typeLabel == "instrument" ? "Inst 1" : typeLabel == "aux" ? "Aux 1" : "Audio 13")
             builder.setChildren(label, [])
             builder.setChildren(strip, [label, insert])
+            if typeLabel == "editable_static" {
+                builder.setAttributeSettable(label, kAXValueAttribute as String, true)
+            }
+            if typeLabel == "empty" { builder.setChildren(strip, [label]) }
             if typeLabel == "duplicate" {
                 let duplicate = builder.element(1_965_868)
                 builder.setRole(duplicate, kAXStaticTextRole as String)
@@ -178,12 +183,16 @@ struct Issue965StripHelpSampleTests {
         let base = builder.makeAXRuntime(appElement: app)
         let metadata = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
         let native: @Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError> = { element, attribute in
+            if attribute == kAXDocumentAttribute as String, CFEqual(element, window) { calls.documents += 1 }
             if attribute == kAXValueAttribute as String, CFEqual(element, label) {
                 calls.typeValues += 1
                 // Two producer values and two initial proof values precede the
                 // deciding post-classification proof. Change the actual native
                 // owner/control then, not a decoded observation or expected value.
                 if calls.typeValues == 5 {
+                    if typeLabel == "editability_changed" {
+                        builder.setAttributeSettable(label, kAXValueAttribute as String, true)
+                    }
                     if typeLabel == "type_changed" { builder.setAttribute(label, kAXValueAttribute as String, "Inst 1") }
                     if typeLabel == "document_changed" {
                         builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/ForeignStrip.logicx")
@@ -204,7 +213,10 @@ struct Issue965StripHelpSampleTests {
             return base.attributeValueResult?(element, attribute) ?? .success(base.attributeValue(element, attribute))
         }
         let raw = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { try? native($0, $1).get() },
-            attributeIsSettable: base.attributeIsSettable, setAttributeValue: base.setAttributeValue,
+            attributeIsSettable: { element, attribute in
+                if typeLabel == "settable_unreadable", CFEqual(element, label), attribute == kAXValueAttribute as String { return nil }
+                return base.attributeIsSettable(element, attribute)
+            }, setAttributeValue: base.setAttributeValue,
             children: base.children, performAction: base.performAction, childCount: base.childCount,
             childrenResult: base.childrenResult, attributeValueResult: native,
             attributeValuesResult: { element, attributes in
@@ -225,6 +237,7 @@ struct Issue965StripHelpSampleTests {
                 let states = try #require(AccessibilityChannel.readChannelStrips(from: [strip], runtime: logic,
                     window: window, mixer: mixer,
                     readingRouting: false, readingScalarHelp: false, stoppingWhen: { guardian.stopped }))
+                let ownedReaderDocumentReads = calls.documents
                 let physical = try #require(states.first?.physicalBinding)
                 let fullyObserved: Bool = try #require(states.first?.pluginsFullyObserved as Bool?)
                 if losesTypeProof {
@@ -233,13 +246,18 @@ struct Issue965StripHelpSampleTests {
                     #expect(states.first?.pluginsSource == nil && states.first?.pluginsReadError != nil,
                         "A lost native type/owner proof cannot publish the chain acquired without its MIDI census")
                 } else {
-                    #expect(states.first?.pluginsSource == "ax" && states.first?.plugins.first?.name == "Gain")
+                    #expect(states.first?.pluginsSource == "ax")
+                    if typeLabel == "empty" {
+                        #expect(states.first?.plugins.isEmpty == true)
+                        #expect(calls.typeValues == 2 && ownedReaderDocumentReads == 1,
+                            "No recognized slots means no MIDI disambiguation or added full owner scans after the ordinary type producer")
+                    } else { #expect(states.first?.plugins.first?.name == "Gain") }
                     #expect(physical.currentIndex(runtime: logic) == 0,
                         "The cost witness must reach a currently owned native source, not a failed fixture lookup")
                     #expect(fullyObserved)
                 }
                 #expect(calls.metadataBatches == 0)
-                if typeLabel == "audio" || losesTypeProof {
+                if typeLabel == "audio" || losesTypeProof || typeLabel == "empty" {
                     #expect(calls.midiHelp == 0,
                         "The exact native fixed Audio type excludes an instrument without a MIDI Help absence census")
                 } else {
