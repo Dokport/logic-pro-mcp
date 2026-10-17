@@ -59,6 +59,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let capture: SessionPopulationObservation.Capture
         let handle: String
     }
+    private struct SendTask: Sendable {
+        let reference: TargetReference
+        let mixerRef: TargetReference
+        let pair: AccessibilityChannel.HeldSelectionAssociation.Pair
+        let control: AXLogicProElements.AssignedSendMenuControl
+        let ordinal: Int
+        let handle: String
+    }
     private struct ReceiverKeep: Sendable {
         let bus: Int
         let reference: TargetReference
@@ -81,6 +89,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         var selectionOrigin: AXTrackBinding.Binding? = nil
         var sort: SortTask? = nil
         var output: OutputTask? = nil
+        var send: SendTask? = nil
         var receivers: [ReceiverKeep] = []
     }
 
@@ -225,6 +234,63 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         switch assignment { case .physical, .stereoOutput: return assignment; default: return nil }
     }
 
+    /// Removal has no new routing endpoint or receiver allocation. The ordinal selects only
+    /// this capture's original native control; execution must still prove that control current.
+    private static func capturedSend(policy: ProjectSessionAudit.IntentPolicy,
+        names: [ProjectSessionAudit.ApprovedName], source: SessionPopulationObservation.Capture,
+        request: SessionPopulationObservation.Request) -> SendTask? {
+        guard FeatureFlags.adr002TargetRef, FeatureFlags.adr004MutationSaga,
+              names.isEmpty, policy.targets.count == 1, policy.sends.count == 1,
+              policy.roles.isEmpty, policy.outputs.isEmpty, policy.receivers.isEmpty,
+              policy.protectedPaths.isEmpty, policy.trackSort == nil, policy.mixerVisible == nil,
+              let target = policy.targets.first, target.mixerRef == nil,
+              let intent = policy.sends.first, intent.target == target.handle, intent.bus == nil,
+              let ordinal = intent.observedOrdinal, ordinal >= 0,
+              request.allowUINavigation,
+              Set([SessionPopulationObservation.Domain.tracks, .strips, .associations, .routing]).isSubset(of: request.domains),
+              source.before == source.after, source.referencesEnabled, !source.referencesStale,
+              source.requestedProjectMatches != false, !source.before.axOccluded,
+              case .issued(let project)? = source.projectIssuance, policy.projectRef == project,
+              let fresh = source.freshPopulation, fresh.stable, fresh.uiEffects.restoration == "restored",
+              let refs = source.issued, case .located(let index) = ProjectSessionAudit.locate(target.trackRef, in: refs),
+              source.tracks.filter({ $0.id == index }).count == 1,
+              let track = source.tracks.first(where: { $0.id == index })?.physicalBinding,
+              track.exposure?.hasEnded != true, let path = source.project.filePath,
+              track.projectPath?.utf8.elementsEqual(path.utf8) == true else { return nil }
+        let pairs = fresh.selectionAssociations.filter { $0.track.matches(track) }
+        guard pairs.count == 1, let pair = pairs.first,
+              fresh.selectionAssociations.filter({ $0.strip.matches(pair.strip) }).count == 1,
+              CFEqual(pair.track.window, pair.strip.window),
+              pair.track.document.utf8.elementsEqual(pair.strip.document.utf8) else { return nil }
+        let rows = source.channelStrips.indices.filter { source.channelStrips[$0].physicalBinding?.matches(pair.strip) == true }
+        let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == ordinal }
+        guard rows.count == 1, let row = rows.first, let mixerRef = source.mixerReference(at: row),
+              checked.count == 1, let reading = checked.first, reading.assignment == .stereoOutput,
+              reading.sendNonRoutingChecks == ["Post Fader"] || reading.sendNonRoutingChecks == ["포스트 페이더"],
+              let control = reading.sendControl, control.ordinal == ordinal,
+              let slots = source.channelStrips[row].sendSlots, slots.count == 2,
+              slots.filter({ $0.state == .observedEmpty }).count == 1,
+              let occupied = slots.first(where: { $0.state == .occupiedUnknownDestination }),
+              occupied.ordinal == ordinal, occupied.levelRaw == 0, occupied.bypassed == false else { return nil }
+        return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair,
+            control: control, ordinal: ordinal, handle: target.handle)
+    }
+
+    static func capturedSendStep(policy: ProjectSessionAudit.IntentPolicy,
+        names: [ProjectSessionAudit.ApprovedName], source: SessionPopulationObservation.Capture,
+        request: SessionPopulationObservation.Request) -> Value? {
+        guard let task = capturedSend(policy: policy, names: names, source: source, request: request) else { return nil }
+        return .object(["id": .string("send_" + task.handle), "kind": .string("local_send_removal"),
+            "target_ref": .string(task.reference.rawValue), "mixer_ref": .string(task.mixerRef.rawValue),
+            "observed_ordinal": .int(task.ordinal),
+            "before": .object(["kind": .string("stereo_output"), "mode": .string("post_fader"),
+                "level_raw": .int(0), "bypassed": .bool(false)]),
+            "after": .object(["kind": .string("no_send")]),
+            "dependencies": .array([]), "blocked_reasons": .array([]),
+            "required_invariants": .array(["captured_track_strip_pair", "original_send_control",
+                "checked_send_readback", "conditional_owned_send_inverse"].map(Value.string))])
+    }
+
     static func capturedOutputStep(policy: ProjectSessionAudit.IntentPolicy, names: [ProjectSessionAudit.ApprovedName],
                                    source: SessionPopulationObservation.Capture,
                                    request: SessionPopulationObservation.Request) -> Value? {
@@ -260,6 +326,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             capture: source, request: request)
         guard naming.reasons.isEmpty else { return nil }
         let policy = naming.policy
+        if let send = capturedSend(policy: policy, names: names, source: source, request: request),
+           case .issued(let project)? = source.projectIssuance {
+            return .init(projectRef: project, document: send.pair.track.document, mixer: nil,
+                names: [], renameCapture: nil, send: send)
+        }
         if names.isEmpty, let receivers = capturedReceiverKeeps(policy: policy, source: source, request: request),
            case .issued(let project)? = source.projectIssuance, let document = receivers.first?.input.owner.document {
             return .init(projectRef: project, document: document, mixer: nil, names: [], renameCapture: nil,
@@ -389,6 +460,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private let selectionOrigin: AXTrackBinding.Binding?
     private let sortTask: SortTask?
     private let outputTask: OutputTask?
+    private let sendTask: SendTask?
     private var outputPair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var outputRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
     private var outputProof: AccessibilityChannel.HeldSelectionAssociation?
@@ -425,6 +497,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                  selectionOrigin: AXTrackBinding.Binding? = nil, cacheProjectEpoch: UInt64,
                  sortTask: SortTask? = nil,
                  outputTask: OutputTask? = nil,
+                 sendTask: SendTask? = nil,
                  receiverKeeps: [ReceiverKeep] = [],
                  registryProjectEpoch: UInt64,
                  cache: StateCache, registry: TargetRegistry, journal: SagaJournal) {
@@ -434,6 +507,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         self.selectionOrigin = selectionOrigin
         self.sortTask = sortTask
         self.outputTask = outputTask
+        self.sendTask = sendTask
         self.receiverKeeps = receiverKeeps
         self.cacheProjectEpoch = cacheProjectEpoch; self.registryProjectEpoch = registryProjectEpoch
         self.cache = cache; self.registry = registry; self.journal = journal
@@ -492,6 +566,22 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   current.physicalTrack?.matches(goal.binding) == true else { return nil }
         }
         let changed = goals.filter { !$0.before.utf8.elementsEqual($0.name.utf8) }
+        if let send = captured.send {
+            guard steps == [capturedSendStep(policy: policy, names: names, source: source.capture, request: source.request)],
+                  let current = await registry.resolve(send.reference), current.kind == .track,
+                  current.physicalTrack?.matches(send.pair.track) == true,
+                  let mixer = await registry.resolve(send.mixerRef), mixer.kind == .mixerStrip,
+                  mixer.physicalMixerStrip?.matches(send.pair.strip) == true else { return nil }
+            let saga = SagaPlan(steps: [.init(operationID: .mixerSetSendOutputVerified, targetRef: send.mixerRef,
+                params: ["ordinal": .int(send.ordinal), "destination": .object(["kind": .string("no_send")]),
+                    "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true),
+                    "project_ref": .string(issued.rawValue)],
+                expectedInverse: .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination"))],
+                idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
+            return .init(plan: saga, projectRef: issued, document: captured.document,
+                cacheProjectEpoch: source.capture.projectEpoch, sendTask: send,
+                registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
+        }
         if let output = captured.output, changed.isEmpty {
             guard steps == [capturedOutputStep(policy: policy, names: names, source: source.capture, request: source.request)],
                   let current = await registry.resolve(output.reference), current.kind == .track,
@@ -607,6 +697,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     func supports(_ step: SagaStep) -> Bool {
+        if sendTask != nil { return plan.steps == [step] }
         if let task = outputTask, step.operationID == .mixerSetOutputVerified {
             return step.operationID == .mixerSetOutputVerified && step.targetRef == task.reference
                 && Set(step.params.keys) == ["destination"]
@@ -632,6 +723,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             && Set(step.params.keys) == ["view", "visible"] && step.params["view"] == .string("mixer")
             && step.params["visible"]?.boolValue != nil
             && step.expectedInverse.operationID == .navigateToggleView && step.expectedInverse.valueParameter == "visible"
+    }
+
+    /// Only a successfully retained, digest-checked canonical approval can supply this native
+    /// witness. The public Saga parser cannot construct an ApprovedSessionRepair.
+    func sendRemovalCustody(for step: SagaStep) -> (AccessibilityChannel.HeldSelectionAssociation.Pair,
+        AXLogicProElements.AssignedSendMenuControl)? {
+        guard let task = sendTask, supports(step), plan.canonicalPlanID != nil,
+              plan.canonicalDigest != nil else { return nil }
+        return (task.pair, task.control)
     }
 
     private var changedNameGoals: [NameGoal] {

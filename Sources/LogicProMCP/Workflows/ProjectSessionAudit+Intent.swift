@@ -97,18 +97,40 @@ extension ProjectSessionAudit {
         let destination: IntentMainOutput
     }
 
-    /// An exact physical send slot on an issued source. A nil bus is explicit removal, never
-    /// inferred from level, bypass, a displayed name or missing observation.
+    /// Physical slots and observed source-census ordinals are distinct selectors. Neither is
+    /// native write authority. A nil bus is explicit removal, never inferred from a scalar.
     struct IntentSend: Equatable, Encodable, Sendable {
+        enum Selector: Hashable, Sendable {
+            case physicalSlot(Int)
+            case observedOrdinal(Int)
+        }
         let target: String
-        let physicalSlot: Int
+        let selector: Selector
         let bus: Int?
+        var physicalSlot: Int? { if case .physicalSlot(let value) = selector { value } else { nil } }
+        var observedOrdinal: Int? { if case .observedOrdinal(let value) = selector { value } else { nil } }
+        var selectorID: String {
+            switch selector {
+            case .physicalSlot(let value): "slot.\(value)"
+            case .observedOrdinal(let value): "ordinal.\(value)"
+            }
+        }
+        init(target: String, selector: Selector, bus: Int?) {
+            self.target = target; self.selector = selector; self.bus = bus
+        }
+        init(target: String, physicalSlot: Int, bus: Int?) {
+            self.init(target: target, selector: .physicalSlot(physicalSlot), bus: bus)
+        }
 
-        enum CodingKeys: String, CodingKey { case target, bus, remove; case physicalSlot = "physical_slot" }
+        enum CodingKeys: String, CodingKey {
+            case target, bus, remove
+            case physicalSlot = "physical_slot", observedOrdinal = "observed_ordinal"
+        }
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(target, forKey: .target)
-            try container.encode(physicalSlot, forKey: .physicalSlot)
+            try container.encodeIfPresent(physicalSlot, forKey: .physicalSlot)
+            try container.encodeIfPresent(observedOrdinal, forKey: .observedOrdinal)
             if let bus { try container.encode(bus, forKey: .bus) }
             else { try container.encode(true, forKey: .remove) }
         }
@@ -194,6 +216,7 @@ extension ProjectSessionAudit {
         case unsupportedSortCriterion(path: String, value: String)
         case invalidSortOrder(path: String)
         case sendDestinationBothOrNeither(path: String)
+        case sendSelectorBothOrNeither(path: String)
         case sendRemovalMustBeTrue(path: String)
         case sendSlotOutOfRange(path: String, value: Int)
         case duplicateSend(target: String, slot: Int)
@@ -241,6 +264,7 @@ extension ProjectSessionAudit {
             case .invalidSortOrder(let path):
                 return "invalid_sort_order \(path)"
             case .sendDestinationBothOrNeither(let path): return "send_destination_both_or_neither \(path)"
+            case .sendSelectorBothOrNeither(let path): return "send_selector_both_or_neither \(path)"
             case .sendRemovalMustBeTrue(let path): return "send_removal_must_be_true \(path)"
             case .sendSlotOutOfRange(let path, let value): return "send_slot_out_of_range \(path) \(value)"
             case .duplicateSend(let target, let slot): return "duplicate_send \(target) \(slot)"
@@ -456,7 +480,8 @@ extension ProjectSessionAudit {
         let severity: Severity
         let status: IntentStatus
         let target: IntentTargetEvidence
-        let physicalSlot: Int
+        let physicalSlot: Int?
+        let observedOrdinal: Int?
         let observed: RoutingEdge?
         let expected: IntentSend
         let coverage: RoutingCoverage
@@ -466,6 +491,7 @@ extension ProjectSessionAudit {
         enum CodingKeys: String, CodingKey {
             case id, rule, basis, severity, status, target, observed, expected, coverage, reasons
             case physicalSlot = "physical_slot"
+            case observedOrdinal = "observed_ordinal"
             case notVerified = "not_verified"
         }
     }
@@ -854,15 +880,19 @@ extension ProjectSessionAudit {
             rejections.append(.wrongType(path: "policy.sends", expected: "array")); return []
         }
         var result: [IntentSend] = []
-        var slots: [String: Set<Int>] = [:]
+        var slots: [String: Set<IntentSend.Selector>] = [:]
         for (index, rawEntry) in entries.enumerated() {
             let path = "policy.sends[\(index)]"
             guard let entry = rawEntry.objectValue else {
                 rejections.append(.wrongType(path: path, expected: "object")); continue
             }
-            rejectUnknownKeys(entry, allowed: ["target", "physical_slot", "bus", "remove"], path: path, into: &rejections)
+            rejectUnknownKeys(entry, allowed: ["target", "physical_slot", "observed_ordinal", "bus", "remove"], path: path, into: &rejections)
             let target = requiredString(entry, key: "target", path: path, into: &rejections)
-            let slot = requiredInt(entry, key: "physical_slot", path: path, into: &rejections)
+            guard (entry["physical_slot"] == nil) != (entry["observed_ordinal"] == nil) else {
+                rejections.append(.sendSelectorBothOrNeither(path: path)); continue
+            }
+            let key = entry["physical_slot"] != nil ? "physical_slot" : "observed_ordinal"
+            let slot = requiredInt(entry, key: key, path: path, into: &rejections)
             guard (entry["bus"] == nil) != (entry["remove"] == nil) else {
                 rejections.append(.sendDestinationBothOrNeither(path: path)); continue
             }
@@ -879,15 +909,23 @@ extension ProjectSessionAudit {
             guard targets.contains(where: { $0.handle == target }) else {
                 rejections.append(.unknownSubject(path: path, subject: target)); continue
             }
-            guard routingPhysicalSendSlots.contains(slot) else {
-                rejections.append(.sendSlotOutOfRange(path: "\(path).physical_slot", value: slot)); continue
+            guard key == "physical_slot" ? routingPhysicalSendSlots.contains(slot) : slot >= 0 else {
+                rejections.append(.sendSlotOutOfRange(path: "\(path).\(key)", value: slot)); continue
             }
-            guard slots[target, default: []].insert(slot).inserted else {
+            let selector: IntentSend.Selector = key == "physical_slot" ? .physicalSlot(slot) : .observedOrdinal(slot)
+            guard slots[target, default: []].insert(selector).inserted else {
                 rejections.append(.duplicateSend(target: target, slot: slot)); continue
             }
-            result.append(IntentSend(target: target, physicalSlot: slot, bus: bus))
+            result.append(IntentSend(target: target, selector: selector, bus: bus))
         }
-        return result.sorted { $0.target == $1.target ? $0.physicalSlot < $1.physicalSlot : $0.target < $1.target }
+        return result.sorted {
+            if $0.target != $1.target { return $0.target < $1.target }
+            switch ($0.selector, $1.selector) {
+            case (.physicalSlot(let a), .physicalSlot(let b)), (.observedOrdinal(let a), .observedOrdinal(let b)): return a < b
+            case (.physicalSlot, .observedOrdinal): return true
+            case (.observedOrdinal, .physicalSlot): return false
+            }
+        }
     }
 
     /// Exactly one of `bus` (a supported number) or `output` (`"no_output"`, the one non-bus main output
@@ -1314,12 +1352,15 @@ extension ProjectSessionAudit {
                                    capture: SessionPopulationObservation.Capture, graph: RoutingGraph) -> IntentSendFinding {
         func finding(_ status: IntentStatus, index: Int? = nil, observed: RoutingEdge? = nil,
                      reasons: [IntentReason] = []) -> IntentSendFinding {
-            IntentSendFinding(id: "send.target.\(intent.target).slot.\(intent.physicalSlot)",
+            IntentSendFinding(id: "send.target.\(intent.target).\(intent.selectorID)",
                 severity: status == .violation ? .warn : .info, status: status,
                 target: IntentTargetEvidence(handle: intent.target, role: nil, trackRef: trackRef.rawValue, trackIndex: index),
-                physicalSlot: intent.physicalSlot, observed: observed, expected: intent, coverage: graph.coverage, reasons: reasons)
+                physicalSlot: intent.physicalSlot, observedOrdinal: intent.observedOrdinal,
+                observed: observed, expected: intent, coverage: graph.coverage, reasons: reasons)
         }
         if let gate { return finding(gate.status, reasons: [gate.reason]) }
+        // The routing graph's physical-slot edges cannot authenticate a source-census ordinal.
+        guard intent.physicalSlot != nil else { return finding(.unverified, reasons: [.sendCoverageIncomplete]) }
         let issued: IssuedTrackReferences
         switch trackReferences(of: capture) {
         case .unreadable(let reason): return finding(.unverified, reasons: [reason])

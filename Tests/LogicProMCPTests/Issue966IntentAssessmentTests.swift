@@ -426,6 +426,40 @@ struct Issue966IntentAssessmentTests {
         #expect(one.outputs == [Audit.IntentOutput(subject: .target("kick"), destination: .bus(1))])
     }
 
+    @Test func observedSendOrdinalIsExplicitAndDoesNotEncodeAsPhysicalSlot() throws {
+        var raw = policyObject(targets: [targetEntry("kick", "trk_0")])
+        raw["sends"] = .array([.object([
+            "target": .string("kick"), "observed_ordinal": .int(1), "remove": .bool(true),
+        ])])
+        let policy = try #require(accepted(Audit.parseIntentPolicy(raw)))
+        let data = try JSONEncoder().encode(policy.sends)
+        let encoded = try #require(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        #expect(encoded.count == 1)
+        #expect(encoded[0]["observed_ordinal"] as? Int == 1)
+        #expect(encoded[0]["physical_slot"] == nil)
+        let remove = try #require(encoded[0]["remove"] as? Bool)
+        #expect(remove)
+
+        for selector: [String: Value] in [
+            [:], ["observed_ordinal": .int(-1)], ["observed_ordinal": .string("1")],
+            ["observed_ordinal": .int(1), "physical_slot": .int(1)],
+        ] {
+            var entry: [String: Value] = ["target": .string("kick"), "remove": .bool(true)]
+            entry.merge(selector) { _, new in new }
+            raw["sends"] = .array([.object(entry)])
+            #expect(rejections(Audit.parseIntentPolicy(raw)) != nil)
+        }
+
+        raw["sends"] = .array([.object([
+            "target": .string("kick"), "physical_slot": .int(1), "remove": .bool(true),
+        ])])
+        let legacy = try #require(accepted(Audit.parseIntentPolicy(raw)))
+        let legacyData = try JSONEncoder().encode(legacy.sends)
+        let legacyWire = try #require(JSONSerialization.jsonObject(with: legacyData) as? [[String: Any]])
+        #expect(legacyWire[0]["physical_slot"] as? Int == 1)
+        #expect(legacyWire[0]["observed_ordinal"] == nil)
+    }
+
     @Test(arguments: ["outputs", "sends", "receivers"], [257, Int.max])
     func policyRejectsBusOutsideSharedRoutingRange(_ domain: String, _ bus: Int) throws {
         var raw = policyObject(targets: [targetEntry("kick", "trk_0")])

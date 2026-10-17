@@ -110,6 +110,8 @@ extension AccessibilityChannel {
         /// Two agreeing complete Bus menu inventories on this retained source.
         /// Not namespace availability, consumer completeness, or write authority.
         var observedBusNumbers: [Int]? = nil
+        /// Process-local original control, retained only after owned cleanup and fresh custody.
+        var sendControl: AXLogicProElements.AssignedSendMenuControl? = nil
     }
 
     struct SendBypassSnapshot {
@@ -547,6 +549,10 @@ extension AccessibilityChannel {
                 ordinal: sendOrdinal, runtime: runtime.ax)
         }
         let assigned = assignedControl()
+        let requiredSendControl = sendReplacement != nil ? SendRemovalSagaAdapter.requiredSendControl : nil
+        guard requiredSendControl.map({ captured in assigned.map(captured.matches) == true }) ?? true else {
+            return refuse(.staleTargetReference, "The previewed native Send control is no longer current; nothing was pressed.")
+        }
         let restoringEmpty = sendReplacement?.restoration?.empty ?? sendReplacement?.creation?.empty
         guard sendOrdinal == nil || assigned != nil || restoringEmpty != nil else {
             return refuse(.readbackUnavailable, "The requested ordinal has no uniquely qualified assigned-send list control; nothing was pressed.")
@@ -872,7 +878,9 @@ extension AccessibilityChannel {
             let request = effective
             func sameOriginalSendControl() -> Bool {
                 if let assigned {
-                    return assignedControl().map { assigned.matches($0) } == true
+                    return assignedControl().map { current in
+                        assigned.matches(current) && (requiredSendControl.map { $0.matches(current) } ?? true)
+                    } == true
                 }
                 if let restoringEmpty {
                     return soleEmptySend(in: physical.strip, runtime: runtime.ax).map { restoringEmpty.matches($0) } == true
@@ -1579,7 +1587,8 @@ extension AccessibilityChannel {
         }
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
             inputAssignment: checkedInputFact, inputRenewal: inputRenewal, inputSlot: inputSlot,
-            sendNonRoutingChecks: sendChecks, sendMode: modeEvidence, observedBusNumbers: observedBusNumbers)
+            sendNonRoutingChecks: sendChecks, sendMode: modeEvidence, observedBusNumbers: observedBusNumbers,
+            sendControl: sendOrdinal != nil && closed && sourceAfter ? assigned : nil)
     }
 
     static func outputReadContextFailure(_ result: ChannelResult, operation: String) -> ChannelResult {

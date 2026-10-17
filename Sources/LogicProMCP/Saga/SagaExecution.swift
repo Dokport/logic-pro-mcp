@@ -175,7 +175,9 @@ final class SagaPartialStateFaultSeam: @unchecked Sendable {
 /// One execution's native removal custody, never persisted in the journal.
 /// The journal records checked scalar facts; those facts cannot recreate this capsule.
 final class SendRemovalSagaAdapter: @unchecked Sendable {
+    @TaskLocal static var requiredSendControl: AXLogicProElements.AssignedSendMenuControl?
     let forward: SagaStep
+    private let capturedControl: AXLogicProElements.AssignedSendMenuControl?
     private var pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var footprint: [SendSlotObservation]?
     private var removal: AccessibilityChannel.RemovedSendObservation?
@@ -228,6 +230,15 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     init?(plan: SagaPlan) {
         guard Self.accepts(plan), let forward = plan.steps.first else { return nil }
         self.forward = forward
+        self.capturedControl = nil
+    }
+
+    init?(approved: ApprovedSessionRepair) {
+        guard approved.plan.steps.count == 1, let forward = approved.plan.steps.first,
+              let (pair, control) = approved.sendRemovalCustody(for: forward) else { return nil }
+        self.forward = forward
+        self.pair = pair
+        self.capturedControl = control
     }
 
     /// Only an internally constructed inverse may carry the checked scalar.
@@ -308,12 +319,17 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                     self.pair = held; self.footprint = slots
                     token = "no_send"; source = .axSendSlotFootprint
                 } else {
+                    if let captured = self.capturedControl {
+                        guard let current = AXLogicProElements.assignedSendMenuControl(in: physical.strip,
+                            ordinal: ordinal, runtime: runtime.ax), captured.matches(current) else { return nil }
+                    }
                     let checked = await AXMixerStripBinding.$current.withValue(physical) {
                         await AXMixerStripBinding.$outputAssociation.withValue(held) {
                             await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
                         }
                     }
                     guard checked.assignment == .stereoOutput,
+                          self.capturedControl.map({ captured in checked.sendControl.map(captured.matches) == true }) ?? true,
                           checked.sendNonRoutingChecks == ["Post Fader"] || checked.sendNonRoutingChecks == ["포스트 페이더"],
                           let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
                           slots.count == 2, slots.filter({ $0.state == .observedEmpty }).count == 1,
@@ -393,8 +409,10 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                                 upstream?(proof)
                             }
                         }) {
-                            await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
-                                router: router, cache: cache, targetRegistry: registry)
+                            await Self.$requiredSendControl.withValue(self.capturedControl) {
+                                await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                                    router: router, cache: cache, targetRegistry: registry)
+                            }
                         }
                     }
                 }
