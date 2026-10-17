@@ -1236,7 +1236,8 @@ struct Issue968ExactTrackNameAdapterTests {
         }
     }
 
-    @Test func aPhysicalMixerOriginUsesItsCapturedPairAndTheExistingCoupledTrackSaga() async throws {
+    @Test(arguments: [true, false])
+    func aPhysicalMixerOriginUsesItsCapturedPairAndTheExistingCoupledTrackSaga(coupled: Bool) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let f = ExactNameFixture()
@@ -1281,6 +1282,7 @@ struct Issue968ExactTrackNameAdapterTests {
                 let journal = SagaJournal()
                 let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
                     key: "physical-mixer-origin", cache: f.cache, registry: f.registry, journal: journal))
+                if !coupled { f.onConfirm = nil }
                 let runtime = f.runtime
                 let result = await SystemDispatcher.handle(command: "saga_execute", params: [:], router: f.router,
                     cache: f.cache, targetRegistry: f.registry, dialogPresent: { false },
@@ -1289,10 +1291,12 @@ struct Issue968ExactTrackNameAdapterTests {
                     liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
                     sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 let outcome = try #require(sharedJSONObject(sharedToolText(result)))
-                #expect(outcome["saga_state"] as? String == "completed")
-                #expect(f.writes == [desired])
-                #expect(f.routedOperations == ["track.rename"])
-                #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == desired)
+                #expect(outcome["saga_state"] as? String == (coupled ? "completed" : "fullyCompensated"))
+                let verified = try #require(outcome["verified"] as? Bool)
+                if coupled { #expect(verified) } else { #expect(!verified) }
+                #expect(f.writes == (coupled ? [desired] : [desired, "A"]))
+                #expect(f.routedOperations == (coupled ? ["track.rename"] : ["track.rename", "track.rename"]))
+                #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == (coupled ? desired : "A"))
                 #expect(f.builder.attributeValue(peer, kAXDescriptionAttribute as String) as? String == "Peer")
             }
         }

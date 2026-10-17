@@ -1201,6 +1201,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                goal.mixerRef != nil || changedNameGoals.contains(where: { $0.reference == goal.reference }) {
                 let observed: String?
                 if afterExecution, let proof = nameExecutions[goal.reference]?.inverse {
+                    // Track-origin aliases may leave the Mixer name unchanged.
+                    // An explicitly approved Mixer-origin coupled_after may not.
+                    // Frozen receipt data is corroborated by the native read below;
+                    // it cannot turn an unsatisfied Mixer goal into completion.
+                    if goal.mixerRef != nil {
+                        guard let effect = ExactTrackNameAdapter.recordedNameEffect(proof),
+                              effect.stripName.utf8.elementsEqual(expected.utf8) else { return nil }
+                    }
                     observed = await ExactTrackNameAdapter.readOwnedCoupledName(proof, ownedPeerEffects: ownedNameEffects)
                 } else {
                     observed = await ExactTrackNameAdapter.readCapturedCoupledName(nameAction(goal),
