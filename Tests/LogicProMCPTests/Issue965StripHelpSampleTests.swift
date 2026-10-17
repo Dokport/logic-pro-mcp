@@ -128,9 +128,10 @@ struct Issue965StripHelpSampleTests {
     @Test("the owned reader omits MIDI disambiguation only for a current native fixed Audio type",
           arguments: [false, true], ["absent", "audio", "instrument", "aux", "duplicate", "malformed", "editable_name",
               "type_changed", "label_replaced", "source_retired", "document_changed",
-              "empty", "editable_static", "editability_changed", "settable_unreadable"])
+              "empty", "editable_static", "editability_changed", "settable_unreadable",
+              "settable_document_changed", "settable_source_retired"])
     func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool, typeLabel: String) throws {
-        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0, bypassHelp = 0, midiHelp = 0, typeValues = 0, documents = 0 }
+        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0, bypassHelp = 0, midiHelp = 0, typeValues = 0, documents = 0, typeSettable = 0 }
         let builder = FakeAXRuntimeBuilder(), calls = Calls()
         let strip = builder.element(1_965_860), insert = builder.element(1_965_861)
         let bypass = builder.element(1_965_862), open = builder.element(1_965_863)
@@ -159,7 +160,8 @@ struct Issue965StripHelpSampleTests {
         builder.setAttribute(app, kAXWindowsAttribute as String, [window])
         builder.setChildren(app, [window])
         let label = builder.element(1_965_867)
-        let losesTypeProof = ["type_changed", "label_replaced", "source_retired", "document_changed", "editability_changed"].contains(typeLabel)
+        let losesTypeProof = ["type_changed", "label_replaced", "source_retired", "document_changed", "editability_changed",
+            "settable_document_changed", "settable_source_retired"].contains(typeLabel)
         if typeLabel != "absent" {
             builder.setRole(label, typeLabel == "editable_name" ? kAXTextFieldRole as String : kAXStaticTextRole as String)
             builder.setAttribute(label, kAXDescriptionAttribute as String, typeLabel == "editable_name" ? "name" : "label")
@@ -214,7 +216,16 @@ struct Issue965StripHelpSampleTests {
         }
         let raw = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { try? native($0, $1).get() },
             attributeIsSettable: { element, attribute in
-                if typeLabel == "settable_unreadable", CFEqual(element, label), attribute == kAXValueAttribute as String { return nil }
+                if CFEqual(element, label), attribute == kAXValueAttribute as String {
+                    calls.typeSettable += 1
+                    if typeLabel == "settable_unreadable" { return nil }
+                    if calls.typeSettable == 2 {
+                        if typeLabel == "settable_document_changed" {
+                            builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/ForeignStrip.logicx")
+                        }
+                        if typeLabel == "settable_source_retired" { builder.setChildren(mixer, []) }
+                    }
+                }
                 return base.attributeIsSettable(element, attribute)
             }, setAttributeValue: base.setAttributeValue,
             children: base.children, performAction: base.performAction, childCount: base.childCount,
@@ -248,7 +259,8 @@ struct Issue965StripHelpSampleTests {
                 } else {
                     #expect(states.first?.pluginsSource == "ax")
                     if typeLabel == "empty" {
-                        #expect(states.first?.plugins.isEmpty == true)
+                        let plugins = try #require(states.first?.plugins)
+                        #expect(plugins.isEmpty)
                         #expect(calls.typeValues == 2 && ownedReaderDocumentReads == 1,
                             "No recognized slots means no MIDI disambiguation or added full owner scans after the ordinary type producer")
                     } else { #expect(states.first?.plugins.first?.name == "Gain") }
