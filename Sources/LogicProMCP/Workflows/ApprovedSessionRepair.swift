@@ -886,8 +886,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   originalSelectionHeld() else { return nil }
             let execution = nameExecutions[goal.reference]
             let observed: String?
-            if outputRenewal != nil, let proof = execution?.inverse, step.params["name"] == .string(goal.before) {
-                observed = await ExactTrackNameAdapter.readOwnedCoupledName(proof)
+            if let proof = execution?.inverse {
+                observed = await ExactTrackNameAdapter.readOwnedCoupledName(proof,
+                    preserveCurrentPeers: step.params["name"] == .string(goal.before), ownedPeerEffects: ownedNameEffects)
             } else if execution?.ran == true, execution?.inverse == nil, step.params["name"] == .string(goal.before) {
                 guard let proof = execution?.restored else { return nil }
                 observed = await ExactTrackNameAdapter.readOwnedCoupledName(proof)
@@ -931,7 +932,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     /// output may differ; neither a fresh row nor a displayed label becomes a new baseline.
     private func outputFootprintHeld(pair: AccessibilityChannel.HeldSelectionAssociation.Pair,
                                      assignment: OutputAssignment, popup: AXUIElement? = nil,
-                                     ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil) -> Bool {
+                                     ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil,
+                                     ownedStripNamePreview: [String]? = nil,
+                                     verifiedNameEffect: ExactTrackNameAdapter.VerifiedNameEffect? = nil) -> Bool {
         guard let task = outputTask, let proof = outputProof else { return false }
         let runtime = pair.track.runtime
         @Sendable func permitted() -> Bool {
@@ -987,13 +990,36 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         var expected = task.capture.channelStrips
         if assignment != task.before { expected[index].output = strips[index].output }
         var expectedTrackRows = task.capture.tracks
-        if let allowed = ownedNamePreview {
+        func effectMatchesSource(_ effect: ExactTrackNameAdapter.VerifiedNameEffect) -> Bool {
+            if effect.matches(pair) { return true }
+            // A name receipt predates this plan's own output replacement. Only
+            // its original-header renewal can carry those frozen name bytes to
+            // the new source; labels and equal ordinals cannot establish it.
+            guard let renewal = outputRenewal,
+                  renewal.original.matches(task.pair.strip),
+                  renewal.pair.track.matches(pair.track), renewal.pair.strip.matches(pair.strip),
+                  effect.matches(.init(track: renewal.originalTrack, strip: renewal.original)) else { return false }
+            return renewal.permits(runtime: runtime, ownedPopup: popup)
+        }
+        if let effect = verifiedNameEffect {
+            guard effectMatchesSource(effect),
+                  let goal = changedNameGoals.first(where: { $0.reference == task.reference }),
+                  let row = expectedTrackRows.firstIndex(where: { $0.physicalBinding?.matches(goal.binding) == true }),
+                  [goal.before, goal.name].contains(where: { effect.trackName.utf8.elementsEqual($0.utf8) }),
+                  [goal.before, goal.name].contains(where: { effect.stripName.utf8.elementsEqual($0.utf8) }),
+                  tracks[row].name.utf8.elementsEqual(effect.trackName.utf8),
+                  strips[index].name?.utf8.elementsEqual(effect.stripName.utf8) == true else { return false }
+            expectedTrackRows[row].name = effect.trackName
+            expected[index].name = effect.stripName
+        } else if let allowed = ownedNamePreview {
+            let stripAllowed = ownedStripNamePreview ?? allowed
             guard let goal = changedNameGoals.first(where: { $0.reference == task.reference }),
                   allowed.allSatisfy({ $0.utf8.elementsEqual(goal.before.utf8) || $0.utf8.elementsEqual(goal.name.utf8) }),
+                  stripAllowed.allSatisfy({ $0.utf8.elementsEqual(goal.before.utf8) || $0.utf8.elementsEqual(goal.name.utf8) }),
                   let row = expectedTrackRows.firstIndex(where: { $0.physicalBinding?.matches(goal.binding) == true }),
                   allowed.contains(where: { tracks[row].name.utf8.elementsEqual($0.utf8) }),
                   let stripName = strips[index].name,
-                  allowed.contains(where: { stripName.utf8.elementsEqual($0.utf8) }) else { return false }
+                  stripAllowed.contains(where: { stripName.utf8.elementsEqual($0.utf8) }) else { return false }
             // The existing writer alone admits its exact name preview. All
             // non-name fields and every peer still match the captured baseline.
             expectedTrackRows[row].name = tracks[row].name
@@ -1002,14 +1028,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
            let execution = nameExecutions[goal.reference] {
             // Only this adapter's actual coupled-name receipt may revise the
             // protected baseline. Current labels never manufacture that receipt.
-            let name: String?
-            if execution.inverse != nil { name = goal.name }
-            else if execution.restored != nil { name = goal.before }
-            else { name = nil }
-            if let name {
-                guard let row = expectedTrackRows.firstIndex(where: { $0.physicalBinding?.matches(goal.binding) == true }) else { return false }
-                expectedTrackRows[row].name = name
-                expected[index].name = name
+            if let receipt = execution.inverse ?? execution.restored {
+                guard let effect = ExactTrackNameAdapter.recordedNameEffect(receipt), effectMatchesSource(effect),
+                      effect.trackName.utf8.elementsEqual((execution.inverse != nil ? goal.name : goal.before).utf8),
+                      let row = expectedTrackRows.firstIndex(where: { $0.physicalBinding?.matches(goal.binding) == true }) else { return false }
+                expectedTrackRows[row].name = effect.trackName
+                expected[index].name = effect.stripName
             }
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -1176,8 +1200,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             if let capture = renameCapture,
                goal.mixerRef != nil || changedNameGoals.contains(where: { $0.reference == goal.reference }) {
                 let observed: String?
-                if outputRenewal != nil, afterExecution, let proof = nameExecutions[goal.reference]?.inverse {
-                    observed = await ExactTrackNameAdapter.readOwnedCoupledName(proof)
+                if afterExecution, let proof = nameExecutions[goal.reference]?.inverse {
+                    // Track-origin aliases may leave the Mixer name unchanged.
+                    // An explicitly approved Mixer-origin coupled_after may not.
+                    // Frozen receipt data is corroborated by the native read below;
+                    // it cannot turn an unsatisfied Mixer goal into completion.
+                    if goal.mixerRef != nil {
+                        guard let effect = ExactTrackNameAdapter.recordedNameEffect(proof),
+                              effect.stripName.utf8.elementsEqual(expected.utf8) else { return nil }
+                    }
+                    observed = await ExactTrackNameAdapter.readOwnedCoupledName(proof, ownedPeerEffects: ownedNameEffects)
                 } else {
                     observed = await ExactTrackNameAdapter.readCapturedCoupledName(nameAction(goal),
                         capture: capture, registry: registry, ownedPeerEffects: afterExecution ? ownedNameEffects : [])
@@ -1239,7 +1271,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         let runtime = goal.binding.runtime
         let preserving: (@Sendable (Bool, AXUIElement?) -> Bool)?
-        let afterVerifiedWrite: (@Sendable (ExactTrackNameAdapter.NameFocusTransport?) async -> Bool)?
+        let afterVerifiedWrite: ExactTrackNameAdapter.PostVerifiedWrite?
         if let task = outputTask {
             guard await outputReading() == task.before else {
                 return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
@@ -1247,16 +1279,24 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             let beforeName = restoring ? goal.name : goal.before
             let afterName = restoring ? goal.before : goal.name
             let baseline = outputProof
+            let previousEffect = execution?.inverse.flatMap(ExactTrackNameAdapter.recordedNameEffect)
             preserving = { [self] preview, editor in
-                outputFootprintHeld(pair: outputPair ?? task.pair, assignment: task.before,
-                    ownedNamePreview: preview ? [beforeName, afterName] : [beforeName], ownedNameEditor: editor)
+                let pair = outputPair ?? task.pair
+                if restoring, previousEffect?.matches(pair) != true { return false }
+                let names = preview ? [beforeName, afterName] : [beforeName]
+                let stripNames = previousEffect.map { effect in
+                    effect.stripName.utf8.elementsEqual(beforeName.utf8) ? names : [effect.stripName]
+                }
+                return outputFootprintHeld(pair: pair, assignment: task.before,
+                    ownedNamePreview: names, ownedNameEditor: editor, ownedStripNamePreview: stripNames)
             }
-            afterVerifiedWrite = { [self] transport in
+            afterVerifiedWrite = { [self] transport, effect in
                 let pair = outputPair ?? task.pair
                 // The writer has already verified its own name effect. A pending
                 // journal cancellation must not abandon this owned UI cleanup or
                 // its inverse receipt; all native custody/gate/deadline checks stay.
-                guard let baseline, await projectIsCurrent(allowPendingCancellation: true),
+                guard let effect, effect.matches(pair), effect.trackName.utf8.elementsEqual(afterName.utf8),
+                      let baseline, await projectIsCurrent(allowPendingCancellation: true),
                       let renewed = heldOutputProof(pair, restorationBaseline: baseline) else { return false }
                 if let source = outputRenewal {
                     // The verified own menu commit may move focus to the held
@@ -1271,10 +1311,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 // This new owner validates the same original population and
                 // old UI baseline. The old owner is never consulted/revived.
                 outputProof = renewed
-                guard outputFootprintHeld(pair: pair, assignment: task.before, ownedNamePreview: [afterName]),
-                      await renewed.restoreCommittedFocus(source: pair.strip, expectedName: afterName,
+                guard outputFootprintHeld(pair: pair, assignment: task.before, verifiedNameEffect: effect),
+                      await renewed.restoreCommittedFocus(source: pair.strip, expectedName: effect.stripName,
                         transport: transport, preservingFootprint: { [self] in
-                            outputFootprintHeld(pair: pair, assignment: task.before, ownedNamePreview: [afterName])
+                            outputFootprintHeld(pair: pair, assignment: task.before, verifiedNameEffect: effect)
                         }, referenceIsCurrent: { [self] in
                           await projectIsCurrent(allowPendingCancellation: true)
                               && pair.track.currentIndex() != nil && pair.strip.currentIndex(runtime: runtime) != nil

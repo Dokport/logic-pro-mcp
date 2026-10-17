@@ -69,15 +69,18 @@ private actor SelectedOutputSagaResultBoundary: Channel {
     var failed = false
     let shouldFail: Bool
     let observed: @Sendable (ChannelResult) -> Void
+    let observedName: @Sendable (ChannelResult) -> Void
     init(_ base: AccessibilityChannel, shouldFail: Bool = true,
-         observed: @escaping @Sendable (ChannelResult) -> Void = { _ in }) {
-        self.base = base; self.shouldFail = shouldFail; self.observed = observed
+         observed: @escaping @Sendable (ChannelResult) -> Void = { _ in },
+         observedName: @escaping @Sendable (ChannelResult) -> Void = { _ in }) {
+        self.base = base; self.shouldFail = shouldFail; self.observed = observed; self.observedName = observedName
     }
     func start() async throws {}
     func stop() async {}
     func healthCheck() async -> ChannelHealth { await base.healthCheck() }
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
         let result = await base.execute(operation: operation, params: params)
+        if operation == "track.rename" { observedName(result) }
         if operation == "mixer.set_output_verified" { observed(result) }
         if shouldFail, operation == "mixer.set_output_verified", !failed,
            sharedJSONObject(result.message)?["state"] as? String == "A" {
@@ -93,7 +96,7 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("One coupled-editor decision reuses its already-held stopped transport",
         arguments: ["held", "fallback", "play", "record", "bad_play", "bad_record", "play_role", "record_role",
                     "replaced_bar", "replaced_record", "competing_bar", "late_competing_bar",
-                    "late_focus", "late_document", "late_source", "late_header", "late_header_role", "late_mixer", "late_peer",
+                    "late_focus", "late_document", "late_source", "late_header", "late_header_role", "late_rail_role", "late_mixer", "late_peer",
                     "cancel", "lost", "fresh_values"])
     func coupledEditorGuardDoesNotRediscoverItsHeldTransport(_ fault: String) async throws {
         let f = try Fixture(), gate = LogicMutationGate()
@@ -158,6 +161,7 @@ struct Issue965HeldSelectionAssociationTests {
                         if fault == "late_source" { f.builder.setChildren(f.mixer, [f.strips[0]]) }
                         if fault == "late_header" { f.builder.setChildren(f.rail, [f.headers[1]]) }
                         if fault == "late_header_role" { f.builder.setRole(f.headers[0], kAXTextFieldRole as String) }
+                        if fault == "late_rail_role" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
                         if fault == "late_mixer" { f.builder.setChildren(f.window, [f.rail, f.builder.element(1_965_720)]) }
                         if fault == "late_peer" { f.builder.setChildren(f.mixer, [otherRecord, f.strips[1]]) }
                         if fault == "cancel" { f.routingLateScopeInjected = true }
@@ -186,18 +190,14 @@ struct Issue965HeldSelectionAssociationTests {
                         "Do not repeat whole Control Bar discovery before deciding Record")
                 } else { #expect(f.coupledGuardPopulationScans > 0) }
                 if fault == "held" {
-                    // The original Track renewal also visits Control Bar
-                    // metadata. Measure it separately; the source/transport
-                    // decision still adds only one uniqueness discovery.
+                    // The original rail's strict rows are already held. Its
+                    // renewal must not rediscover unrelated Control Bar data;
+                    // keep the one actual transport uniqueness discovery.
                     f.coupledGuardBarReads = 0
                     f.coupledGuardCountDiscovery = true
-                    let trackIndex = try #require(pair.track.currentIndex())
-                    #expect(trackIndex == 0)
-                    let headerRenewalReads = f.coupledGuardBarReads
-                    f.coupledGuardBarReads = 0
                     let playReads = f.coupledGuardPlayReads, recordReads = f.coupledGuardRecordReads
                     #expect(held.permitsCoupledEditorTransportRead(pair: pair))
-                    #expect(f.coupledGuardBarReads == oneDiscoveryReads + headerRenewalReads)
+                    #expect(f.coupledGuardBarReads == oneDiscoveryReads)
                     #expect(f.coupledGuardPopulationScans == 0)
                     #expect(f.coupledGuardPlayReads > playReads && f.coupledGuardRecordReads > recordReads)
                     f.coupledGuardCountDiscovery = false
@@ -471,6 +471,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingFocusClickFault: String?
         var routingFocusHitReads = 0
         var routingOutputChannelStates: [String] = []
+        var routingNameChannelStates: [String] = []
         var routingMenuNameOpens = 0
         var routingNameWrites: [String] = []
         var routingNameConfirms = 0
@@ -1181,6 +1182,14 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_name_cancel_" + fault)
     }
 
+    @Test("A verified track alias keeps its actual unchanged Mixer name through output and inverse",
+          arguments: ["forward", "second_failure", "newer_mirror", "newer_primary", "reverted_mirror"])
+    func canonicalTrackAliasDoesNotInventAMirrorRename(_ fault: String) async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_uncoupled_" + fault, fixture: f)
+        #expect(f.routingNameChannelStates.first == "A", "Reach the actual verified name writer")
+    }
+
     @Test func ownedWholeCensusContinuationCanCompensateBothActualLeaves() async throws {
         let f = try Fixture()
         try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_census_second_failure", fixture: f)
@@ -1211,9 +1220,11 @@ struct Issue965HeldSelectionAssociationTests {
                 let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
                 let composed = mode.hasPrefix("coupled")
                 let menuOverlay = mode.hasPrefix("coupled_menu_overlay")
+                let uncoupled = mode.hasPrefix("coupled_menu_overlay_uncoupled_")
+                let newerUncoupled = uncoupled && ["newer_mirror", "newer_primary", "reverted_mirror"].contains(where: { mode.hasSuffix($0) })
                 let cancelsAfterName = mode.hasPrefix("coupled_menu_overlay_name_cancel_")
                 let ownsEditor = ["coupled_editor", "coupled_retired_editor", "coupled_late_editor", "coupled_late_confirm"].contains(mode)
-                let compensatesBoth = ["coupled_cancel", "coupled_second_failure", "coupled_retired", "coupled_retired_editor", "coupled_menu_overlay_second_failure", "coupled_menu_overlay_census_second_failure"].contains(mode)
+                let compensatesBoth = ["coupled_cancel", "coupled_second_failure", "coupled_retired", "coupled_retired_editor", "coupled_menu_overlay_second_failure", "coupled_menu_overlay_census_second_failure", "coupled_menu_overlay_uncoupled_second_failure"].contains(mode)
                 let nameField = f.builder.element(1_971_400)
                 let menuEditor = f.builder.element(1_971_402), rename = f.builder.element(1_971_406)
                 if composed {
@@ -1251,7 +1262,7 @@ struct Issue965HeldSelectionAssociationTests {
                             f.routingNameConfirms += 1
                             f.builder.setAttribute(nameField, kAXDescriptionAttribute as String, name)
                             f.builder.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
-                            f.builder.setAttribute(f.builder.element(1_965_711), kAXValueAttribute as String, name)
+                            if !uncoupled { f.builder.setAttribute(f.builder.element(1_965_711), kAXValueAttribute as String, name) }
                             // Native menu Return closes the owned editor on the
                             // original rail path, not the earlier Mixer focus.
                             f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.routingReplacement ?? f.strips[1]])
@@ -1547,6 +1558,17 @@ struct Issue965HeldSelectionAssociationTests {
                         let label = f.builder.attributeValue(outputs[index], kAXDescriptionAttribute as String) as? String
                         f.builder.setAttribute(echo, kAXTitleAttribute as String, label)
                         f.routingOpenedOutputIndex = index
+                        if newerUncoupled, !f.routingLateScopeInjected,
+                           f.routingNameWrites.count == 1, f.routingNameConfirms == 1 {
+                            f.routingLateScopeInjected = true
+                            if mode.hasSuffix("newer_primary") {
+                                f.builder.setAttribute(nameField, kAXDescriptionAttribute as String, "External")
+                                f.builder.setAttribute(f.headers[0], kAXTitleAttribute as String, "External")
+                            } else {
+                                f.builder.setAttribute(f.builder.element(1_965_711), kAXValueAttribute as String,
+                                    mode.hasSuffix("reverted_mirror") ? "Selected Canonical" : "External")
+                            }
+                        }
                         f.builder.setAttribute(stereo, "AXMenuItemMarkChar", label == "Stereo Output" ? "✓" : "")
                         f.builder.setAttribute(physical, "AXMenuItemMarkChar", label == "Output 3-4" ? "✓" : "")
                         f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1], root])
@@ -1714,6 +1736,11 @@ struct Issue965HeldSelectionAssociationTests {
                         }, observedResult: { response in
                             f.routingOutputChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
                         }))
+                } else if uncoupled {
+                    await router.register(SelectedOutputSagaResultBoundary(f.channel(), shouldFail: compensatesBoth,
+                        observedName: { response in
+                            f.routingNameChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
+                        }))
                 } else if mode.hasPrefix("coupled_menu_overlay_census") {
                     await router.register(SelectedOutputSagaResultBoundary(f.channel(), shouldFail: mode.hasSuffix("second_failure"), observed: { response in
                         f.routingOutputChannelStates.append(sharedJSONObject(response.message)?["state"] as? String ?? "unknown")
@@ -1805,7 +1832,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingOutputChannelStates.first == "A", "Reach the verified real channel before judging the owned-name continuation")
                 }
                 if composed {
-                    if f.routingFocusClickFault != nil || ["coupled_newer_name", "coupled_late_peer", "coupled_project", "coupled_name_leaf_peer", "coupled_foreign_editor", "coupled_late_editor", "coupled_late_confirm", "coupled_menu_overlay_foreign_rail", "coupled_menu_overlay_missing_header", "coupled_menu_overlay_peer_change", "coupled_menu_overlay_late_editor"].contains(mode)
+                    if f.routingFocusClickFault != nil || newerUncoupled || ["coupled_newer_name", "coupled_late_peer", "coupled_project", "coupled_name_leaf_peer", "coupled_foreign_editor", "coupled_late_editor", "coupled_late_confirm", "coupled_menu_overlay_foreign_rail", "coupled_menu_overlay_missing_header", "coupled_menu_overlay_peer_change", "coupled_menu_overlay_late_editor"].contains(mode)
                         || (menuOverlay && (mode.contains("_post_") || mode.hasSuffix("_restore_ack_only"))) {
                         if f.routingFocusClickFault == nil { #expect(f.routingLateScopeInjected) }
                         #expect(result["saga_state"] as? String != "completed")
@@ -1816,11 +1843,18 @@ struct Issue965HeldSelectionAssociationTests {
                         if mode == "coupled_late_peer" || mode == "coupled_name_leaf_peer" {
                             #expect(f.builder.attributeValue(f.builder.element(1_973_121), kAXValueAttribute as String) as? NSNumber == NSNumber(value: 0.4))
                         }
+                        if newerUncoupled {
+                            #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String
+                                == (mode.hasSuffix("newer_primary") ? "Duplicate" : mode.hasSuffix("reverted_mirror") ? "Selected Canonical" : "External"))
+                            if mode.hasSuffix("newer_primary") {
+                                #expect(f.builder.attributeValue(nameField, kAXDescriptionAttribute as String) as? String == "External")
+                            }
+                        }
                     } else {
-                        #expect(result["saga_state"] as? String == (compensatesBoth ? "fullyCompensated" : "completed"))
+                        #expect(result["saga_state"] as? String == (compensatesBoth ? "fullyCompensated" : "completed"), "\(result)")
                         #expect(f.routingDestinationPresses == (compensatesBoth ? 2 : 1))
                         #expect(f.routingNameWrites == (mode == "coupled_same" ? [] : compensatesBoth ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
-                        #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == (compensatesBoth || mode == "coupled_same" ? "Duplicate" : "Selected Canonical"))
+                        #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == (uncoupled || compensatesBoth || mode == "coupled_same" ? "Duplicate" : "Selected Canonical"))
                         if menuOverlay {
                             let verified = try #require(result["verified"] as? Bool)
                             if compensatesBoth { #expect(!verified) } else { #expect(verified) }

@@ -393,6 +393,23 @@ extension AccessibilityChannel {
         /// complete original source paths/census and stopped controls, never
         /// passive-focus permission, stored values or globally rediscovered rows.
         func permitsCoupledEditorTransportRead(pair: Pair) -> Bool {
+            func originalSourceStillHeld() -> Bool {
+                guard let role = AXHelpers.getRole(rail, runtime: logic.ax),
+                      [kAXGroupRole, kAXListRole, kAXScrollAreaRole].contains(where: { role == $0 as String }),
+                      case .read(let currentHeaders) = AXLogicProElements.enumerateTrackHeaderRows(
+                    in: rail, runtime: logic.ax) else {
+                    lost = true; pair.track.exposure?.end(); return false
+                }
+                // Feed the actual strict enumeration to the original exposures.
+                // A sampled missing acquired header cannot recover on a reread.
+                pair.track.exposure?.observeHeaders(currentHeaders)
+                retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(currentHeaders) }
+                guard Self.same(headers, currentHeaders),
+                      owned(checkingStoppedTransport: false) else {
+                    lost = true; pair.track.exposure?.end(); return false
+                }
+                return true
+            }
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   CFEqual(pair.track.window, window), CFEqual(pair.strip.window, window),
                   CFEqual(pair.strip.mixer, mixer),
@@ -412,8 +429,7 @@ extension AccessibilityChannel {
                   // Match the original editor guard's ordering: source custody
                   // is decided after the transport reads, not before them.
                   pair.track.exposure?.isCurrent ?? true,
-                  pair.track.currentIndex() != nil,
-                  owned(checkingStoppedTransport: false),
+                  originalSourceStillHeld(),
                   pair.track.exposure?.isCurrent ?? true,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
             return true

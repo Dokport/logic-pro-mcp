@@ -22,6 +22,235 @@ import Testing
 @Suite("Issue #628 — the transport scan's candidate list is a value")
 struct Issue628TransportAmbiguityTests {
 
+    @Test("Control Bar discovery batches fresh node metadata without changing ambiguity or fallback",
+          arguments: ["bulk", "scalar", "competing", "refresh"])
+    func controlBarDiscoveryUsesTheExistingFreshBatchTraversal(_ mode: String) throws {
+        final class Calls: @unchecked Sendable { var bulk = 0, scalarBranch = 0 }
+        let b = FakeAXRuntimeBuilder(), calls = Calls()
+        let window = b.element(1_971_910), branch = b.element(1_971_911), leaf = b.element(1_971_912)
+        b.setRole(window, kAXWindowRole as String)
+        b.setRole(branch, kAXGroupRole as String)
+        b.setRole(leaf, kAXStaticTextRole as String)
+        b.setChildren(branch, [leaf]); b.setChildren(leaf, [])
+        let bar = transportish(b, 1_971_913, labels: ["Play", "Record"])
+        let other = transportish(b, 1_971_914, labels: ["Play", "Record"])
+        for candidate in [bar, other] {
+            b.setAttribute(candidate, kAXDescriptionAttribute as String, "Control Bar")
+        }
+        b.setChildren(window, mode == "competing" ? [branch, bar, other] : [branch, bar])
+        let base = b.makeAXRuntime()
+        let batch: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError>)?
+        if mode == "scalar" { batch = nil }
+        else {
+            batch = { element, attributes in
+                calls.bulk += 1
+                return .success(attributes.map { attribute -> AnyObject in
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            }
+        }
+        let ax = AXHelpers.Runtime(axApp: base.axApp,
+            attributeValue: { element, attribute in
+                if CFEqual(element, branch), attribute == kAXRoleAttribute as String { calls.scalarBranch += 1 }
+                return base.attributeValue(element, attribute)
+            }, setAttributeValue: base.setAttributeValue,
+            children: { element in
+                if CFEqual(element, branch) { calls.scalarBranch += 1 }
+                return base.children(element)
+            }, performAction: base.performAction, childCount: base.childCount,
+            childrenResult: { element in
+                if CFEqual(element, branch) { calls.scalarBranch += 1 }
+                return AXHelpers.childrenResult(element, runtime: base)
+            }, attributeValueResult: { element, attribute in
+                if CFEqual(element, branch), attribute == kAXRoleAttribute as String { calls.scalarBranch += 1 }
+                return AXHelpers.getAttributeResult(element, attribute, runtime: base) as Result<AnyObject?, AXHelpers.AXStatusError>
+            },
+            attributeValuesResult: batch)
+        let found = AXLogicProElements.getControlBar(in: window, runtime: ax)
+        if mode == "competing" { #expect(found == nil) }
+        else { #expect(CFEqual(try #require(found), bar)) }
+        if mode == "scalar" { #expect(calls.bulk == 0 && calls.scalarBranch > 0) }
+        else { #expect(calls.bulk > 0 && calls.scalarBranch == 0) }
+        if mode == "refresh" {
+            b.setChildren(window, [branch, bar, other])
+            #expect(AXLogicProElements.getControlBar(in: window, runtime: ax) == nil)
+        }
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
+    @Test("An unreadable or malformed group description cannot hide a competing Control Bar",
+          arguments: ["unreadable", "malformed"])
+    func batchedControlBarDescriptionMustBeKnown(fault: String) throws {
+        final class Reads: @unchecked Sendable { var failedDescription = 0 }
+        let reads = Reads()
+        let b = FakeAXRuntimeBuilder()
+        let window = b.element(1_971_980)
+        let bar = transportish(b, 1_971_981, labels: ["Play", "Record"])
+        let other = transportish(b, 1_971_982, labels: ["Play", "Record"])
+        b.setRole(window, kAXWindowRole as String)
+        for group in [bar, other] {
+            b.setAttribute(group, kAXDescriptionAttribute as String, "Control Bar")
+            for child in b.makeAXRuntime().children(group) { b.setRole(child, kAXCheckBoxRole as String) }
+        }
+        b.setChildren(window, [bar, other])
+        var nativeError = AXError.cannotComplete
+        let unreadable = try #require(AXValueCreate(.axError, &nativeError))
+        let base = b.makeAXRuntime()
+        let ax = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { element, attribute in
+            if CFEqual(element, other), attribute == kAXDescriptionAttribute as String {
+                reads.failedDescription += 1
+                return fault == "unreadable" ? nil : NSNumber(value: 1)
+            }
+            return base.attributeValue(element, attribute)
+        },
+            setAttributeValue: base.setAttributeValue, children: base.children,
+            performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult, attributeValueResult: { element, attribute in
+                if CFEqual(element, other), attribute == kAXDescriptionAttribute as String {
+                    reads.failedDescription += 1
+                    return fault == "unreadable" ? .failure(.init(raw: AXError.cannotComplete.rawValue))
+                        : .success(NSNumber(value: 1))
+                }
+                return AXHelpers.getAttributeResult(element, attribute, runtime: base)
+            },
+            attributeValuesResult: { element, attributes in
+                .success(attributes.map { attribute -> AnyObject in
+                    if CFEqual(element, other), attribute == kAXDescriptionAttribute as String {
+                        reads.failedDescription += 1
+                        return fault == "unreadable" ? unreadable : NSNumber(value: 1)
+                    }
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        #expect(AXLogicProElements.getControlBar(in: window, runtime: ax) == nil,
+            "A group's unknown label is not evidence that it is not another Control Bar")
+        #expect(reads.failedDescription > 0)
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
+    @Test("Fresh post-census child and role failures cannot conceal a competing Control Bar",
+          arguments: ["children", "role"])
+    func lateControlBarDiscriminatorFailureRefuses(fault: String) {
+        let b = FakeAXRuntimeBuilder()
+        let window = b.element(1_971_983)
+        let bar = transportish(b, 1_971_984, labels: ["Play", "Record"])
+        let other = transportish(b, 1_971_985, labels: ["Play", "Record"])
+        b.setRole(window, kAXWindowRole as String)
+        for group in [bar, other] {
+            b.setAttribute(group, kAXDescriptionAttribute as String, "Control Bar")
+            for child in b.makeAXRuntime().children(group) { b.setRole(child, kAXCheckBoxRole as String) }
+        }
+        b.setChildren(window, [bar, other])
+        let base = b.makeAXRuntime()
+        let otherChildren = base.children(other)
+        let unavailable = AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue)
+        let ax = AXHelpers.Runtime(axApp: base.axApp,
+            attributeValue: { element, attribute in
+                if fault == "role", attribute == kAXRoleAttribute as String,
+                   otherChildren.contains(where: { CFEqual($0, element) }) { return nil }
+                return base.attributeValue(element, attribute)
+            }, setAttributeValue: base.setAttributeValue,
+            children: { element in
+                if fault == "children", CFEqual(element, other) { return [] }
+                return base.children(element)
+            }, performAction: base.performAction, childCount: base.childCount,
+            childrenResult: { element in
+                if fault == "children", CFEqual(element, other) { return .failure(unavailable) }
+                return AXHelpers.childrenResult(element, runtime: base)
+            }, attributeValueResult: { element, attribute in
+                if fault == "role", attribute == kAXRoleAttribute as String,
+                   otherChildren.contains(where: { CFEqual($0, element) }) { return .failure(unavailable) }
+                return AXHelpers.getAttributeResult(element, attribute, runtime: base)
+            }, attributeValuesResult: { element, attributes in
+                // The initial census is genuinely complete. The later deciding
+                // read fails through both scalar seams, not through this batch.
+                .success(attributes.map { attribute -> AnyObject in
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        #expect(AXLogicProElements.getControlBar(in: window, runtime: ax) == nil)
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
+    @Test("A positively observed checkbox qualifies the bar without treating other unknown roles as absence",
+          arguments: ["first", "last", "none"])
+    func aKnownCheckboxStillQualifiesDespiteOtherUnknownRoles(mode: String) throws {
+        let b = FakeAXRuntimeBuilder()
+        let window = b.element(1_971_986)
+        let bar = transportish(b, 1_971_987, labels: ["Play", "Record"])
+        b.setRole(window, kAXWindowRole as String)
+        b.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+        b.setChildren(window, [bar])
+        let controls = b.makeAXRuntime().children(bar)
+        for child in controls { b.setRole(child, kAXCheckBoxRole as String) }
+        let known = mode == "first" ? controls.first : mode == "last" ? controls.last : nil
+        let base = b.makeAXRuntime()
+        let ax = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { element, attribute in
+            if attribute == kAXRoleAttribute as String, controls.contains(where: { CFEqual($0, element) }),
+               known.map({ CFEqual($0, element) }) != true { return nil }
+            return base.attributeValue(element, attribute)
+        }, setAttributeValue: base.setAttributeValue, children: base.children,
+            performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult, attributeValueResult: { element, attribute in
+                if attribute == kAXRoleAttribute as String, controls.contains(where: { CFEqual($0, element) }),
+                   known.map({ CFEqual($0, element) }) != true {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return AXHelpers.getAttributeResult(element, attribute, runtime: base)
+            }, attributeValuesResult: { element, attributes in
+                .success(attributes.map { attribute -> AnyObject in
+                    if attribute == kAXChildrenAttribute as String { return base.children(element) as CFArray }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        let found = AXLogicProElements.getControlBar(in: window, runtime: ax)
+        if known == nil { #expect(found == nil, "Unknown-only evidence cannot qualify the named shell") }
+        else { #expect(CFEqual(try #require(found), bar)) }
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
+    @Test("An unreadable batched branch cannot conceal a competing Control Bar",
+          arguments: ["bulk_error", "malformed_children", "malformed_role", "malformed_child_array"])
+    func incompleteBatchedDiscoveryCannotCertifyAUniqueControlBar(_ fault: String) {
+        let b = FakeAXRuntimeBuilder()
+        let window = b.element(1_971_930), branch = b.element(1_971_931)
+        let bar = transportish(b, 1_971_932, labels: ["Play", "Record"])
+        let other = transportish(b, 1_971_933, labels: ["Play", "Record"])
+        b.setRole(window, kAXWindowRole as String); b.setRole(branch, kAXGroupRole as String)
+        for candidate in [bar, other] {
+            b.setAttribute(candidate, kAXDescriptionAttribute as String, "Control Bar")
+        }
+        b.setChildren(window, [bar, branch]); b.setChildren(branch, [other])
+        let base = b.makeAXRuntime()
+        let ax = AXHelpers.Runtime(axApp: base.axApp, attributeValue: base.attributeValue,
+            setAttributeValue: base.setAttributeValue, children: base.children,
+            performAction: base.performAction, childCount: base.childCount,
+            childrenResult: base.childrenResult, attributeValueResult: base.attributeValueResult,
+            attributeValuesResult: { element, attributes in
+                if CFEqual(element, branch) && fault == "bulk_error" {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return .success(attributes.map { attribute -> AnyObject in
+                    if CFEqual(element, other), attribute == kAXRoleAttribute as String,
+                       fault == "malformed_role" { return NSNumber(value: 0) }
+                    if attribute == kAXChildrenAttribute as String {
+                        if CFEqual(element, branch), fault == "malformed_children" { return "not-an-array" as NSString }
+                        if CFEqual(element, branch), fault == "malformed_child_array" { return ["not-an-element"] as CFArray }
+                        return base.children(element) as CFArray
+                    }
+                    return base.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        #expect(AXLogicProElements.getControlBar(in: window, runtime: base) == nil,
+            "The valid scalar tree contains both real transport bars")
+        #expect(AXLogicProElements.getControlBar(in: window, runtime: ax) == nil,
+            "An incomplete branch is unknown, never evidence that the other bar is absent")
+        #expect(b.setCalls.isEmpty && b.actionCalls.isEmpty)
+    }
+
     @Test("transport container control evidence reuses the actual localized control authorities",
           arguments: [["lecture", "Enregistrement"], ["Wiedergabe", "Aufnahme"]])
     func localizedOwnTransportControlsQualify(labels: [String]) throws {
