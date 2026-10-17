@@ -749,7 +749,7 @@ extension ProjectSessionAudit {
                 "observation": .string("proposed_not_observed"), "reasons": .array(reasons.sorted().map(Value.string))]), reasons, nil)
         }
         guard reasons.isEmpty, finding.status == .violation else { return unverified() }
-        guard finding.expected.physicalOutput == nil else { return unverified("physical_send_graph_adapter_unavailable") }
+        guard finding.expected.localOutput == nil else { return unverified("physical_send_graph_adapter_unavailable") }
         guard graph.edges.allSatisfy({ $0.send?.level?.isFinite ?? true }) else {
             return unverified("send_scalar_unserializable")
         }

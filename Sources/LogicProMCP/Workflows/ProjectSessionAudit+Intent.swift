@@ -107,20 +107,26 @@ extension ProjectSessionAudit {
         enum Destination: Equatable, Sendable {
             case bus(Int)
             case physical(Int, Int)
+            case stereoOutput
             case remove
         }
         let target: String
         let selector: Selector
         let destination: Destination
         var bus: Int? { if case .bus(let value) = destination { value } else { nil } }
-        var physicalOutput: OutputAssignment? {
-            if case .physical(let first, let second) = destination { .physical(first, second) } else { nil }
+        var localOutput: OutputAssignment? {
+            switch destination {
+            case .physical(let first, let second): .physical(first, second)
+            case .stereoOutput: .stereoOutput
+            default: nil
+            }
         }
         var isRemoval: Bool { destination == .remove }
         var destinationValue: Value {
             switch destination {
             case .bus(let number): .object(["kind": .string("bus"), "number": .int(number)])
             case .physical(let first, let second): .object(["kind": .string("physical"), "ports": .array([.int(first), .int(second)])])
+            case .stereoOutput: .object(["kind": .string("stereo_output")])
             case .remove: .object(["kind": .string("no_send")])
             }
         }
@@ -153,7 +159,7 @@ extension ProjectSessionAudit {
             try container.encodeIfPresent(observedOrdinal, forKey: .observedOrdinal)
             switch destination {
             case .bus(let number): try container.encode(number, forKey: .bus)
-            case .physical: try container.encode(destinationValue, forKey: .output)
+            case .physical, .stereoOutput: try container.encode(destinationValue, forKey: .output)
             case .remove: try container.encode(true, forKey: .remove)
             }
         }
@@ -926,10 +932,12 @@ extension ProjectSessionAudit {
                 destination = .bus(number)
             } else if let raw = entry["output"] {
                 let parsed = MixerDispatcher.outputAssignmentParam(raw, field: "\(path).output")
-                guard case .physical(let first, let second)? = parsed.assignment else {
-                    rejections.append(.unsupportedOutput(path: "\(path).output", value: parsed.problem ?? "physical output required")); continue
+                switch parsed.assignment {
+                case .physical(let first, let second)?: destination = .physical(first, second)
+                case .stereoOutput?: destination = .stereoOutput
+                default:
+                    rejections.append(.unsupportedOutput(path: "\(path).output", value: parsed.problem ?? "physical or Stereo output required")); continue
                 }
-                destination = .physical(first, second)
             } else {
                 guard let remove = requiredBool(entry, key: "remove", path: path, into: &rejections) else { continue }
                 guard remove else { rejections.append(.sendRemovalMustBeTrue(path: path)); continue }

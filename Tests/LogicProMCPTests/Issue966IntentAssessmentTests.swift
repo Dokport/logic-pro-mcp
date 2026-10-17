@@ -477,7 +477,8 @@ struct Issue966IntentAssessmentTests {
         for bad: Value in [
             .object(["kind": .string("physical"), "ports": .array([.int(4), .int(3)])]),
             .object(["kind": .string("physical"), "ports": .array([.bool(true), .int(2)])]),
-            .object(["kind": .string("stereo_output")]),
+            .object(["kind": .string("stereo_output"), "ports": .array([.int(1), .int(2)])]),
+            .object(["kind": .string("stereo_output"), "native_proof": .bool(true)]),
             .object(["kind": .string("no_output")]),
         ] {
             raw["sends"] = .array([.object(["target": .string("kick"), "observed_ordinal": .int(1), "output": bad])])
@@ -492,6 +493,24 @@ struct Issue966IntentAssessmentTests {
         let physical = try #require(accepted(Audit.parseIntentPolicy(raw)))
         let assessment = Audit.assessIntent(policy: physical, capture: threeTrackCapture, graph: correctGraph)
         #expect(assessment.sendFindings?.first?.status == .unverified)
+    }
+
+    @Test func stereoSendOutputIsExplicitAndNeverEncodesOrAssessesAsRemoval() throws {
+        var raw = policyObject(targets: [targetEntry("kick", "trk_0")])
+        let output: Value = .object(["kind": .string("stereo_output")])
+        raw["sends"] = .array([.object([
+            "target": .string("kick"), "observed_ordinal": .int(1), "output": output,
+        ])])
+        let policy = try #require(accepted(Audit.parseIntentPolicy(raw)))
+        #expect(!policy.sends[0].isRemoval && policy.sends[0].bus == nil)
+        let wire = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(policy.sends)) as? [[String: Any]])
+        #expect((wire[0]["output"] as? [String: Any])?["kind"] as? String == "stereo_output")
+        #expect(wire[0]["remove"] == nil && wire[0]["bus"] == nil && wire[0]["physical_slot"] == nil)
+        // The graph has no physical/Stereo endpoint witness: an empty bus slot is not compliance.
+        raw["sends"] = .array([.object(["target": .string("kick"), "physical_slot": .int(1), "output": output])])
+        let physicalSlot = try #require(accepted(Audit.parseIntentPolicy(raw)))
+        #expect(Audit.assessIntent(policy: physicalSlot, capture: threeTrackCapture, graph: correctGraph)
+            .sendFindings?.first?.status == .unverified)
     }
 
     @Test(arguments: ["outputs", "sends", "receivers"], [257, Int.max])

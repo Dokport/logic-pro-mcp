@@ -65,6 +65,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let pair: AccessibilityChannel.HeldSelectionAssociation.Pair
         let control: AXLogicProElements.AssignedSendMenuControl
         let ordinal: Int
+        let before: OutputAssignment
         let desired: OutputAssignment?
         let handle: String
     }
@@ -235,7 +236,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         switch assignment { case .physical, .stereoOutput: return assignment; default: return nil }
     }
 
-    /// Only removal or a typed physical endpoint needs no receiver allocation. The ordinal
+    /// Removal and typed local output endpoints need no receiver allocation. The ordinal
     /// selects this capture's original native control, which execution must still prove current.
     private static func capturedSend(policy: ProjectSessionAudit.IntentPolicy,
         names: [ProjectSessionAudit.ApprovedName], source: SessionPopulationObservation.Capture,
@@ -246,7 +247,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               policy.protectedPaths.isEmpty, policy.trackSort == nil, policy.mixerVisible == nil,
               let target = policy.targets.first, target.mixerRef == nil,
               let intent = policy.sends.first, intent.target == target.handle, intent.bus == nil,
-              intent.isRemoval || intent.physicalOutput != nil,
+              intent.isRemoval || intent.localOutput != nil,
               let ordinal = intent.observedOrdinal, ordinal >= 0,
               request.allowUINavigation,
               Set([SessionPopulationObservation.Domain.tracks, .strips, .associations, .routing]).isSubset(of: request.domains),
@@ -267,7 +268,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let rows = source.channelStrips.indices.filter { source.channelStrips[$0].physicalBinding?.matches(pair.strip) == true }
         let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == ordinal }
         guard rows.count == 1, let row = rows.first, let mixerRef = source.mixerReference(at: row),
-              checked.count == 1, let reading = checked.first, reading.assignment == .stereoOutput,
+              checked.count == 1, let reading = checked.first,
+              intent.localOutput.map({ AccessibilityChannel.supportsOccupiedSendChange(before: reading.assignment, after: $0) })
+                ?? (intent.isRemoval && reading.assignment == .stereoOutput),
               reading.sendNonRoutingChecks == ["Post Fader"] || reading.sendNonRoutingChecks == ["포스트 페이더"],
               let control = reading.sendControl, control.ordinal == ordinal,
               let slots = source.channelStrips[row].sendSlots, slots.count == 2,
@@ -275,19 +278,22 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               let occupied = slots.first(where: { $0.state == .occupiedUnknownDestination }),
               occupied.ordinal == ordinal, occupied.levelRaw == 0, occupied.bypassed == false else { return nil }
         return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair,
-            control: control, ordinal: ordinal, desired: intent.physicalOutput, handle: target.handle)
+            control: control, ordinal: ordinal, before: reading.assignment, desired: intent.localOutput, handle: target.handle)
     }
 
     static func capturedSendStep(policy: ProjectSessionAudit.IntentPolicy,
         names: [ProjectSessionAudit.ApprovedName], source: SessionPopulationObservation.Capture,
         request: SessionPopulationObservation.Request) -> Value? {
-        guard let task = capturedSend(policy: policy, names: names, source: source, request: request) else { return nil }
+        guard let task = capturedSend(policy: policy, names: names, source: source, request: request),
+              var before = assignmentValue(task.before).objectValue else { return nil }
+        before["mode"] = .string("post_fader")
+        before["level_raw"] = .int(0)
+        before["bypassed"] = .bool(false)
         return .object(["id": .string("send_" + task.handle),
             "kind": .string(task.desired == nil ? "local_send_removal" : "local_send_output"),
             "target_ref": .string(task.reference.rawValue), "mixer_ref": .string(task.mixerRef.rawValue),
             "observed_ordinal": .int(task.ordinal),
-            "before": .object(["kind": .string("stereo_output"), "mode": .string("post_fader"),
-                "level_raw": .int(0), "bypassed": .bool(false)]),
+            "before": .object(before),
             "after": task.desired.map(assignmentValue) ?? .object(["kind": .string("no_send")]),
             "dependencies": .array([]), "blocked_reasons": .array([]),
             "required_invariants": .array(["captured_track_strip_pair", "original_send_control",
@@ -578,7 +584,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             let saga = SagaPlan(steps: [.init(operationID: .mixerSetSendOutputVerified, targetRef: send.mixerRef,
                 params: ["ordinal": .int(send.ordinal),
                     "destination": send.desired.map(assignmentValue) ?? .object(["kind": .string("no_send")]),
-                    "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true),
+                    "expected_current": assignmentValue(send.before), "replace_existing": .bool(true),
                     "project_ref": .string(issued.rawValue)],
                 expectedInverse: .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination"))],
                 idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
