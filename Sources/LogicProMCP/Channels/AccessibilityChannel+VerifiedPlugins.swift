@@ -1195,11 +1195,27 @@ extension AccessibilityChannel {
                 effects.reason = "mixer_global_selection_unverified"; return nil
             }
             if !sameSet(selected, original) { effects.changed.append("mixer_selection") }
-            let complete = accepted && sameSet(selected, strips)
-            guard await held(), let decidingSelected = elements(kAXSelectedChildrenAttribute as String), sameSet(decidingSelected, selected),
-                  AXHelpers.isAttributeSettable(binding.mixer, kAXSelectedChildrenAttribute as String, runtime: runtime.ax) == true,
-                  await held(),
-                  await referenceIsCurrent(), !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+            guard await held(), let decidingSelected = elements(kAXSelectedChildrenAttribute as String) else {
+                effects.reason = "mixer_selection_restoration_conflict"; return nil
+            }
+            var selectionAtInverse = selected
+            if !sameSet(decidingSelected, selected) {
+                // One accepted Select All can settle after the post-menu sample.
+                // Renew only its exact requested original-CF population, never an
+                // arbitrary changed subset. One matching bookend, no retry leaf,
+                // new deadline or transfer of the captured original selection/focus.
+                guard accepted, sameSet(selected, original), sameSet(decidingSelected, strips),
+                      await held(), sameFocus(), passive.permits(),
+                      let settled = elements(kAXSelectedChildrenAttribute as String), sameSet(settled, strips) else {
+                    effects.reason = "mixer_selection_restoration_conflict"; return nil
+                }
+                selectionAtInverse = settled
+                if !sameSet(settled, original) { effects.changed.append("mixer_selection") }
+            }
+            let complete = accepted && sameSet(selectionAtInverse, strips)
+            guard AXHelpers.isAttributeSettable(binding.mixer, kAXSelectedChildrenAttribute as String, runtime: runtime.ax) == true,
+                  await held(), await referenceIsCurrent(), !stop(),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                 effects.reason = "mixer_selection_restoration_conflict"; return nil
             }
             effects.attempted.append("mixer_selection_restoration")
@@ -1241,7 +1257,7 @@ extension AccessibilityChannel {
                   frames() == originalFrames, await held() else {
                 effects.reason = "mixer_selection_restoration_unverified"; return nil
             }
-            if !sameSet(selected, original) { effects.changed.append("mixer_selection_restoration") }
+            if !sameSet(selectionAtInverse, original) { effects.changed.append("mixer_selection_restoration") }
             mixerSelectionRestorationPending = false
             effects.restoration = "restored"
             return complete ? strips.map { .init(window: window, mixer: binding.mixer, strip: $0, document: document) } : nil
