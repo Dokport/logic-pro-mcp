@@ -768,9 +768,11 @@ extension AccessibilityChannel {
     /// root/submenu aliases must agree, and each routing submenu is read completely.
     /// This is an observation only: callers must separately prove popup/source custody.
     static func currentOutputMenuAssignment(
-        in root: AXUIElement, runtime: AXHelpers.Runtime
+        in root: AXUIElement, runtime: AXHelpers.Runtime,
+        observingBusNumbers: (([Int]) -> Void)? = nil
     ) -> OutputAssignment? {
-        currentRoutingMenuAssignment(in: root, runtime: runtime, inputBusOnly: false)
+        currentRoutingMenuAssignment(in: root, runtime: runtime, inputBusOnly: false,
+            observingBusNumbers: observingBusNumbers)
     }
 
     enum SendMode: String, Sendable, CaseIterable {
@@ -896,7 +898,8 @@ extension AccessibilityChannel {
     }
 
     private static func currentRoutingMenuAssignment(
-        in root: AXUIElement, runtime: AXHelpers.Runtime, inputBusOnly: Bool
+        in root: AXUIElement, runtime: AXHelpers.Runtime, inputBusOnly: Bool,
+        observingBusNumbers: (([Int]) -> Void)? = nil
     ) -> OutputAssignment? {
         if inputBusOnly {
             guard case .bus(let number)? = currentInputMenuAssignment(in: root, runtime: runtime) else { return nil }
@@ -910,12 +913,14 @@ extension AccessibilityChannel {
             return observed
         }
         return checkedRoutingMenuAssignment(in: root, runtime: runtime, isInput: false, neutral: .noOutput,
-            destination: destination, isBus: { if case .bus = $0 { return true }; return false })
+            destination: destination, isBus: { if case .bus = $0 { return true }; return false },
+            observingBusNumbers: observingBusNumbers)
     }
 
     private static func checkedRoutingMenuAssignment<Assignment: Equatable>(
         in root: AXUIElement, runtime: AXHelpers.Runtime, isInput: Bool, neutral: Assignment,
-        destination: (String) -> Assignment?, isBus: (Assignment) -> Bool
+        destination: (String) -> Assignment?, isBus: (Assignment) -> Bool,
+        observingBusNumbers: (([Int]) -> Void)? = nil
     ) -> Assignment? {
         let receiverArrow: Character = isInput ? "←" : "→"
         func mark(_ item: AXUIElement) -> String? {
@@ -960,8 +965,21 @@ extension AccessibilityChannel {
                 }
             }
         }
+        var observedBusNumbers: [Int]?
         for (title,menu) in branches {
             guard let leaves = leafItems(under: menu, path: [title], depth: 0, runtime: runtime) else { return nil }
+            if observingBusNumbers != nil, !isInput,
+               AXLocalePolicy.outputPopupBusSubmenuTitle.matches(title, mode: .exact) {
+                let numbers = leaves.compactMap {
+                    OutputAssignment.busNumber(ofMenuItemTitle: $0.title, receiverArrow: receiverArrow)
+                }
+                // These are menu entries, not unused buses, selectable choices, or
+                // an allocation reservation. An incomplete/ambiguous inventory is
+                // withheld without erasing an independently checked assignment.
+                if !numbers.isEmpty, numbers.count == leaves.count, Set(numbers).count == numbers.count {
+                    observedBusNumbers = numbers.sorted()
+                }
+            }
             for item in leaves {
                 guard let checked = mark(item.element), checked == "" || checked == "✓" else { return nil }
                 if checked == "✓" {
@@ -977,8 +995,10 @@ extension AccessibilityChannel {
                 }
             }
         }
-        if current == neutral { return checkedLeaves.isEmpty ? current : nil }
-        return checkedLeaves.count == 1 && checkedLeaves.first == current ? current : nil
+        let agrees = current == neutral ? checkedLeaves.isEmpty : checkedLeaves.count == 1 && checkedLeaves.first == current
+        guard agrees else { return nil }
+        if let observedBusNumbers { observingBusNumbers?(observedBusNumbers) }
+        return current
     }
 
     private struct TitledMenuItem {

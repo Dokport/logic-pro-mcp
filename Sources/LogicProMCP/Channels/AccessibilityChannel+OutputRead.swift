@@ -107,6 +107,9 @@ extension AccessibilityChannel {
         var changedSend: ChangedSendObservation? = nil
         /// Opt-in typed native mode evidence for this scalar writer only.
         var sendMode: SendModeState? = nil
+        /// Two agreeing complete Bus menu inventories on this retained source.
+        /// Not namespace availability, consumer completeness, or write authority.
+        var observedBusNumbers: [Int]? = nil
     }
 
     struct SendBypassSnapshot {
@@ -842,15 +845,18 @@ extension AccessibilityChannel {
             return current.count == 1 && CFEqual(current[0], root) && ownerBoundaryStillCurrent()
         }
         // Two agreeing reads bracketed by the same source/menu, not an atomic graph snapshot.
-        func checkedChoice() -> OutputAssignment? {
+        func checkedChoice(observingBusNumbers: (([Int]) -> Void)? = nil) -> OutputAssignment? {
             if inputBusOnly { return currentInputMenuBusAssignment(in: root, runtime: runtime.ax).map(OutputAssignment.bus) }
-            return currentOutputMenuAssignment(in: root, runtime: runtime.ax)
+            return currentOutputMenuAssignment(in: root, runtime: runtime.ax,
+                observingBusNumbers: sendOrdinal == nil ? observingBusNumbers : nil)
         }
+        var firstBusNumbers: [Int]?
+        var secondBusNumbers: [Int]?
         let firstInput = includingNonBusInputs ? currentInputMenuAssignment(in: root, runtime: runtime.ax) : nil
-        let first = includingNonBusInputs ? firstInput?.busOutputAssignment : checkedChoice()
+        let first = includingNonBusInputs ? firstInput?.busOutputAssignment : checkedChoice(observingBusNumbers: { firstBusNumbers = $0 })
         let secondOwned = menuOwned()
         let secondInput = includingNonBusInputs && secondOwned ? currentInputMenuAssignment(in: root, runtime: runtime.ax) : nil
-        let second = includingNonBusInputs ? secondInput?.busOutputAssignment : (secondOwned ? checkedChoice() : nil)
+        let second = includingNonBusInputs ? secondInput?.busOutputAssignment : (secondOwned ? checkedChoice(observingBusNumbers: { secondBusNumbers = $0 }) : nil)
         let inputFactsAgree = firstInput != nil && secondInput == firstInput
         let sendChecks = sendOrdinal == nil ? nil : sendMenuNonRoutingChecks(in: root, runtime: runtime.ax)
         let firstMode = observingSendMode ? currentSendMode(in: root, runtime: runtime.ax) : nil
@@ -1565,9 +1571,15 @@ extension AccessibilityChannel {
         extras["verify_source"] = inputBusOnly ? "ax_input_menu_checkmark" : (sendOrdinal == nil ? "ax_output_menu_checkmark" : "ax_send_menu_checkmark")
         if inputBusOnly { extras["input_scope"] = "bus_only" }
         extras["snapshot_atomic"] = false
+        let observedBusNumbers = !inputBusOnly && sendOrdinal == nil && closed
+            && firstBusNumbers != nil && firstBusNumbers == secondBusNumbers ? firstBusNumbers : nil
+        if let observedBusNumbers {
+            extras["observed_bus_namespace"] = ["bus_numbers": observedBusNumbers,
+                "source": "ax_output_bus_menu", "namespace_availability": "not_observed"]
+        }
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
             inputAssignment: checkedInputFact, inputRenewal: inputRenewal, inputSlot: inputSlot,
-            sendNonRoutingChecks: sendChecks, sendMode: modeEvidence)
+            sendNonRoutingChecks: sendChecks, sendMode: modeEvidence, observedBusNumbers: observedBusNumbers)
     }
 
     static func outputReadContextFailure(_ result: ChannelResult, operation: String) -> ChannelResult {

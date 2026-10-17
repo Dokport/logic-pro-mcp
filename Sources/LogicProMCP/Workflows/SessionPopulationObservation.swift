@@ -84,6 +84,8 @@ enum SessionPopulationObservation {
         /// Complete agreeing native mode/pan census from this same owned menu.
         /// Retained historical data only, not a fresh control or write capability.
         var sendMode: AccessibilityChannel.SendModeState? = nil
+        /// Complete agreeing menu entries, not availability or allocation authority.
+        var observedBusNumbers: [Int]? = nil
     }
 
     struct HeldDisclosureExposure: Sendable {
@@ -855,6 +857,15 @@ enum SessionPopulationObservation {
         let source = "ax_input_menu_checkmark"
     }
 
+    struct ObservedBusNamespace: Encodable, Sendable {
+        let busNumbers: [Int]
+        let source = "ax_output_bus_menu"
+        let namespaceAvailability = "not_observed"
+        enum CodingKeys: String, CodingKey {
+            case busNumbers = "bus_numbers", source, namespaceAvailability = "namespace_availability"
+        }
+    }
+
     struct StripRow: Encodable, Sendable {
         let stripIndex: Int
         let name: String?
@@ -870,6 +881,7 @@ enum SessionPopulationObservation {
         var sendSlots: [SendSlotObservation]? = nil
         var observedTypeLabel: StripTypeLabelObservation? = nil
         var checkedInput: CheckedInputObservation? = nil
+        var observedBusNamespace: ObservedBusNamespace? = nil
 
         enum CodingKeys: String, CodingKey {
             case stripIndex = "strip_index"
@@ -886,6 +898,7 @@ enum SessionPopulationObservation {
             case sendSlots = "send_slots"
             case observedTypeLabel = "observed_type_label"
             case checkedInput = "checked_input"
+            case observedBusNamespace = "observed_bus_namespace"
         }
 
         // Unknown and legacy not-read names remain explicit nulls, never empty names.
@@ -909,6 +922,7 @@ enum SessionPopulationObservation {
             try container.encodeIfPresent(sendSlots, forKey: .sendSlots)
             try container.encodeIfPresent(observedTypeLabel, forKey: .observedTypeLabel)
             try container.encodeIfPresent(checkedInput, forKey: .checkedInput)
+            try container.encodeIfPresent(observedBusNamespace, forKey: .observedBusNamespace)
         }
     }
 
@@ -1119,6 +1133,23 @@ enum SessionPopulationObservation {
             }
             return result
         }
+    }
+
+    /// Historical menu inventory from this capture's surviving physical owner.
+    /// No cached label, send menu, or unrelated source supplies missing entries.
+    static func reportedBusNamespace(of strip: ChannelStripState, capture: Capture,
+                                     qualified: Bool) -> ObservedBusNamespace? {
+        guard qualified, capture.requestedProjectMatches != false, !capture.before.axOccluded,
+              let fresh = capture.freshPopulation, fresh.stable, let owner = strip.physicalBinding,
+              let path = capture.project.filePath, fresh.project?.filePath == path,
+              URL(string: owner.document)?.path == path,
+              capture.channelStrips.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1,
+              fresh.strips?.filter({ $0.physicalBinding?.matches(owner) == true }).count == 1 else { return nil }
+        let held = fresh.checkedOutputs.filter { $0.source.matches(owner) && $0.sendOrdinal == nil }
+        guard held.count == 1, let numbers = held.first?.observedBusNumbers, !numbers.isEmpty,
+              Set(numbers).count == numbers.count,
+              numbers.allSatisfy({ OutputAssignment.busNumbers.contains($0) }) else { return nil }
+        return .init(busNumbers: numbers.sorted())
     }
 
     /// Only the same fresh capture's unique held source/control can publish a
@@ -1356,6 +1387,8 @@ enum SessionPopulationObservation {
                         qualified: !moved && !referencesStale),
                     observedTypeLabel: reportedTypeLabel(of: strip, capture: capture),
                     checkedInput: capture.mixerReference(at: row) == nil ? nil : reportedCheckedInput(
+                        of: strip, capture: capture, qualified: !moved && !referencesStale),
+                    observedBusNamespace: capture.mixerReference(at: row) == nil ? nil : reportedBusNamespace(
                         of: strip, capture: capture, qualified: !moved && !referencesStale)
                 )
             }

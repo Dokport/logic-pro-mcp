@@ -66,6 +66,61 @@ struct Issue291CheckedOutputGraphTests {
         #expect(f.mutations.map { $0.1 } == (navigation ? ["AXPress", "AXCancel", "AXPress", "AXCancel"] : []))
     }
 
+    @Test("Inspection retains Bus menu inventory only on its unique surviving checked output source",
+          arguments: ["healthy", "navigation_denied", "duplicate", "other_owner", "unstable", "send_only", "wrong_project"])
+    func inspectionPublishesOnlyHeldBusNamespace(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try preparedFixture(bus: true)
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            var fresh = try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(request: .init(domains: [.routing],
+                    allowUINavigation: fault != "navigation_denied"), fileReader: .unavailable, stoppingWhen: { false })
+            }
+            #expect(fresh.stable)
+            if fault == "duplicate" { fresh.checkedOutputs += fresh.checkedOutputs }
+            if fault == "other_owner" {
+                let other = try #require(fresh.strips?[1].physicalBinding)
+                fresh.checkedOutputs = fresh.checkedOutputs.filter { $0.source.matches(other) }
+            }
+            if fault == "send_only" {
+                for index in fresh.checkedOutputs.indices { fresh.checkedOutputs[index].sendOrdinal = 0 }
+            }
+            if fault == "unstable" { fresh.stable = false }
+            let cache = StateCache(), registry = TargetRegistry()
+            await cache.updateProject(try #require(fresh.project))
+            if fault == "wrong_project" {
+                await cache.updateProject(.init(name: "Foreign", filePath: "/foreign.logicx", source: "fixture"))
+            }
+            await cache.updateDocumentState(true)
+            await cache.updateChannelStrips(try #require(fresh.strips))
+            let base = await SessionPopulationObservation.capture(cache: cache,
+                targetRegistry: registry, fileReader: .unavailable)
+            let capture = SessionPopulationObservation.Capture(before: base.before, after: base.after,
+                projectEpoch: base.projectEpoch, project: base.project, tracks: base.tracks,
+                tracksFetchedAt: base.tracksFetchedAt, channelStrips: base.channelStrips,
+                mixerFetchedAt: base.mixerFetchedAt, fileTrackCount: base.fileTrackCount,
+                projectFileNotBound: base.projectFileNotBound, requestedProjectMatches: base.requestedProjectMatches,
+                referencesEnabled: base.referencesEnabled, targetSnapshot: base.targetSnapshot,
+                issued: base.issued, projectIssuance: base.projectIssuance,
+                beganAt: base.beganAt, endedAt: base.endedAt, captureID: base.captureID,
+                freshPopulation: fresh, mixerReferences: base.mixerReferences)
+            let report = SessionPopulationObservation.build(request: .init(domains: [.routing]), capture: capture)
+            let row = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(report.strips.rows[0])) as? [String: Any])
+            if fault == "healthy" {
+                let inventory = try #require(row["observed_bus_namespace"] as? [String: Any])
+                #expect(inventory["bus_numbers"] as? [Int] == [1])
+                #expect(inventory["source"] as? String == "ax_output_bus_menu")
+                #expect(inventory["namespace_availability"] as? String == "not_observed")
+            } else { #expect(row["observed_bus_namespace"] == nil) }
+            #expect(!SessionPopulationObservation.routingGraph(capture: capture).complete)
+            #expect(f.mutations.count == (fault == "navigation_denied" ? 0 : 4))
+        }
+    }
+
     @Test("Checked before-output capture publishes only owned partial non-bus endpoints",
           arguments: ["stereo", "physical", "no_output", "unknown", "navigation_denied", "missing_mark", "owner_loss"])
     func checkedNonBusBeforeCapturePublishesOnlyPartialEndpoints(kind: String) async throws {
