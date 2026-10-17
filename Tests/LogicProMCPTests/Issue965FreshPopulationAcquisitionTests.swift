@@ -4302,6 +4302,15 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: "delayed_dispatch")
     }
 
+    @Test func registeredSelectAllSettlesBetweenPostReadAndInverseRead() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: "late_deciding_settlement")
+    }
+
+    @Test(arguments: ["late_deciding_foreign", "late_deciding_subset", "late_deciding_unread", "late_deciding_document", "late_deciding_cancel"])
+    func registeredLateSelectAllSettlementDoesNotAdoptUnknownOrForeignSelection(fault: String) async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: fault)
+    }
+
     @Test("owned Mixer Select All observes offscreen population and restores the actual original subset",
           arguments: [1, 2, 4], ["healthy", "no_navigation", "not_all", "filter_off", "hidden_off", "not_settable",
                              "unread_selection", "duplicate_original", "missing_menu", "duplicate_menu", "noop_selection",
@@ -4458,7 +4467,9 @@ struct Issue965FreshPopulationAcquisitionTests {
                 if CFEqual(element, selectAll), action == kAXPressAction as String {
                     fixture.events.record("select_all")
                     if fault == "delayed_dispatch" { return true }
-                    if fault != "noop_selection" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips) }
+                    if fault != "noop_selection" && !fault.hasPrefix("late_deciding_") {
+                        fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
+                    }
                     if fault == "omitted_offscreen" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.suffix(2))) }
                     if fault == "foreign_selected" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [fixture.header]) }
                     if fault == "duplicate_selected" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [strips[0]]) }
@@ -4554,6 +4565,32 @@ struct Issue965FreshPopulationAcquisitionTests {
                         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     }
                     if selected { selectionReads.record("after_select_all") }
+                    if fault.hasPrefix("late_deciding_"), selected,
+                       selectionReads.recorded.filter({ $0 == "after_select_all" }).count == 5 {
+                        // The accepted leaf has not changed the first three bounded
+                        // samples or the post-menu read. Its exact population settles
+                        // at the inverse's deciding read, as observed on the host.
+                        selectionReads.record("late_deciding_transition")
+                        switch fault {
+                        case "late_deciding_foreign":
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [fixture.header])
+                        case "late_deciding_subset":
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.prefix(2)))
+                        case "late_deciding_unread": return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                        case "late_deciding_document":
+                            fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
+                        case "late_deciding_cancel":
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
+                            withUnsafeCurrentTask { $0?.cancel() }
+                        default: fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
+                        }
+                    }
+                    if fault.hasPrefix("late_deciding_") {
+                        // Own this status-bearing result: the legacy value fallback
+                        // invokes readingAttribute a second time when it returns nil.
+                        return .success(fixture.builder.attributeValue(mixer, attribute).map { $0 as AnyObject })
+                    }
                 }
                 if fault == "before_leaf_transport_document", CFEqual(element, controls[1]),
                    attribute == kAXValueAttribute as String, selectionReads.recorded.contains("leaf_deciding") {
@@ -4569,12 +4606,20 @@ struct Issue965FreshPopulationAcquisitionTests {
                 return nativeRead(element, attribute)
             })
         let body = try #require(sharedJSONObject(sharedToolText(result)))
+        if fault == "late_deciding_cancel" {
+            #expect(body["state"] as? String == "C")
+            #expect(body["error"] as? String == "cancelled")
+            #expect(selectionReads.recorded.contains("late_deciding_transition"))
+            #expect(fixture.events.recorded.filter({ $0 == "select_all" }).count == 1)
+            #expect(!fixture.events.recorded.contains("restore_mixer_selection"))
+            return
+        }
         let section: [String: Any]
         if fullPopulation && (!["full_population_restore_focus", "full_population_shared"].contains(fault) || originalCount != 1) {
             #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
             section = body["strips"] as? [String: Any] ?? [:]
         } else { section = try #require(body["strips"] as? [String: Any]) }
-        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch"].contains(fault)
+        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch", "late_deciding_settlement"].contains(fault)
             || (["full_population_restore_focus", "full_population_shared"].contains(fault) && originalCount == 1)
             || (originalCount == strips.count && ["noop_selection", "restore_ack_only", "restore_focus_false",
                 "restore_focus_ack_only", "restore_focus_unselected", "restore_focus_selection_drift"].contains(fault))
@@ -4594,6 +4639,13 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(selectionReads.recorded.contains("pending_menu_read"))
             #expect(selectionReads.recorded.contains("delayed_dispatch_settled"))
             #expect(!selectionReads.recorded.contains("delayed_dispatch_cancelled"))
+        }
+        if fault.hasPrefix("late_deciding_") {
+            #expect(selectionReads.recorded.contains("late_deciding_transition"))
+            #expect(fixture.events.recorded.filter({ $0 == "select_all" }).count == 1)
+            if fault == "late_deciding_settlement" {
+                #expect(fixture.events.recorded.filter({ $0 == "restore_mixer_selection" }).count == 1)
+            } else { #expect(!fixture.events.recorded.contains("restore_mixer_selection")) }
         }
         if fault == "before_menu_document" { #expect(!fixture.events.recorded.contains("open_edit")) }
         if fault == "before_leaf_document" { #expect(!fixture.events.recorded.contains("select_all")) }
