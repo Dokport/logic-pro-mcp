@@ -5,6 +5,66 @@ import Testing
 
 @Suite("#965 one native Help sample per strip extraction", .serialized)
 struct Issue965StripHelpSampleTests {
+    @Test("failure-noting delegation retains one fresh full guard per actual Help read",
+          arguments: ["legacy", "typed", "raw_legacy", "raw_typed", "nested", "native_failure", "cutoff", "omitted", "fresh_cutoff"])
+    func notedHelpReadGuardsTheNativeBoundaryOnce(mode: String) throws {
+        final class Calls: @unchecked Sendable { var guards = 0, native = 0 }
+        let builder = FakeAXRuntimeBuilder(), calls = Calls()
+        let element = builder.element(1_971_990)
+        builder.setAttribute(element, kAXHelpAttribute as String, "Native Help")
+        let base = builder.makeAXRuntime()
+        let native: @Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError> = { node, attribute in
+            if attribute == kAXHelpAttribute as String {
+                calls.native += 1
+                if mode == "native_failure" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+            }
+            return .success(base.attributeValue(node, attribute))
+        }
+        let raw = AXHelpers.Runtime(axApp: base.axApp,
+            attributeValue: { node, attribute in try? native(node, attribute).get() },
+            setAttributeValue: base.setAttributeValue, children: base.children,
+            performAction: base.performAction, childCount: base.childCount,
+            attributeValueResult: native)
+        let failures = AXPluginInstanceIdentity.FailedReads()
+        let nestedFailures = AXPluginInstanceIdentity.FailedReads()
+        let noted = AXPluginInstanceIdentity.noting(failures, over: raw)
+        let runtime = mode == "nested" ? AXPluginInstanceIdentity.noting(nestedFailures, over: noted) : noted
+        let guardian = AXHelpers.HelpReadGuard(allowHelpReads: mode != "omitted", stop: {
+            calls.guards += 1
+            return mode == "cutoff" || (mode == "fresh_cutoff" && calls.guards > 1)
+        })
+        func read() -> String? {
+            switch mode {
+            case "legacy": return AXHelpers.getAttribute(element, kAXHelpAttribute as String, runtime: runtime)
+            case "raw_legacy": return runtime.attributeValue(element, kAXHelpAttribute as String) as? String
+            case "raw_typed": return (try? runtime.attributeValueResult?(element, kAXHelpAttribute as String).get()) as? String
+            default:
+                let result: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                    element, kAXHelpAttribute as String, runtime: runtime)
+                return try? result.get()
+            }
+        }
+        AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+            let first = read()
+            #expect(calls.guards == 1, "Only the wrapper's deciding native boundary needs the full guard")
+            let refused = mode == "cutoff" || mode == "omitted"
+            #expect(calls.native == (refused ? 0 : 1))
+            #expect(first == (refused || mode == "native_failure" ? nil : "Native Help"))
+            if mode == "fresh_cutoff" {
+                #expect(read() == nil)
+                #expect(calls.guards == 2 && calls.native == 1 && guardian.stopped)
+                #expect(read() == nil && calls.guards == 2 && calls.native == 1)
+            } else if !refused {
+                _ = read()
+                #expect(calls.guards == 2 && calls.native == 2,
+                    "Delegation must never cache permission for the next physical read")
+            }
+            if mode == "omitted" { #expect(!guardian.stopped && !failures.any) }
+            if mode == "native_failure" { #expect(failures.any) }
+        }
+        #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
+    }
+
     @Test("the actual owned strip reader retains failure-noting plugin provenance over both input runtimes",
           arguments: [false, true])
     func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool) throws {

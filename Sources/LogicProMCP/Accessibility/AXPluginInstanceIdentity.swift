@@ -412,7 +412,8 @@ public enum AXPluginInstanceIdentity {
             actionNamesResult: base.actionNamesResult,
             childrenResult: children,
             attributeValueResult: attribute,
-            performActionResult: base.performActionResult
+            performActionResult: base.performActionResult,
+            helpReadsAreGuarded: true
         )
     }
 }

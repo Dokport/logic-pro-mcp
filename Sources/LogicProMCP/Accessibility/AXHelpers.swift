@@ -33,6 +33,9 @@ enum AXHelpers {
         let elementAtPosition: (@Sendable (AXUIElement, CGPoint) -> Result<AXUIElement?, AXStatusError>)?
         /// One fresh native request on one element; never a cached observation.
         let attributeValuesResult: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXStatusError>)?
+        /// Both scalar seams delegate through the helpers and therefore perform
+        /// their own fresh Help guard. This is delegation, not stored permission.
+        let helpReadsAreGuarded: Bool
 
         /// Explicit memberwise initializer, replacing the compiler-synthesized one so
         /// `childrenResult` can default to `nil`. Every existing construction that omits
@@ -51,7 +54,8 @@ enum AXHelpers {
             attributeValueResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXStatusError>)? = nil,
             performActionResult: (@Sendable (AXUIElement, String) -> Result<Void, AXStatusError>)? = nil,
             elementAtPosition: (@Sendable (AXUIElement, CGPoint) -> Result<AXUIElement?, AXStatusError>)? = nil,
-            attributeValuesResult: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXStatusError>)? = nil
+            attributeValuesResult: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXStatusError>)? = nil,
+            helpReadsAreGuarded: Bool = false
         ) {
             self.axApp = axApp
             self.attributeValue = attributeValue
@@ -67,6 +71,7 @@ enum AXHelpers {
             self.performActionResult = performActionResult
             self.elementAtPosition = elementAtPosition
             self.attributeValuesResult = attributeValuesResult
+            self.helpReadsAreGuarded = helpReadsAreGuarded
         }
 
         static let production = Runtime(
@@ -196,8 +201,13 @@ enum AXHelpers {
         var stopped: Bool { lock.withLock { refused } }
 
         /// Whether the next AXHelp read may go ahead. Asks `stop` until it once answers true.
-        func permits() -> Bool {
+        func permits(delegatingToGuardedRead: Bool = false) -> Bool {
             if stopped { return false }
+            // A failure-noting runtime immediately delegates to another helper.
+            // Let the innermost helper decide once, immediately before the real
+            // read. Deliberate omission still returns here without entering the
+            // noting seam or changing its failure provenance.
+            if delegatingToGuardedRead && allowHelpReads { return true }
             // Deliberately omitted Help retains the existing unavailable result
             // without latching a cancellation. Its side effects are not a read-only
             // acquisition step; other evidence and guarded cleanup can still run.
@@ -245,7 +255,8 @@ enum AXHelpers {
             guard case .success(let value) = samples.read(element, runtime: runtime) else { return nil }
             return value as? T
         }
-        if attribute == kAXHelpAttribute as String, let guardian = HelpReadGuard.current, !guardian.permits() {
+        if attribute == kAXHelpAttribute as String, let guardian = HelpReadGuard.current,
+           !guardian.permits(delegatingToGuardedRead: runtime.helpReadsAreGuarded) {
             return nil
         }
         return runtime.attributeValue(element, attribute) as? T
@@ -267,7 +278,8 @@ enum AXHelpers {
                 return value as? T
             }
         }
-        if attribute == kAXHelpAttribute as String, let guardian = HelpReadGuard.current, !guardian.permits() {
+        if attribute == kAXHelpAttribute as String, let guardian = HelpReadGuard.current,
+           !guardian.permits(delegatingToGuardedRead: runtime.helpReadsAreGuarded) {
             // Not read, which is not the same as read and absent.
             return .failure(AXStatusError(raw: Int32(AXError.cannotComplete.rawValue)))
         }
