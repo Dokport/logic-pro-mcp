@@ -1266,6 +1266,26 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.routingNameChannelStates.first == "A", "Reach the actual verified name writer")
     }
 
+    @Test("Coupled naming survives an owned peer redraw while its exact source remains current",
+          arguments: ["coupled_menu_overlay_census", "coupled_menu_overlay_census_second_failure"])
+    func coupledNameContinuationRetainsASurvivingOriginalSource(mode: String) async throws {
+        let f = try Fixture()
+        try await assertCanonicalPhysicalOutput(mode: "surviving_" + mode, fixture: f)
+        #expect(f.routingReplacement == nil, "Keep the exact original source, not a replacement with the same name")
+        let redrawnPeer = try #require(f.routingOtherReplacement)
+        #expect(!CFEqual(redrawnPeer, f.strips[0]))
+        let census = f.builder.makeAXRuntime().children(f.mixer)
+        #expect(census.contains { CFEqual($0, f.strips[1]) })
+        #expect(!census.contains { CFEqual($0, f.strips[0]) })
+        #expect(f.routingOutputChannelStates == (mode.hasSuffix("second_failure") ? ["A", "A"] : ["A"]))
+    }
+
+    @Test("Coupled surviving-source continuation still refuses changed protected state",
+          arguments: ["scalar", "input", "send", "plugin", "header", "project"])
+    func coupledSurvivingSourceDoesNotAdoptChangedProtectedState(fault: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "surviving_coupled_menu_overlay_census_" + fault)
+    }
+
     @Test func ownedWholeCensusContinuationCanCompensateBothActualLeaves() async throws {
         let f = try Fixture()
         try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay_census_second_failure", fixture: f)
@@ -1296,6 +1316,8 @@ struct Issue965HeldSelectionAssociationTests {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
                 let composed = mode.hasPrefix("coupled")
+                let censusMode = mode.hasPrefix("coupled_menu_overlay_")
+                    ? String(mode.dropFirst("coupled_menu_overlay_".count)) : mode
                 let menuOverlay = mode.hasPrefix("coupled_menu_overlay")
                 let uncoupled = mode.hasPrefix("coupled_menu_overlay_uncoupled_")
                 let newerUncoupled = uncoupled && ["newer_mirror", "newer_primary", "reverted_mirror"].contains(where: { mode.hasSuffix($0) })
@@ -1404,19 +1426,19 @@ struct Issue965HeldSelectionAssociationTests {
                     if f.routingScalarControls.contains(where: { CFEqual($0, node) }) {
                         f.routingScalarControls.append(copy)
                     }
-                    if mode == "census_scalar", CFEqual(node, f.builder.element(1_973_121)) {
+                    if censusMode == "census_scalar", CFEqual(node, f.builder.element(1_973_121)) {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(copy, kAXValueAttribute as String, NSNumber(value: 0.4))
                     }
-                    if mode == "census_input", CFEqual(node, f.builder.element(1_973_170)) {
+                    if censusMode == "census_input", CFEqual(node, f.builder.element(1_973_170)) {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(copy, kAXDescriptionAttribute as String, "Input 2")
                     }
-                    if mode == "census_send", CFEqual(node, f.builder.element(1_973_151)) {
+                    if censusMode == "census_send", CFEqual(node, f.builder.element(1_973_151)) {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(copy, kAXDescriptionAttribute as String, "Bus 1")
                     }
-                    if mode == "census_plugin", CFEqual(node, f.builder.element(19_731_601)) {
+                    if censusMode == "census_plugin", CFEqual(node, f.builder.element(19_731_601)) {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(copy, kAXValueAttribute as String, NSNumber(value: 1))
                     }
@@ -1532,7 +1554,7 @@ struct Issue965HeldSelectionAssociationTests {
                         !CFEqual($0, f.builder.element(1_973_121))
                     })
                 }
-                if mode == "occupied_peer" || mode == "late_peer_send" || mode == "census_send" {
+                if mode == "occupied_peer" || mode == "late_peer_send" || censusMode == "census_send" {
                     let anchor = f.builder.element(1_973_150), group = f.builder.element(1_973_151)
                     let bypass = f.builder.element(1_973_152), list = f.builder.element(1_973_153)
                     let knob = f.builder.element(1_973_154)
@@ -1552,7 +1574,7 @@ struct Issue965HeldSelectionAssociationTests {
                     f.builder.setChildren(knob, []); f.routingScalarControls.append(knob)
                     f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [anchor, group, knob])
                 }
-                if ["known_plugin", "unread_plugin", "unread_plugin_bypass", "census_plugin"].contains(mode) {
+                if ["known_plugin", "unread_plugin", "unread_plugin_bypass"].contains(mode) || censusMode == "census_plugin" {
                     let plugin = Issue982UnreadChildrenTests.occupiedSlot(f.builder, 1_973_160, name: "Compressor")
                     if mode == "unread_plugin" { f.builder.setAttribute(plugin, kAXDescriptionAttribute as String, NSNull()) }
                     if mode == "unread_plugin_bypass" {
@@ -1560,7 +1582,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [plugin])
                 }
-                if mode == "census_input" {
+                if censusMode == "census_input" {
                     let input = f.builder.element(1_973_170)
                     f.builder.setButton(input, description: "Input 1", help: "Input slot. Choose the channel strip input source.",
                         x: 0, y: 0, width: 1, height: 1)
@@ -1683,11 +1705,11 @@ struct Issue965HeldSelectionAssociationTests {
                         if menuOverlay, let replacement = f.routingReplacement {
                             f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [replacement])
                         }
-                        if mode == "census_header" {
+                        if censusMode == "census_header" {
                             f.routingLateScopeInjected = true
                             f.builder.setChildren(f.rail, [redrawPeer(f.headers[0], key: 1_974_201), f.headers[1]])
                         }
-                        if mode == "census_project" {
+                        if censusMode == "census_project" {
                             f.routingLateScopeInjected = true
                             f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                         }
@@ -1916,10 +1938,19 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingNameWrites == writes && f.routingDestinationPresses == 0)
                     return
                 }
-                if mode.hasPrefix("coupled_menu_overlay_census") {
+                if mode.hasPrefix("coupled_menu_overlay_census"), ["census", "census_second_failure"].contains(censusMode) {
                     #expect(f.routingOutputChannelStates.first == "A", "Reach the verified real channel before judging the owned-name continuation")
                 }
                 if composed {
+                    if ["census_scalar", "census_input", "census_send", "census_plugin", "census_header", "census_project"].contains(censusMode) {
+                        #expect(f.routingLateScopeInjected, "Reach the actual post-write protected-state change")
+                        #expect(result["saga_state"] as? String != "completed")
+                        let verified = try #require(result["verified"] as? Bool)
+                        #expect(!verified)
+                        #expect(f.routingDestinationPresses == 1, "No guessed inverse may follow the changed protected footprint")
+                        #expect(f.routingNameWrites == ["Selected Canonical"])
+                        return
+                    }
                     if f.routingFocusClickFault != nil || newerUncoupled || ["coupled_newer_name", "coupled_late_peer", "coupled_project", "coupled_name_leaf_peer", "coupled_foreign_editor", "coupled_late_editor", "coupled_late_confirm", "coupled_menu_overlay_foreign_rail", "coupled_menu_overlay_missing_header", "coupled_menu_overlay_peer_change", "coupled_menu_overlay_late_editor"].contains(mode)
                         || (menuOverlay && (mode.contains("_post_") || mode.hasSuffix("_restore_ack_only"))) {
                         if f.routingFocusClickFault == nil { #expect(f.routingLateScopeInjected) }
@@ -1961,7 +1992,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(((result["steps"] as? [[String: Any]])?.first?["result"] as? [String: Any])?["state"] as? String == "A",
                         "Reach the actually verified scalar write before judging the independent aggregate proof")
                 }
-                if mode == "late_peer" || mode == "late_project" || mode == "late_peer_send" {
+                if ["late_peer", "late_project", "late_peer_send"].contains(mode) {
                     #expect(f.routingLateScopeInjected, "Reach the protected peer mutation during this source's popup")
                     if mode == "late_peer" { #expect(f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String == f.bundle.absoluteString) }
                     #expect(pair.strip.currentIndex(runtime: f.logic()) == (mode == "late_project" ? nil : 1))

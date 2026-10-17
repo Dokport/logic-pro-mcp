@@ -100,6 +100,80 @@ private func addFramedButton(
 
 // MARK: - empty vs occupied classification
 
+@Test(arguments: ["legacy", "batched", "noted"])
+func knownIONegativeMetadataDoesNotRequirePluginHelp(mode: String) throws {
+    final class Reads: @unchecked Sendable { var help = 0, guards = 0 }
+    let attributes = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
+    for (offset, label) in ["Stereo Output", "Input slot", "출력 슬롯", "센드 슬롯"].enumerated() {
+        for attribute in attributes {
+            let builder = FakeAXRuntimeBuilder(), reads = Reads()
+            let io = addFramedButton(builder, 1_971_800 + offset, y: 300,
+                help: "Audio Plug-in")
+            builder.setAttribute(io, attribute, label)
+            builder.setChildren(io, [])
+            let base = builder.makeAXRuntime()
+            let read: @Sendable (AXUIElement, String) -> AnyObject? = { element, name in
+                if name == kAXHelpAttribute as String { reads.help += 1 }
+                return base.attributeValue(element, name)
+            }
+            let batch: (@Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError>)?
+            if mode == "batched" {
+                batch = { element, names in .success(names.map { read(element, $0) ?? NSNull() }) }
+            } else { batch = nil }
+            let raw = AXHelpers.Runtime(axApp: base.axApp, attributeValue: read,
+                attributeIsSettable: base.attributeIsSettable,
+                setAttributeValue: base.setAttributeValue, children: base.children,
+                performAction: base.performAction, childCount: base.childCount,
+                childrenResult: base.childrenResult,
+                attributeValueResult: { .success(read($0, $1)) },
+                attributeValuesResult: batch)
+            let failures = AXPluginInstanceIdentity.FailedReads()
+            let runtime = mode == "noted" ? AXPluginInstanceIdentity.noting(failures, over: raw) : raw
+            let guardian = AXHelpers.HelpReadGuard(stop: { reads.guards += 1; return false })
+            let slots = AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+                AXLogicProElements.audioPluginInsertSlots(children: [io], runtime: runtime)
+            }
+            #expect(slots.isEmpty)
+            #expect(reads.help == 0 && reads.guards == 0,
+                "Fresh metadata proves both existing negative predicates; even conflicting Help cannot make this button an insert")
+            #expect(!failures.any)
+            #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
+        }
+    }
+}
+
+@Test(arguments: ["help_adds_io_exclusion", "help_identifies_insert"])
+func undecidedInsertMetadataStillReachesItsFreshHelpGuard(mode: String) throws {
+    final class Reads: @unchecked Sendable { var help = 0, guards = 0 }
+    let builder = FakeAXRuntimeBuilder(), reads = Reads()
+    let ioHelp = mode == "help_adds_io_exclusion"
+    let button = addFramedButton(builder, 1_971_820, y: 300,
+        description: ioHelp ? "Audio Plug-in" : "Unknown",
+        help: ioHelp ? "Output slot" : "Audio Plug-in")
+    builder.setChildren(button, [])
+    let runtime = builder.makeAXRuntime(attributeValueHandler: { _, attribute in
+        if attribute == kAXHelpAttribute as String { reads.help += 1 }
+        return nil
+    }, setAttributeHandler: nil, performActionHandler: nil)
+    let guardian = AXHelpers.HelpReadGuard(stop: { reads.guards += 1; return false })
+    let slots = AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+        AXLogicProElements.audioPluginInsertSlots(children: [button], runtime: runtime)
+    }
+    if ioHelp { #expect(slots.isEmpty) }
+    else { #expect(slots.count == 1 && slots[0].isEmpty) }
+    #expect(reads.help > 0 && reads.guards == reads.help)
+    #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
+}
+
+@Test(arguments: ["Stereo Output", "Input slot", "출력 슬롯", "센드 슬롯"])
+func structuralOccupiedInsertKeepsItsDestinationShapedName(name: String) throws {
+    let builder = FakeAXRuntimeBuilder()
+    let occupied = addOccupiedSlot(builder, 1_971_830, name: name)
+    let slots = AXLogicProElements.audioPluginInsertSlots(children: [occupied], runtime: builder.makeAXRuntime())
+    #expect(slots.count == 1 && slots[0].readStatus == .occupiedReadable && slots[0].name == name)
+    #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
+}
+
 @Test func testEmptySlotIsWriteSafe() throws {
     let builder = FakeAXRuntimeBuilder()
     let strip = builder.element(520)

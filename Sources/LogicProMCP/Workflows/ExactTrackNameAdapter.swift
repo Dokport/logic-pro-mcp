@@ -311,7 +311,12 @@ enum ExactTrackNameAdapter {
         guard let mirror = proof.mirror,
               mirror.pair.track.matches(source.originalTrack),
               mirror.pair.strip.matches(source.original),
-              source.original.currentIndex(runtime: mirror.pair.track.runtime) == nil,
+              // A peer can redraw while this exact source survives. Retain its
+              // observed ordinal in that case; a different renewed source still
+              // requires retirement of the original, never label-based rebinding.
+              (source.pair.strip.matches(source.original)
+                  ? source.original.currentIndex(runtime: mirror.pair.track.runtime) == source.index
+                  : source.original.currentIndex(runtime: mirror.pair.track.runtime) == nil),
               source.permits(runtime: mirror.pair.track.runtime),
               await proof.registry.resolve(mirror.reference)?.physicalMixerStrip?.matches(mirror.registryStrip ?? mirror.pair.strip) == true else { return nil }
         var updated = proof

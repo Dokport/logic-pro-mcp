@@ -350,7 +350,15 @@ extension AXLogicProElements {
            size.height > 0, size.height < 12 {
             return false
         }
-        let text = elementSearchText(element, runtime: runtime)
+        let metadata = elementSearchMetadata(element, runtime: runtime)
+        let nonHelp = metadata.compactMap { $0 }.joined(separator: " ").lowercased()
+        // Both existing exclusion paths are already decided by fresh metadata.
+        // Adding Help cannot undo either positive containment observation.
+        // Occupied groups are still classified separately by their structure.
+        if AXLocalePolicy.sendOrIOControlLabel.containsAny(in: nonHelp),
+           isKnownNonInsertButtonText(nonHelp) { return false }
+        let text = (metadata + [AXHelpers.getHelp(element, runtime: runtime)])
+            .compactMap { $0 }.joined(separator: " ").lowercased()
         let isAudioSlot = AXLocalePolicy.audioPluginSlotLabel.containsAny(in: text)
         let isSendOrIO = AXLocalePolicy.sendOrIOControlLabel.containsAny(in: text)
         if isAudioSlot && !isSendOrIO {
@@ -498,28 +506,30 @@ extension AXLogicProElements {
         _ element: AXUIElement,
         runtime: AXHelpers.Runtime
     ) -> String {
+        (elementSearchMetadata(element, runtime: runtime) + [AXHelpers.getHelp(element, runtime: runtime)])
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+    }
+
+    private static func elementSearchMetadata(
+        _ element: AXUIElement,
+        runtime: AXHelpers.Runtime
+    ) -> [String?] {
         if runtime.attributeValuesResult != nil {
             // One fresh semantic sample, not another classifier's metadata.
             // Help remains separate and last, under its original full guardian.
             let attributes = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
-            let metadata = AXHelpers.getNonHelpAttributes(element, attributes, runtime: runtime).map { reading -> String? in
+            return AXHelpers.getNonHelpAttributes(element, attributes, runtime: runtime).map { reading -> String? in
                 guard case .success(.some(let value)) = reading else { return nil }
                 return value as? String
             }
-            return (metadata + [AXHelpers.getHelp(element, runtime: runtime)])
-                .compactMap { $0 }.joined(separator: " ").lowercased()
         }
         // Existing runtimes (including failure-noting wrappers) retain their
         // original individual-read seams and ordering.
         return [
             AXHelpers.getIdentifier(element, runtime: runtime),
             AXHelpers.getDescription(element, runtime: runtime),
-            AXHelpers.getTitle(element, runtime: runtime),
-            AXHelpers.getHelp(element, runtime: runtime)
+            AXHelpers.getTitle(element, runtime: runtime)
         ]
-        .compactMap { $0 }
-        .joined(separator: " ")
-        .lowercased()
     }
 
     // MARK: - Plugin Windows (verified parameter write — T5)
