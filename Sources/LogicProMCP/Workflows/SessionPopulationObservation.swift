@@ -86,6 +86,8 @@ enum SessionPopulationObservation {
         var sendMode: AccessibilityChannel.SendModeState? = nil
         /// Complete agreeing menu entries, not availability or allocation authority.
         var observedBusNumbers: [Int]? = nil
+        /// Original native Send control; never encoded or restored from report JSON.
+        var sendControl: AXLogicProElements.AssignedSendMenuControl? = nil
     }
 
     struct HeldDisclosureExposure: Sendable {

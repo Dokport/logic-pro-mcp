@@ -364,7 +364,11 @@ actor MutationSaga {
                 && step.operationID == .mixerSetOutputVerified
                 && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
                 && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
-            let definition = SendRemovalSagaAdapter.accepts(plan)
+            let approvedSend = approvedSessionRepair?.supports(step) == true
+                && step.operationID == .mixerSetSendOutputVerified
+                && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
+                && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
+            let definition = (SendRemovalSagaAdapter.accepts(plan) || approvedSend)
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_send_output_verified", valueParameter: "destination", tolerance: .exact)
                 : SendModeSagaAdapter.accepts(plan)
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_send_mode_verified", valueParameter: "mode", tolerance: .exact)

@@ -669,7 +669,7 @@ actor AccessibilityChannel: Channel {
                         } else if let assignment = read.assignment {
                             checked.append(.init(source: owner, assignment: assignment, sendOrdinal: candidate.ordinal,
                                 sendNonRoutingChecks: read.sendNonRoutingChecks, sendMode: read.sendMode,
-                                observedBusNumbers: read.observedBusNumbers))
+                                observedBusNumbers: read.observedBusNumbers, sendControl: read.sendControl))
                         }
                     }
                 }

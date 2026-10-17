@@ -838,7 +838,8 @@ struct SystemDispatcher: OperationTraceDispatching {
             } catch {
                 return SagaWire.invalidParams(error)
             }
-            let sendRemoval = SendRemovalSagaAdapter(plan: plan)
+            let sendRemoval = approvedSessionRepair.flatMap { SendRemovalSagaAdapter(approved: $0) }
+                ?? SendRemovalSagaAdapter(plan: plan)
             let sendMode = SendModeSagaAdapter(plan: plan)
             let sendLevel = SendLevelSagaAdapter(plan: plan)
             let journalIssues: [[String: Any]]
@@ -924,7 +925,8 @@ struct SystemDispatcher: OperationTraceDispatching {
             let selectedEQPlan = SelectedEQParameterSaga.contains(plan)
             let pluginPlan = compressorPlan || selectedEQPlan
             let containsSend = plan.steps.contains { $0.operationID == .mixerSetSendOutputVerified }
-            let sendRemoval = SendRemovalSagaAdapter(plan: plan)
+            let sendRemoval = approvedSessionRepair.flatMap { SendRemovalSagaAdapter(approved: $0) }
+                ?? SendRemovalSagaAdapter(plan: plan)
             let containsMode = plan.steps.contains { $0.operationID == .mixerSetSendModeVerified }
             let sendMode = SendModeSagaAdapter(plan: plan)
             let containsLevel = plan.steps.contains { $0.operationID == .mixerSetSendLevelVerified }
@@ -944,7 +946,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                     hint: "Only one exact occupied Stereo Output send removal, existing-bus/physical-output replacement or sole-empty Stereo Output creation is supported by this Saga adapter.",
                     extras: ["write_attempted": false]), traceID: traceID)
             }
-            if pluginPlan || containsSend || containsMode || containsLevel, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+            let canonicalSendConfirmed = approvedSessionRepair?.plan == plan && sendRemoval != nil
+            if pluginPlan || (containsSend && !canonicalSendConfirmed) || containsMode || containsLevel, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
                     hint: "Confirm this exact plan_hash before applying the selected workflow",
                     extras: ["write_attempted": false]), traceID: traceID)

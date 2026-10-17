@@ -12,19 +12,23 @@ private actor SendRemovalSagaResultBoundary: Channel {
     let operation: String
     let idempotencyKey: String
     let afterForward: @Sendable () -> Void
+    let beforeForward: @Sendable () -> Void
     let observedResult: @Sendable (ChannelResult) -> Void
     init(base: AccessibilityChannel, journal: SagaJournal, mode: String,
          operation: String = "mixer.set_send_output_verified", idempotencyKey: String = "owned-send-removal-saga",
          afterForward: @escaping @Sendable () -> Void = {},
+         beforeForward: @escaping @Sendable () -> Void = {},
          observedResult: @escaping @Sendable (ChannelResult) -> Void = { _ in }) {
         self.base = base; self.journal = journal; self.mode = mode; self.afterForward = afterForward
         self.operation = operation; self.idempotencyKey = idempotencyKey
+        self.beforeForward = beforeForward
         self.observedResult = observedResult
     }
     func start() async throws {}
     func stop() async {}
     func healthCheck() async -> ChannelHealth { await base.healthCheck() }
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
+        if operation == self.operation { beforeForward() }
         if operation == self.operation, mode == "no_observer" {
             return .success(HonestContract.encodeStateA(extras: ["verified": true, "write_attempted": true]))
         }
@@ -2750,6 +2754,14 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(removing: true, restoring: true, emptyModeMenu: true, sagaMode: mode)
     }
 
+    @Test(arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project", "physical_slot", "mixed", "missing_witness", "decoded"])
+    func canonicalSendRemovalUsesItsRetainedNativeControl(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(removing: true, restoring: true,
+                emptyModeMenu: true, canonicalSend: mode)
+        }
+    }
+
     @Test("Registered inspection preserves raw checked nonrouting titles without calling them a typed send mode")
     func registeredInspectionPreservesItsCheckedSendNonroutingWitness() async throws {
         try await assertOccupiedSingleSendRenewal(inspectSendWitness: "observed")
@@ -3217,7 +3229,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                modeSaga: String? = nil,
                                                modeEffectBoundary: ModeEffectBoundary? = nil,
                                                levelSaga: String? = nil,
-                                               creationSaga: String? = nil) async throws {
+                                               creationSaga: String? = nil,
+                                               canonicalSend: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
@@ -3581,7 +3594,11 @@ struct Issue965HeldSelectionAssociationTests {
                     return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
+                    || (canonicalSend != nil && CFEqual(element, b.element(1_965_2799)))
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
+                    if canonicalSend == "late_replacement", CFEqual(element, b.element(1_965_2799)) {
+                        f.routingBypassMenuOpens += 1
+                    }
                     if bypassMode != nil { f.routingBypassMenuOpens += 1 }
                     if f.routingBypassMenuOpens == 3, let pending = f.routingBypassPendingValue {
                         f.routingLateScopeInjected = true
@@ -3772,7 +3789,7 @@ struct Issue965HeldSelectionAssociationTests {
                 return .failure(.init(raw: AXError.invalidUIElement.rawValue))
             }
             let before = try await inspect(f, cache: cache, registry: registry,
-                domains: inspectSendWitness == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"])
+                domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"])
             if ["changed_control", "typed_mode_changed_control"].contains(inspectSendWitness ?? ""), before["snapshot_id"] == nil {
                 #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 0)
                 #expect(before["state"] as? String == "C")
@@ -3788,6 +3805,112 @@ struct Issue965HeldSelectionAssociationTests {
                 CFEqual($0.strip.strip, f.strips[1])
             })
             #expect(CFEqual(originalPair.track.header, f.headers[0]))
+            if let canonicalSend {
+                let router = ChannelRouter(), gate = LogicMutationGate()
+                guard case .issued(let project)? = capture.projectIssuance else {
+                    Issue.record("The capture must issue its actual project"); return
+                }
+                let target = try #require(capture.issued?.byRow[0])
+                let key = "canonical-send-" + canonicalSend, journal = SagaJournal()
+                await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
+                    mode: canonicalSend == "cancel" ? "cancel" : "completed", idempotencyKey: key,
+                    beforeForward: {
+                        if canonicalSend == "late_replacement" {
+                            let decoy = b.element(1_965_2799)
+                            b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
+                            b.setChildren(decoy, []); b.setActionNames(decoy, [kAXPressAction as String])
+                            b.setChildren(b.element(1_965_2621), [b.element(1_965_2622), decoy])
+                            f.routingLateScopeInjected = true
+                        }
+                    }))
+                let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                    poller: StatePoller(axChannel: f.channel(), cache: cache,
+                        runtime: .init(hasVisibleWindow: { false }, keyboardFocus: { .notTextEditing })),
+                    dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal,
+                    mutationGate: gate, liveTrackNames: { [:] })
+                let planHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
+                var policy: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue),
+                    "targets": .array([.object(["handle": .string("source"), "track_ref": .string(target.rawValue)])]),
+                    "sends": .array([.object(["target": .string("source"),
+                        canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1),
+                        "remove": .bool(true)])])]
+                if canonicalSend == "mixed" { policy["presentation"] = .object(["mixer_visible": .bool(true)]) }
+                if ["missing_witness", "decoded"].contains(canonicalSend) {
+                    var fresh = capture.freshPopulation
+                    let withoutControl: [SessionPopulationObservation.HeldCheckedOutput] = (fresh?.checkedOutputs ?? []).map { reading in
+                        var copy = reading; copy.sendControl = nil; return copy
+                    }
+                    fresh?.checkedOutputs = withoutControl
+                    let rows = canonicalSend == "decoded"
+                        ? try JSONDecoder().decode([ChannelStripState].self, from: JSONEncoder().encode(capture.channelStrips))
+                        : capture.channelStrips
+                    let altered = SessionPopulationObservation.Capture(before: capture.before, after: capture.after,
+                        projectEpoch: capture.projectEpoch, project: capture.project, tracks: capture.tracks,
+                        tracksFetchedAt: capture.tracksFetchedAt, channelStrips: rows,
+                        mixerFetchedAt: capture.mixerFetchedAt, fileTrackCount: capture.fileTrackCount,
+                        projectFileNotBound: capture.projectFileNotBound, requestedProjectMatches: capture.requestedProjectMatches,
+                        referencesEnabled: capture.referencesEnabled, targetSnapshot: capture.targetSnapshot,
+                        issued: capture.issued, projectIssuance: capture.projectIssuance,
+                        beganAt: capture.beganAt, endedAt: capture.endedAt, captureID: capture.captureID,
+                        freshPopulation: fresh, mixerReferences: capture.mixerReferences)
+                    guard case .accepted(let parsed) = ProjectSessionAudit.parseIntentPolicy(policy) else {
+                        Issue.record("The explicit selector must parse"); return
+                    }
+                    let request = try #require(await cache.retainedInspection(id: id)).request
+                    let blocked = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: parsed, policyValue: .object(policy),
+                        names: [], capture: altered, request: request, snapshotCurrent: true)
+                    #expect(sharedJSONObject(blocked.json)?["executable"] as? Bool == false)
+                    #expect(f.routingDestinationPresses == 0)
+                    return
+                }
+                let plannedText = sharedToolText(await planHandler(dependencies,
+                    ["snapshot_id": .string(id), "policy": .object(policy)]))
+                let planned = try #require(sharedJSONObject(plannedText))
+                if ["physical_slot", "mixed"].contains(canonicalSend) {
+                    #expect(planned["executable"] as? Bool == false)
+                    #expect(f.routingDestinationPresses == 0)
+                    return
+                }
+                #expect(planned["executable"] as? Bool == true, "Actual plan: \(plannedText)")
+                let planID = try #require(planned["plan_id"] as? String)
+                let digest = try #require(planned["digest"] as? String)
+                let preview = try #require(planned["steps"] as? [[String: Any]])
+                #expect(preview.count == 1 && preview[0]["kind"] as? String == "local_send_removal")
+                #expect(preview[0]["observed_ordinal"] as? Int == 1 && preview[0]["physical_slot"] == nil)
+                if canonicalSend == "replacement" {
+                    let decoy = b.element(1_965_2799)
+                    b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
+                    b.setChildren(decoy, []); b.setActionNames(decoy, [kAXPressAction as String])
+                    b.setChildren(b.element(1_965_2621), [b.element(1_965_2622), decoy])
+                }
+                if canonicalSend == "wrong_project" {
+                    b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                }
+                let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
+                let arguments: [String: Value] = ["plan_id": .string(planID),
+                    "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
+                    "confirmed": .bool(true), "idempotency_key": .string(key)]
+                let result = await apply(dependencies, arguments)
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if ["replacement", "late_replacement", "wrong_digest", "wrong_project"].contains(canonicalSend) {
+                    #expect(body["state"] as? String == "C", "Actual refusal: \(sharedToolText(result))")
+                    #expect(f.routingDestinationPresses == 0)
+                    if canonicalSend == "late_replacement" {
+                        #expect(f.routingLateScopeInjected)
+                        #expect(f.routingBypassMenuOpens == 0, "Refuse the same-valued replacement before its popup is opened")
+                    }
+                } else {
+                    #expect(body["saga_state"] as? String == (canonicalSend == "cancel" ? "fullyCompensated" : "completed"),
+                        "Actual apply: \(sharedToolText(result))")
+                    #expect(f.routingDestinationPresses == (canonicalSend == "cancel" ? 2 : 1))
+                    let beforeReplay = f.routingDestinationPresses
+                    _ = await apply(dependencies, arguments)
+                    #expect(f.routingDestinationPresses == beforeReplay)
+                }
+                #expect(!gate.isHeldByEntitledHolder())
+                return
+            }
             if inspectSendWitness != nil {
                 let checked = capture.freshPopulation?.checkedOutputs.filter {
                     $0.source.matches(originalPair.strip) && $0.sendOrdinal == 1

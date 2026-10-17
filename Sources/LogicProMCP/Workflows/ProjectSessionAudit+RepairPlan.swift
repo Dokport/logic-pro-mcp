@@ -120,18 +120,21 @@ extension ProjectSessionAudit {
         let assessment = assessIntent(policy: policy, capture: capture, graph: graph)
         let localOutputStep = ApprovedSessionRepair.capturedOutputStep(policy: policy, names: names,
             source: capture, request: request)
+        let localSendStep = ApprovedSessionRepair.capturedSendStep(policy: policy, names: names,
+            source: capture, request: request)
+        let capturedLocalTask = localOutputStep != nil || localSendStep != nil
         let viewOnly = policy.mixerVisible != nil && policy.trackSort == nil && policy.targets.isEmpty && policy.roles.isEmpty
             && policy.outputs.isEmpty && policy.sends.isEmpty && policy.receivers.isEmpty && names.isEmpty && policy.protectedPaths.isEmpty
         var reasons = Set<String>()
         reasons.formUnion(naming.reasons.values)
         if !snapshotCurrent { reasons.insert("snapshot_changed") }
-        if !viewOnly && localOutputStep == nil && request.scope != .wholeProject { reasons.insert("whole_project_scope_required") }
+        if !viewOnly && !capturedLocalTask && request.scope != .wholeProject { reasons.insert("whole_project_scope_required") }
         let gate = assessmentGate(policy: policy, capture: capture, graph: graph)
-        if !viewOnly && localOutputStep == nil, let gate { reasons.insert(gate.reason.rawValue) }
+        if !viewOnly && !capturedLocalTask, let gate { reasons.insert(gate.reason.rawValue) }
         // The whole binding the assessor applies: the gate, and the registry epoch it checks per
         // finding (#1090 review R2, R1090-002). Receiver evidence is read only from a graph both pass.
         let epochMismatch = graphEpochMismatch(graph, capture: capture)
-        if !viewOnly && localOutputStep == nil, let epochMismatch { reasons.insert(epochMismatch.rawValue) }
+        if !viewOnly && !capturedLocalTask, let epochMismatch { reasons.insert(epochMismatch.rawValue) }
         let graphBound = gate == nil && epochMismatch == nil
         var proposalReadReasons = reasons
         if !request.domains.contains(.routing) { proposalReadReasons.insert("routing_not_requested") }
@@ -187,7 +190,7 @@ extension ProjectSessionAudit {
         }
         // Even an unchanged send needs a fresh exact-slot verifier which the retained apply
         // provider does not have. A pure graph fixture cannot advertise runtime availability.
-        if !policy.sends.isEmpty { reasons.insert("send_goal_verification_unavailable") }
+        if !policy.sends.isEmpty && localSendStep == nil { reasons.insert("send_goal_verification_unavailable") }
         if options.onAmbiguity == .reportOnly { reasons.insert("report_only_requested") }
         // Steps that create a receiving aux come before the outputs that need one
         // (destination before source), and each bus gets at most one.
@@ -369,6 +372,10 @@ extension ProjectSessionAudit {
         if !assessment.questions.isEmpty { reasons.insert("unresolved_intent") }
 
         for finding in assessment.sendFindings ?? [] {
+            if let localSendStep {
+                steps.append(localSendStep)
+                continue
+            }
             if finding.status == .compliant, proposalReadReasons.isEmpty {
                 unchanged.append(.string(finding.id))
                 continue
@@ -390,10 +397,9 @@ extension ProjectSessionAudit {
             blocked.formUnion(proposal.reasons)
             blocked.formUnion(["exact_target_send_adapter_unavailable", "send_preservation_adapter_unavailable"])
             reasons.formUnion(blocked)
-            steps.append(.object([
+            var sendStep: [String: Value] = [
                 "id": .string(id), "kind": .string("send_assignment"),
                 "target_ref": finding.target.trackRef.map(Value.string) ?? .null,
-                "physical_slot": .int(finding.physicalSlot),
                 "before": try finding.observed.map { try repairPlanValue($0) } ?? .null,
                 "after": try repairPlanValue(finding.expected),
                 "proposed_routing_diff": proposal.wire,
@@ -401,7 +407,10 @@ extension ProjectSessionAudit {
                 "required_invariants": .array(["exact_strip_identity", "exact_send_slot_and_destination",
                     "preserved_send_scalars", "receiver_fanout", "protected_and_intermediate_audio_paths",
                     "channel_format_preservation", "sidechain_and_monitoring_preservation", "conditional_inverse_send"].map(Value.string))
-            ]))
+            ]
+            if let slot = finding.physicalSlot { sendStep["physical_slot"] = .int(slot) }
+            if let ordinal = finding.observedOrdinal { sendStep["observed_ordinal"] = .int(ordinal) }
+            steps.append(.object(sendStep))
         }
         // Standalone approved receiver creation is topology work too, even with no source assignment.
         let topologyIDs = (Array(auxStepForBus.values) + routingIDs).sorted()
@@ -569,8 +578,8 @@ extension ProjectSessionAudit {
             "steps": .array(steps), "preview": .array(steps),
             "unchanged_tasks": .array(unchanged), "questions": try repairPlanValue(assessment.questions),
             "receiver_questions": .array(receiverQuestions.keys.sorted().compactMap { receiverQuestions[$0] }),
-            "findings": .array(try (localOutputStep == nil ? assessment.findings : []).map { try repairPlanValue($0) }
-                + (assessment.sendFindings ?? []).map { try repairPlanValue($0) }),
+            "findings": .array(try (capturedLocalTask ? [] : assessment.findings).map { try repairPlanValue($0) }
+                + (localSendStep == nil ? assessment.sendFindings ?? [] : []).map { try repairPlanValue($0) }),
             "new_object_inventory": .array(inventory),
             "planning_options": options.wire,
             "executable": .bool(reasons.isEmpty),
@@ -743,14 +752,14 @@ extension ProjectSessionAudit {
         guard graph.edges.allSatisfy({ $0.send?.level?.isFinite ?? true }) else {
             return unverified("send_scalar_unserializable")
         }
-        guard let before = finding.observed, let observed = before.send,
+        guard let slot = finding.physicalSlot, let before = finding.observed, let observed = before.send,
               let rawRef = finding.target.trackRef else {
             // An empty slot has no observed scalar defaults to preserve. Account for that task,
             // but don't invent a level, mode or enabled state for a new connection.
             return unverified("send_creation_metadata_unavailable")
         }
         let request = RoutingWriteRequest(sourceTrackRef: TargetReference(rawValue: rawRef),
-            physicalSlot: finding.physicalSlot, destinationBusNumber: finding.expected.bus ?? observed.destinationBusNumber,
+            physicalSlot: slot, destinationBusNumber: finding.expected.bus ?? observed.destinationBusNumber,
             destinationRef: finding.expected.bus == nil ? observed.destinationRef : nil,
             replaceExisting: finding.expected.bus == nil || allowReplace, expectedProjectEpoch: graph.projectEpoch)
         let decision = evaluate(request, against: graph)
