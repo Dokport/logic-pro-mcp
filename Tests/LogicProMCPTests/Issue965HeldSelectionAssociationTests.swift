@@ -519,6 +519,11 @@ struct Issue965HeldSelectionAssociationTests {
         var coupledGuardPlayReads = 0
         var coupledGuardRecordReads = 0
         var coupledGuardCountDiscovery = false
+        var measuringFootprintReads = false
+        // Retain the actual request-local guards so object IDs cannot be reused
+        // between separate footprint reads. These are test observations only.
+        var footprintReads: [ObjectIdentifier: (guardOwner: AXHelpers.HelpReadGuard,
+            record: Int, help: Int, names: Set<Int>)] = [:]
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
         var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingSelection: (@Sendable (Int) -> Void)?
@@ -673,6 +678,19 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                     }
                     if CFEqual(element, window), attribute == kAXHelpAttribute as String { presentationCensusReads += 1 }
+                    if measuringFootprintReads, !routingNameWrites.isEmpty,
+                       let guardian = AXHelpers.HelpReadGuard.current {
+                        let key = ObjectIdentifier(guardian)
+                        var sample = footprintReads[key] ?? (guardian, 0, 0, [])
+                        if attribute == kAXHelpAttribute as String { sample.help += 1 }
+                        if attribute == kAXValueAttribute as String {
+                            if CFEqual(element, builder.element(1_965_722)) { sample.record += 1 }
+                            for index in strips.indices where CFEqual(element, builder.element(1_965_710 + index)) {
+                                sample.names.insert(index)
+                            }
+                        }
+                        footprintReads[key] = sample
+                    }
                     routingRead?(element, attribute)
                     if routingScalarControls.contains(where: { CFEqual($0, element) }),
                        [kAXValueAttribute as String, kAXMinValueAttribute as String, kAXMaxValueAttribute as String].contains(attribute) {
@@ -1096,6 +1114,22 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.routingDestinationPresses == 2)
         #expect(f.inputMenuPresses <= 8,
                 "Keep the captured baseline, Saga before/after and inverse-ownership reads, and each checked scalar writer; duplicate adapter reads consume the same bounded native lifecycle")
+    }
+
+    @Test("Protected footprint rows retain full Help guards without repeating whole custody discovery for non-Help metadata")
+    func coupledFootprintDoesNotRepeatWholeOwnershipAtEveryMetadataRow() async throws {
+        let f = try Fixture()
+        f.measuringFootprintReads = true
+        try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay", fixture: f)
+        let footprints = f.footprintReads.values.filter {
+            $0.names.count == f.strips.count && $0.help > 0 && $0.record > 0
+        }
+        #expect(!footprints.isEmpty, "Reach actual post-name complete protected reads and physical Help reads")
+        for sample in footprints {
+            #expect(sample.record <= sample.help,
+                "Keep one fresh stopped-transport/custody check per actual Help read, not additional complete censuses per non-Help row: record=\(sample.record), Help=\(sample.help)")
+        }
+        #expect(f.routingNameWrites == ["Selected Canonical"] && f.routingDestinationPresses == 1)
     }
 
     @Test("An owned output may redraw a peer while its exact source survives; changed protected state remains unknown",

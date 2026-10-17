@@ -955,13 +955,19 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               zip(proof.headers, task.capture.tracks).allSatisfy({ header, row in
                   row.physicalBinding.map { CFEqual($0.header, header) } == true
               }) else { return false }
+        // Non-Help rows share the fresh complete custody bookends below/above.
+        // Keep cancellation/gate/deadline checks per row and full fresh custody
+        // before every actual Help read, rather than recensus the whole host per row.
+        let metadataStopped: @Sendable () -> Bool = {
+            (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil
+        }
         let fields = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
             let tracks = AccessibilityChannel.readTrackStates(from: proof.headers, in: pair.track.window,
-                runtime: runtime, readingTypeHelp: false, stoppingWhen: { !permitted() }).states
+                runtime: runtime, readingTypeHelp: false, stoppingWhen: metadataStopped).states
             let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer, runtime: runtime.ax)
                 .flatMap { AccessibilityChannel.readChannelStrips(from: $0.strips, runtime: runtime,
                     window: pair.strip.window, mixer: pair.strip.mixer, readingScalarHelp: false,
-                    stoppingWhen: { !permitted() }) }
+                    stoppingWhen: metadataStopped) }
             return (tracks, strips)
         }
         guard let tracks = fields.0, let strips = fields.1, permitted(),
