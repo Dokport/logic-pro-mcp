@@ -194,7 +194,19 @@ extension AccessibilityChannel {
     ) {
         let failures = AXPluginInstanceIdentity.FailedReads()
         let ax = AXPluginInstanceIdentity.noting(failures, over: runtime.ax)
-        let plugins = AXLogicProElements.pluginSlots(in: strip, runtime: ax, observingSlots: { slots in
+        // Keep optional native type proof under the same failure-noting runtime;
+        // neither a Codable observation nor a previous extraction can supply it.
+        let typedRuntime = AXLogicProElements.Runtime(logicProPID: runtime.logicProPID, ax: ax,
+            executeAppleScript: runtime.executeAppleScript,
+            executeAppleScriptWithTimeout: runtime.executeAppleScriptWithTimeout,
+            onScreenWindowList: runtime.onScreenWindowList,
+            postPopupMenuEscape: runtime.postPopupMenuEscape,
+            focusedApplicationPID: runtime.focusedApplicationPID,
+            observeFrontmost: runtime.observeFrontmost, observeHost: runtime.observeHost)
+        let audioType = state.typeLabelBinding.flatMap {
+            AXLogicProElements.NativeAudioStripType(binding: $0, runtime: typedRuntime)
+        }
+        let plugins = AXLogicProElements.pluginSlots(in: strip, runtime: ax, nativeAudioType: audioType, observingSlots: { slots in
             state.pluginsFullyObserved = slots.allSatisfy {
                 $0.readStatus == .empty || ($0.readStatus == .occupiedReadable && $0.isBypassed != nil)
             }

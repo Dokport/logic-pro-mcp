@@ -125,10 +125,11 @@ struct Issue965StripHelpSampleTests {
         #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)
     }
 
-    @Test("the actual owned strip reader retains failure-noting plugin provenance over both input runtimes",
-          arguments: [false, true])
-    func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool) throws {
-        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0, bypassHelp = 0 }
+    @Test("the owned reader omits MIDI disambiguation only for a current native fixed Audio type",
+          arguments: [false, true], ["absent", "audio", "instrument", "aux", "duplicate", "malformed", "editable_name",
+              "type_changed", "label_replaced", "source_retired", "document_changed"])
+    func ownedPluginReaderReachesOnlyTheEligibleBatchSeam(noting: Bool, typeLabel: String) throws {
+        final class Calls: @unchecked Sendable { var metadataBatches = 0, helpGuardCalls = 0, bypassHelp = 0, midiHelp = 0, typeValues = 0 }
         let builder = FakeAXRuntimeBuilder(), calls = Calls()
         let strip = builder.element(1_965_860), insert = builder.element(1_965_861)
         let bypass = builder.element(1_965_862), open = builder.element(1_965_863)
@@ -146,12 +147,60 @@ struct Issue965StripHelpSampleTests {
         let window = builder.element(1_965_864), mixer = builder.element(1_965_865)
         builder.setRole(window, kAXWindowRole as String)
         builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/OwnedStrip.logicx")
-        builder.setRole(mixer, kAXLayoutAreaRole as String)
+        builder.setRole(mixer, kAXGroupRole as String)
+        builder.setAttribute(mixer, kAXIdentifierAttribute as String, "Mixer")
+        builder.setAttribute(mixer, kAXDescriptionAttribute as String, "Mixer")
         builder.setChildren(mixer, [strip]); builder.setChildren(window, [mixer])
-        let base = builder.makeAXRuntime()
+        builder.setAttribute(window, kAXTitleAttribute as String, "OwnedStrip - Tracks")
+        let app = builder.element(1_965_866)
+        builder.setRole(app, kAXApplicationRole as String)
+        builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+        builder.setAttribute(app, kAXWindowsAttribute as String, [window])
+        builder.setChildren(app, [window])
+        let label = builder.element(1_965_867)
+        let losesTypeProof = ["type_changed", "label_replaced", "source_retired", "document_changed"].contains(typeLabel)
+        if typeLabel != "absent" {
+            builder.setRole(label, typeLabel == "editable_name" ? kAXTextFieldRole as String : kAXStaticTextRole as String)
+            builder.setAttribute(label, kAXDescriptionAttribute as String, typeLabel == "editable_name" ? "name" : "label")
+            builder.setAttribute(label, kAXValueAttribute as String,
+                typeLabel == "malformed" ? NSNumber(value: 13) : typeLabel == "instrument" ? "Inst 1" : typeLabel == "aux" ? "Aux 1" : "Audio 13")
+            builder.setChildren(label, [])
+            builder.setChildren(strip, [label, insert])
+            if typeLabel == "duplicate" {
+                let duplicate = builder.element(1_965_868)
+                builder.setRole(duplicate, kAXStaticTextRole as String)
+                builder.setAttribute(duplicate, kAXDescriptionAttribute as String, "label")
+                builder.setAttribute(duplicate, kAXValueAttribute as String, "Audio 13")
+                builder.setChildren(duplicate, [])
+                builder.setChildren(strip, [label, duplicate, insert])
+            }
+        }
+        let base = builder.makeAXRuntime(appElement: app)
         let metadata = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute] as [String]
         let native: @Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError> = { element, attribute in
+            if attribute == kAXValueAttribute as String, CFEqual(element, label) {
+                calls.typeValues += 1
+                // Two producer values and two initial proof values precede the
+                // deciding post-classification proof. Change the actual native
+                // owner/control then, not a decoded observation or expected value.
+                if calls.typeValues == 5 {
+                    if typeLabel == "type_changed" { builder.setAttribute(label, kAXValueAttribute as String, "Inst 1") }
+                    if typeLabel == "document_changed" {
+                        builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/ForeignStrip.logicx")
+                    }
+                    if typeLabel == "source_retired" { builder.setChildren(mixer, []) }
+                    if typeLabel == "label_replaced" {
+                        let replacement = builder.element(1_965_868)
+                        builder.setRole(replacement, kAXStaticTextRole as String)
+                        builder.setAttribute(replacement, kAXDescriptionAttribute as String, "label")
+                        builder.setAttribute(replacement, kAXValueAttribute as String, "Audio 13")
+                        builder.setChildren(replacement, [])
+                        builder.setChildren(strip, [replacement, insert])
+                    }
+                }
+            }
             if attribute == kAXHelpAttribute as String, CFEqual(element, bypass) { calls.bypassHelp += 1 }
+            if attribute == kAXHelpAttribute as String, CFEqual(element, insert) { calls.midiHelp += 1 }
             return base.attributeValueResult?(element, attribute) ?? .success(base.attributeValue(element, attribute))
         }
         let raw = AXHelpers.Runtime(axApp: base.axApp, attributeValue: { try? native($0, $1).get() },
@@ -176,15 +225,39 @@ struct Issue965StripHelpSampleTests {
                 let states = try #require(AccessibilityChannel.readChannelStrips(from: [strip], runtime: logic,
                     window: window, mixer: mixer,
                     readingRouting: false, readingScalarHelp: false, stoppingWhen: { guardian.stopped }))
-                #expect(states.first?.pluginsSource == "ax" && states.first?.plugins.first?.name == "Gain")
-                #expect(states.first?.physicalBinding != nil)
-                let fullyObserved = try #require(states.first?.pluginsFullyObserved)
-                #expect(fullyObserved)
+                let physical = try #require(states.first?.physicalBinding)
+                let fullyObserved: Bool = try #require(states.first?.pluginsFullyObserved as Bool?)
+                if losesTypeProof {
+                    #expect(calls.typeValues >= 5, "The witness must reach the deciding native type bookend")
+                    #expect(!fullyObserved)
+                    #expect(states.first?.pluginsSource == nil && states.first?.pluginsReadError != nil,
+                        "A lost native type/owner proof cannot publish the chain acquired without its MIDI census")
+                } else {
+                    #expect(states.first?.pluginsSource == "ax" && states.first?.plugins.first?.name == "Gain")
+                    #expect(physical.currentIndex(runtime: logic) == 0,
+                        "The cost witness must reach a currently owned native source, not a failed fixture lookup")
+                    #expect(fullyObserved)
+                }
                 #expect(calls.metadataBatches == 0)
-                #expect(calls.helpGuardCalls > 0 && !guardian.stopped && !failures.any,
-                    "Independent MIDI/instrument absence still requires its guarded Help census")
+                if typeLabel == "audio" || losesTypeProof {
+                    #expect(calls.midiHelp == 0,
+                        "The exact native fixed Audio type excludes an instrument without a MIDI Help absence census")
+                } else {
+                    #expect(calls.midiHelp > 0 && calls.helpGuardCalls > 0,
+                        "Unresolved, non-Audio, malformed and editable labels retain guarded MIDI/instrument disambiguation")
+                }
+                #expect(!guardian.stopped && !failures.any)
                 #expect(calls.bypassHelp == 0,
                     "The actual owned reader must not read Bypass Help just to find an Open control already present in sibling metadata")
+                if typeLabel == "audio" {
+                    builder.setAttribute(label, kAXValueAttribute as String, "Inst 1")
+                    calls.midiHelp = 0
+                    let next = try #require(AccessibilityChannel.readChannelStrips(from: [strip], runtime: logic,
+                        window: window, mixer: mixer, readingRouting: false, readingScalarHelp: false,
+                        stoppingWhen: { guardian.stopped }))
+                    #expect(next.first?.pluginsSource == "ax" && calls.midiHelp > 0,
+                        "The next extraction must not reuse the previous Audio proof")
+                }
             }
         }
         #expect(builder.setCalls.isEmpty && builder.actionCalls.isEmpty)

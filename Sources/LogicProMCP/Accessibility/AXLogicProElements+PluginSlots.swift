@@ -3,6 +3,34 @@ import Foundation
 
 
 extension AXLogicProElements {
+    /// Request-local native type evidence, not a decoded label or an insert/write capability.
+    struct NativeAudioStripType {
+        private let binding: AXMixerTypeLabelBinding
+        private let logic: Runtime
+
+        init?(binding: AXMixerTypeLabelBinding, runtime: Runtime) {
+            let suffix = binding.label.utf8.dropFirst(6)
+            guard binding.label.hasPrefix("Audio "),
+                  suffix.first.map({ (49...57).contains($0) }) == true,
+                  suffix.allSatisfy({ (48...57).contains($0) }) else { return nil }
+            self.binding = binding; logic = runtime
+        }
+
+        fileprivate func isCurrent(children: [AXUIElement]) -> Bool {
+            guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  binding.owner.currentIndex(runtime: logic) != nil,
+                  case .success(let currentChildren) = AXHelpers.childrenResult(binding.owner.strip, runtime: logic.ax),
+                  currentChildren.count == children.count,
+                  zip(currentChildren, children).allSatisfy({ CFEqual($0, $1) }),
+                  let current = typeNumberLabel(in: binding.owner.strip, runtime: logic.ax),
+                  CFEqual(current.control, binding.control),
+                  current.label.utf8.elementsEqual(binding.label.utf8),
+                  binding.owner.currentIndex(runtime: logic) != nil,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            return true
+        }
+    }
+
     /// The occupied inserts of `strip`, or nil when the strip's children did not read (#982) or
     /// its insert slots could not be classified. An empty list is a strip whose chain was read and
     /// holds nothing.
@@ -13,10 +41,11 @@ extension AXLogicProElements {
     static func pluginSlots(
         in strip: AXUIElement,
         runtime: AXHelpers.Runtime = .production,
+        nativeAudioType: NativeAudioStripType? = nil,
         observingSlots: ([PluginInsertSlot]) -> Void = { _ in }
     ) -> [PluginSlotState]? {
         guard let children = childrenIfRead(strip, runtime: runtime) else { return nil }
-        let slots = audioPluginInsertSlots(children: children, runtime: runtime)
+        let slots = audioPluginInsertSlots(children: children, runtime: runtime, nativeAudioType: nativeAudioType)
         observingSlots(slots)
         guard !slots.contains(where: { $0.readStatus == .unclassified }) else { return nil }
         return slots.compactMap { slot in
@@ -87,7 +116,8 @@ extension AXLogicProElements {
     /// them with `childrenResult` can tell a failed read from a strip with no inserts (#972).
     static func audioPluginInsertSlots(
         children: [AXUIElement],
-        runtime: AXHelpers.Runtime = .production
+        runtime: AXHelpers.Runtime = .production,
+        nativeAudioType: NativeAudioStripType? = nil
     ) -> [PluginInsertSlot] {
         var slots: [PluginInsertSlot] = []
         for (offset, child) in children.enumerated() {
@@ -113,7 +143,7 @@ extension AXLogicProElements {
             }
             // else: not an insert slot — skip without consuming an index.
         }
-        return screenOrderedInsertSlots(slots, children: children, runtime: runtime)
+        return screenOrderedInsertSlots(slots, children: children, runtime: runtime, nativeAudioType: nativeAudioType)
     }
 
     /// Number the recognised slots from the top of the strip down, and take a software
@@ -134,11 +164,30 @@ extension AXLogicProElements {
     static func screenOrderedInsertSlots(
         _ found: [PluginInsertSlot],
         children: [AXUIElement],
-        runtime: AXHelpers.Runtime
+        runtime: AXHelpers.Runtime,
+        nativeAudioType: NativeAudioStripType? = nil
+    ) -> [PluginInsertSlot] {
+        let excludesInstrument = nativeAudioType?.isCurrent(children: children) == true
+        let result = screenOrderedInsertSlots(found, children: children, runtime: runtime,
+            excludesInstrument: excludesInstrument)
+        // Every new extraction renews both native bookends. A lost positive
+        // proof cannot publish the chain obtained by omitting its MIDI census.
+        guard !excludesInstrument || nativeAudioType?.isCurrent(children: children) == true else {
+            return found.enumerated().map { $0.element.numbered($0.offset, as: .unclassified) }
+        }
+        return result
+    }
+
+    private static func screenOrderedInsertSlots(
+        _ found: [PluginInsertSlot],
+        children: [AXUIElement],
+        runtime: AXHelpers.Runtime,
+        excludesInstrument: Bool
     ) -> [PluginInsertSlot] {
         guard !found.isEmpty else { return [] }
         let unclassified = found.enumerated().map { $0.element.numbered($0.offset, as: .unclassified) }
-        let midiEffectSlot = midiEffectSlotFrame(children: children, runtime: runtime)
+        let midiEffectSlot: MIDIEffectSlotReading = excludesInstrument ? .absent
+            : midiEffectSlotFrame(children: children, runtime: runtime)
         // One slot on a strip with no instrument slot has one order; nothing needs a frame.
         if found.count == 1, case .absent = midiEffectSlot {
             return [found[0].numbered(0)]
