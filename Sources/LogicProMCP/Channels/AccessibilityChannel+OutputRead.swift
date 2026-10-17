@@ -1324,7 +1324,7 @@ extension AccessibilityChannel {
                 let change: ChangedSendObservation?
                 let observingChange = request.occupiedInverse != nil || (sendChangeObserver != nil
                     && request.expected == .stereoOutput && request.destination.map {
-                        if case .bus = $0 { return true }; return false
+                        switch $0 { case .bus, .physical: return true; default: return false }
                     } == true)
                 if observingChange, let checkedAfter = after.assignment, let checkedBefore = request.expected, let verifiedPopulation {
                     let proof = ChangedSendObservation(source: source, control: final.control, footprint: final.slots,

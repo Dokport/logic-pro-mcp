@@ -297,7 +297,9 @@ struct SystemDispatcher: OperationTraceDispatching {
             engineering targets; fresh raw state owns the raw_ax_value inverse. Q is not applied, \
             no raw/engineering conversion or automatic recommendation mapping is inferred. \
             Selected Send Saga: one exact occupied Stereo Output send, Post Fader, raw level 0 and bypass off, \
-            may be removed or replaced by one existing Bus 1..256. Use its mix_ref and source-census ordinal, \
+            may be removed or replaced by one existing Bus 1..256 or a checked physical output pair. \
+            Physical pairs use the existing destination {kind:physical,ports:[a,b]} shape; offered availability \
+            is checked by the native popup, not inferred from the numbers. Use its mix_ref and source-census ordinal, \
             expected_current Stereo Output, replace_existing:true and confirmed_plan_hash. Native request-local \
             custody plus independent checked reads govern compensation; no canonical physical-slot mapping, \
             Aux creation, fresh-empty creation or general Send reversibility is inferred. \
@@ -939,7 +941,7 @@ struct SystemDispatcher: OperationTraceDispatching {
             }
             if containsSend, sendRemoval == nil {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
-                    hint: "Only one exact occupied Stereo Output send removal, existing-bus replacement or sole-empty Stereo Output creation is supported by this Saga adapter.",
+                    hint: "Only one exact occupied Stereo Output send removal, existing-bus/physical-output replacement or sole-empty Stereo Output creation is supported by this Saga adapter.",
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             if pluginPlan || containsSend || containsMode || containsLevel, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {

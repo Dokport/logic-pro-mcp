@@ -192,7 +192,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
               step.targetRef != nil,
               Set(step.params.keys).subtracting(["ordinal", "destination", "expected_current", "replace_existing", "project_ref"]).isEmpty,
               step.params["ordinal"]?.intValue.map({ $0 >= 0 }) == true,
-              isCreation(step) || ((step.params["destination"] == .object(["kind": .string("no_send")]) || busDestination(step) != nil)
+              isCreation(step) || ((step.params["destination"] == .object(["kind": .string("no_send")]) || replacementDestination(step) != nil)
                 && step.params["expected_current"] == .object(["kind": .string("stereo_output")])
                 && step.params["replace_existing"] == .bool(true)),
               step.expectedInverse == .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination") else { return false }
@@ -216,6 +216,15 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
         return .bus(number)
     }
 
+    private static func replacementDestination(_ step: SagaStep) -> OutputAssignment? {
+        if let bus = busDestination(step) { return bus }
+        guard let raw = step.params["destination"], let value = raw.objectValue,
+              Set(value.keys) == ["kind", "ports"], value["kind"] == .string("physical"),
+              let assignment = MixerDispatcher.outputAssignmentParam(raw, field: "destination").assignment,
+              case .physical = assignment else { return nil }
+        return assignment
+    }
+
     init?(plan: SagaPlan) {
         guard Self.accepts(plan), let forward = plan.steps.first else { return nil }
         self.forward = forward
@@ -234,7 +243,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     static func journalValue(_ step: SagaStep) -> Value? {
         if isCreation(step) { return .string("stereo_output") }
         if step.params["destination"] == .object(["kind": .string("no_send")]) { return .string("no_send") }
-        return busDestination(step).map { .string($0.token) }
+        return replacementDestination(step).map { .string($0.token) }
     }
 
     private func scope<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
@@ -373,7 +382,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 }) {
                     await AccessibilityChannel.$sendChangeObserver.withValue({ proof in
                         if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track),
-                           proof.checkedBefore == .stereoOutput, proof.checkedAfter == Self.busDestination(self.forward) {
+                           proof.checkedBefore == .stereoOutput, proof.checkedAfter == Self.replacementDestination(self.forward) {
                             self.change = proof
                             upstreamChange?(proof)
                         }
