@@ -1884,7 +1884,8 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.footprintDocumentInjected && f.footprintDocumentRestored,
                         "Reach the initial Track-document sample and keep its contradiction until actual name extraction")
                     #expect(result["saga_state"] as? String != "completed")
-                    #expect(result["verified"] as? Bool == false)
+                    let verified = try #require(result["verified"] as? Bool)
+                    #expect(!verified)
                     #expect(f.routingDestinationPresses == 0,
                         "A restored final scope cannot authorize output from foreign/unknown sampled Track ownership")
                     #expect(f.routingNameWrites == ["Selected Canonical"])
