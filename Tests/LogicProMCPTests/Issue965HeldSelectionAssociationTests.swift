@@ -93,7 +93,7 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("One coupled-editor decision reuses its already-held stopped transport",
         arguments: ["held", "fallback", "play", "record", "bad_play", "bad_record", "play_role", "record_role",
                     "replaced_bar", "replaced_record", "competing_bar", "late_competing_bar",
-                    "late_focus", "late_document", "late_source", "late_header", "late_header_role", "late_mixer", "late_peer",
+                    "late_focus", "late_document", "late_source", "late_header", "late_header_role", "late_rail_role", "late_mixer", "late_peer",
                     "cancel", "lost", "fresh_values"])
     func coupledEditorGuardDoesNotRediscoverItsHeldTransport(_ fault: String) async throws {
         let f = try Fixture(), gate = LogicMutationGate()
@@ -158,6 +158,7 @@ struct Issue965HeldSelectionAssociationTests {
                         if fault == "late_source" { f.builder.setChildren(f.mixer, [f.strips[0]]) }
                         if fault == "late_header" { f.builder.setChildren(f.rail, [f.headers[1]]) }
                         if fault == "late_header_role" { f.builder.setRole(f.headers[0], kAXTextFieldRole as String) }
+                        if fault == "late_rail_role" { f.builder.setRole(f.rail, kAXTextFieldRole as String) }
                         if fault == "late_mixer" { f.builder.setChildren(f.window, [f.rail, f.builder.element(1_965_720)]) }
                         if fault == "late_peer" { f.builder.setChildren(f.mixer, [otherRecord, f.strips[1]]) }
                         if fault == "cancel" { f.routingLateScopeInjected = true }
@@ -186,18 +187,14 @@ struct Issue965HeldSelectionAssociationTests {
                         "Do not repeat whole Control Bar discovery before deciding Record")
                 } else { #expect(f.coupledGuardPopulationScans > 0) }
                 if fault == "held" {
-                    // The original Track renewal also visits Control Bar
-                    // metadata. Measure it separately; the source/transport
-                    // decision still adds only one uniqueness discovery.
+                    // The original rail's strict rows are already held. Its
+                    // renewal must not rediscover unrelated Control Bar data;
+                    // keep the one actual transport uniqueness discovery.
                     f.coupledGuardBarReads = 0
                     f.coupledGuardCountDiscovery = true
-                    let trackIndex = try #require(pair.track.currentIndex())
-                    #expect(trackIndex == 0)
-                    let headerRenewalReads = f.coupledGuardBarReads
-                    f.coupledGuardBarReads = 0
                     let playReads = f.coupledGuardPlayReads, recordReads = f.coupledGuardRecordReads
                     #expect(held.permitsCoupledEditorTransportRead(pair: pair))
-                    #expect(f.coupledGuardBarReads == oneDiscoveryReads + headerRenewalReads)
+                    #expect(f.coupledGuardBarReads == oneDiscoveryReads)
                     #expect(f.coupledGuardPopulationScans == 0)
                     #expect(f.coupledGuardPlayReads > playReads && f.coupledGuardRecordReads > recordReads)
                     f.coupledGuardCountDiscovery = false

@@ -797,7 +797,10 @@ extension AXLogicProElements {
         }
     }
 
-    private static func enumerateTrackHeaderRows(
+    /// Parse this rail using the same status-bearing row rules as discovery.
+    /// Callers must independently retain its original window/path ownership;
+    /// this parser does not discover a rail or grant custody of one.
+    static func enumerateTrackHeaderRows(
         in headers: AXUIElement,
         runtime: AXHelpers.Runtime
     ) -> TrackHeaderRead {
