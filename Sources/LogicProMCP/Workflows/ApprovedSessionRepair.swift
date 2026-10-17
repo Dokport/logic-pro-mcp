@@ -1148,7 +1148,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         // A committed output can redraw an existing peer without retiring the
         // source. Renew only through the original header and its actual inverse;
         // the unchanged protected-value comparison still decides acceptance.
-        let peerRedrawn = !sourceRetired && body["state"] as? String == "A"
+        // A response that is still State B can have crossed the actual write
+        // boundary. Renew observation as for a retired source; only the fresh
+        // checked assignment and protected footprint can establish its effect.
+        let peerRedrawn = !sourceRetired
             && priorCensus.count == task.capture.channelStrips.count
             && currentCensus.map { current in
                 current.count == priorCensus.count
