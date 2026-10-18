@@ -63,6 +63,7 @@ enum OwnedAuxLifecycle {
         let effect: AccessibilityChannel.ChangedInputObservation?
         let result: ChannelResult?
         let diagnostic: String?
+        let uiEffects: SessionPopulationObservation.UIEffects
     }
 
     /// Minted only by the original creation Context after a real selected
@@ -121,7 +122,7 @@ enum OwnedAuxLifecycle {
         }
     }
 
-    fileprivate struct Node: @unchecked Sendable {
+    struct Node: @unchecked Sendable {
         let element: AXUIElement
         let children: [AXUIElement]
         let fields: [String: Value]
@@ -131,6 +132,42 @@ enum OwnedAuxLifecycle {
                 && children.count == other.children.count
                 && zip(children, other.children).allSatisfy { CFEqual($0, $1) }
         }
+    }
+
+    /// An owned input change can make the selected Aux ineligible for a dormant
+    /// control-bar utility (native Tuner). This is availability/help metadata,
+    /// not permission to change any checkbox value or to restore that utility.
+    /// Keep exact objects/children and every other field; allow only one leaf's
+    /// measured enabled -> disabled transition under the original control bar.
+    static func preservesInputInitializationOutside(_ before: [Node], _ after: [Node]?,
+                                                    controlBar: AXUIElement?) -> Bool {
+        guard let after, before.count == after.count else { return false }
+        if zip(before, after).allSatisfy({ $0.matches($1) }) { return true }
+        guard let controlBar, before.filter({ CFEqual($0.element, controlBar) }).count == 1,
+              let bar = before.first(where: { CFEqual($0.element, controlBar) }),
+              bar.fields[kAXRoleAttribute] == .text(kAXGroupRole as String) else { return false }
+        var descendants: [AXUIElement] = [], pending = bar.children
+        while let element = pending.popLast() {
+            guard descendants.count < before.count,
+                  !descendants.contains(where: { CFEqual($0, element) }),
+                  let node = before.first(where: { CFEqual($0.element, element) }) else { return false }
+            descendants.append(element); pending.append(contentsOf: node.children)
+        }
+        var deactivated = 0
+        for (old, current) in zip(before, after) where !old.matches(current) {
+            guard CFEqual(old.element, current.element), old.children.isEmpty, current.children.isEmpty,
+                  descendants.contains(where: { CFEqual($0, old.element) }),
+                  old.fields[kAXRoleAttribute] == .text(kAXCheckBoxRole as String),
+                  current.fields[kAXRoleAttribute] == .text(kAXCheckBoxRole as String),
+                  old.fields[kAXValueAttribute] == .number(0), current.fields[kAXValueAttribute] == .number(0),
+                  old.fields[kAXEnabledAttribute] == .number(1), current.fields[kAXEnabledAttribute] == .number(0) else { return false }
+            var a = old.fields, b = current.fields
+            for field in [kAXEnabledAttribute, kAXHelpAttribute] { a.removeValue(forKey: field); b.removeValue(forKey: field) }
+            guard a == b else { return false }
+            deactivated += 1
+            guard deactivated == 1 else { return false }
+        }
+        return deactivated == 1
     }
 
     /// Operation state only: callers must retain this same context to reconcile an
@@ -1106,7 +1143,7 @@ enum OwnedAuxLifecycle {
         func initializeInputBus(for proof: OwnedInverse, destination: Int) async -> InputReceipt {
             let runtime = self.runtime
             func rejected(_ reason: String) -> InputReceipt {
-                .init(status: .rejectedBeforeWrite, effect: nil, result: nil, diagnostic: reason)
+                .init(status: .rejectedBeforeWrite, effect: nil, result: nil, diagnostic: reason, uiEffects: uiEffects)
             }
             guard proof.owner == owner, !deleteIssued, (1...256).contains(destination),
                   let created = held?.created, CFEqual(created, proof.strip), let track = observedTrack else {
@@ -1120,7 +1157,7 @@ enum OwnedAuxLifecycle {
                       let current = census(), current.count == after.strips.count,
                       zip(after.strips, current).allSatisfy({ matches($0, footprint($1)) }), actionContextCurrent() else {
                     return .init(status: .configurationPartial, effect: inputInitializationReceipt?.effect,
-                        result: inputInitializationReceipt?.result, diagnostic: "initialization_not_reissued")
+                        result: inputInitializationReceipt?.result, diagnostic: "initialization_not_reissued", uiEffects: uiEffects)
                 }
                 return cached
             }
@@ -1161,6 +1198,7 @@ enum OwnedAuxLifecycle {
                   let inputIndex = trees[index].firstIndex(where: { CFEqual($0.element, slot.control) }),
                   actionContextCurrent() else { return rejected("created_input_preservation_unavailable") }
             let window = bindings[0].window, mixer = bindings[0].mixer
+            let controlBar = AXLogicProElements.getControlBar(in: window, runtime: runtime.ax)
             let excluded = [mixer, options, edit]
             let authorization = InputInitializationProof(owner: owner, pair: currentPair, before: beforeInput,
                 destination: destination, checked: checked, permitting: { popup in
@@ -1194,7 +1232,14 @@ enum OwnedAuxLifecycle {
                effect.current.track.matches(track), effect.permits(),
                let after = census(), after.count == current.count,
                after.indices.contains(index), CFEqual(after[index], effect.current.strip.strip),
-               matches(outside, footprint(window, excluding: excluded)) {
+               let afterOutside = footprint(window, excluding: excluded),
+               OwnedAuxLifecycle.preservesInputInitializationOutside(outside, afterOutside, controlBar: controlBar) {
+                if !matches(outside, afterOutside) {
+                    uiEffects.restoration = "not_restored"
+                    if !uiEffects.changed.contains("control_bar_checkbox_availability") {
+                        uiEffects.changed.append("control_bar_checkbox_availability")
+                    }
+                }
                 let afterTrees = after.compactMap { footprint($0) }
                 completed = afterTrees.count == trees.count && trees.indices.allSatisfy { offset in
                     if offset != index { return sameValues(trees[offset], afterTrees[offset]) }
@@ -1208,12 +1253,13 @@ enum OwnedAuxLifecycle {
                     }
                 }
                 if completed, let finalOutside = footprint(window, excluding: excluded),
-                   matches(outside, finalOutside), effect.permits(), actionContextCurrent() {
+                   OwnedAuxLifecycle.preservesInputInitializationOutside(outside, finalOutside, controlBar: controlBar),
+                   effect.permits(), actionContextCurrent() {
                     inputInitializationAfter = (finalOutside, afterTrees)
                 } else { completed = false }
             }
             let receipt = InputReceipt(status: completed ? .initialized : .configurationPartial,
-                effect: effect, result: result, diagnostic: completed ? nil : "created_input_effect_or_preservation_unverified")
+                effect: effect, result: result, diagnostic: completed ? nil : "created_input_effect_or_preservation_unverified", uiEffects: uiEffects)
             inputInitializationReceipt = receipt
             return receipt
         }

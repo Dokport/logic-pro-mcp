@@ -1088,6 +1088,38 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
+    @Test(arguments: ["healthy", "unchanged", "outside_bar", "unknown_bar", "activated", "value", "other_field",
+        "role", "child", "replacement", "multiple", "peer_edit", "unread_enabled"])
+    func initializedInputMayDeactivateOnlyOneDormantControlBarCheckbox(fault: String) {
+        let b = FakeAXRuntimeBuilder(), bar = b.element(967_3000), tuner = b.element(967_3001), peer = b.element(967_3002)
+        let fields: [String: OwnedAuxLifecycle.Value] = [kAXRoleAttribute: .text(kAXCheckBoxRole as String),
+            kAXDescriptionAttribute: .text("Tuner"), kAXEnabledAttribute: .number(1), kAXValueAttribute: .number(0),
+            kAXHelpAttribute: .text("available")]
+        var beforeFields = fields, afterFields = fields
+        afterFields[kAXEnabledAttribute] = .number(0); afterFields[kAXHelpAttribute] = .text("unavailable")
+        var children: [AXUIElement] = [], element = tuner
+        if fault == "unchanged" { afterFields = fields }
+        if fault == "activated" { beforeFields[kAXEnabledAttribute] = .number(0); afterFields[kAXEnabledAttribute] = .number(1) }
+        if fault == "value" { afterFields[kAXValueAttribute] = .number(1) }
+        if fault == "other_field" { afterFields[kAXDescriptionAttribute] = .text("Other control") }
+        if fault == "role" { afterFields[kAXRoleAttribute] = .text(kAXButtonRole as String) }
+        if fault == "child" { children = [b.element(967_3003)] }
+        if fault == "replacement" { element = b.element(967_3004) }
+        if fault == "unread_enabled" { afterFields.removeValue(forKey: kAXEnabledAttribute) }
+        let barChildren = fault == "outside_bar" ? [] : fault == "multiple" ? [tuner, peer] : [tuner]
+        let barNode = OwnedAuxLifecycle.Node(element: bar, children: barChildren,
+            fields: [kAXRoleAttribute: .text(kAXGroupRole as String)])
+        let originalPeer = OwnedAuxLifecycle.Node(element: peer, children: [], fields: fields)
+        var peerFields = fields
+        if fault == "multiple" { peerFields[kAXEnabledAttribute] = .number(0); peerFields[kAXHelpAttribute] = .text("unavailable") }
+        if fault == "peer_edit" { peerFields[kAXValueAttribute] = .number(2) }
+        let before = [barNode, .init(element: tuner, children: [], fields: beforeFields), originalPeer]
+        let after = [barNode, OwnedAuxLifecycle.Node(element: element, children: children, fields: afterFields),
+            .init(element: peer, children: [], fields: peerFields)]
+        #expect(OwnedAuxLifecycle.preservesInputInitializationOutside(before, after,
+            controlBar: fault == "unknown_bar" ? nil : bar) == ["healthy", "unchanged"].contains(fault))
+    }
+
     @Test(arguments: ["canvas_redraw", "scrollbar_canvas_redraw", "canvas_redraw_value", "canvas_redraw_content", "canvas_redraw_blank", "canvas_redraw_reused"])
     func appendedTrackCanObserveOnlyCompleteEmptyCanvasRowRedraw(fault: String) async throws {
         let f = Fixture(); f.modelTrackAppend(fault)
