@@ -2840,6 +2840,16 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("A composed Send that preserves its original controls still publishes owned effect custody",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendRetainsSurvivingNativeControls(mode: String, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, freshPhysicalReturn: returning)
+        }
+    }
+
     @Test(arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project", "physical_slot", "mixed", "missing_witness", "decoded", "unsupported_pair", "physical_removal"])
     func canonicalPhysicalSendReturnRetainsItsTypedBeforeAndOriginalControl(mode: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -3337,6 +3347,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                canonicalSend: String? = nil,
                                                canonicalPhysical: Bool = false,
                                                canonicalName: Bool = false,
+                                               stableDestinationControls: Bool = false,
                                                freshPhysicalReturn: Bool = false,
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil) async throws {
@@ -3748,6 +3759,15 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, [f.strips[0], source]); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, destination) {
+                    if stableDestinationControls {
+                        f.routingDestinationPresses += 1
+                        b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                        b.setChildren(f.mixer, f.strips)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                        return true
+                    }
                     f.routingDestinationPresses += 1; f.routingReplacement = replacement
                     b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
@@ -3789,6 +3809,15 @@ struct Issue965HeldSelectionAssociationTests {
                     return true
                 }
                 if restoring, action == kAXPressAction as String, CFEqual(element, stereo) {
+                    if stableDestinationControls {
+                        f.routingDestinationPresses += 1
+                        b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", "")
+                        b.setChildren(f.mixer, f.strips)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                        return true
+                    }
                     f.routingDestinationPresses += 1; f.routingReplacement = restoredSource
                     b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
                     b.setAttribute(echo, "AXMenuItemMarkChar", "✓")

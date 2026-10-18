@@ -1240,7 +1240,16 @@ extension AccessibilityChannel {
                     population: population, extras: extras, runtime: runtime)
             }
             guard let assigned else { return uncertain("The original occupied-send control is unavailable.") }
-            guard contextAfterPress, controlAfterPress, axPopupAbsent, cgPopupAbsent else {
+            let observingChange = request.occupiedInverse != nil || (sendChangeObserver != nil
+                && request.expected.flatMap { before in request.destination.map {
+                    supportsOccupiedSendChange(before: before, after: $0)
+                } } == true)
+            // A successful stable-control write needs the same native effect capsule as
+            // a retired-source write. Renew its original header without adopting a
+            // replacement Send on a surviving source.
+            let survivingDestination = observingChange && contextAfterPress && controlAfterPress
+                && axPopupAbsent && cgPopupAbsent && sameOriginalSendControl()
+            if observingChange || !(contextAfterPress && controlAfterPress && axPopupAbsent && cgPopupAbsent) {
                 // Diagnostic reads of the retained originals only; a readable
                 // replacement or a zero AX status never restores action authority.
                 func roleStatus(_ original: AXUIElement) -> Int32 {
@@ -1272,8 +1281,9 @@ extension AccessibilityChannel {
                 // A mode leaf may replace only the Send controls. Renew the
                 // exact surviving source through the same original-header
                 // observation/inverse; presence alone never adopts a new Send.
-                // Destination replacement retains its retired-source boundary.
-                guard originalCount == 0 || (request.modeChange != nil && originalCount == 1
+                // A destination write may retain its exact original source AND controls;
+                // replaced controls on a surviving destination source still refuse.
+                guard originalCount == 0 || ((request.modeChange != nil || survivingDestination) && originalCount == 1
                     && physical.currentIndex(runtime: runtime) != nil) else {
                     return uncertain("The original mode source is not uniquely current; no replacement control is adopted.")
                 }
@@ -1298,6 +1308,7 @@ extension AccessibilityChannel {
                     return true
                 }
                 guard let renewed = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax),
+                      !survivingDestination || (renewedOwner.matches(physical) && renewed.control.matches(assigned)),
                       normalized(renewed.slots) == normalized(singleton.slots), populationPreserved(),
                       source.permits(runtime: runtime) else {
                     return uncertain("Renewal changed the complete empty-slot footprint, protected send state or physical population.")
@@ -1333,10 +1344,6 @@ extension AccessibilityChannel {
                 extras["changed"] = true
                 extras["verify_source"] = "ax_send_menu_checkmark"; extras["snapshot_atomic"] = false
                 let change: ChangedSendObservation?
-                let observingChange = request.occupiedInverse != nil || (sendChangeObserver != nil
-                    && request.expected.flatMap { before in request.destination.map {
-                        supportsOccupiedSendChange(before: before, after: $0)
-                    } } == true)
                 if observingChange, let checkedAfter = after.assignment, let checkedBefore = request.expected, let verifiedPopulation {
                     let proof = ChangedSendObservation(source: source, control: final.control, footprint: final.slots,
                         checkedBefore: checkedBefore, checkedAfter: checkedAfter,
