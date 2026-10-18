@@ -977,6 +977,55 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
+    @Test(arguments: ["healthy", "before_track", "pending_track", "foreign_proof", "project", "selection", "header_edit", "peer_edit", "aux_replaced", "track_replaced", "cancelled"])
+    func createdPairRequiresThisContextsCurrentActualAuxAndTrack(fault: String) async throws {
+        let f = Fixture(); f.modelTrackAppend(fault == "pending_track" ? "no_effect" : "healthy")
+        try await owned(f) {
+            let context = try f.context()
+            let aux = await context.create()
+            let proof = try #require(aux.inverse)
+            if fault != "before_track" { _ = await context.appendArrangeTrack(for: proof) }
+            var requestedProof = proof
+            if fault == "foreign_proof" {
+                let other = Fixture(); other.modelTrackAppend()
+                let foreign = try other.context()
+                requestedProof = try #require(await foreign.create().inverse)
+            }
+            switch fault {
+            case "project": f.b.setAttribute(f.window, kAXDocumentAttribute, "file:///tmp/967-other.logicx")
+            case "selection": f.selected = [f.original[0]]
+            case "header_edit": f.b.setAttribute(f.b.element(967_2020), kAXValueAttribute, "Newer header edit")
+            case "peer_edit": f.b.setAttribute(f.original[0], kAXValueAttribute, 1)
+            case "aux_replaced":
+                let replacement = f.b.element(967_2100)
+                f.b.setRole(replacement, kAXLayoutItemRole as String)
+                f.b.setChildren(replacement, f.b.makeAXRuntime().children(f.created))
+                f.replacementCreated = replacement; f.selected = [replacement]
+            case "track_replaced":
+                let replacement = f.b.element(967_2101), original = f.b.element(f.appendedHeaderID)
+                f.b.setRole(replacement, kAXLayoutItemRole as String)
+                f.b.setAttribute(replacement, kAXDescriptionAttribute, "Track 3")
+                f.b.setAttribute(replacement, kAXSelectedAttribute, true)
+                f.b.setChildren(replacement, f.b.makeAXRuntime().children(original))
+                f.b.setChildren(f.b.element(f.trackRailID), [f.b.element(967_2001), f.b.element(967_2002), replacement])
+            case "cancelled": f.cancelled = true
+            default: break
+            }
+            let inputsBefore = f.mouseEvents
+            let pair = await context.observedCreatedPair(for: requestedProof)
+            if fault == "healthy" {
+                let pair = try #require(pair)
+                #expect(CFEqual(pair.track.header, f.b.element(f.appendedHeaderID)))
+                #expect(CFEqual(pair.strip.strip, f.created))
+                #expect(pair.track.currentIndex() == 2 && pair.strip.currentIndex(runtime: f.runtime) == 2)
+                #expect(pair.source == "owned_aux_track_creation")
+            } else { #expect(pair == nil) }
+            #expect(f.mouseEvents == inputsBefore, "Pair observation must not issue or retry a creator or focus gesture")
+            #expect(f.selectionSets == 0 && f.deletePresses == 0)
+            #expect(f.trackAppendPresses == (["before_track"].contains(fault) ? 0 : 1))
+        }
+    }
+
     @Test(arguments: ["activated_scrollbar", "zero_scrollbar", "unrelated_scrollbar", "scrollbar_bad_value", "scrollbar_bad_child", "scrollbar_added_content"])
     func appendedTrackMayActivateOnlyItsExistingCanvasScrollbar(fault: String) async throws {
         let f = Fixture(); f.modelTrackAppend(fault)
@@ -1010,7 +1059,7 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
-    @Test(arguments: ["selection", "edit", "delete"], ["project", "cancellation"])
+    @Test(arguments: ["selection", "edit", "delete", "pair"], ["project", "cancellation"])
     func finalSelectionReadCannotOutliveItsActionScope(stage: String, loss: String) async throws {
         func configured() -> Fixture {
             let f = Fixture()
@@ -1018,7 +1067,8 @@ struct Issue967OwnedAuxLifecycleTests {
                 f.modelWholePeerRetirement(); f.selectionAfterCreation = []
                 f.focusOnCreation = f.mixer
                 f.b.setAttributeSettable(f.mixer, kAXSelectedChildrenAttribute, true)
-            } else { f.selectCreatedOnCreation = true }
+            } else if stage == "pair" { f.modelTrackAppend() }
+            else { f.selectCreatedOnCreation = true }
             return f
         }
         // Learn the last actual selection read before this fake native action,
@@ -1029,9 +1079,12 @@ struct Issue967OwnedAuxLifecycleTests {
             let context = try control.context(nativeControls: stage == "selection")
             let aux = await context.create()
             let proof = try #require(aux.inverse)
-            if stage != "selection" { #expect(await context.remove(proof).status == .removed) }
+            if stage == "pair" {
+                #expect(await context.appendArrangeTrack(for: proof).status == .appended)
+                #expect(await context.observedCreatedPair(for: proof) != nil)
+            } else if stage != "selection" { #expect(await context.remove(proof).status == .removed) }
         }
-        let boundary = stage == "selection" ? control.selectionReadAtSet
+        let boundary = stage == "pair" ? control.selectionReads : stage == "selection" ? control.selectionReadAtSet
             : stage == "edit" ? control.selectionReadAtEdit : control.selectionReadAtDelete
         #expect(boundary > 0)
         let f = configured(); f.scopeLossAtSelectionRead = boundary; f.scopeLossKind = loss
@@ -1040,6 +1093,11 @@ struct Issue967OwnedAuxLifecycleTests {
             let aux = await context.create()
             if stage == "selection" {
                 #expect(aux.inverse == nil && f.selectionSets == 0)
+            } else if stage == "pair" {
+                let proof = try #require(aux.inverse)
+                #expect(await context.appendArrangeTrack(for: proof).status == .appended)
+                #expect(await context.observedCreatedPair(for: proof) == nil)
+                #expect(f.trackAppendPresses == 1 && f.selectionSets == 0 && f.deletePresses == 0)
             } else {
                 let proof = try #require(aux.inverse)
                 #expect(await context.remove(proof).status == .residual)

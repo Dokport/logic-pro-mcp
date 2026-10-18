@@ -979,6 +979,26 @@ enum OwnedAuxLifecycle {
             return trackReceipt(.pending, "track_append_unobserved")
         }
 
+        /// A read handoff for this Context's actual creation and optional Track.
+        /// The native menu was dispatched on this sole Aux, and the new selected
+        /// header was retained under the unchanged original header prefix. No
+        /// name/ordinal join, focus gesture, public reference rebinding or new
+        /// assignment authority is inferred from the tuple.
+        func observedCreatedPair(for proof: OwnedInverse) async -> AccessibilityChannel.HeldSelectionAssociation.Pair? {
+            guard proof.owner == owner, !deleteIssued, trackAppendIssued,
+                  let held, let created = held.created, let track = observedTrack,
+                  CFEqual(proof.strip, created),
+                  await appendArrangeTrack(for: proof).status == .appended,
+                  permitted(), let current = census(),
+                  current.filter({ CFEqual($0, created) }).count == 1,
+                  matches(proof.footprint, footprint(created)),
+                  track.currentIndex() != nil,
+                  AXValueExtractors.extractSelectedState(track.header, runtime: runtime.ax) == true,
+                  selectedOnly(created), actionContextCurrent() else { return nil }
+            return .init(track: track, strip: .init(window: bindings[0].window, mixer: bindings[0].mixer,
+                strip: created, document: bindings[0].document), source: "owned_aux_track_creation")
+        }
+
         func create() async -> Receipt {
             if trackAppendIssued { return receipt(.configurationPartial, strip: observedCreated, diagnostic: "owned_arrange_track_configuration_pending") }
             if let held, let proof = held.inverse {
