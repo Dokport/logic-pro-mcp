@@ -169,6 +169,9 @@ struct Issue967OwnedAuxLifecycleTests {
         var trackAppended = false
         var trackAppendFault = "healthy"
         var trackAppendPostEditDelivered = false
+        var readFocusFault: String?
+        var readFocusPresses = 0
+        var selectionReadAtFocus = 0
         let trackRailID = 967_2000
         let appendedHeaderID = 967_2003
 
@@ -269,6 +272,7 @@ struct Issue967OwnedAuxLifecycleTests {
             }
             if trackAppendFault == "header_edit" { b.setAttribute(b.element(967_2020), kAXValueAttribute, "Newer edit") }
             if trackAppendFault == "peer_edit" { b.setAttribute(original[0], kAXValueAttribute, 1) }
+            if readFocusFault != nil { b.setAttribute(app, kAXFocusedUIElementAttribute, mixer) }
             optionOpen = false
         }
 
@@ -396,7 +400,16 @@ struct Issue967OwnedAuxLifecycleTests {
                       betweenClickHalves = true
                       return true
                   },
-                  postKeyEvent: { _ in Issue.record("Keyboard fallback forbidden"); return false },
+                  postKeyEvent: { [self] key in
+                      guard let readFocusFault else { Issue.record("Keyboard fallback forbidden"); return false }
+                      #expect(key == 9 && trackAppended)
+                      readFocusPresses += 1; selectionReadAtFocus = selectionReads
+                      if !["no_effect", "late_effect"].contains(readFocusFault) {
+                          b.setAttribute(app, kAXFocusedUIElementAttribute,
+                              readFocusFault == "wrong_focus" ? window : b.element(trackRailID))
+                      }
+                      return readFocusFault != "unacked_effect"
+                  },
                   postUnicodeScalar: { _ in Issue.record("Typing forbidden"); return false },
                   sleepMicros: { _ in Issue.record("Sleep between input halves forbidden") },
                   prepareMouseClick: { [self] point, count in
@@ -977,52 +990,57 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
-    @Test(arguments: ["healthy", "before_track", "pending_track", "foreign_proof", "project", "selection", "header_edit", "peer_edit", "aux_replaced", "track_replaced", "cancelled"])
-    func createdPairRequiresThisContextsCurrentActualAuxAndTrack(fault: String) async throws {
+    @Test(arguments: ["healthy", "already_rail", "unacked_effect", "no_effect", "late_effect", "wrong_focus",
+        "before_track", "pending_track", "foreign_proof", "project", "selection", "header_edit", "peer_edit", "track_replaced", "cancelled", "text_editing", "wrong_window", "modal"])
+    func createdTrackReadFocusIsOwnedAndNeverReissuesAKey(fault: String) async throws {
         let f = Fixture(); f.modelTrackAppend(fault == "pending_track" ? "no_effect" : "healthy")
+        f.readFocusFault = fault
         try await owned(f) {
-            let context = try f.context()
-            let aux = await context.create()
+            let context = try f.context(), aux = await context.create()
             let proof = try #require(aux.inverse)
             if fault != "before_track" { _ = await context.appendArrangeTrack(for: proof) }
-            var requestedProof = proof
+            var requested = proof
             if fault == "foreign_proof" {
                 let other = Fixture(); other.modelTrackAppend()
-                let foreign = try other.context()
-                requestedProof = try #require(await foreign.create().inverse)
+                requested = try #require(await other.context().create().inverse)
             }
             switch fault {
+            case "already_rail": f.b.setAttribute(f.app, kAXFocusedUIElementAttribute, f.b.element(f.trackRailID))
             case "project": f.b.setAttribute(f.window, kAXDocumentAttribute, "file:///tmp/967-other.logicx")
             case "selection": f.selected = [f.original[0]]
-            case "header_edit": f.b.setAttribute(f.b.element(967_2020), kAXValueAttribute, "Newer header edit")
+            case "header_edit": f.b.setAttribute(f.b.element(967_2020), kAXValueAttribute, "Newer edit")
             case "peer_edit": f.b.setAttribute(f.original[0], kAXValueAttribute, 1)
-            case "aux_replaced":
-                let replacement = f.b.element(967_2100)
-                f.b.setRole(replacement, kAXLayoutItemRole as String)
-                f.b.setChildren(replacement, f.b.makeAXRuntime().children(f.created))
-                f.replacementCreated = replacement; f.selected = [replacement]
             case "track_replaced":
-                let replacement = f.b.element(967_2101), original = f.b.element(f.appendedHeaderID)
+                let replacement = f.b.element(967_2101)
                 f.b.setRole(replacement, kAXLayoutItemRole as String)
                 f.b.setAttribute(replacement, kAXDescriptionAttribute, "Track 3")
                 f.b.setAttribute(replacement, kAXSelectedAttribute, true)
-                f.b.setChildren(replacement, f.b.makeAXRuntime().children(original))
+                f.b.setChildren(replacement, f.b.makeAXRuntime().children(f.b.element(f.appendedHeaderID)))
                 f.b.setChildren(f.b.element(f.trackRailID), [f.b.element(967_2001), f.b.element(967_2002), replacement])
             case "cancelled": f.cancelled = true
+            case "text_editing": f.b.setAttribute(f.app, kAXFocusedUIElementAttribute, f.b.element(967_2022))
+            case "wrong_window": f.b.setAttribute(f.app, kAXFocusedWindowAttribute, f.b.element(967_2200))
+            case "modal":
+                let dialog = f.b.element(967_2201)
+                f.b.setRole(dialog, kAXWindowRole as String)
+                f.b.setAttribute(dialog, kAXSubroleAttribute, kAXDialogSubrole as String)
+                f.b.setAttribute(dialog, kAXModalAttribute, true); f.b.setChildren(dialog, [])
+                f.b.setAttribute(f.app, kAXWindowsAttribute, [f.window, dialog])
             default: break
             }
-            let inputsBefore = f.mouseEvents
-            let pair = await context.observedCreatedPair(for: requestedProof)
-            if fault == "healthy" {
-                let pair = try #require(pair)
-                #expect(CFEqual(pair.track.header, f.b.element(f.appendedHeaderID)))
-                #expect(CFEqual(pair.strip.strip, f.created))
-                #expect(pair.track.currentIndex() == 2 && pair.strip.currentIndex(runtime: f.runtime) == 2)
-                #expect(pair.source == "owned_aux_track_creation")
-            } else { #expect(pair == nil) }
-            #expect(f.mouseEvents == inputsBefore, "Pair observation must not issue or retry a creator or focus gesture")
-            #expect(f.selectionSets == 0 && f.deletePresses == 0)
-            #expect(f.trackAppendPresses == (["before_track"].contains(fault) ? 0 : 1))
+            let inputs = f.mouseEvents
+            let result = await context.prepareCreatedTrackReadFocus(for: requested)
+            let dispatched = ["healthy", "unacked_effect", "no_effect", "late_effect", "wrong_focus"].contains(fault)
+            let prepared = ["healthy", "already_rail", "unacked_effect"].contains(fault)
+            #expect((result.status == .readFocusPrepared) == prepared)
+            #expect(f.readFocusPresses == (dispatched ? 1 : 0))
+            if fault == "late_effect" { f.b.setAttribute(f.app, kAXFocusedUIElementAttribute, f.b.element(f.trackRailID)) }
+            let replay = await context.prepareCreatedTrackReadFocus(for: requested)
+            #expect((replay.status == .readFocusPrepared) == (prepared || fault == "late_effect"))
+            #expect(f.readFocusPresses == (dispatched ? 1 : 0))
+            #expect(f.mouseEvents == inputs && f.selectionSets == 0 && f.deletePresses == 0)
+            #expect(f.trackAppendPresses == (fault == "before_track" ? 0 : 1))
+            if prepared { #expect(CFEqual(try #require(result.track).header, f.b.element(f.appendedHeaderID))) }
         }
     }
 
@@ -1059,7 +1077,7 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
-    @Test(arguments: ["selection", "edit", "delete", "pair"], ["project", "cancellation"])
+    @Test(arguments: ["selection", "edit", "delete", "focus"], ["project", "cancellation"])
     func finalSelectionReadCannotOutliveItsActionScope(stage: String, loss: String) async throws {
         func configured() -> Fixture {
             let f = Fixture()
@@ -1067,7 +1085,7 @@ struct Issue967OwnedAuxLifecycleTests {
                 f.modelWholePeerRetirement(); f.selectionAfterCreation = []
                 f.focusOnCreation = f.mixer
                 f.b.setAttributeSettable(f.mixer, kAXSelectedChildrenAttribute, true)
-            } else if stage == "pair" { f.modelTrackAppend() }
+            } else if stage == "focus" { f.modelTrackAppend(); f.readFocusFault = "healthy" }
             else { f.selectCreatedOnCreation = true }
             return f
         }
@@ -1079,12 +1097,12 @@ struct Issue967OwnedAuxLifecycleTests {
             let context = try control.context(nativeControls: stage == "selection")
             let aux = await context.create()
             let proof = try #require(aux.inverse)
-            if stage == "pair" {
+            if stage == "focus" {
                 #expect(await context.appendArrangeTrack(for: proof).status == .appended)
-                #expect(await context.observedCreatedPair(for: proof) != nil)
+                #expect(await context.prepareCreatedTrackReadFocus(for: proof).status == .readFocusPrepared)
             } else if stage != "selection" { #expect(await context.remove(proof).status == .removed) }
         }
-        let boundary = stage == "pair" ? control.selectionReads : stage == "selection" ? control.selectionReadAtSet
+        let boundary = stage == "focus" ? control.selectionReadAtFocus : stage == "selection" ? control.selectionReadAtSet
             : stage == "edit" ? control.selectionReadAtEdit : control.selectionReadAtDelete
         #expect(boundary > 0)
         let f = configured(); f.scopeLossAtSelectionRead = boundary; f.scopeLossKind = loss
@@ -1093,11 +1111,11 @@ struct Issue967OwnedAuxLifecycleTests {
             let aux = await context.create()
             if stage == "selection" {
                 #expect(aux.inverse == nil && f.selectionSets == 0)
-            } else if stage == "pair" {
+            } else if stage == "focus" {
                 let proof = try #require(aux.inverse)
                 #expect(await context.appendArrangeTrack(for: proof).status == .appended)
-                #expect(await context.observedCreatedPair(for: proof) == nil)
-                #expect(f.trackAppendPresses == 1 && f.selectionSets == 0 && f.deletePresses == 0)
+                #expect(await context.prepareCreatedTrackReadFocus(for: proof).status != .readFocusPrepared)
+                #expect(f.trackAppendPresses == 1 && f.readFocusPresses == 0 && f.selectionSets == 0 && f.deletePresses == 0)
             } else {
                 let proof = try #require(aux.inverse)
                 #expect(await context.remove(proof).status == .residual)

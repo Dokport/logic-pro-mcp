@@ -48,7 +48,7 @@ enum OwnedAuxLifecycle {
         fileprivate let strip: AXUIElement
         fileprivate let footprint: [Node]
     }
-    enum TrackStatus: Sendable { case rejectedBeforeWrite, pending, appended, configurationPartial }
+    enum TrackStatus: Sendable { case rejectedBeforeWrite, pending, appended, readFocusPrepared, configurationPartial }
     struct TrackReceipt: Sendable {
         let status: TrackStatus
         /// Retained even when later preservation fails; not a deletion capability.
@@ -117,6 +117,7 @@ enum OwnedAuxLifecycle {
         private var trackAppendIssued = false
         private var trackBaseline: TrackBaseline?
         private var observedTrack: AXTrackBinding.Binding?
+        private var createdReadFocusBefore: (population: [AXUIElement], selected: AXUIElement)?
         private var uiEffects = SessionPopulationObservation.UIEffects()
         private var ownedMenu: (control: AXUIElement, reportedParent: AXUIElement,
                                 popupParent: AXUIElement, attachmentParent: AXUIElement,
@@ -979,24 +980,66 @@ enum OwnedAuxLifecycle {
             return trackReceipt(.pending, "track_append_unobserved")
         }
 
-        /// A read handoff for this Context's actual creation and optional Track.
-        /// The native menu was dispatched on this sole Aux, and the new selected
-        /// header was retained under the unchanged original header prefix. No
-        /// name/ordinal join, focus gesture, public reference rebinding or new
-        /// assignment authority is inferred from the tuple.
-        func observedCreatedPair(for proof: OwnedInverse) async -> AccessibilityChannel.HeldSelectionAssociation.Pair? {
+        /// Prepare only this creation's held Track for the existing selected
+        /// association reader. Track creation can retire every Mixer object;
+        /// this stage therefore grants no Aux binding or assignment authority.
+        /// The single Tab is never retried, including an unacknowledged effect.
+        func prepareCreatedTrackReadFocus(for proof: OwnedInverse) async -> TrackReceipt {
             guard proof.owner == owner, !deleteIssued, trackAppendIssued,
-                  let held, let created = held.created, let track = observedTrack,
-                  CFEqual(proof.strip, created),
-                  await appendArrangeTrack(for: proof).status == .appended,
-                  permitted(), let current = census(),
-                  current.filter({ CFEqual($0, created) }).count == 1,
-                  matches(proof.footprint, footprint(created)),
-                  track.currentIndex() != nil,
-                  AXValueExtractors.extractSelectedState(track.header, runtime: runtime.ax) == true,
-                  selectedOnly(created), actionContextCurrent() else { return nil }
-            return .init(track: track, strip: .init(window: bindings[0].window, mixer: bindings[0].mixer,
-                strip: created, document: bindings[0].document), source: "owned_aux_track_creation")
+                  let created = held?.created, CFEqual(proof.strip, created),
+                  let baseline = trackBaseline, let track = observedTrack,
+                  await appendArrangeTrack(for: proof).status == .appended, track.currentIndex() != nil else {
+                return trackReceipt(.rejectedBeforeWrite, "created_track_proof_required")
+            }
+            func currentFocus() -> (element: AXUIElement, onRail: Bool)? {
+                guard !AXLogicProElements.dialogPresent(runtime: runtime),
+                      let app = AXLogicProElements.appRoot(runtime: runtime),
+                      let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute, runtime: runtime.ax),
+                      let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute, runtime: runtime.ax),
+                      CFEqual(main, bindings[0].window), CFEqual(focusedWindow, main),
+                      let rail = AXLogicProElements.uniqueTrackHeaderRail(in: main, runtime: runtime), CFEqual(rail, baseline.rail),
+                      let path = AccessibilityChannel.HeldSelectionAssociation.path(rail, to: main, ax: runtime.ax),
+                      let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute, runtime: runtime.ax),
+                      case .notTextEditing = AccessibilityChannel.readLogicKeyboardFocus(of: focus, runtime: runtime) else { return nil }
+                return (focus, path.dropLast().contains { CFEqual($0, focus) })
+            }
+            if createdReadFocusBefore == nil {
+                guard permitted(), let current = census(),
+                      let index = baseline.strips.firstIndex(where: { $0.first.map { CFEqual($0.element, created) } == true }),
+                      current.indices.contains(index), selectedOnly(current[index]),
+                      let focus = currentFocus(), focus.onRail || mixerIsFocused(),
+                      let bookend = census(), same(current, bookend),
+                      let decidingFocus = currentFocus(), CFEqual(focus.element, decidingFocus.element),
+                      selectedOnly(current[index]),
+                      actionContextCurrent() else {
+                    return trackReceipt(.rejectedBeforeWrite, "created_track_read_focus_before_changed")
+                }
+                // The ordinal is a refusal-only UI bookend, not an Aux identity
+                // join. Only the existing fresh association may issue that pair.
+                createdReadFocusBefore = (current, current[index])
+                if !focus.onRail {
+                    uiEffects.navigationPerformed = true; uiEffects.restoration = "not_restored"
+                    uiEffects.attempted.append("created_track_read_focus")
+                    _ = mouse.postKeyEvent(9)
+                }
+            }
+            guard let before = createdReadFocusBefore else { return trackReceipt(.pending) }
+            for _ in 0..<samples {
+                do { try await waitForNextSample() } catch { return trackReceipt(.pending) }
+                guard await appendArrangeTrack(for: proof).status == .appended,
+                      let current = census(), same(before.population, current), selectedOnly(before.selected),
+                      let focus = currentFocus(), actionContextCurrent() else {
+                    return trackReceipt(.configurationPartial, "created_track_read_focus_preservation_unverified")
+                }
+                guard focus.onRail else { continue }
+                if uiEffects.attempted.contains("created_track_read_focus"),
+                   !uiEffects.changed.contains("created_track_read_focus") {
+                    uiEffects.changed.append("created_track_read_focus")
+                }
+                uiEffects.reason = nil
+                return trackReceipt(.readFocusPrepared)
+            }
+            return trackReceipt(.pending, "created_track_read_focus_unobserved")
         }
 
         func create() async -> Receipt {
