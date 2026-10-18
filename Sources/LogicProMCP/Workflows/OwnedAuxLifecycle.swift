@@ -48,6 +48,14 @@ enum OwnedAuxLifecycle {
         fileprivate let strip: AXUIElement
         fileprivate let footprint: [Node]
     }
+    enum TrackStatus: Sendable { case rejectedBeforeWrite, pending, appended, configurationPartial }
+    struct TrackReceipt: Sendable {
+        let status: TrackStatus
+        /// Retained even when later preservation fails; not a deletion capability.
+        let track: AXTrackBinding.Binding?
+        let diagnostic: String?
+        let uiEffects: SessionPopulationObservation.UIEffects
+    }
     struct Receipt: @unchecked Sendable {
         let status: Status
         let created: AXUIElement?
@@ -78,6 +86,13 @@ enum OwnedAuxLifecycle {
     /// Operation state only: callers must retain this same context to reconcile an
     /// uncertain receipt. It is not a second lifecycle journal or a serializable token.
     actor Context {
+        private struct TrackBaseline {
+            let headers: [AXUIElement]
+            let radios: [AXUIElement]
+            let outside: [Node]
+            let strips: [[Node]]
+            let rail: AXUIElement
+        }
         private let owner = UUID()
         private let bindings: [AXMixerStripBinding.Binding]
         private let options: AXUIElement
@@ -99,6 +114,9 @@ enum OwnedAuxLifecycle {
         private var createdSelectionPending = false
         private var createdSelectionIssued = false
         private var topologyRefreshAttempted = false
+        private var trackAppendIssued = false
+        private var trackBaseline: TrackBaseline?
+        private var observedTrack: AXTrackBinding.Binding?
         private var uiEffects = SessionPopulationObservation.UIEffects()
         private var ownedMenu: (control: AXUIElement, reportedParent: AXUIElement,
                                 popupParent: AXUIElement, attachmentParent: AXUIElement,
@@ -611,7 +629,7 @@ enum OwnedAuxLifecycle {
             return true
         }
 
-        private func leaf(_ button: AXUIElement, creator: Bool) -> AXUIElement? {
+        private func leaf(_ button: AXUIElement, creator: Bool, appendingTrack: Bool = false) -> AXUIElement? {
             // The corpus-derived creator title supplies only semantic discovery,
             // never CF ownership or all-locale native qualification. The inverse is
             // the actual Mixer Edit menu's semantic delete: leaf, not Remove Selected.
@@ -633,7 +651,7 @@ enum OwnedAuxLifecycle {
                 // from the uniqueness proof. Only a known nonmatch may be skipped.
                 guard case .success(let raw?) = text, CFGetTypeID(raw) == CFStringGetTypeID(),
                       let actual = raw as? String else { return nil }
-                let semanticMatch = creator ? AXLocalePolicy.mixerCreateAuxiliaryChannelStrip.matches(actual, mode: .exactStrict)
+                let semanticMatch = creator ? (appendingTrack ? AXLocalePolicy.mixerAppendTracksForSelectedStrips : AXLocalePolicy.mixerCreateAuxiliaryChannelStrip).matches(actual, mode: .exactStrict)
                     : actual.utf8.elementsEqual("delete:".utf8)
                 if !semanticMatch { continue }
                 guard case .success(let children) = AXHelpers.childrenResult(element, runtime: runtime.ax) else { return nil }
@@ -709,7 +727,192 @@ enum OwnedAuxLifecycle {
                     .input: input, .output: output]
         }
 
+        private func trackReceipt(_ status: TrackStatus, _ diagnostic: String? = nil) -> TrackReceipt {
+            .init(status: status, track: observedTrack, diagnostic: diagnostic, uiEffects: uiEffects)
+        }
+
+        private func headerSelection(_ headers: [AXUIElement], selectedLast: Bool) -> Bool {
+            for (index, header) in headers.enumerated() {
+                guard AXValueExtractors.extractSelectedState(header, runtime: runtime.ax)
+                    == (selectedLast && index == headers.count - 1) else { return false }
+            }
+            return true
+        }
+
+        private func appendOutsidePreserved(_ baseline: TrackBaseline, track: AXUIElement) -> Bool {
+            guard let addedTree = footprint(track), let headerDescription = addedTree.first?.fields[kAXDescriptionAttribute],
+                  let menus = ownedMenuExclusion(), menus.isEmpty,
+                  let current = footprint(bindings[0].window, excluding: [bindings[0].mixer, options, edit]) else { return false }
+            func node(_ element: AXUIElement, in nodes: [Node]) -> Node? {
+                let found = nodes.filter { CFEqual($0.element, element) }
+                return found.count == 1 ? found.first : nil
+            }
+            let extra = current.filter { actual in
+                !baseline.outside.contains { CFEqual($0.element, actual.element) }
+                    && !addedTree.contains { CFEqual($0.element, actual.element) }
+            }
+            var canvas: AXUIElement?, placeholder: AXUIElement?, retitledPlaceholder = false
+            if !extra.isEmpty {
+                // Appending an empty Track either inserts its empty canvas row
+                // before the old blank row, or consumes that row and adds an
+                // identical blank. This read-only classifier grants no actuation.
+                let canvases = baseline.outside.filter {
+                    $0.fields[kAXRoleAttribute] == .text(kAXGroupRole as String) && {
+                        guard case .text(let description)? = $0.fields[kAXDescriptionAttribute] else { return false }
+                        return AXLocalePolicy.trackContentExplicit.matches(description, mode: .exact)
+                    }($0)
+                }
+                guard extra.count == 1, extra[0].children.isEmpty, canvases.count == 1,
+                      let oldCanvas = canvases.first, let blank = oldCanvas.children.last,
+                      let oldBlank = node(blank, in: baseline.outside), oldBlank.children.isEmpty,
+                      oldBlank.fields[kAXValueAttribute] == .number(0),
+                      oldBlank.fields[kAXDescriptionAttribute] == nil || oldBlank.fields[kAXDescriptionAttribute] == .text(""),
+                      let newCanvas = node(oldCanvas.element, in: current), let newBlank = node(blank, in: current) else { return false }
+                var oldFields = oldBlank.fields, newFields = newBlank.fields, extraFields = extra[0].fields
+                oldFields.removeValue(forKey: kAXDescriptionAttribute)
+                newFields.removeValue(forKey: kAXDescriptionAttribute)
+                extraFields.removeValue(forKey: kAXDescriptionAttribute)
+                guard oldFields == newFields, oldFields == extraFields else { return false }
+                if extra[0].fields == oldBlank.fields, newBlank.fields[kAXDescriptionAttribute] == headerDescription,
+                   same(newCanvas.children, oldCanvas.children + [extra[0].element]) {
+                    retitledPlaceholder = true
+                } else {
+                    guard newBlank.fields == oldBlank.fields, extra[0].fields[kAXDescriptionAttribute] == headerDescription,
+                          same(newCanvas.children, Array(oldCanvas.children.dropLast()) + [extra[0].element, blank]) else { return false }
+                }
+                canvas = oldCanvas.element; placeholder = blank
+            }
+            for expected in baseline.outside {
+                guard let actual = node(expected.element, in: current) else { return false }
+                var a = expected.fields, b = actual.fields
+                if baseline.radios.contains(where: { CFEqual($0, expected.element) }) {
+                    guard b[kAXValueAttribute] == .number(0) else { return false }
+                    a.removeValue(forKey: kAXValueAttribute); b.removeValue(forKey: kAXValueAttribute)
+                }
+                if retitledPlaceholder, let placeholder, CFEqual(expected.element, placeholder) {
+                    a.removeValue(forKey: kAXDescriptionAttribute); b.removeValue(forKey: kAXDescriptionAttribute)
+                }
+                guard a == b else { return false }
+                if CFEqual(expected.element, baseline.rail) {
+                    guard same(actual.children, expected.children + [track]) else { return false }
+                } else if let canvas, CFEqual(expected.element, canvas) {
+                    // Exact expected canvas child insertion was checked above.
+                    continue
+                } else if !same(expected.children, actual.children) { return false }
+            }
+            return true
+        }
+
+        /// One explicit optional Track stage on this Context's actual creation.
+        /// Its native proof cannot be reconstructed from a public allow flag.
+        /// No Aux-only inverse is usable once this extra creation is issued.
+        func appendArrangeTrack(for proof: OwnedInverse) async -> TrackReceipt {
+            guard proof.owner == owner, !deleteIssued, let held, let strip = held.created,
+                  CFEqual(proof.strip, strip) else { return trackReceipt(.rejectedBeforeWrite, "owned_aux_proof_required") }
+            if !trackAppendIssued {
+                guard permitted(), let current = census(), current.count == bindings.count + 1,
+                      current.filter({ CFEqual($0, strip) }).count == 1, originalsInOrder(current), preserved(),
+                      matches(proof.footprint, footprint(strip)), focusedOn(strip), selectedOnly(strip),
+                      let rail = AXLogicProElements.uniqueTrackHeaderRail(in: bindings[0].window, runtime: runtime),
+                      case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: bindings[0].window, runtime: runtime),
+                      !headers.isEmpty, headerSelection(headers, selectedLast: true),
+                      let outside = footprint(bindings[0].window, excluding: [bindings[0].mixer, options, edit]) else {
+                    return trackReceipt(.rejectedBeforeWrite, "track_append_before_changed")
+                }
+                var radios: [AXUIElement] = []
+                for (index, header) in headers.enumerated() {
+                    guard let tree = footprint(header), let root = tree.first else { return trackReceipt(.rejectedBeforeWrite) }
+                    let candidates = tree.filter { node in
+                        root.children.contains { CFEqual($0, node.element) } && node.fields[kAXRoleAttribute] == .text(kAXRadioButtonRole as String)
+                    }
+                    guard candidates.count == 1, let radio = candidates.first,
+                          radio.fields[kAXValueAttribute] == .number(index == headers.count - 1 ? 1 : 0) else {
+                        return trackReceipt(.rejectedBeforeWrite, "header_focus_state_unverified")
+                    }
+                    radios.append(radio.element)
+                }
+                let strips = current.compactMap { footprint($0) }
+                guard strips.count == current.count, let parent = parent(options), menus(options)?.isEmpty == true,
+                      case .success(let children) = AXHelpers.childrenResult(options, runtime: runtime.ax),
+                      actionContextCurrent() else { return trackReceipt(.rejectedBeforeWrite) }
+                ownedMenu = nil
+                _ = AXHelpers.performAction(options, kAXPressAction, runtime: runtime.ax)
+                guard retainOpenedMenu(options, parent: parent, beforeNodes: outside + strips.flatMap({ $0 }), beforeControlChildren: children),
+                      let choice = leaf(options, creator: true, appendingTrack: true),
+                      let frame = creatorFrame(choice), let app = AXLogicProElements.appRoot(runtime: runtime),
+                      let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute, runtime: runtime.ax),
+                      let click = mouse.prepareMouseClick(CGPoint(x: frame.midX, y: frame.midY), 1), let hit = runtime.ax.elementAtPosition,
+                      case .success(let firstHit?) = hit(app, CGPoint(x: frame.midX, y: frame.midY)), CFEqual(firstHit, choice),
+                      permitted(), preserved(), matches(proof.footprint, footprint(strip)),
+                      case .read(let decidingHeaders) = AXLogicProElements.allTrackHeadersVerifiedRead(in: bindings[0].window, runtime: runtime),
+                      same(headers, decidingHeaders), headerSelection(headers, selectedLast: true),
+                      let finalChoice = leaf(options, creator: true, appendingTrack: true), CFEqual(finalChoice, choice),
+                      creatorFrame(choice) == frame,
+                      case .success(let finalHit?) = hit(app, CGPoint(x: frame.midX, y: frame.midY)), CFEqual(finalHit, choice),
+                      let currentFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute, runtime: runtime.ax), CFEqual(focus, currentFocus),
+                      let decidingMenu = ownedMenuExclusion(), decidingMenu.count == 1,
+                      permitted(), preserved(), matches(proof.footprint, footprint(strip)),
+                      let finalCensus = census(), same(current, finalCensus),
+                      headerSelection(headers, selectedLast: true), selectedOnly(strip), actionContextCurrent() else {
+                    _ = closeOwnedMenu(); return trackReceipt(.rejectedBeforeWrite, "track_append_dispatch_refused")
+                }
+                trackBaseline = .init(headers: headers, radios: radios, outside: outside, strips: strips, rail: rail)
+                trackAppendIssued = true
+                uiEffects.navigationPerformed = true; uiEffects.restoration = "not_restored"
+                uiEffects.attempted.append("arrange_track_append")
+                guard mouse.postMouseEvent(.mouseMoved, CGPoint(x: frame.midX, y: frame.midY), 0) else {
+                    return trackReceipt(.pending, "track_append_pointer_unverified")
+                }
+                guard click.postDown() else { return trackReceipt(.pending, "track_append_down_unverified") }
+                let released = click.postUp()
+                guard released else { return trackReceipt(.pending, "track_append_release_unverified") }
+            }
+            guard let baseline = trackBaseline else { return trackReceipt(.pending) }
+            for _ in 0..<samples {
+                do { try await waitForNextSample() } catch { return trackReceipt(.pending) }
+                guard permitted(), case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: bindings[0].window, runtime: runtime),
+                      headers.count >= baseline.headers.count,
+                      same(Array(headers.prefix(baseline.headers.count)), baseline.headers) else { return trackReceipt(.configurationPartial, "original_headers_changed") }
+                let added = headers.filter { candidate in !baseline.headers.contains { CFEqual($0, candidate) } }
+                if added.isEmpty { continue }
+                guard added.count == 1, headers.count == baseline.headers.count + 1 else {
+                    return trackReceipt(.configurationPartial, "track_append_ambiguous")
+                }
+                if let observedTrack {
+                    guard CFEqual(observedTrack.header, added[0]) else { return trackReceipt(.configurationPartial, "observed_track_replaced") }
+                } else {
+                    // Keep the observed native object before later preservation
+                    // or configuration can fail; this grants no delete proof.
+                    observedTrack = .init(window: bindings[0].window, header: added[0], document: bindings[0].document, runtime: runtime)
+                }
+                guard headerSelection(baseline.headers, selectedLast: false),
+                      AXValueExtractors.extractSelectedState(added[0], runtime: runtime.ax) == true else {
+                    return trackReceipt(.configurationPartial, "track_append_selection_unverified")
+                }
+                guard appendOutsidePreserved(baseline, track: added[0]) else {
+                    return trackReceipt(.configurationPartial, "track_append_outside_preservation_unverified")
+                }
+                guard let current = census(), current.count == baseline.strips.count else {
+                    return trackReceipt(.configurationPartial, "track_append_population_unverified")
+                }
+                let trees = current.compactMap { footprint($0) }
+                guard trees.count == baseline.strips.count,
+                      zip(baseline.strips, trees).allSatisfy({ sameValues($0, $1) }),
+                      case .read(let bookend) = AXLogicProElements.allTrackHeadersVerifiedRead(in: bindings[0].window, runtime: runtime),
+                      same(headers, bookend), headerSelection(baseline.headers, selectedLast: false),
+                      AXValueExtractors.extractSelectedState(added[0], runtime: runtime.ax) == true,
+                      appendOutsidePreserved(baseline, track: added[0]), actionContextCurrent() else {
+                    return trackReceipt(.configurationPartial, "track_append_preservation_unverified")
+                }
+                if !uiEffects.changed.contains("arrange_track_append") { uiEffects.changed.append("arrange_track_append") }
+                uiEffects.reason = "owned_arrange_track_focus_unverified"
+                return trackReceipt(.appended)
+            }
+            return trackReceipt(.pending, "track_append_unobserved")
+        }
+
         func create() async -> Receipt {
+            if trackAppendIssued { return receipt(.configurationPartial, strip: observedCreated, diagnostic: "owned_arrange_track_configuration_pending") }
             if let held, let proof = held.inverse {
                 if deleteIssued { return await remove(proof) }
                 guard let current = census(), current.contains(where: { CFEqual($0, proof.strip) }),
@@ -829,6 +1032,7 @@ enum OwnedAuxLifecycle {
         }
 
         func remove(_ proof: OwnedInverse) async -> Receipt {
+            if trackAppendIssued { return receipt(.residual, strip: observedCreated, diagnostic: "owned_arrange_track_inverse_unavailable") }
             guard proof.owner == owner, let held, let strip = held.created,
                   CFEqual(proof.strip, strip) else { return receipt(.residual) }
             if !deleteIssued {

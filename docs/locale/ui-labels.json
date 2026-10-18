@@ -3431,6 +3431,34 @@
     "zh-TW": "derived"
    }
   },
+  "mixerAppendTracksForSelectedStrips": {
+   "canonical": "Create Tracks for Selected Channel Strips",
+   "variants": [
+    "선택한 채널 스트립에 대해 트랙 생성",
+    "Spuren für ausgewählte Channel-Strips erzeugen",
+    "Crear pistas para canales seleccionados",
+    "Créer des pistes pour les tranches de console sélectionnées",
+    "Crea tracce per le channel strip selezionate",
+    "選択したチャンネルストリップのトラックを作成",
+    "Criar Pistas dos Canais Selecionados",
+    "为选定的通道条创建轨道",
+    "為所選的聲道控制排製作音軌"
+   ],
+   "rationale": "The creation-owned Aux's explicit Options Track action. Values are this installed Logic.framework row's own values; labels do not grant object ownership or all-locale native qualification.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
+   }
+  },
   "mixerChannelModeControl": {
    "canonical": "channel mode",
    "variants": [
@@ -3449,14 +3477,14 @@
    "coverage": {
     "en-US": "derived",
     "ko-KR": "derived",
-    "ja-JP": "unmeasured",
-    "de-DE": "unmeasured",
-    "es-ES": "unmeasured",
-    "fr-FR": "unmeasured",
-    "it-IT": "unmeasured",
-    "pt-BR": "unmeasured",
-    "zh-CN": "unmeasured",
-    "zh-TW": "unmeasured"
+    "ja-JP": "derived",
+    "de-DE": "derived",
+    "es-ES": "derived",
+    "fr-FR": "derived",
+    "it-IT": "derived",
+    "pt-BR": "derived",
+    "zh-CN": "derived",
+    "zh-TW": "derived"
    }
   },
   "mixerCreateAuxiliaryChannelStrip": {
@@ -3475,16 +3503,16 @@
    "rationale": "The bounded owned auxiliary lifecycle's unique Mixer Options creator leaf. Values are derived from the installed Logic.framework row. English and Korean menu discovery does not qualify native CF custody, settlement, defaults or inverse behavior in any locale.",
    "match": "exact_strict",
    "coverage": {
-    "en-US": "unmeasured",
-    "ko-KR": "unmeasured",
-    "ja-JP": "unmeasured",
-    "de-DE": "unmeasured",
-    "es-ES": "unmeasured",
-    "fr-FR": "unmeasured",
-    "it-IT": "unmeasured",
-    "pt-BR": "unmeasured",
-    "zh-CN": "unmeasured",
-    "zh-TW": "unmeasured"
+    "en-US": "derived",
+    "ko-KR": "derived",
+    "ja-JP": "derived",
+    "de-DE": "derived",
+    "es-ES": "derived",
+    "fr-FR": "derived",
+    "it-IT": "derived",
+    "pt-BR": "derived",
+    "zh-CN": "derived",
+    "zh-TW": "derived"
    }
   },
   "mixerGainReductionMeterControl": {
@@ -3503,16 +3531,16 @@
    "rationale": "Identifies the gain-reduction AXButton for strict raw default-state reading. EN/KO raw control shape was read; variants are the installed MAMixer row's values, not native lifecycle or plug-in absence qualification.",
    "match": "exact_strict",
    "coverage": {
-    "en-US": "unmeasured",
-    "ko-KR": "unmeasured",
-    "ja-JP": "unmeasured",
-    "de-DE": "unmeasured",
-    "es-ES": "unmeasured",
-    "fr-FR": "unmeasured",
-    "it-IT": "unmeasured",
-    "pt-BR": "unmeasured",
-    "zh-CN": "unmeasured",
-    "zh-TW": "unmeasured"
+    "en-US": "derived",
+    "ko-KR": "derived",
+    "ja-JP": "derived",
+    "de-DE": "derived",
+    "es-ES": "derived",
+    "fr-FR": "derived",
+    "it-IT": "derived",
+    "pt-BR": "derived",
+    "zh-CN": "derived",
+    "zh-TW": "derived"
    }
   },
   "mixerInspectorContext": {

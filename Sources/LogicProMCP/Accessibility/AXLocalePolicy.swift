@@ -2356,6 +2356,16 @@ enum AXLocalePolicy {
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Create%20New%20Auxiliary%20Channel%20Strip#value"
     )
 
+    static let mixerAppendTracksForSelectedStrips = LabelSet(
+        canonical: "Create Tracks for Selected Channel Strips",
+        variants: ["선택한 채널 스트립에 대해 트랙 생성", "Spuren für ausgewählte Channel-Strips erzeugen",
+                   "Crear pistas para canales seleccionados", "Créer des pistes pour les tranches de console sélectionnées",
+                   "Crea tracce per le channel strip selezionate", "選択したチャンネルストリップのトラックを作成",
+                   "Criar Pistas dos Canais Selecionados", "为选定的通道条创建轨道", "為所選的聲道控制排製作音軌"],
+        rationale: "The creation-owned Aux's explicit Options Track action. Values are this installed Logic.framework row's own values; labels do not grant object ownership or all-locale native qualification.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Create%20Tracks%20for%20Selected%20Channel%20Strips#value"
+    )
+
     static let mixerChannelModeControl = LabelSet(
         canonical: "channel mode",
         variants: ["채널 모드", "チャンネルモード", "Kanalmodus", "modo de canal", "mode canal",
@@ -3729,7 +3739,7 @@ enum AXLocalePolicy {
         transportKeywordFalseFriends,
         mixerInspectorContext,
         mixerNamedElement,
-        controlBarMixerToggle, mixerCreateAuxiliaryChannelStrip, mixerChannelModeControl, mixerGainReductionMeterControl,
+        controlBarMixerToggle, mixerCreateAuxiliaryChannelStrip, mixerAppendTracksForSelectedStrips, mixerChannelModeControl, mixerGainReductionMeterControl,
         mixerPresentationSingle, mixerPresentationTracks, mixerPresentationAll,
         mixerTypeFilterAudio, mixerTypeFilterInstrument, mixerTypeFilterAux, mixerTypeFilterBus,
         mixerTypeFilterInput, mixerTypeFilterOutput, mixerTypeFilterMasterVCA, mixerTypeFilterMIDI,

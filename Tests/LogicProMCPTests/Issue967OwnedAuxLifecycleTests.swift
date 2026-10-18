@@ -155,6 +155,65 @@ struct Issue967OwnedAuxLifecycleTests {
         var visibilityPresses = 0
         var topologyFault = "success"
         var topologyButtonStates = 0
+        var trackAppendEnabled = false
+        var trackAppendPresses = 0
+        var trackAppendHitReads = 0
+        var trackAppended = false
+        var trackAppendFault = "healthy"
+        var trackAppendPostEditDelivered = false
+        let trackRailID = 967_2000
+        let appendedHeaderID = 967_2003
+
+        func modelTrackAppend(_ fault: String = "healthy") {
+            trackAppendEnabled = true; trackAppendFault = fault
+            selectCreatedOnCreation = true
+            let rail = b.element(trackRailID), leaf = b.element(967_2004)
+            b.setRole(rail, kAXListRole as String); b.setAttribute(rail, kAXIdentifierAttribute, "Track Headers")
+            var headers: [AXUIElement] = []
+            for index in 0..<3 {
+                let header = b.element(967_2001 + index), radio = b.element(967_2010 + index), name = b.element(967_2020 + index)
+                b.setRole(header, kAXLayoutItemRole as String)
+                b.setAttribute(header, kAXDescriptionAttribute, "Track \(index + 1)")
+                b.setAttribute(header, kAXSelectedAttribute, index == 1)
+                b.setRole(radio, kAXRadioButtonRole as String); b.setAttribute(radio, kAXDescriptionAttribute, "Has Focus")
+                b.setAttribute(radio, kAXValueAttribute, index == 1 ? 1 : 0); b.setChildren(radio, [])
+                b.setRole(name, kAXTextFieldRole as String); b.setAttribute(name, kAXValueAttribute, "Original \(index)")
+                b.setChildren(name, []); b.setChildren(header, [radio, name]); headers.append(header)
+            }
+            b.setChildren(rail, Array(headers.prefix(2)))
+            let canvas = b.element(967_2040)
+            b.setRole(canvas, kAXGroupRole as String); b.setAttribute(canvas, kAXDescriptionAttribute, "Tracks contents")
+            let rows = (0..<4).map { b.element(967_2041 + $0) }
+            for (index, row) in rows.enumerated() {
+                b.setRole(row, "AXUnknown"); b.setAttribute(row, kAXValueAttribute, 0); b.setChildren(row, [])
+                if index < 2 { b.setAttribute(row, kAXDescriptionAttribute, "Track \(index + 1)") }
+            }
+            b.setChildren(canvas, Array(rows.prefix(3)))
+            b.setChildren(window, b.makeAXRuntime().children(window) + [rail, canvas])
+            b.setRole(leaf, kAXMenuItemRole as String)
+            b.setAttribute(leaf, kAXTitleAttribute, "Create Tracks for Selected Channel Strips")
+            b.setAttribute(leaf, kAXEnabledAttribute, true); b.setChildren(leaf, [])
+            b.setActionNames(leaf, [kAXPressAction as String])
+            var point = CGPoint(x: 100, y: 240), size = CGSize(width: 180, height: 20)
+            b.setAttribute(leaf, kAXPositionAttribute, AXValueCreate(.cgPoint, &point)!)
+            b.setAttribute(leaf, kAXSizeAttribute, AXValueCreate(.cgSize, &size)!)
+            b.setChildren(optionMenu, [create, leaf])
+        }
+
+        func exposeAppendedTrack() {
+            trackAppended = true
+            let headers = (0..<3).map { b.element(967_2001 + $0) }
+            for (index, header) in headers.enumerated() {
+                b.setAttribute(header, kAXSelectedAttribute, index == 2)
+                b.setAttribute(b.element(967_2010 + index), kAXValueAttribute, index == 2 ? 1 : 0)
+            }
+            b.setChildren(b.element(trackRailID), headers)
+            b.setAttribute(b.element(967_2043), kAXDescriptionAttribute, "Track 3")
+            b.setChildren(b.element(967_2040), (0..<4).map { b.element(967_2041 + $0) })
+            if trackAppendFault == "header_edit" { b.setAttribute(b.element(967_2020), kAXValueAttribute, "Newer edit") }
+            if trackAppendFault == "peer_edit" { b.setAttribute(original[0], kAXValueAttribute, 1) }
+            optionOpen = false
+        }
 
         init(delay: Int = 0) {
             self.delay = delay
@@ -274,7 +333,7 @@ struct Issue967OwnedAuxLifecycleTests {
         var mouse: AXMouseHelper.Runtime {
             .init(postMouseEvent: { [self] type, point, count in
                       guard type == .mouseMoved else { Issue.record("Unprepared click forbidden"); return false }
-                      #expect(point == CGPoint(x: 190, y: 210) && count == 0)
+                      #expect(point == CGPoint(x: 190, y: trackAppendEnabled && issued ? 250 : 210) && count == 0)
                       mouseEvents.append("move")
                       if mouseFault == "move_failed" { return false }
                       betweenClickHalves = true
@@ -285,7 +344,8 @@ struct Issue967OwnedAuxLifecycleTests {
                   sleepMicros: { _ in Issue.record("Sleep between input halves forbidden") },
                   prepareMouseClick: { [self] point, count in
                       mousePreparations += 1
-                      #expect(point == CGPoint(x: 190, y: 210) && count == 1)
+                      let appending = trackAppendEnabled && issued
+                      #expect(point == CGPoint(x: 190, y: appending ? 250 : 210) && count == 1)
                       if mouseFault == "prepare_failed" { return nil }
                       return .init(postDown: { [self] in
                           mouseEvents.append("down"); betweenClickHalves = true
@@ -293,6 +353,11 @@ struct Issue967OwnedAuxLifecycleTests {
                           return true
                       }, postUp: { [self] in
                           mouseEvents.append("up"); betweenClickHalves = false
+                          if appending {
+                              trackAppendPresses += 1
+                              if !["no_effect", "late_effect"].contains(trackAppendFault) { exposeAppendedTrack() }
+                              return trackAppendFault != "unacked_effect"
+                          }
                           createPresses += 1
                           if !creatorEffectUnknown { issued = true }
                           if issued {
@@ -310,6 +375,17 @@ struct Issue967OwnedAuxLifecycleTests {
 
         private func creatorHit(_ root: AXUIElement, _ point: CGPoint) -> Result<AXUIElement?, AXHelpers.AXStatusError> {
             noteRead(); hitReads += 1
+            if trackAppendEnabled, issued {
+                trackAppendHitReads += 1
+                #expect(CFEqual(root, app) && point == CGPoint(x: 190, y: 250))
+                if trackAppendFault == "late_project", trackAppendHitReads == 2 {
+                    b.setAttribute(window, kAXDocumentAttribute, "file:///tmp/967-other.logicx")
+                }
+                if trackAppendFault == "late_header", trackAppendHitReads == 2 {
+                    b.setAttribute(b.element(967_2020), kAXValueAttribute, "Newer edit before dispatch")
+                }
+                return .success(b.element(967_2004))
+            }
             #expect(CFEqual(root, app) && point == CGPoint(x: 190, y: 210))
             if mouseFault == "foreign_hit" || (mouseFault == "late_foreign_hit" && hitReads >= 2) {
                 return .success(original[0])
@@ -503,6 +579,15 @@ struct Issue967OwnedAuxLifecycleTests {
 
         private func attributeResult(_ element: AXUIElement, _ attribute: String) -> Result<AnyObject?, AXHelpers.AXStatusError>? {
             noteRead()
+            if trackAppended, trackAppendFault == "post_header_edit", currentlyReadingFootprint,
+               !trackAppendPostEditDelivered, CFEqual(element, app) {
+                trackAppendPostEditDelivered = true
+                b.setAttribute(b.element(967_2020), kAXValueAttribute, "Newer edit after outside sample")
+            }
+            if trackAppendEnabled, trackAppendFault == "late_transport_project", trackAppendHitReads >= 2,
+               CFEqual(element, b.element(967_142)), attribute == kAXValueAttribute {
+                b.setAttribute(window, kAXDocumentAttribute, "file:///tmp/967-other.logicx")
+            }
             if selectionSettableObserved, CFEqual(element, app), attribute == kAXFocusedUIElementAttribute {
                 selectionDecisionFocusObserved = true
             }
@@ -764,6 +849,61 @@ struct Issue967OwnedAuxLifecycleTests {
                                   cancellationRequested: { fixture?.cancelled == true })) {
                 try await body()
             }
+    }
+
+    @Test(arguments: ["healthy", "unacked_effect", "late_effect", "no_effect", "header_edit", "peer_edit", "late_project", "selection_changed", "late_header", "late_transport_project", "post_header_edit"])
+    func ownedAuxCanAppendOneTrackWithoutReissuingOrDiscardingPartialObjects(fault: String) async throws {
+        let f = Fixture(); f.modelTrackAppend(fault)
+        try await owned(f) {
+            let context = try f.context()
+            let aux = await context.create()
+            let proof = try #require(aux.inverse)
+            if fault == "selection_changed" { f.selected = [f.original[0]] }
+            var receipt = await context.appendArrangeTrack(for: proof)
+            if fault == "post_header_edit" { #expect(f.trackAppendPostEditDelivered) }
+            if fault == "late_effect" {
+                #expect(receipt.status == .pending)
+                f.exposeAppendedTrack()
+                receipt = await context.appendArrangeTrack(for: proof)
+            }
+            if fault == "unacked_effect" { receipt = await context.appendArrangeTrack(for: proof) }
+            if ["healthy", "unacked_effect", "late_effect"].contains(fault) {
+                #expect(receipt.status == .appended)
+                let track = try #require(receipt.track)
+                #expect(CFEqual(track.header, f.b.element(f.appendedHeaderID)))
+                #expect(track.currentIndex() == 2)
+            } else if ["late_project", "selection_changed", "late_header", "late_transport_project"].contains(fault) {
+                #expect(receipt.status == .rejectedBeforeWrite)
+                #expect(f.trackAppendPresses == 0)
+            } else if fault == "no_effect" {
+                #expect(receipt.status == .pending && receipt.track == nil)
+            } else {
+                #expect(receipt.status == .configurationPartial)
+                #expect(receipt.track != nil, "Retain the actual extra header before preservation can fail")
+            }
+            let count = f.trackAppendPresses
+            _ = await context.appendArrangeTrack(for: proof)
+            #expect(f.trackAppendPresses == count && f.createPresses == 1)
+            if count > 0 {
+                #expect((await context.create()).inverse == nil)
+                #expect((await context.remove(proof)).status == .residual)
+                #expect(f.deletePresses == 0, "An Aux-only inverse does not include an appended Track")
+            }
+        }
+    }
+
+    @Test func anotherContextCannotGrantTrackCreationWithAnEqualNativeAux() async throws {
+        let f = Fixture(); f.modelTrackAppend()
+        let other = Fixture(); other.modelTrackAppend()
+        try await owned(f) {
+            let context = try f.context(), foreign = try other.context()
+            _ = await context.create()
+            let foreignAux = await foreign.create()
+            let foreignProof = try #require(foreignAux.inverse)
+            let result = await context.appendArrangeTrack(for: foreignProof)
+            #expect(result.status == .rejectedBeforeWrite)
+            #expect(f.trackAppendPresses == 0 && f.optionPresses == 1)
+        }
     }
 
     @Test func delayedCreationIssuesOnceAndRetainsActualInputDefaults() async throws {
