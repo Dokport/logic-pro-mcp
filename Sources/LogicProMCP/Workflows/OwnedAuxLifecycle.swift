@@ -57,6 +57,55 @@ enum OwnedAuxLifecycle {
         let diagnostic: String?
         let uiEffects: SessionPopulationObservation.UIEffects
     }
+    enum InputStatus: Sendable { case rejectedBeforeWrite, initialized, configurationPartial }
+    struct InputReceipt: Sendable {
+        let status: InputStatus
+        let effect: AccessibilityChannel.ChangedInputObservation?
+        let result: ChannelResult?
+        let diagnostic: String?
+    }
+
+    /// Minted only by the original creation Context after a real selected
+    /// association and independent checked input. Never decoded from parameters.
+    struct InputInitializationProof: @unchecked Sendable {
+        fileprivate let owner: UUID
+        let pair: AccessibilityChannel.HeldSelectionAssociation.Pair
+        let before: InputAssignment
+        let destination: Int
+        private let checked: AccessibilityChannel.CheckedOutputReading
+        private let permitting: @Sendable (AXUIElement?) -> Bool
+
+        fileprivate init(owner: UUID, pair: AccessibilityChannel.HeldSelectionAssociation.Pair,
+                         before: InputAssignment, destination: Int,
+                         checked: AccessibilityChannel.CheckedOutputReading,
+                         permitting: @escaping @Sendable (AXUIElement?) -> Bool) {
+            self.owner = owner; self.pair = pair; self.before = before
+            self.destination = destination; self.checked = checked; self.permitting = permitting
+        }
+        func permitsBefore(_ source: AXMixerStripBinding.Binding, popup: AXUIElement? = nil) -> Bool {
+            guard pair.strip.matches(source), pair.track.currentIndex() != nil,
+                  case .physical = before, checked.inputAssignment == before,
+                  checked.inputSlot?.owner.matches(source) == true,
+                  checked.inputRenewal.map({ $0.permits(runtime: pair.track.runtime, ownedPopup: popup) }) ?? true else { return false }
+            return permitting(popup)
+        }
+        func retainedCheckedRead() -> AccessibilityChannel.CheckedOutputReading? {
+            permitsBefore(pair.strip) ? checked : nil
+        }
+        func authorizes(original: AccessibilityChannel.HeldSelectionAssociation.Pair,
+                        current: AccessibilityChannel.HeldSelectionAssociation.Pair,
+                        before: InputAssignment, after: Int) -> Bool {
+            self.before == before && destination == after && pair.track.matches(original.track)
+                && pair.strip.matches(original.strip) && pair.track.matches(current.track)
+        }
+    }
+
+    private final class InputCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: AccessibilityChannel.ChangedInputObservation?
+        func record(_ effect: AccessibilityChannel.ChangedInputObservation) { lock.withLock { value = effect } }
+        func read() -> AccessibilityChannel.ChangedInputObservation? { lock.withLock { value } }
+    }
     struct Receipt: @unchecked Sendable {
         let status: Status
         let created: AXUIElement?
@@ -119,6 +168,9 @@ enum OwnedAuxLifecycle {
         private var trackBaseline: TrackBaseline?
         private var observedTrack: AXTrackBinding.Binding?
         private var createdReadFocusBefore: (population: [AXUIElement], selected: AXUIElement)?
+        private var inputInitializationDestination: Int?
+        private var inputInitializationReceipt: InputReceipt?
+        private var inputInitializationAfter: (outside: [Node], strips: [[Node]])?
         private var uiEffects = SessionPopulationObservation.UIEffects()
         private var ownedMenu: (control: AXUIElement, reportedParent: AXUIElement,
                                 popupParent: AXUIElement, attachmentParent: AXUIElement,
@@ -402,6 +454,11 @@ enum OwnedAuxLifecycle {
         /// selector atlas snapshot. Unknown reads refuse rather than become zero/empty.
         private func footprint(_ root: AXUIElement, excluding: [AXUIElement] = [],
                                ignoringTransientMenus: [AXUIElement] = []) -> [Node]? {
+            Self.footprint(root, excluding: excluding, ignoringTransientMenus: ignoringTransientMenus, runtime: runtime)
+        }
+
+        private nonisolated static func footprint(_ root: AXUIElement, excluding: [AXUIElement] = [],
+                               ignoringTransientMenus: [AXUIElement] = [], runtime: AXLogicProElements.Runtime) -> [Node]? {
             var result: [Node] = []
             var visits: [(AXUIElement, Int)] = [(root, 0)]
             while let (element, depth) = visits.popLast() {
@@ -1041,6 +1098,124 @@ enum OwnedAuxLifecycle {
                 return trackReceipt(.readFocusPrepared)
             }
             return trackReceipt(.pending, "created_track_read_focus_unobserved")
+        }
+
+        /// One explicit input initialization on this Context's actual creation.
+        /// The canonical caller still supplies consent/allocation; this is not a
+        /// public command or a general physical-input replacement permission.
+        func initializeInputBus(for proof: OwnedInverse, destination: Int) async -> InputReceipt {
+            let runtime = self.runtime
+            func rejected(_ reason: String) -> InputReceipt {
+                .init(status: .rejectedBeforeWrite, effect: nil, result: nil, diagnostic: reason)
+            }
+            guard proof.owner == owner, !deleteIssued, (1...256).contains(destination),
+                  let created = held?.created, CFEqual(created, proof.strip), let track = observedTrack else {
+                return rejected("owned_created_track_required")
+            }
+            if let issued = inputInitializationDestination {
+                guard issued == destination else { return rejected("initialization_destination_conflict") }
+                guard let cached = inputInitializationReceipt, cached.status == .initialized,
+                      let effect = cached.effect, effect.permits(), let after = inputInitializationAfter,
+                      matches(after.outside, footprint(bindings[0].window, excluding: [bindings[0].mixer, options, edit])),
+                      let current = census(), current.count == after.strips.count,
+                      zip(after.strips, current).allSatisfy({ matches($0, footprint($1)) }), actionContextCurrent() else {
+                    return .init(status: .configurationPartial, effect: inputInitializationReceipt?.effect,
+                        result: inputInitializationReceipt?.result, diagnostic: "initialization_not_reissued")
+                }
+                return cached
+            }
+            guard await prepareCreatedTrackReadFocus(for: proof).status == .readFocusPrepared else {
+                return rejected("created_track_read_focus_required")
+            }
+            let stop: @Sendable () -> Bool = { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil }
+            let guardian = AXHelpers.HelpReadGuard(allowHelpReads: true, stop: stop)
+            let population: SessionPopulationObservation.FreshPopulation
+            do {
+                population = try await AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+                    try await AccessibilityChannel(runtime: .axBacked(logicRuntime: runtime, observationMouseRuntime: mouse))
+                        .readFreshSessionPopulation(request: .init(scope: .selection,
+                            domains: [.tracks, .strips, .associations], allowUINavigation: true),
+                            fileReader: .production,
+                            readFocusScope: AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope(),
+                            stoppingBeforeAXRead: { stop() || guardian.stopped }, stoppingWhen: { stop() || guardian.stopped })
+                }
+            } catch { return rejected("created_association_unavailable") }
+            guard population.selectionAssociations.count == 1, let pair = population.selectionAssociations.first,
+                  pair.track.matches(track) else { return rejected("created_track_association_changed") }
+            let checked = await AXMixerStripBinding.$current.withValue(pair.strip) {
+                await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                    await AccessibilityChannel.getCheckedInputObservation(runtime: runtime)
+                }
+            }
+            let currentPair = checked.inputRenewal?.pair ?? pair
+            guard currentPair.track.matches(track), let beforeInput = checked.inputAssignment,
+                  case .physical = beforeInput, let slot = checked.inputSlot, slot.owner.matches(currentPair.strip),
+                  checked.inputRenewal.map({ $0.permits(runtime: runtime) }) ?? true,
+                  await appendArrangeTrack(for: proof).status == .appended,
+                  let current = census(), let index = current.firstIndex(where: { CFEqual($0, currentPair.strip.strip) }),
+                  let outside = footprint(bindings[0].window, excluding: [bindings[0].mixer, options, edit]) else {
+                return rejected("created_checked_physical_input_required")
+            }
+            let trees = current.compactMap { footprint($0) }
+            guard trees.count == current.count,
+                  let inputIndex = trees[index].firstIndex(where: { CFEqual($0.element, slot.control) }),
+                  actionContextCurrent() else { return rejected("created_input_preservation_unavailable") }
+            let window = bindings[0].window, mixer = bindings[0].mixer
+            let excluded = [mixer, options, edit]
+            let authorization = InputInitializationProof(owner: owner, pair: currentPair, before: beforeInput,
+                destination: destination, checked: checked, permitting: { popup in
+                    guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                          let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: runtime.ax)?.strips,
+                          census.count == current.count, zip(census, current).allSatisfy({ CFEqual($0, $1) }),
+                          let latestOutside = Self.footprint(window, excluding: excluded, runtime: runtime),
+                          latestOutside.count == outside.count, zip(outside, latestOutside).allSatisfy({ $0.matches($1) }) else { return false }
+                    for (expected, strip) in zip(trees, current) {
+                        guard let actual = Self.footprint(strip, ignoringTransientMenus: popup.map { [$0] } ?? [], runtime: runtime),
+                              expected.count == actual.count, zip(expected, actual).allSatisfy({ $0.matches($1) }) else { return false }
+                    }
+                    return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+                })
+            guard authorization.permitsBefore(currentPair.strip) else { return rejected("created_input_changed") }
+            // Record the one configuration attempt before awaiting its writer.
+            // An uncertain outcome can be observed later, never re-dispatched.
+            inputInitializationDestination = destination
+            let capture = InputCapture(), upstream = AccessibilityChannel.inputChangeObserver
+            let result = await AXMixerStripBinding.$current.withValue(currentPair.strip) {
+                await AXMixerStripBinding.$outputAssociation.withValue(currentPair) {
+                    await AccessibilityChannel.$inputChangeObserver.withValue({ effect in capture.record(effect); upstream?(effect) }) {
+                        await AccessibilityChannel.setInputBusVerified(params: ["destination": "bus:\(destination)", "replace_existing": "true"],
+                            runtime: runtime, ownedCreation: authorization)
+                    }
+                }
+            }
+            let effect = capture.read()
+            var completed = false
+            if let effect, effect.creation?.owner == owner, effect.before == beforeInput, effect.after == destination,
+               effect.current.track.matches(track), effect.permits(),
+               let after = census(), after.count == current.count,
+               after.indices.contains(index), CFEqual(after[index], effect.current.strip.strip),
+               matches(outside, footprint(window, excluding: excluded)) {
+                let afterTrees = after.compactMap { footprint($0) }
+                completed = afterTrees.count == trees.count && trees.indices.allSatisfy { offset in
+                    if offset != index { return sameValues(trees[offset], afterTrees[offset]) }
+                    let old = trees[offset], new = afterTrees[offset]
+                    guard old.count == new.count, new.indices.contains(inputIndex),
+                          CFEqual(new[inputIndex].element, effect.control.control) else { return false }
+                    return old.indices.allSatisfy { node in
+                        var a = old[node].fields, b = new[node].fields
+                        if node == inputIndex { a.removeValue(forKey: kAXDescriptionAttribute); b.removeValue(forKey: kAXDescriptionAttribute) }
+                        return a == b && old[node].children.count == new[node].children.count
+                    }
+                }
+                if completed, let finalOutside = footprint(window, excluding: excluded),
+                   matches(outside, finalOutside), effect.permits(), actionContextCurrent() {
+                    inputInitializationAfter = (finalOutside, afterTrees)
+                } else { completed = false }
+            }
+            let receipt = InputReceipt(status: completed ? .initialized : .configurationPartial,
+                effect: effect, result: result, diagnostic: completed ? nil : "created_input_effect_or_preservation_unverified")
+            inputInitializationReceipt = receipt
+            return receipt
         }
 
         func create() async -> Receipt {

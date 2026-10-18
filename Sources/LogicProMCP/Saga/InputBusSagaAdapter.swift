@@ -146,7 +146,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             }
             let response: CallTool.Result
             if let effect = self.effect {
-                guard !self.inverseConsumed, effect.permits(),
+                guard !self.inverseConsumed, case .bus(let originalBus) = effect.before, effect.creation == nil, effect.permits(),
                       await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
                         operation: "saga.input_bus") == nil else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed input is no longer current")
@@ -156,11 +156,11 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     await AXMixerStripBinding.$outputAssociation.withValue(effect.current) {
                         await AccessibilityChannel.$inputChangeObserver.withValue({ proof in
                             if proof.original.strip.matches(effect.current.strip), proof.original.track.matches(effect.current.track),
-                               proof.before == effect.after, proof.after == effect.before, proof.sink == effect.sink {
+                               proof.before == .bus(effect.after), proof.after == originalBus, proof.sink == effect.sink {
                                 self.restored = proof
                             }
                         }) {
-                            await AccessibilityChannel.setInputBusVerified(params: ["destination": "bus:\(effect.before)",
+                            await AccessibilityChannel.setInputBusVerified(params: ["destination": "bus:\(originalBus)",
                                 "expected_current": "bus:\(effect.after)", "replace_existing": "true"],
                                 runtime: effect.current.track.runtime, ownedInverse: effect)
                         }
@@ -178,7 +178,8 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                 let traceID = await MixerDispatcher.startTraceIfEnabled(command: "set_input_bus_verified")
                 response = await AccessibilityChannel.$inputChangeObserver.withValue({ proof in
                     if proof.original.strip.matches(held.strip), proof.original.track.matches(held.track),
-                       proof.before == Self.bus(self.forward.params["expected_current"]), proof.after == Self.bus(self.forward.params["destination"]) {
+                       proof.before == Self.bus(self.forward.params["expected_current"]).map(InputAssignment.bus),
+                       proof.creation == nil, proof.after == Self.bus(self.forward.params["destination"]) {
                         self.effect = proof; upstream?(proof)
                     }
                 }) {

@@ -26,6 +26,8 @@ struct Issue291InputAssignmentTests {
         var lateFault: String?
         var lateFaultObserved = false
         var koreanInputAlias = false
+        var ordinaryEffectCurrent = false
+        var unownedPhysicalEffectAccepted = false
 
         init() throws {
             f = try .init()
@@ -204,6 +206,39 @@ struct Issue291InputAssignmentTests {
             #expect(f.open == nil)
         }
         #expect(f.leafPresses == [1, 256])
+    }
+
+    @Test func ordinaryInputEffectCannotBecomeAPhysicalInitialization() async throws {
+        let f = try Fixture()
+        let pair = AccessibilityChannel.HeldSelectionAssociation.Pair(
+            track: .init(window: f.f.window, header: f.f.headers[1], document: f.f.bundle.absoluteString, runtime: f.runtime),
+            strip: .init(window: f.f.window, mixer: f.f.mixer, strip: f.f.strips[0], document: f.f.bundle.absoluteString))
+        let result = await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+            await AccessibilityChannel.$inputChangeObserver.withValue({ proof in
+                f.ordinaryEffectCurrent = proof.permits() && proof.before == .bus(256) && proof.creation == nil
+                let unowned = AccessibilityChannel.ChangedInputObservation(original: proof.original, current: proof.current,
+                    renewal: proof.renewal, control: proof.control, population: proof.population, sink: proof.sink,
+                    before: .physical([1, 2]), after: proof.after, creation: nil, focus: proof.focus,
+                    checkedAfter: proof.checkedAfter, sampledAt: proof.sampledAt)
+                f.unownedPhysicalEffectAccepted = unowned.permits()
+            }) { await f.write(1) }
+        }
+        #expect(try #require(sharedJSONObject(result.message))["state"] as? String == "A")
+        #expect(f.ordinaryEffectCurrent && !f.unownedPhysicalEffectAccepted)
+        #expect(f.leafPresses == [1])
+    }
+
+    @Test func publicPhysicalExpectedInputStillRefusesBeforeNavigation() async throws {
+        let f = try Fixture()
+        let owner = AXMixerStripBinding.Binding(window: f.f.window, mixer: f.f.mixer,
+            strip: f.f.strips[0], document: f.f.bundle.absoluteString)
+        let result = await AXMixerStripBinding.$current.withValue(owner) {
+            await AccessibilityChannel.setInputBusVerified(params: ["destination": "bus:1", "expected_current": "input:1-2",
+                "replace_existing": "true"], runtime: f.runtime, timing: .immediate)
+        }
+        let body = try #require(sharedJSONObject(result.message))
+        #expect(body["state"] as? String == "C" && body["error"] as? String == "invalid_params")
+        #expect(f.inputOpens == 0 && f.leafPresses.isEmpty)
     }
 
     @Test("Replacement and actual current input must agree before a write", arguments: [false, true])

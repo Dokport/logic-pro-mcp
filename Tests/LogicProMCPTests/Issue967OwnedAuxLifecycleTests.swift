@@ -1062,6 +1062,32 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
+    @Test(arguments: ["before_track", "foreign_proof", "project", "selection", "peer_edit", "invalid_bus", "cancelled"])
+    func inputInitializationRequiresTheOriginalCurrentCreation(fault: String) async throws {
+        let f = Fixture(); f.modelTrackAppend(); f.readFocusFault = "healthy"
+        try await owned(f) {
+            let context = try f.context(), aux = await context.create()
+            let proof = try #require(aux.inverse)
+            if fault != "before_track" { #expect(await context.appendArrangeTrack(for: proof).status == .appended) }
+            var requested = proof
+            switch fault {
+            case "foreign_proof":
+                let other = Fixture(); other.modelTrackAppend()
+                requested = try #require(await other.context().create().inverse)
+            case "project": f.b.setAttribute(f.window, kAXDocumentAttribute, "file:///tmp/967-other.logicx")
+            case "selection": f.selected = [f.original[0]]
+            case "peer_edit": f.b.setAttribute(f.original[0], kAXValueAttribute, 1)
+            case "cancelled": f.cancelled = true
+            default: break
+            }
+            let mouseBefore = f.mouseEvents, optionsBefore = f.optionPresses
+            let result = await context.initializeInputBus(for: requested, destination: fault == "invalid_bus" ? 257 : 2)
+            #expect(result.status == .rejectedBeforeWrite)
+            #expect(f.readFocusPresses == 0 && f.mouseEvents == mouseBefore && f.optionPresses == optionsBefore)
+            #expect(f.selectionSets == 0 && f.deletePresses == 0)
+        }
+    }
+
     @Test(arguments: ["canvas_redraw", "scrollbar_canvas_redraw", "canvas_redraw_value", "canvas_redraw_content", "canvas_redraw_blank", "canvas_redraw_reused"])
     func appendedTrackCanObserveOnlyCompleteEmptyCanvasRowRedraw(fault: String) async throws {
         let f = Fixture(); f.modelTrackAppend(fault)
