@@ -420,9 +420,10 @@ enum OwnedAuxLifecycle {
         /// A creator may replace the entire native Mixer census. Compare the
         /// complete protected value trees only to establish aggregate peer
         /// preservation, never to rebind an old reference or actuate a peer.
-        /// The actual created object must be the sole selected/focused addition
-        /// with the accepted observed defaults. Its new CF is then retained and
-        /// all later checks use exact native identity again.
+        /// There must be exactly one possible addition before selection/focus
+        /// is considered: those observations cannot disambiguate identical trees.
+        /// Retain its new CF before configuration validation can fail; all later
+        /// checks use exact native identity again.
         private func retainCreationAfterWholeRedraw(_ current: [AXUIElement]) -> Bool {
             guard issued, !deleteIssued, observedCreated == nil,
                   same(preservationPeers, bindings.map(\.strip)),
@@ -447,9 +448,6 @@ enum OwnedAuxLifecycle {
                 let peerTrees = trees.enumerated().filter { $0.offset != index }.map(\.element)
                 guard peerTrees.count == before.count,
                       zip(before, peerTrees).allSatisfy({ sameValues($0, $1) }) else { continue }
-                let candidate = current[index]
-                guard selectedOnly(candidate), focusedOn(candidate),
-                      defaults(candidate) == acceptedDefaults else { continue }
                 candidates.append(index)
             }
             guard candidates.count == 1, let index = candidates.first,
@@ -458,7 +456,6 @@ enum OwnedAuxLifecycle {
                   matches(outsideMixer, footprint(bindings[0].window,
                     excluding: [bindings[0].mixer, options, edit])),
                   selectedOnly(current[index]), focusedOn(current[index]),
-                  defaults(current[index]) == acceptedDefaults,
                   let final = census(), same(current, final), actionContextCurrent() else { return false }
             preservationPeers = current.enumerated().filter { $0.offset != index }.map(\.element)
             self.before = trees.enumerated().filter { $0.offset != index }.map(\.element)

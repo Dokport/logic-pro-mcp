@@ -579,6 +579,27 @@ struct Issue967OwnedAuxLifecycleTests {
             selectCreatedOnCreation = true
         }
 
+        func makeOnePeerIdenticalToTheCreatedAux() {
+            var nextID = 967_900
+            let native = b.makeAXRuntime()
+            func copyTree(_ source: AXUIElement, into target: AXUIElement) {
+                for key in [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
+                            kAXHelpAttribute, kAXIdentifierAttribute, kAXValueAttribute, kAXEnabledAttribute] {
+                    if let value = b.attributeValue(source, key as String) {
+                        b.setAttribute(target, key, value)
+                    }
+                }
+                let children = native.children(source).map { child -> AXUIElement in
+                    let copy = b.element(nextID); nextID += 1
+                    copyTree(child, into: copy)
+                    return copy
+                }
+                b.setChildren(target, children)
+            }
+            copyTree(created, into: original[1])
+            if let retiredPeerCopies { copyTree(created, into: retiredPeerCopies[1]) }
+        }
+
         func useNativeSiblingMenuAttachment() {
             siblingMenus = true
             // Native Options exposes its menu through AXChildren, while the same
@@ -688,6 +709,33 @@ struct Issue967OwnedAuxLifecycleTests {
             f.b.setAttribute(f.b.element(967_801), kAXValueAttribute, 0.5)
             #expect(await context.remove(inverse).status == .residual)
             #expect(f.deletePresses == 0)
+        }
+    }
+
+    @Test func identicalPeerAndNewAuxCannotBeDisambiguatedBySelection() async throws {
+        try await owned {
+            let f = Fixture(); f.modelWholePeerRetirement()
+            f.makeOnePeerIdenticalToTheCreatedAux()
+            let context = try f.context(nativeControls: true)
+            let result = await context.create()
+            #expect(result.status != .created)
+            #expect(result.inverse == nil)
+            #expect(f.createPresses == 1 && f.deletePresses == 0,
+                    "status=\(result.status), diagnostic=\(result.diagnostic ?? "none"), options=\(f.optionPresses)")
+        }
+    }
+
+    @Test func uniquelyObservedNewAuxIsRetainedBeforeItsConfigurationFails() async throws {
+        try await owned {
+            let f = Fixture(); f.modelWholePeerRetirement()
+            f.b.setAttribute(try #require(f.controls[.volume]), kAXValueAttribute, 1)
+            let context = try f.context(nativeControls: true)
+            let result = await context.create()
+            #expect(result.status == .configurationPartial)
+            #expect(result.created.map { CFEqual($0, f.created) } == true)
+            #expect(result.inverse == nil)
+            #expect(await context.create().status == .configurationPartial)
+            #expect(f.createPresses == 1 && f.deletePresses == 0)
         }
     }
 
