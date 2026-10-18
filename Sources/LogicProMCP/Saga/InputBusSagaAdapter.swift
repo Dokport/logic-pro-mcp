@@ -75,11 +75,15 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             guard FeatureFlags.adr002TargetRef, self.supports(step),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
-                    operation: "saga.input_bus") == nil else { return nil }
+                    operation: "saga.input_bus") == nil else {
+                Log.info("Input Saga read refused: acquisition or project scope", subsystem: "ax"); return nil
+            }
             let held: AccessibilityChannel.HeldSelectionAssociation.Pair
             let proof = self.restored ?? self.effect
             if let proof {
-                guard proof.permits(), !self.inverseConsumed || self.restored != nil else { return nil }
+                guard proof.permits(), !self.inverseConsumed || self.restored != nil else {
+                    Log.info("Input Saga read refused: changed-input custody", subsystem: "ax"); return nil
+                }
                 held = proof.current
             } else if let captured = self.pair {
                 guard !self.attempted, self.beforeStillCurrent() else { return nil }
@@ -113,6 +117,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                 }
             }
             let current = reading.inputRenewal?.pair ?? held
+            Log.info("Input Saga checked read: \(reading.result.message)", subsystem: "ax")
             guard reading.result.isSuccess, let receipt = decodedJSONObject(reading.result.message),
                   receipt["state"] as? String == "A", receipt["popup_menu_state"] as? String == "closed",
                   case .bus(let actual)? = reading.assignment,
@@ -123,9 +128,13 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                   reading.inputRenewal.map({ $0.original.matches(held.strip) && $0.originalTrack.matches(held.track)
                     && $0.permits(runtime: held.track.runtime) }) ?? current.strip.matches(held.strip),
                   await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
-                    operation: "saga.input_bus") == nil else { return nil }
+                    operation: "saga.input_bus") == nil else {
+                Log.info("Input Saga read refused: checked result or current source", subsystem: "ax"); return nil
+            }
             if let proof {
-                guard let renewed = proof.following(reading) else { return nil }
+                guard let renewed = proof.following(reading) else {
+                    Log.info("Input Saga read refused: following checked renewal", subsystem: "ax"); return nil
+                }
                 if self.restored != nil { self.restored = renewed } else { self.effect = renewed }
             }
             self.pair = current; self.readControl = control
