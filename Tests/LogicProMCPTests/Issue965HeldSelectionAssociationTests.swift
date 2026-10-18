@@ -560,6 +560,14 @@ struct Issue965HeldSelectionAssociationTests {
         var inputRetirementCensusLagObserved = false
         var inputMenuHadOwnedClaim = false
         var inputSagaForwardVerified = false
+        var inputInverseLeafObserved = false
+        var inputInverseDocumentRead = false
+        var inputInverseDescriptionRead = false
+        var inputInverseDocumentCandidates = 0
+        var inputInverseReadSequence = 0
+        var inputInverseLastDocument = 0
+        var inputInverseLastInput = 0
+        var inputInverseScopeOrderedAtWrite = false
         var inputPreviousReadWasDescription = false
         var presentationCensusReads = 0
         var passivePermissionSelectionReads = 0
@@ -5909,10 +5917,12 @@ struct Issue965HeldSelectionAssociationTests {
                       "late_inverse_source", "late_inverse_control", "late_inverse_output",
                       "inverse_boundary_control", "inverse_boundary_sink", "inverse_boundary_peer",
                       "inverse_boundary_final_control", "inverse_boundary_final_sink", "inverse_boundary_final_peer",
+                      "inverse_boundary_final_document_1", "inverse_boundary_final_document_4",
                       "retired_track_failure", "retired_track_cancel", "retired_track_changed_input", "retired_track_removed_header"])
     func registeredInputSagaOwnsItsActualCompensation(_ outcome: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder, cache = StateCache(), registry = TargetRegistry()
+            f.useBulkReads = outcome.contains("_final_")
             let retiring = outcome.hasPrefix("retired_track_")
             if retiring {
                 f.routingSelection = { index in
@@ -5927,6 +5937,7 @@ struct Issue965HeldSelectionAssociationTests {
             let outputMenu = b.element(1_291_210), outputEcho = b.element(1_291_211), outputLeaf = b.element(1_291_212)
             let replacementInput = b.element(1_291_215)
             let replacementPeer = b.element(1_291_216)
+            let trailingInputMarker = b.element(1_291_217)
             b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
             let mixerOwner = b.element(1_291_213)
             b.setRole(mixerOwner, kAXGroupRole as String); b.setAttribute(mixerOwner, kAXDescriptionAttribute as String, "Mixer")
@@ -5935,6 +5946,10 @@ struct Issue965HeldSelectionAssociationTests {
             b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output destination.", x: 0, y: 30, width: 60, height: 20)
             for control in [input, output] { b.setChildren(control, []); b.setActionNames(control, [kAXPressAction as String]) }
             b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [input, output])
+            if outcome.hasPrefix("inverse_boundary_final_document_") {
+                b.setRole(trailingInputMarker, kAXStaticTextRole as String); b.setChildren(trailingInputMarker, [])
+                b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [trailingInputMarker])
+            }
             for menu in [root, submenu, outputRoot, outputMenu] { b.setRole(menu, kAXMenuRole as String) }
             for menu in [root, outputRoot] { b.setActionNames(menu, [kAXCancelAction as String]) }
             for (node, title) in [(echo, "Bus 1"), (parent, "Bus"), (one, "Bus 1"), (two, "Bus 2"),
@@ -5957,6 +5972,10 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, census + [inputPressed ? root : outputRoot]); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, one) || CFEqual(element, two) {
+                    if f.inputInverseLeafObserved, f.routingDestinationPresses == 1 {
+                        f.inputInverseScopeOrderedAtWrite = f.inputInverseLastInput > 0
+                            && f.inputInverseLastDocument > f.inputInverseLastInput
+                    }
                     f.routingDestinationPresses += 1
                     let title = CFEqual(element, one) ? "Bus 1" : "Bus 2"
                     b.setAttribute(input, kAXDescriptionAttribute as String, title); b.setAttribute(echo, kAXTitleAttribute as String, title)
@@ -6012,6 +6031,35 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
             f.routingRead = { element, attribute in
+                if f.inputInverseLeafObserved, f.routingDestinationPresses == 1 {
+                    f.inputInverseReadSequence += 1
+                    if CFEqual(element, f.window), attribute == kAXDocumentAttribute as String {
+                        f.inputInverseLastDocument = f.inputInverseReadSequence
+                    }
+                    if CFEqual(element, trailingInputMarker), attribute == kAXRoleAttribute as String {
+                        f.inputInverseLastInput = f.inputInverseReadSequence
+                    }
+                }
+                if outcome.hasPrefix("inverse_boundary_final_document_"), f.inputInverseLeafObserved,
+                   f.routingDestinationPresses == 1, !f.routingLateScopeInjected {
+                    if CFEqual(element, f.window), attribute == kAXDocumentAttribute as String {
+                        f.inputInverseDocumentRead = true; f.inputInverseDescriptionRead = false
+                    }
+                    if f.inputInverseDocumentRead, CFEqual(element, input), attribute == kAXDescriptionAttribute as String {
+                        f.inputInverseDescriptionRead = true
+                    }
+                    if f.inputInverseDescriptionRead, CFEqual(element, trailingInputMarker), attribute == kAXRoleAttribute as String {
+                        f.inputInverseDocumentRead = false; f.inputInverseDescriptionRead = false
+                        f.inputInverseDocumentCandidates += 1
+                        // Both popupOwned checks scan the input before and after their owner
+                        // checks. The fourth group is the final, deciding pre-action scan;
+                        // the first is the earlier refusal control. Neither runs after a write.
+                        if f.inputInverseDocumentCandidates == Int(outcome.split(separator: "_").last ?? "") {
+                            f.routingLateScopeInjected = true
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                    }
+                }
                 // Mutate only after the actual verified forward, at inverse acquisition.
                 if !outcome.contains("_final_"), CFEqual(element, output), attribute == kAXDescriptionAttribute as String {
                     injectInverseBoundary()
@@ -6019,7 +6067,9 @@ struct Issue965HeldSelectionAssociationTests {
             }
             f.routingActionNames = { element in
                 // A separate witness reaches the actual inverse leaf's capability read.
-                if outcome.contains("_final_"), CFEqual(element, one) { injectInverseBoundary() }
+                if outcome.hasPrefix("inverse_boundary_final_document_"), CFEqual(element, one), f.inputSagaForwardVerified,
+                   AccessibilityChannel.inputChangeObserver != nil { f.inputInverseLeafObserved = true }
+                else if outcome.contains("_final_"), CFEqual(element, one) { injectInverseBoundary() }
                 return nil
             }
             await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal, mode: boundaryOutcome,
@@ -6092,7 +6142,12 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
                 return
             }
-            if ["no_observer", "lost_observer"].contains(outcome) || outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") || outcome == "completed" {
+            // Moving the protected read before the final owner check removes the unsafe
+            // fourth post-document group. If it is absent, require actual input reads AND
+            // a later document check at the real inverse press, not mere non-injection.
+            let orderedFinalScope = outcome == "inverse_boundary_final_document_4" && !f.routingLateScopeInjected
+            if orderedFinalScope { #expect(f.inputInverseScopeOrderedAtWrite) }
+            if !orderedFinalScope && (["no_observer", "lost_observer"].contains(outcome) || outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") || outcome == "completed") {
                 #expect(body["state"] as? String == (outcome == "completed" ? "A" : "B"), "Actual input result: \(body)")
                 #expect(body["saga_state"] as? String == (outcome == "completed" ? "completed"
                     : outcome.hasPrefix("inverse_boundary_") ? "compensationFailed" : "rollbackUncertain"))

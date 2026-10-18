@@ -137,6 +137,7 @@ extension AccessibilityChannel {
                   before.inputRenewal.map({ $0.permits(runtime: runtime, ownedPopup: ownedPopup) }) != false else {
                 Log.info("Input writer custody refused: original association/gate", subsystem: "ax"); return false
             }
+            guard inverseStillCurrent(ownedPopup: ownedPopup) else { return false }
             guard
                   sinkStillCurrent(owner),
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
@@ -156,7 +157,7 @@ extension AccessibilityChannel {
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                 Log.info("Input writer custody refused: sink/transport/window/document", subsystem: "ax"); return false
             }
-            return inverseStillCurrent(ownedPopup: ownedPopup)
+            return true
         }
         guard ownerStillCurrent() else {
             return refusal(.routingDependencyUnknown, "The source must remain a stopped physical-output sink with every send observed empty.")
