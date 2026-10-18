@@ -1,4 +1,5 @@
 @preconcurrency import ApplicationServices
+import Carbon
 import Foundation
 
 /// One native, request-owned aux creator/inverse. No public command, bus allocator,
@@ -1020,7 +1021,7 @@ enum OwnedAuxLifecycle {
                 if !focus.onRail {
                     uiEffects.navigationPerformed = true; uiEffects.restoration = "not_restored"
                     uiEffects.attempted.append("created_track_read_focus")
-                    _ = mouse.postKeyEvent(9)
+                    _ = mouse.postKeyEvent(CGKeyCode(kVK_Tab))
                 }
             }
             guard let before = createdReadFocusBefore else { return trackReceipt(.pending) }

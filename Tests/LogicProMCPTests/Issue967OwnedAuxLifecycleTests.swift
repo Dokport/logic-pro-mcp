@@ -1,4 +1,5 @@
 @preconcurrency import ApplicationServices
+import Carbon
 import Foundation
 import Testing
 @testable import LogicProMCP
@@ -402,7 +403,7 @@ struct Issue967OwnedAuxLifecycleTests {
                   },
                   postKeyEvent: { [self] key in
                       guard let readFocusFault else { Issue.record("Keyboard fallback forbidden"); return false }
-                      #expect(key == 9 && trackAppended)
+                      #expect(key == CGKeyCode(kVK_Tab) && trackAppended)
                       readFocusPresses += 1; selectionReadAtFocus = selectionReads
                       if !["no_effect", "late_effect"].contains(readFocusFault) {
                           b.setAttribute(app, kAXFocusedUIElementAttribute,
