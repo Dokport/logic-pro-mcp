@@ -141,6 +141,14 @@ struct Issue967OwnedAuxLifecycleTests {
         var selectCreatedOnCreation = false
         var focusOnCreation: AXUIElement?
         var retiredDeletionPeers: [AXUIElement]?
+        var selectionAfterCreation: [AXUIElement]?
+        var selectionSets = 0
+        var selectionSetChanges = true
+        var selectionSetAcknowledged = true
+        var lateSelectionChange = false
+        var selectionSettableObserved = false
+        var selectionDecisionFocusObserved = false
+        var lateSelectionInjected = false
 
         init(delay: Int = 0) {
             self.delay = delay
@@ -281,9 +289,12 @@ struct Issue967OwnedAuxLifecycleTests {
                           mouseEvents.append("up"); betweenClickHalves = false
                           createPresses += 1
                           if !creatorEffectUnknown { issued = true }
-                          if issued && selectCreatedOnCreation {
-                              selected = [created]
-                              b.setAttribute(app, kAXFocusedUIElementAttribute, focusOnCreation ?? created)
+                          if issued {
+                              if let selectionAfterCreation { selected = selectionAfterCreation }
+                              else if selectCreatedOnCreation { selected = [created] }
+                              if selectCreatedOnCreation || focusOnCreation != nil {
+                                  b.setAttribute(app, kAXFocusedUIElementAttribute, focusOnCreation ?? created)
+                              }
                           }
                           optionOpen = false
                           return mouseFault != "up_failed"
@@ -365,7 +376,15 @@ struct Issue967OwnedAuxLifecycleTests {
                    }
                    return currentChildren(element).map { .success($0) }
                },
-               setAttributeHandler: nil, performActionHandler: { [self] element, action in
+               setAttributeHandler: { [self] element, attribute, value in
+                   guard CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute,
+                         let values = value as? [AXUIElement] else {
+                       Issue.record("Unexpected lifecycle setter"); return false
+                   }
+                   selectionSets += 1
+                   if selectionSetChanges { selected = values }
+                   return selectionSetAcknowledged
+               }, performActionHandler: { [self] element, action in
                 if action == kAXCancelAction as String {
                     if CFEqual(element, optionMenu) {
                         optionCancelPresses += 1
@@ -426,7 +445,13 @@ struct Issue967OwnedAuxLifecycleTests {
             if mouseFault == "missing_hit_seam" { hit = nil }
             else { hit = { [self] root, point in creatorHit(root, point) } }
             let ax = AXHelpers.Runtime(axApp: base.ax.axApp, attributeValue: base.ax.attributeValue,
-                attributeIsSettable: base.ax.attributeIsSettable, setAttributeValue: base.ax.setAttributeValue,
+                attributeIsSettable: { [self] element, attribute in
+                    let result = base.ax.attributeIsSettable(element, attribute)
+                    if result == true, CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute {
+                        selectionSettableObserved = true
+                    }
+                    return result
+                }, setAttributeValue: base.ax.setAttributeValue,
                 children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
                 actionNames: base.ax.actionNames, actionNamesResult: { [self] element in
                     noteRead()
@@ -454,6 +479,14 @@ struct Issue967OwnedAuxLifecycleTests {
 
         private func attributeResult(_ element: AXUIElement, _ attribute: String) -> Result<AnyObject?, AXHelpers.AXStatusError>? {
             noteRead()
+            if selectionSettableObserved, CFEqual(element, app), attribute == kAXFocusedUIElementAttribute {
+                selectionDecisionFocusObserved = true
+            }
+            if lateSelectionChange, selectionDecisionFocusObserved, !lateSelectionInjected,
+               CFEqual(element, window), attribute == kAXDocumentAttribute {
+                lateSelectionInjected = true
+                selected = [retiredPeerCopies![0]]
+            }
             if CFEqual(element, app) { currentlyReadingFootprint = false }
             if CFEqual(element, window), attribute == kAXEnabledAttribute {
                 footprintRootRead = true; currentlyReadingFootprint = true
@@ -785,6 +818,43 @@ struct Issue967OwnedAuxLifecycleTests {
             if fault == "multiple_selection" { f.selected.append(f.retiredPeerCopies![0]) }
             #expect(await context.remove(inverse).status == .residual)
             #expect(f.deletePresses == 0)
+        }
+    }
+
+    @Test(arguments: ["success", "no_ack_effect", "delayed", "failed", "other_selection", "late_selection", "foreign_focus", "ambiguous"])
+    func uniquelyCreatedObjectOwnsOnlyOneEmptySelectionUpdate(fault: String) async throws {
+        try await owned {
+            let f = Fixture(); f.modelWholePeerRetirement()
+            f.selectCreatedOnCreation = false
+            f.selectionAfterCreation = fault == "other_selection" ? [f.retiredPeerCopies![0]] : []
+            f.focusOnCreation = fault == "foreign_focus" ? f.window : f.mixer
+            f.b.setAttributeSettable(f.mixer, kAXSelectedChildrenAttribute, true)
+            if fault == "ambiguous" { f.makeOnePeerIdenticalToTheCreatedAux() }
+            if ["failed", "delayed"].contains(fault) { f.selectionSetChanges = false }
+            if ["failed", "no_ack_effect"].contains(fault) { f.selectionSetAcknowledged = false }
+            if fault == "late_selection" { f.lateSelectionChange = true }
+            let context = try f.context(nativeControls: true)
+            let result = await context.create()
+            if ["other_selection", "late_selection", "foreign_focus", "ambiguous"].contains(fault) {
+                #expect(result.status != .created && result.inverse == nil)
+                #expect(f.selectionSets == 0)
+                if fault == "late_selection" { #expect(f.lateSelectionInjected) }
+            } else if ["failed", "delayed"].contains(fault) {
+                #expect(result.status == .pending && result.inverse == nil)
+                #expect(result.created.map { CFEqual($0, f.created) } == true)
+                #expect(await context.create().status == .pending)
+                #expect(f.selectionSets == 1)
+                if fault == "delayed" {
+                    f.selected = [f.created]
+                    #expect(await context.create().status == .created)
+                    #expect(f.selectionSets == 1)
+                }
+            } else {
+                #expect(result.status == .created && result.inverse != nil)
+                #expect(result.created.map { CFEqual($0, f.created) } == true)
+                #expect(f.selectionSets == 1)
+            }
+            #expect(f.createPresses == 1 && f.deletePresses == 0)
         }
     }
 

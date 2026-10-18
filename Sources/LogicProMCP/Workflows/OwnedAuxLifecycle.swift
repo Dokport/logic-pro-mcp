@@ -92,6 +92,8 @@ enum OwnedAuxLifecycle {
         private var outsideMixer: [Node]?
         private var held: Receipt?
         private var observedCreated: AXUIElement?
+        private var createdSelectionPending = false
+        private var createdSelectionIssued = false
         private var ownedMenu: (control: AXUIElement, reportedParent: AXUIElement,
                                 popupParent: AXUIElement, attachmentParent: AXUIElement,
                                 ancestor: Node?, children: [AXUIElement], menu: AXUIElement)?
@@ -179,7 +181,13 @@ enum OwnedAuxLifecycle {
             // Native Mixer-only Aux selection can leave keyboard focus on the
             // containing Mixer. Its exact identity is necessary but insufficient:
             // the independently read selection must still be this sole strip.
-            if CFEqual(focus, bindings[0].mixer) { return selectedOnly(strip) }
+            if ownsMixerFocus(focus, app: app) { return selectedOnly(strip) }
+            guard let menu, let nodes = footprint(menu) else { return false }
+            return nodes.contains(where: { CFEqual($0.element, focus) })
+        }
+
+        private func ownsMixerFocus(_ focus: AXUIElement, app: AXUIElement) -> Bool {
+            if CFEqual(focus, bindings[0].mixer) { return true }
             // Logic 12.3 focuses the enclosing Mixer group rather than its
             // inner strip area. Reuse discovery's real owner path, not a name
             // match or arbitrary ancestor, and keep its held child identity.
@@ -190,12 +198,18 @@ enum OwnedAuxLifecycle {
                     checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
                let binding = discovery.binding, CFEqual(binding.mixer, bindings[0].mixer),
                binding.owners.filter({ CFEqual($0, focus) }).count == 1,
-               unchangedGroup(heldOwner), selectedOnly(strip),
+               unchangedGroup(heldOwner),
                case .success(let finalFocus?) = AXHelpers.getAttributeResult(app, kAXFocusedUIElementAttribute,
                     runtime: runtime.ax) as Result<AXUIElement?, AXHelpers.AXStatusError>,
                CFEqual(focus, finalFocus) { return true }
-            guard let menu, let nodes = footprint(menu) else { return false }
-            return nodes.contains(where: { CFEqual($0.element, focus) })
+            return false
+        }
+
+        private func mixerIsFocused() -> Bool {
+            guard let app = AXLogicProElements.appRoot(runtime: runtime),
+                  case .success(let focus?) = AXHelpers.getAttributeResult(app, kAXFocusedUIElementAttribute,
+                    runtime: runtime.ax) as Result<AXUIElement?, AXHelpers.AXStatusError> else { return false }
+            return ownsMixerFocus(focus, app: app)
         }
 
         private func creatorFrame(_ leaf: AXUIElement) -> CGRect? {
@@ -482,12 +496,50 @@ enum OwnedAuxLifecycle {
                   let bookend = census(), same(current, bookend),
                   zip(current, trees).allSatisfy({ matches($1, footprint($0)) }),
                   matches(outsideMixer, footprint(bindings[0].window,
-                    excluding: [bindings[0].mixer, options, edit])),
-                  selectedOnly(current[index]), focusedOn(current[index]),
-                  let final = census(), same(current, final), actionContextCurrent() else { return false }
+                    excluding: [bindings[0].mixer, options, edit])) else { return false }
+            let candidate = current[index]
+            let needsSelection: Bool
+            if selectedOnly(candidate), focusedOn(candidate) { needsSelection = false }
+            else {
+                guard selectionIsEmpty(), mixerIsFocused() else { return false }
+                needsSelection = true
+            }
+            guard let final = census(), same(current, final), actionContextCurrent() else { return false }
             preservationPeers = current.enumerated().filter { $0.offset != index }.map(\.element)
             self.before = trees.enumerated().filter { $0.offset != index }.map(\.element)
-            observedCreated = current[index]
+            observedCreated = candidate
+            createdSelectionPending = needsSelection
+            return true
+        }
+
+        private func selectionIsEmpty() -> Bool {
+            guard case .success(.elements(let selected)) = AXHelpers.getAXUIElementArrayRead(
+                bindings[0].mixer, kAXSelectedChildrenAttribute, runtime: runtime.ax) else { return false }
+            return selected.isEmpty
+        }
+
+        /// Select only the already retained, structurally unique creation. An
+        /// empty Mixer selection may be acquired once; another selection is not
+        /// ours to replace. Lost/late acknowledgement never permits a new setter.
+        private func acquireCreatedSelection(_ current: [AXUIElement]) -> Bool {
+            guard let strip = observedCreated,
+                  current.filter({ CFEqual($0, strip) }).count == 1 else { return false }
+            if selectedOnly(strip), focusedOn(strip) {
+                createdSelectionPending = false
+                return true
+            }
+            guard !createdSelectionIssued, selectionIsEmpty(), mixerIsFocused(),
+                  AXHelpers.isAttributeSettable(bindings[0].mixer, kAXSelectedChildrenAttribute,
+                    runtime: runtime.ax) == true,
+                  preserved(), let bookend = census(), same(current, bookend),
+                  selectionIsEmpty(), mixerIsFocused(), actionContextCurrent(),
+                  selectionIsEmpty() else { return false }
+            createdSelectionIssued = true
+            _ = AXHelpers.setAttribute(bindings[0].mixer, kAXSelectedChildrenAttribute,
+                [strip] as CFArray, runtime: runtime.ax)
+            guard selectedOnly(strip), focusedOn(strip),
+                  let after = census(), same(current, after), preserved(), actionContextCurrent() else { return false }
+            createdSelectionPending = false
             return true
         }
 
@@ -719,6 +771,9 @@ enum OwnedAuxLifecycle {
                     observedCreated = new[0]
                 }
                 guard preserved() else { return receipt(.pending, strip: observedCreated, diagnostic: "preservation_changed") }
+                if createdSelectionPending, !acquireCreatedSelection(current) {
+                    return receipt(.pending, strip: observedCreated, diagnostic: "created_selection_unverified")
+                }
                 if new.count == 1 {
                     let strip = new[0]
                     guard let actual = defaults(strip), let initial = footprint(strip),
