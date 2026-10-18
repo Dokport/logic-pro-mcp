@@ -34,7 +34,11 @@ private actor SendRemovalSagaResultBoundary: Channel {
         }
         let result: ChannelResult
         if operation == self.operation, mode == "lost_observer" {
-            if operation == "mixer.set_send_level_verified" {
+            if operation == "mixer.set_input_bus_verified" {
+                result = await AccessibilityChannel.$inputChangeObserver.withValue(nil) {
+                    await base.execute(operation: operation, params: params)
+                }
+            } else if operation == "mixer.set_send_level_verified" {
                 result = await AccessibilityChannel.$sendLevelChangeObserver.withValue(nil) {
                     await base.execute(operation: operation, params: params)
                 }
@@ -5895,6 +5899,179 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingLateScopeInjected, "The refusing late boundary must actually be reached")
                 } else { #expect(f.selections == [1, 0], "Unavailable original authority must not acquire by duplicate name or ordinal") }
             }
+        }
+    }
+
+    @Test("An input Saga compensates only its actual Bus change under its original pair",
+          arguments: ["completed", "failure", "cancel", "wrong_target", "wrong_track", "wrong_project", "wrong_hash", "missing_hash",
+                      "no_observer", "lost_observer", "late_inverse_input", "late_inverse_project",
+                      "late_inverse_source", "late_inverse_control", "late_inverse_output",
+                      "retired_track_failure", "retired_track_cancel", "retired_track_changed_input", "retired_track_removed_header"])
+    func registeredInputSagaOwnsItsActualCompensation(_ outcome: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(), b = f.builder, cache = StateCache(), registry = TargetRegistry()
+            let retiring = outcome.hasPrefix("retired_track_")
+            if retiring {
+                f.routingSelection = { index in
+                    b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                        [index == 0 ? f.routingReplacement ?? f.strips[1] : f.strips[0]])
+                }
+            }
+            let input = b.element(1_291_200), output = b.element(1_291_201)
+            let root = b.element(1_291_202), echo = b.element(1_291_203), parent = b.element(1_291_204)
+            let submenu = b.element(1_291_205), one = b.element(1_291_206), two = b.element(1_291_207)
+            let outputRoot = b.element(1_291_208), outputParent = b.element(1_291_209)
+            let outputMenu = b.element(1_291_210), outputEcho = b.element(1_291_211), outputLeaf = b.element(1_291_212)
+            b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
+            let mixerOwner = b.element(1_291_213)
+            b.setRole(mixerOwner, kAXGroupRole as String); b.setAttribute(mixerOwner, kAXDescriptionAttribute as String, "Mixer")
+            b.setChildren(mixerOwner, [f.mixer]); b.setChildren(f.window, [f.rail, mixerOwner, b.element(1_965_720)])
+            b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+            b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output destination.", x: 0, y: 30, width: 60, height: 20)
+            for control in [input, output] { b.setChildren(control, []); b.setActionNames(control, [kAXPressAction as String]) }
+            b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [input, output])
+            for menu in [root, submenu, outputRoot, outputMenu] { b.setRole(menu, kAXMenuRole as String) }
+            for menu in [root, outputRoot] { b.setActionNames(menu, [kAXCancelAction as String]) }
+            for (node, title) in [(echo, "Bus 1"), (parent, "Bus"), (one, "Bus 1"), (two, "Bus 2"),
+                                  (outputParent, "Output"), (outputEcho, "Stereo Output"), (outputLeaf, "Stereo Output")] {
+                b.setRole(node, kAXMenuItemRole as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+                b.setAttribute(node, kAXEnabledAttribute as String, true); b.setChildren(node, [])
+            }
+            for leaf in [one, two] { b.setActionNames(leaf, [kAXPressAction as String]) }
+            for node in [echo, one, outputEcho, outputLeaf] { b.setAttribute(node, "AXMenuItemMarkChar", "✓") }
+            b.setAttribute(two, "AXMenuItemMarkChar", "")
+            b.setChildren(submenu, [one, two]); b.setChildren(parent, [submenu]); b.setChildren(root, [echo, parent])
+            b.setChildren(outputMenu, [outputLeaf]); b.setChildren(outputParent, [outputMenu]); b.setChildren(outputRoot, [outputEcho, outputParent])
+            f.routingAction = { element, action in
+                let source = f.routingReplacement ?? f.strips[1]
+                let census = [f.strips[0], source]
+                if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, output) {
+                    if CFEqual(element, input) { f.inputMenuPresses += 1 }
+                    b.setChildren(f.mixer, census + [CFEqual(element, input) ? root : outputRoot]); return true
+                }
+                if action == kAXPressAction as String, CFEqual(element, one) || CFEqual(element, two) {
+                    f.routingDestinationPresses += 1
+                    let title = CFEqual(element, one) ? "Bus 1" : "Bus 2"
+                    b.setAttribute(input, kAXDescriptionAttribute as String, title); b.setAttribute(echo, kAXTitleAttribute as String, title)
+                    b.setAttribute(one, "AXMenuItemMarkChar", CFEqual(element, one) ? "✓" : "")
+                    b.setAttribute(two, "AXMenuItemMarkChar", CFEqual(element, two) ? "✓" : "")
+                    b.setChildren(f.mixer, census); b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? source : f.window); return true
+                }
+                if action == kAXCancelAction as String, CFEqual(element, root) || CFEqual(element, outputRoot) {
+                    if CFEqual(element, root) { f.inputMenuCancels += 1 }
+                    if retiring, CFEqual(element, root) {
+                        let replacement = b.element(1_291_300 + f.inputMenuCancels)
+                        b.setRole(replacement, kAXLayoutItemRole as String)
+                        b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                        b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                        b.setChildren(replacement, b.makeAXRuntime().children(source))
+                        f.routingReplacement = replacement
+                    }
+                    let current = f.routingReplacement ?? f.strips[1]
+                    b.setChildren(f.mixer, [f.strips[0], current])
+                    if retiring { b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [current]) }
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? current : f.window); return true
+                }
+                Issue.record("Unexpected input Saga action"); return false
+            }
+            let captured = try await inspect(f, cache: cache, registry: registry)
+            let snapshotID = try #require(captured["snapshot_id"] as? String)
+            let capture = try #require(await cache.retainedInspection(id: snapshotID)).capture
+            let row = try #require(capture.channelStrips.indices.first { capture.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, f.strips[1]) } == true })
+            let reference = try #require(capture.mixerReference(at: row))
+            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? f.strips[1] : f.window)
+            let router = ChannelRouter(), gate = LogicMutationGate(), journal = SagaJournal(), key = "owned-input-saga"
+            let boundaryOutcome = retiring ? String(outcome.dropFirst("retired_track_".count)) : outcome
+            await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal, mode: boundaryOutcome,
+                operation: "mixer.set_input_bus_verified", idempotencyKey: key, afterForward: {
+                    switch outcome {
+                    case "late_inverse_input": b.setAttribute(input, kAXDescriptionAttribute as String, "Bus 256")
+                    case "late_inverse_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "late_inverse_source": b.setChildren(f.mixer, [f.strips[0]])
+                    case "late_inverse_output": b.setAttribute(output, kAXDescriptionAttribute as String, "Bus 2")
+                    case "late_inverse_control":
+                        let foreign = b.element(1_291_214)
+                        b.setButton(foreign, description: "Bus 2", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+                        b.setChildren(foreign, [])
+                        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, input) } + [foreign])
+                    default: return
+                    }
+                    f.routingLateScopeInjected = true
+                }, observedResult: { result in
+                    #expect(sharedJSONObject(result.message)?["state"] as? String == "A", "Actual scalar input result: \(result.message)")
+                }))
+            let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                poller: StatePoller(axChannel: f.channel(), cache: cache,
+                    runtime: .init(hasVisibleWindow: { true }, projectFileReader: .unavailable, keyboardFocus: { .notTextEditing })),
+                dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal, mutationGate: gate,
+                liveTrackNames: { [:] })
+            var stepParams: [String: Value] = ["destination": .object(["kind": .string("bus"), "number": .int(2)]),
+                "expected_current": .object(["kind": .string("bus"), "number": .int(1)]), "replace_existing": .bool(true)]
+            if outcome == "wrong_project" { stepParams["project_ref"] = .string("prj_foreign") }
+            let trackReference = try #require(capture.issued?.byRow.first ?? nil)
+            let wrongTrackReference = try #require(capture.issued?.byRow.last ?? nil)
+            let target = outcome == "wrong_target" ? try #require(capture.mixerReference(at: 0))
+                : outcome == "wrong_track" ? wrongTrackReference : retiring ? trackReference : reference
+            var wire: [String: Value] = ["idempotency_key": .string(key), "steps": .array([.object([
+                "operation_id": .string(OperationID.mixerSetInputBusVerified.rawValue), "target_ref": .string(target.rawValue),
+                "params": .object(stepParams),
+                "expected_inverse": .object(["operation_id": .string(OperationID.mixerSetInputBusVerified.rawValue), "value_parameter": .string("destination")])])])]
+            wire["confirmed_plan_hash"] = .string(SagaJournal.planHash(try SagaWire.plan(from: wire)))
+            if outcome == "wrong_hash" { wire["confirmed_plan_hash"] = .string(String(repeating: "0", count: 64)) }
+            if outcome == "missing_hash" { wire.removeValue(forKey: "confirmed_plan_hash") }
+            let preflight = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_preflight"))
+            let preview = await FeatureFlags.withAdr004MutationSagaForTests(true) { await preflight(dependencies, wire) }
+            let previewBody = try #require(sharedJSONObject(sharedToolText(preview)))
+            if ["wrong_target", "wrong_track", "wrong_project"].contains(outcome) {
+                #expect(previewBody["ok"] as? Bool == false)
+                #expect(f.routingDestinationPresses == 0)
+                return
+            }
+            #expect(previewBody["ok"] as? Bool == true, "Actual input preflight: \(previewBody)")
+            #expect(f.routingDestinationPresses == 0)
+            if outcome == "retired_track_changed_input" {
+                b.setAttribute(input, kAXDescriptionAttribute as String, "Bus 2")
+                b.setAttribute(echo, kAXTitleAttribute as String, "Bus 2")
+                b.setAttribute(one, "AXMenuItemMarkChar", ""); b.setAttribute(two, "AXMenuItemMarkChar", "✓")
+            }
+            if outcome == "retired_track_removed_header" { b.setChildren(f.rail, [f.headers[1]]) }
+            let execute = try #require(OperationHandlerRegistry.handler(tool: "logic_system", command: "saga_execute"))
+            let result = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(dependencies, wire) }
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            if ["wrong_hash", "missing_hash"].contains(outcome) {
+                #expect(body["state"] as? String == "C")
+                #expect(body["write_attempted"] as? Bool == false && f.routingDestinationPresses == 0)
+                return
+            }
+            if ["retired_track_changed_input", "retired_track_removed_header"].contains(outcome) {
+                #expect(body["state"] as? String == "C", "Changed original input target: \(body)")
+                #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
+                return
+            }
+            if ["no_observer", "lost_observer"].contains(outcome) || outcome.hasPrefix("late_inverse_") || outcome == "completed" {
+                #expect(body["state"] as? String == (outcome == "completed" ? "A" : "B"), "Actual input result: \(body)")
+                #expect(body["saga_state"] as? String == (outcome == "completed" ? "completed" : "rollbackUncertain"))
+                #expect(f.routingDestinationPresses == (outcome == "no_observer" ? 0 : 1))
+                if outcome.hasPrefix("late_inverse_") { #expect(f.routingLateScopeInjected) }
+                let presses = f.routingDestinationPresses
+                let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(dependencies, wire) }
+                let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                #expect(replayBody["duplicate"] as? Bool == true)
+                #expect(f.routingDestinationPresses == presses && !gate.isHeldByEntitledHolder())
+                return
+            }
+            #expect(body["saga_state"] as? String == "fullyCompensated", "Actual input Saga: \(body)")
+            #expect(f.routingDestinationPresses == 2)
+            #expect(b.attributeValue(one, "AXMenuItemMarkChar") as? String == "✓")
+            #expect(b.attributeValue(two, "AXMenuItemMarkChar") as? String == "")
+            if retiring { #expect(f.routingReplacement != nil && f.inputMenuCancels > 2) }
+            let readsBeforeReplay = f.inputMenuPresses
+            let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(dependencies, wire) }
+            let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+            #expect(boundaryOutcome == "cancel" ? replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue
+                : replayBody["duplicate"] as? Bool == true)
+            #expect(f.routingDestinationPresses == 2 && !gate.isHeldByEntitledHolder())
+            #expect(f.inputMenuPresses == readsBeforeReplay, "Replay must not reacquire a native input")
         }
     }
 

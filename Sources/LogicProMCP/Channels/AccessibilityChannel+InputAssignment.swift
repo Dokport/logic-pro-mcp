@@ -334,6 +334,12 @@ extension AccessibilityChannel {
         guard actual == destination else {
             return uncertain(.readbackMismatch, "The committed checked input differs from the request; no inverse was attempted.")
         }
+        guard recordInputEffect(original: AXMixerStripBinding.outputAssociation, current: after.inputRenewal?.pair ?? afterPair,
+            renewal: after.inputRenewal ?? writerRenewal ?? before.inputRenewal,
+            control: finalSlot, population: finalPopulation.strips, sink: sink,
+            before: observed, after: actual, runtime: runtime) else {
+            return uncertain(.readbackUnavailable, "The input changed but native effect custody could not be retained; stop dependent writes.")
+        }
         return .success(HonestContract.encodeStateA(extras: extras))
     }
 }
