@@ -190,6 +190,17 @@ struct Issue967OwnedAuxLifecycleTests {
             }
             b.setChildren(canvas, Array(rows.prefix(3)))
             b.setChildren(window, b.makeAXRuntime().children(window) + [rail, canvas])
+            if fault.contains("scrollbar") {
+                let viewport = b.element(967_2050), bar = b.element(967_2051)
+                b.setRole(viewport, kAXScrollAreaRole as String)
+                b.setRole(bar, kAXScrollBarRole as String)
+                b.setAttribute(bar, kAXEnabledAttribute, false)
+                b.setAttribute(bar, kAXValueAttribute, 1)
+                b.setChildren(bar, [])
+                b.setChildren(viewport, fault == "unrelated_scrollbar" ? [bar] : [canvas, bar])
+                b.setChildren(window, b.makeAXRuntime().children(window).filter { !CFEqual($0, canvas) }
+                    + (fault == "unrelated_scrollbar" ? [canvas, viewport] : [viewport]))
+            }
             b.setRole(leaf, kAXMenuItemRole as String)
             b.setAttribute(leaf, kAXTitleAttribute, "Create Tracks for Selected Channel Strips")
             b.setAttribute(leaf, kAXEnabledAttribute, true); b.setChildren(leaf, [])
@@ -210,6 +221,26 @@ struct Issue967OwnedAuxLifecycleTests {
             b.setChildren(b.element(trackRailID), headers)
             b.setAttribute(b.element(967_2043), kAXDescriptionAttribute, "Track 3")
             b.setChildren(b.element(967_2040), (0..<4).map { b.element(967_2041 + $0) })
+            if trackAppendFault.contains("scrollbar") {
+                let bar = b.element(967_2051)
+                b.setAttribute(bar, kAXEnabledAttribute, true)
+                b.setAttribute(bar, kAXValueAttribute, trackAppendFault == "scrollbar_bad_value" ? 0.5 : 0)
+                let subroles = ["", kAXIncrementArrowSubrole as String, kAXDecrementArrowSubrole as String,
+                                kAXIncrementPageSubrole as String, kAXDecrementPageSubrole as String]
+                let children = subroles.indices.map { b.element(967_2060 + $0) }
+                for (index, child) in children.enumerated() {
+                    b.setRole(child, (index == 0 ? kAXValueIndicatorRole : kAXButtonRole) as String)
+                    b.setAttribute(child, kAXSubroleAttribute, subroles[index]); b.setChildren(child, [])
+                }
+                b.setAttribute(children[0], kAXValueAttribute, 0)
+                if trackAppendFault == "scrollbar_bad_child" { b.setRole(children[1], kAXTextFieldRole as String) }
+                if trackAppendFault == "scrollbar_added_content" {
+                    let content = b.element(967_2070)
+                    b.setRole(content, kAXGroupRole as String); b.setChildren(content, [])
+                    b.setChildren(children[1], [content])
+                }
+                b.setChildren(bar, children)
+            }
             if trackAppendFault == "header_edit" { b.setAttribute(b.element(967_2020), kAXValueAttribute, "Newer edit") }
             if trackAppendFault == "peer_edit" { b.setAttribute(original[0], kAXValueAttribute, 1) }
             optionOpen = false
@@ -903,6 +934,23 @@ struct Issue967OwnedAuxLifecycleTests {
             let result = await context.appendArrangeTrack(for: foreignProof)
             #expect(result.status == .rejectedBeforeWrite)
             #expect(f.trackAppendPresses == 0 && f.optionPresses == 1)
+        }
+    }
+
+    @Test(arguments: ["activated_scrollbar", "unrelated_scrollbar", "scrollbar_bad_value", "scrollbar_bad_child", "scrollbar_added_content"])
+    func appendedTrackMayActivateOnlyItsExistingCanvasScrollbar(fault: String) async throws {
+        let f = Fixture(); f.modelTrackAppend(fault)
+        try await owned(f) {
+            let context = try f.context()
+            let aux = await context.create()
+            let proof = try #require(aux.inverse)
+            let result = await context.appendArrangeTrack(for: proof)
+            #expect(result.status == (fault == "activated_scrollbar" ? .appended : .configurationPartial))
+            #expect(result.track != nil)
+            #expect(f.trackAppendPresses == 1)
+            _ = await context.appendArrangeTrack(for: proof)
+            #expect(f.trackAppendPresses == 1)
+            #expect((await context.remove(proof)).status == .residual && f.deletePresses == 0)
         }
     }
 

@@ -747,21 +747,58 @@ enum OwnedAuxLifecycle {
                 let found = nodes.filter { CFEqual($0.element, element) }
                 return found.count == 1 ? found.first : nil
             }
-            let extra = current.filter { actual in
+            var extra = current.filter { actual in
                 !baseline.outside.contains { CFEqual($0.element, actual.element) }
                     && !addedTree.contains { CFEqual($0.element, actual.element) }
+            }
+            let canvases = baseline.outside.filter {
+                $0.fields[kAXRoleAttribute] == .text(kAXGroupRole as String) && {
+                    guard case .text(let description)? = $0.fields[kAXDescriptionAttribute] else { return false }
+                    return AXLocalePolicy.trackContentExplicit.matches(description, mode: .exact)
+                }($0)
+            }
+            var activatedScrollbar: AXUIElement?
+            if canvases.count == 1, let oldCanvas = canvases.first {
+                // A new empty row can make its existing viewport scrollable.
+                // Recognize only that canvas's exact sibling scrollbar, not a
+                // global scroll-value exemption or authority to move a viewport.
+                let parents = baseline.outside.filter { $0.children.contains { CFEqual($0, oldCanvas.element) } }
+                if parents.count == 1, let parent = parents.first,
+                   parent.fields[kAXRoleAttribute] == .text(kAXScrollAreaRole as String) {
+                    let candidates = baseline.outside.filter { candidate in
+                        parent.children.contains(where: { CFEqual($0, candidate.element) })
+                    }
+                    for old in candidates where old.fields[kAXRoleAttribute] == .text(kAXScrollBarRole as String)
+                        && old.fields[kAXEnabledAttribute] == .number(0) && old.fields[kAXValueAttribute] == .number(1)
+                        && old.children.isEmpty {
+                        guard let actual = node(old.element, in: current) else { return false }
+                        if old.matches(actual) { continue }
+                        guard activatedScrollbar == nil, actual.children.count == 5,
+                              actual.fields[kAXEnabledAttribute] == .number(1), actual.fields[kAXValueAttribute] == .number(0) else { return false }
+                        var a = old.fields, b = actual.fields
+                        for field in [kAXEnabledAttribute, kAXValueAttribute] { a.removeValue(forKey: field); b.removeValue(forKey: field) }
+                        guard a == b else { return false }
+                        let subroles = [kAXIncrementArrowSubrole, kAXDecrementArrowSubrole, kAXIncrementPageSubrole, kAXDecrementPageSubrole]
+                        for (index, child) in actual.children.enumerated() {
+                            guard let control = node(child, in: extra), control.children.isEmpty,
+                                  control.fields[kAXRoleAttribute] == .text((index == 0 ? kAXValueIndicatorRole : kAXButtonRole) as String) else { return false }
+                            if index == 0 {
+                                guard control.fields[kAXValueAttribute] == .number(0) else { return false }
+                            } else {
+                                let subrole: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(child, kAXSubroleAttribute, runtime: runtime.ax)
+                                guard case .success(let observed?) = subrole, observed == subroles[index - 1] as String else { return false }
+                            }
+                        }
+                        extra.removeAll { candidate in actual.children.contains { CFEqual($0, candidate.element) } }
+                        activatedScrollbar = old.element
+                    }
+                }
             }
             var canvas: AXUIElement?, placeholder: AXUIElement?, retitledPlaceholder = false
             if !extra.isEmpty {
                 // Appending an empty Track either inserts its empty canvas row
                 // before the old blank row, or consumes that row and adds an
                 // identical blank. This read-only classifier grants no actuation.
-                let canvases = baseline.outside.filter {
-                    $0.fields[kAXRoleAttribute] == .text(kAXGroupRole as String) && {
-                        guard case .text(let description)? = $0.fields[kAXDescriptionAttribute] else { return false }
-                        return AXLocalePolicy.trackContentExplicit.matches(description, mode: .exact)
-                    }($0)
-                }
                 guard extra.count == 1, extra[0].children.isEmpty, canvases.count == 1,
                       let oldCanvas = canvases.first, let blank = oldCanvas.children.last,
                       let oldBlank = node(blank, in: baseline.outside), oldBlank.children.isEmpty,
@@ -792,13 +829,23 @@ enum OwnedAuxLifecycle {
                 if retitledPlaceholder, let placeholder, CFEqual(expected.element, placeholder) {
                     a.removeValue(forKey: kAXDescriptionAttribute); b.removeValue(forKey: kAXDescriptionAttribute)
                 }
+                if let activatedScrollbar, CFEqual(expected.element, activatedScrollbar) {
+                    a.removeValue(forKey: kAXEnabledAttribute); b.removeValue(forKey: kAXEnabledAttribute)
+                    a.removeValue(forKey: kAXValueAttribute); b.removeValue(forKey: kAXValueAttribute)
+                }
                 guard a == b else { return false }
                 if CFEqual(expected.element, baseline.rail) {
                     guard same(actual.children, expected.children + [track]) else { return false }
                 } else if let canvas, CFEqual(expected.element, canvas) {
                     // Exact expected canvas child insertion was checked above.
                     continue
+                } else if let activatedScrollbar, CFEqual(expected.element, activatedScrollbar) {
+                    // Its exact new primitive children were checked above.
+                    continue
                 } else if !same(expected.children, actual.children) { return false }
+            }
+            if activatedScrollbar != nil, !uiEffects.changed.contains("arrange_track_scrollbar") {
+                uiEffects.changed.append("arrange_track_scrollbar")
             }
             return true
         }
