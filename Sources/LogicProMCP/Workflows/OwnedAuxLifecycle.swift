@@ -795,31 +795,51 @@ enum OwnedAuxLifecycle {
                 }
             }
             var canvas: AXUIElement?, placeholder: AXUIElement?, retitledPlaceholder = false
+            var redrawnEmptyRows: [AXUIElement] = []
             if !extra.isEmpty {
                 // Appending an empty Track either inserts its empty canvas row
                 // before the old blank row, or consumes that row and adds an
                 // identical blank. This read-only classifier grants no actuation.
-                guard extra.count == 1, extra[0].children.isEmpty, canvases.count == 1,
+                guard canvases.count == 1,
                       let oldCanvas = canvases.first, let blank = oldCanvas.children.last,
                       let oldBlank = node(blank, in: baseline.outside), oldBlank.children.isEmpty,
                       oldBlank.fields[kAXValueAttribute] == .number(0),
                       oldBlank.fields[kAXDescriptionAttribute] == nil || oldBlank.fields[kAXDescriptionAttribute] == .text(""),
                       let newCanvas = node(oldCanvas.element, in: current), let newBlank = node(blank, in: current) else { return false }
-                var oldFields = oldBlank.fields, newFields = newBlank.fields, extraFields = extra[0].fields
-                oldFields.removeValue(forKey: kAXDescriptionAttribute)
-                newFields.removeValue(forKey: kAXDescriptionAttribute)
-                extraFields.removeValue(forKey: kAXDescriptionAttribute)
-                guard oldFields == newFields, oldFields == extraFields else { return false }
-                if extra[0].fields == oldBlank.fields, newBlank.fields[kAXDescriptionAttribute] == headerDescription,
-                   same(newCanvas.children, oldCanvas.children + [extra[0].element]) {
-                    retitledPlaceholder = true
+                let oldRows = oldCanvas.children.dropLast().compactMap { node($0, in: baseline.outside) }
+                let newRows = newCanvas.children.dropLast().compactMap { node($0, in: current) }
+                if oldRows.count == oldCanvas.children.count - 1, !oldRows.isEmpty,
+                   oldRows.allSatisfy({ old in !current.contains { CFEqual($0.element, old.element) } }) {
+                    // Native append redraws every existing empty canvas row,
+                    // but retains the original blank and header prefix. Compare
+                    // only a complete zero-valued leaf population. This neither
+                    // rebinds retired rows nor permits writes through their rank.
+                    guard oldBlank.fields[kAXRoleAttribute] == .text(kAXLayoutAreaRole as String),
+                          oldBlank.matches(newBlank), CFEqual(newCanvas.children.last, blank),
+                          newRows.count == oldRows.count + 1, extra.count == newRows.count,
+                          same(extra.map(\.element), newRows.map(\.element)),
+                          (oldRows + newRows).allSatisfy({ $0.children.isEmpty && $0.fields == oldBlank.fields }) else { return false }
+                    redrawnEmptyRows = oldRows.map(\.element)
+                    canvas = oldCanvas.element
                 } else {
-                    guard newBlank.fields == oldBlank.fields, extra[0].fields[kAXDescriptionAttribute] == headerDescription,
-                          same(newCanvas.children, Array(oldCanvas.children.dropLast()) + [extra[0].element, blank]) else { return false }
+                    guard extra.count == 1, extra[0].children.isEmpty else { return false }
+                    var oldFields = oldBlank.fields, newFields = newBlank.fields, extraFields = extra[0].fields
+                    oldFields.removeValue(forKey: kAXDescriptionAttribute)
+                    newFields.removeValue(forKey: kAXDescriptionAttribute)
+                    extraFields.removeValue(forKey: kAXDescriptionAttribute)
+                    guard oldFields == newFields, oldFields == extraFields else { return false }
+                    if extra[0].fields == oldBlank.fields, newBlank.fields[kAXDescriptionAttribute] == headerDescription,
+                       same(newCanvas.children, oldCanvas.children + [extra[0].element]) {
+                        retitledPlaceholder = true
+                    } else {
+                        guard newBlank.fields == oldBlank.fields, extra[0].fields[kAXDescriptionAttribute] == headerDescription,
+                              same(newCanvas.children, Array(oldCanvas.children.dropLast()) + [extra[0].element, blank]) else { return false }
+                    }
+                    canvas = oldCanvas.element; placeholder = blank
                 }
-                canvas = oldCanvas.element; placeholder = blank
             }
             for expected in baseline.outside {
+                if redrawnEmptyRows.contains(where: { CFEqual($0, expected.element) }) { continue }
                 guard let actual = node(expected.element, in: current) else { return false }
                 var a = expected.fields, b = actual.fields
                 if baseline.radios.contains(where: { CFEqual($0, expected.element) }) {

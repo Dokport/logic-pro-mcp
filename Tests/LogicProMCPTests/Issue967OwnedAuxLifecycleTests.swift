@@ -185,8 +185,15 @@ struct Issue967OwnedAuxLifecycleTests {
             b.setRole(canvas, kAXGroupRole as String); b.setAttribute(canvas, kAXDescriptionAttribute, "Tracks contents")
             let rows = (0..<4).map { b.element(967_2041 + $0) }
             for (index, row) in rows.enumerated() {
-                b.setRole(row, "AXUnknown"); b.setAttribute(row, kAXValueAttribute, 0); b.setChildren(row, [])
+                b.setRole(row, fault.contains("canvas_redraw") ? kAXLayoutAreaRole as String : "AXUnknown")
+                b.setAttribute(row, kAXEnabledAttribute, true)
+                b.setAttribute(row, kAXValueAttribute, 0); b.setChildren(row, [])
                 if index < 2 { b.setAttribute(row, kAXDescriptionAttribute, "Track \(index + 1)") }
+            }
+            if fault == "canvas_redraw_content" {
+                let content = b.element(967_2090)
+                b.setRole(content, kAXGroupRole as String); b.setChildren(content, [])
+                b.setChildren(rows[0], [content])
             }
             b.setChildren(canvas, Array(rows.prefix(3)))
             b.setChildren(window, b.makeAXRuntime().children(window) + [rail, canvas])
@@ -221,6 +228,17 @@ struct Issue967OwnedAuxLifecycleTests {
             b.setChildren(b.element(trackRailID), headers)
             b.setAttribute(b.element(967_2043), kAXDescriptionAttribute, "Track 3")
             b.setChildren(b.element(967_2040), (0..<4).map { b.element(967_2041 + $0) })
+            if trackAppendFault.contains("canvas_redraw") {
+                var rows = (0..<3).map { b.element(967_2081 + $0) }
+                for row in rows {
+                    b.setRole(row, kAXLayoutAreaRole as String); b.setAttribute(row, kAXEnabledAttribute, true)
+                    b.setAttribute(row, kAXValueAttribute, 0); b.setChildren(row, [])
+                }
+                if trackAppendFault == "canvas_redraw_value" { b.setAttribute(rows[0], kAXValueAttribute, 1) }
+                if trackAppendFault == "canvas_redraw_reused" { rows[0] = b.element(967_2041) }
+                let blank = trackAppendFault == "canvas_redraw_blank" ? b.element(967_2044) : b.element(967_2043)
+                b.setChildren(b.element(967_2040), rows + [blank])
+            }
             if trackAppendFault.contains("scrollbar") {
                 let bar = b.element(967_2051)
                 b.setAttribute(bar, kAXEnabledAttribute, true)
@@ -950,6 +968,22 @@ struct Issue967OwnedAuxLifecycleTests {
             #expect(f.trackAppendPresses == 1)
             _ = await context.appendArrangeTrack(for: proof)
             #expect(f.trackAppendPresses == 1)
+            #expect((await context.remove(proof)).status == .residual && f.deletePresses == 0)
+        }
+    }
+
+    @Test(arguments: ["canvas_redraw", "scrollbar_canvas_redraw", "canvas_redraw_value", "canvas_redraw_content", "canvas_redraw_blank", "canvas_redraw_reused"])
+    func appendedTrackCanObserveOnlyCompleteEmptyCanvasRowRedraw(fault: String) async throws {
+        let f = Fixture(); f.modelTrackAppend(fault)
+        try await owned(f) {
+            let context = try f.context()
+            let aux = await context.create()
+            let proof = try #require(aux.inverse)
+            let result = await context.appendArrangeTrack(for: proof)
+            #expect(result.status == (["canvas_redraw", "scrollbar_canvas_redraw"].contains(fault) ? .appended : .configurationPartial))
+            #expect(result.track != nil)
+            _ = await context.appendArrangeTrack(for: proof)
+            #expect(f.trackAppendPresses == 1 && f.createPresses == 1)
             #expect((await context.remove(proof)).status == .residual && f.deletePresses == 0)
         }
     }
