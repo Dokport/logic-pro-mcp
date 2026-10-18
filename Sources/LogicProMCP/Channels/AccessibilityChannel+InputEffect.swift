@@ -60,17 +60,29 @@ extension AccessibilityChannel {
             let runtime = current.track.runtime
             guard next.original.matches(current.strip), next.originalTrack.matches(current.track),
                   next.pair.track.matches(current.track), next.permits(runtime: runtime),
-                  slot.owner.matches(next.pair.strip),
+                  slot.owner.matches(next.pair.strip) else {
+                Log.info("Input effect renewal refused: original source or current ownership", subsystem: "ax"); return nil
+            }
+            guard
                   let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: next.pair.strip.mixer, runtime: runtime.ax)?.strips,
-                  census.count == population.count,
-                  zip(population, census).allSatisfy({ old, new in
+                  census.count == population.count else {
+                Log.info("Input effect renewal refused: population count", subsystem: "ax"); return nil
+            }
+            guard zip(population, census).allSatisfy({ old, new in
                       CFEqual(old, current.strip.strip) ? CFEqual(new, next.pair.strip.strip) : CFEqual(old, new)
-                  }),
-                  let app = AXLogicProElements.appRoot(runtime: runtime),
-                  let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else { return nil }
+                  }) else {
+                Log.info("Input effect renewal refused: peer population identity", subsystem: "ax"); return nil
+            }
+            guard let app = AXLogicProElements.appRoot(runtime: runtime),
+                  let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else {
+                Log.info("Input effect renewal refused: focus unavailable", subsystem: "ax"); return nil
+            }
             let renewed = Self(original: original, current: next.pair, renewal: next, control: slot,
                 population: census, sink: sink, before: before, after: after, focus: focus)
-            return renewed.permits() ? renewed : nil
+            guard renewed.permits() else {
+                Log.info("Input effect renewal refused: renewed custody", subsystem: "ax"); return nil
+            }
+            return renewed
         }
     }
 
