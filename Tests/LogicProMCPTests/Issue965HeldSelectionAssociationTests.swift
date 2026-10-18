@@ -559,6 +559,7 @@ struct Issue965HeldSelectionAssociationTests {
         var inputRetiredSourceReadable = false
         var inputRetirementCensusLagObserved = false
         var inputMenuHadOwnedClaim = false
+        var inputSagaForwardVerified = false
         var inputPreviousReadWasDescription = false
         var presentationCensusReads = 0
         var passivePermissionSelectionReads = 0
@@ -5906,6 +5907,8 @@ struct Issue965HeldSelectionAssociationTests {
           arguments: ["completed", "failure", "cancel", "wrong_target", "wrong_track", "wrong_project", "wrong_hash", "missing_hash",
                       "no_observer", "lost_observer", "late_inverse_input", "late_inverse_project",
                       "late_inverse_source", "late_inverse_control", "late_inverse_output",
+                      "inverse_boundary_control", "inverse_boundary_sink", "inverse_boundary_peer",
+                      "inverse_boundary_final_control", "inverse_boundary_final_sink", "inverse_boundary_final_peer",
                       "retired_track_failure", "retired_track_cancel", "retired_track_changed_input", "retired_track_removed_header"])
     func registeredInputSagaOwnsItsActualCompensation(_ outcome: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
@@ -5922,6 +5925,8 @@ struct Issue965HeldSelectionAssociationTests {
             let submenu = b.element(1_291_205), one = b.element(1_291_206), two = b.element(1_291_207)
             let outputRoot = b.element(1_291_208), outputParent = b.element(1_291_209)
             let outputMenu = b.element(1_291_210), outputEcho = b.element(1_291_211), outputLeaf = b.element(1_291_212)
+            let replacementInput = b.element(1_291_215)
+            let replacementPeer = b.element(1_291_216)
             b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
             let mixerOwner = b.element(1_291_213)
             b.setRole(mixerOwner, kAXGroupRole as String); b.setAttribute(mixerOwner, kAXDescriptionAttribute as String, "Mixer")
@@ -5944,15 +5949,20 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(outputMenu, [outputLeaf]); b.setChildren(outputParent, [outputMenu]); b.setChildren(outputRoot, [outputEcho, outputParent])
             f.routingAction = { element, action in
                 let source = f.routingReplacement ?? f.strips[1]
-                let census = [f.strips[0], source]
-                if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, output) {
-                    if CFEqual(element, input) { f.inputMenuPresses += 1 }
-                    b.setChildren(f.mixer, census + [CFEqual(element, input) ? root : outputRoot]); return true
+                let peer = outcome.hasPrefix("inverse_boundary_") && outcome.hasSuffix("_peer") && f.routingLateScopeInjected ? replacementPeer : f.strips[0]
+                let census = [peer, source]
+                if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, replacementInput) || CFEqual(element, output) {
+                    let inputPressed = !CFEqual(element, output)
+                    if inputPressed { f.inputMenuPresses += 1 }
+                    b.setChildren(f.mixer, census + [inputPressed ? root : outputRoot]); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, one) || CFEqual(element, two) {
                     f.routingDestinationPresses += 1
                     let title = CFEqual(element, one) ? "Bus 1" : "Bus 2"
                     b.setAttribute(input, kAXDescriptionAttribute as String, title); b.setAttribute(echo, kAXTitleAttribute as String, title)
+                    if f.routingLateScopeInjected, outcome.hasPrefix("inverse_boundary_"), outcome.hasSuffix("_control") {
+                        b.setAttribute(replacementInput, kAXDescriptionAttribute as String, title)
+                    }
                     b.setAttribute(one, "AXMenuItemMarkChar", CFEqual(element, one) ? "✓" : "")
                     b.setAttribute(two, "AXMenuItemMarkChar", CFEqual(element, two) ? "✓" : "")
                     b.setChildren(f.mixer, census); b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? source : f.window); return true
@@ -5968,7 +5978,7 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingReplacement = replacement
                     }
                     let current = f.routingReplacement ?? f.strips[1]
-                    b.setChildren(f.mixer, [f.strips[0], current])
+                    b.setChildren(f.mixer, [peer, current])
                     if retiring { b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [current]) }
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? current : f.window); return true
                 }
@@ -5981,9 +5991,40 @@ struct Issue965HeldSelectionAssociationTests {
             let reference = try #require(capture.mixerReference(at: row))
             b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? f.strips[1] : f.window)
             let router = ChannelRouter(), gate = LogicMutationGate(), journal = SagaJournal(), key = "owned-input-saga"
-            let boundaryOutcome = retiring ? String(outcome.dropFirst("retired_track_".count)) : outcome
+            let boundaryOutcome = outcome.hasPrefix("inverse_boundary_") ? "failure"
+                : retiring ? String(outcome.dropFirst("retired_track_".count)) : outcome
+            @Sendable func injectInverseBoundary() {
+                guard outcome.hasPrefix("inverse_boundary_"), f.inputSagaForwardVerified, f.routingDestinationPresses == 1,
+                      AccessibilityChannel.inputChangeObserver != nil, !f.routingLateScopeInjected else { return }
+                f.routingLateScopeInjected = true
+                if outcome.hasSuffix("_control") {
+                    b.setButton(replacementInput, description: "Bus 2", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+                    b.setChildren(replacementInput, []); b.setActionNames(replacementInput, [kAXPressAction as String])
+                    b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, input) } + [replacementInput])
+                } else if outcome.hasSuffix("_sink") {
+                    b.setAttribute(output, kAXDescriptionAttribute as String, "Output 3-4")
+                    b.setAttribute(outputEcho, kAXTitleAttribute as String, "Output 3-4")
+                    b.setAttribute(outputLeaf, kAXTitleAttribute as String, "Output 3-4")
+                } else {
+                    b.setRole(replacementPeer, kAXLayoutItemRole as String)
+                    b.setChildren(replacementPeer, b.makeAXRuntime().children(f.strips[0]))
+                    b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).map { CFEqual($0, f.strips[0]) ? replacementPeer : $0 })
+                }
+            }
+            f.routingRead = { element, attribute in
+                // Mutate only after the actual verified forward, at inverse acquisition.
+                if !outcome.contains("_final_"), CFEqual(element, output), attribute == kAXDescriptionAttribute as String {
+                    injectInverseBoundary()
+                }
+            }
+            f.routingActionNames = { element in
+                // A separate witness reaches the actual inverse leaf's capability read.
+                if outcome.contains("_final_"), CFEqual(element, one) { injectInverseBoundary() }
+                return nil
+            }
             await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal, mode: boundaryOutcome,
                 operation: "mixer.set_input_bus_verified", idempotencyKey: key, afterForward: {
+                    f.inputSagaForwardVerified = true
                     switch outcome {
                     case "late_inverse_input": b.setAttribute(input, kAXDescriptionAttribute as String, "Bus 256")
                     case "late_inverse_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
@@ -6023,11 +6064,13 @@ struct Issue965HeldSelectionAssociationTests {
             let preview = await FeatureFlags.withAdr004MutationSagaForTests(true) { await preflight(dependencies, wire) }
             let previewBody = try #require(sharedJSONObject(sharedToolText(preview)))
             if ["wrong_target", "wrong_track", "wrong_project"].contains(outcome) {
-                #expect(previewBody["ok"] as? Bool == false)
+                let ok = try #require(previewBody["ok"] as? Bool)
+                #expect(!ok)
                 #expect(f.routingDestinationPresses == 0)
                 return
             }
-            #expect(previewBody["ok"] as? Bool == true, "Actual input preflight: \(previewBody)")
+            let ok = try #require(previewBody["ok"] as? Bool)
+            #expect(ok, "Actual input preflight: \(previewBody)")
             #expect(f.routingDestinationPresses == 0)
             if outcome == "retired_track_changed_input" {
                 b.setAttribute(input, kAXDescriptionAttribute as String, "Bus 2")
@@ -6040,7 +6083,8 @@ struct Issue965HeldSelectionAssociationTests {
             let body = try #require(sharedJSONObject(sharedToolText(result)))
             if ["wrong_hash", "missing_hash"].contains(outcome) {
                 #expect(body["state"] as? String == "C")
-                #expect(body["write_attempted"] as? Bool == false && f.routingDestinationPresses == 0)
+                let wrote = try #require(body["write_attempted"] as? Bool)
+                #expect(!wrote && f.routingDestinationPresses == 0)
                 return
             }
             if ["retired_track_changed_input", "retired_track_removed_header"].contains(outcome) {
@@ -6048,15 +6092,17 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.routingDestinationPresses == 0 && !gate.isHeldByEntitledHolder())
                 return
             }
-            if ["no_observer", "lost_observer"].contains(outcome) || outcome.hasPrefix("late_inverse_") || outcome == "completed" {
+            if ["no_observer", "lost_observer"].contains(outcome) || outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") || outcome == "completed" {
                 #expect(body["state"] as? String == (outcome == "completed" ? "A" : "B"), "Actual input result: \(body)")
-                #expect(body["saga_state"] as? String == (outcome == "completed" ? "completed" : "rollbackUncertain"))
+                #expect(body["saga_state"] as? String == (outcome == "completed" ? "completed"
+                    : outcome.hasPrefix("inverse_boundary_") ? "compensationFailed" : "rollbackUncertain"))
                 #expect(f.routingDestinationPresses == (outcome == "no_observer" ? 0 : 1))
-                if outcome.hasPrefix("late_inverse_") { #expect(f.routingLateScopeInjected) }
+                if outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") { #expect(f.routingLateScopeInjected) }
                 let presses = f.routingDestinationPresses
                 let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(dependencies, wire) }
                 let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
-                #expect(replayBody["duplicate"] as? Bool == true)
+                let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                #expect(duplicate)
                 #expect(f.routingDestinationPresses == presses && !gate.isHeldByEntitledHolder())
                 return
             }
@@ -6068,8 +6114,12 @@ struct Issue965HeldSelectionAssociationTests {
             let readsBeforeReplay = f.inputMenuPresses
             let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(dependencies, wire) }
             let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
-            #expect(boundaryOutcome == "cancel" ? replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue
-                : replayBody["duplicate"] as? Bool == true)
+            if boundaryOutcome == "cancel" {
+                #expect(replayBody["error"] as? String == HonestContract.FailureError.unsupportedState.rawValue)
+            } else {
+                let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                #expect(duplicate)
+            }
             #expect(f.routingDestinationPresses == 2 && !gate.isHeldByEntitledHolder())
             #expect(f.inputMenuPresses == readsBeforeReplay, "Replay must not reacquire a native input")
         }

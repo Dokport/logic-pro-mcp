@@ -7,7 +7,8 @@ extension AccessibilityChannel {
     /// physical-input, aux creation, or input-format conversion authority.
     static func setInputBusVerified(params: [String: String],
         runtime: AXLogicProElements.Runtime = .production,
-        timing: OutputAssignmentTiming = .live) async -> ChannelResult {
+        timing: OutputAssignmentTiming = .live,
+        ownedInverse: ChangedInputObservation? = nil) async -> ChannelResult {
         let operation = "mixer.set_input_bus_verified"
         var extras: [String: Any] = ["operation": operation, "write_attempted": false,
             "navigation_attempted": false]
@@ -61,6 +62,12 @@ extension AccessibilityChannel {
         }(), original.currentIndex(runtime: runtime) != nil else {
             return refusal(.routingDependencyUnknown, "Only a checked physical-output sink is supported; no input destination was pressed.")
         }
+        if let ownedInverse {
+            guard ownedInverse.current.strip.matches(original), ownedInverse.before == destination,
+                  ownedInverse.after == expected, ownedInverse.sink == sink, ownedInverse.permits() else {
+                return refusal(.staleTargetReference, "The original changed input no longer authorizes this inverse.")
+            }
+        }
         let before = await getInputBusObservation(runtime: runtime, timing: timing)
         recordRead(before, key: "before_acquisition")
         guard case .bus(let observed)? = before.assignment else {
@@ -81,6 +88,14 @@ extension AccessibilityChannel {
             return refusal(.staleTargetReference, "The checked input has no current physical source/control binding.")
         }
         extras["strip_count_before"] = population.strips.count
+        let inverseProtection: ChangedInputObservation?
+        if let ownedInverse {
+            guard let renewed = ownedInverse.following(before), renewed.current.strip.matches(owner),
+                  renewed.control.matches(heldInput), renewed.sink == sink else {
+                return refusal(.staleTargetReference, "Input reacquisition did not preserve the original changed control.")
+            }
+            inverseProtection = renewed
+        } else { inverseProtection = nil }
         func checkedSink(_ source: AXMixerStripBinding.Binding) async -> CheckedOutputReading {
             await AXMixerStripBinding.$current.withValue(source) {
                 await getOutputObservation(runtime: runtime, timing: timing)
@@ -98,6 +113,19 @@ extension AccessibilityChannel {
                   let sends = AXLogicProElements.sendSlotObservations(in: source.strip, runtime: runtime.ax),
                   sends.allSatisfy({ $0.state == .observedEmpty }) else { return false }
             return true
+        }
+        @Sendable func inverseStillCurrent(ownedPopup: AXUIElement?) -> Bool {
+            guard let inverseProtection else { return true }
+            guard inverseProtection.current.strip.matches(owner), inverseProtection.control.matches(heldInput),
+                  inverseProtection.sink == sink,
+                  inverseProtection.renewal.map({ $0.permits(runtime: runtime, ownedPopup: ownedPopup) }) ?? true,
+                  let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: owner.mixer, runtime: runtime.ax)?.strips,
+                  census.count == inverseProtection.population.count,
+                  zip(census, inverseProtection.population).allSatisfy({ CFEqual($0, $1) }),
+                  sinkStillCurrent(owner) else { return false }
+            let input = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
+            guard case .source(let label) = input.reading, let control = input.control else { return false }
+            return inverseProtection.control.matches(.init(owner: owner, control: control, source: label))
         }
         @Sendable func ownerStillCurrent(ownedPopup: AXUIElement? = nil) -> Bool {
             let currentInput = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
@@ -128,7 +156,7 @@ extension AccessibilityChannel {
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                 Log.info("Input writer custody refused: sink/transport/window/document", subsystem: "ax"); return false
             }
-            return true
+            return inverseStillCurrent(ownedPopup: ownedPopup)
         }
         guard ownerStillCurrent() else {
             return refusal(.routingDependencyUnknown, "The source must remain a stopped physical-output sink with every send observed empty.")

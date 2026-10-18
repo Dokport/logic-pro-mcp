@@ -160,7 +160,8 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                             }
                         }) {
                             await AccessibilityChannel.setInputBusVerified(params: ["destination": "bus:\(effect.before)",
-                                "expected_current": "bus:\(effect.after)", "replace_existing": "true"], runtime: effect.current.track.runtime)
+                                "expected_current": "bus:\(effect.after)", "replace_existing": "true"],
+                                runtime: effect.current.track.runtime, ownedInverse: effect)
                         }
                     }
                 }
