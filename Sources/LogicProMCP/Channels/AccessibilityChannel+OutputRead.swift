@@ -1192,6 +1192,7 @@ extension AccessibilityChannel {
                 }, permittingCleanup: { writerMenuOwned(preservingOriginalLabel: false) })
             extras.merge(cleanup) { _, new in new }
             func uncertain(_ hint: String) -> CheckedOutputReading {
+                Log.info("Occupied Send verification refused: \(hint)", subsystem: "ax")
                 extras["hint"] = hint
                 return .init(result: .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras)), assignment: nil)
             }
@@ -1215,6 +1216,7 @@ extension AccessibilityChannel {
             extras["post_press_custody"] = ["context_current": contextAfterPress,
                 "original_send_control_current": controlAfterPress,
                 "ax_popup_absent": axPopupAbsent, "cg_popup_absent": cgPopupAbsent]
+            Log.info("Send post-press custody: context=\(contextAfterPress), control=\(controlAfterPress), ax_popup_absent=\(axPopupAbsent), cg_popup_absent=\(cgPopupAbsent)", subsystem: "ax")
             if let restoration = request.restoration {
                 guard axPopupAbsent, cgPopupAbsent else {
                     return uncertain("The explicit inverse did not close its owned popup; no further action was attempted.")
