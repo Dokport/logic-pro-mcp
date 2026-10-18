@@ -75,16 +75,17 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             guard FeatureFlags.adr002TargetRef, self.supports(step),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
-                    operation: "saga.input_bus") == nil else {
-                Log.info("Input Saga read refused: acquisition or project scope", subsystem: "ax"); return nil
-            }
+                    operation: "saga.input_bus") == nil else { return nil }
             let held: AccessibilityChannel.HeldSelectionAssociation.Pair
             let proof = self.restored ?? self.effect
             if let proof {
-                guard proof.permits(), !self.inverseConsumed || self.restored != nil else {
-                    Log.info("Input Saga read refused: changed-input custody", subsystem: "ax"); return nil
-                }
-                held = proof.current
+                guard !self.inverseConsumed || self.restored != nil,
+                      let reading = proof.retainedCheckedRead(), case .bus(let actual)? = reading.assignment,
+                      await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
+                        operation: "saga.input_bus") == nil else { return nil }
+                return .init(read: .init(readSource: .axInputMenuCheckmark, provenance: .liveIndependent,
+                    trackIndex: proof.current.track.currentIndex(), field: "input_bus", observed: .string("bus:\(actual)"),
+                    sampledAt: proof.sampledAt))
             } else if let captured = self.pair {
                 guard !self.attempted, self.beforeStillCurrent() else { return nil }
                 held = captured
@@ -117,26 +118,17 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                 }
             }
             let current = reading.inputRenewal?.pair ?? held
-            Log.info("Input Saga checked read: \(reading.result.message)", subsystem: "ax")
             guard reading.result.isSuccess, let receipt = decodedJSONObject(reading.result.message),
                   receipt["state"] as? String == "A", receipt["popup_menu_state"] as? String == "closed",
                   case .bus(let actual)? = reading.assignment,
-                  actual == (proof?.after ?? Self.bus(self.forward.params["expected_current"])),
+                  actual == Self.bus(self.forward.params["expected_current"]),
                   let control = reading.inputSlot, control.owner.matches(current.strip),
                   current.track.matches(held.track), current.track.currentIndex() != nil,
                   current.strip.currentIndex(runtime: held.track.runtime) != nil,
                   reading.inputRenewal.map({ $0.original.matches(held.strip) && $0.originalTrack.matches(held.track)
                     && $0.permits(runtime: held.track.runtime) }) ?? current.strip.matches(held.strip),
                   await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
-                    operation: "saga.input_bus") == nil else {
-                Log.info("Input Saga read refused: checked result or current source", subsystem: "ax"); return nil
-            }
-            if let proof {
-                guard let renewed = proof.following(reading) else {
-                    Log.info("Input Saga read refused: following checked renewal", subsystem: "ax"); return nil
-                }
-                if self.restored != nil { self.restored = renewed } else { self.effect = renewed }
-            }
+                    operation: "saga.input_bus") == nil else { return nil }
             self.pair = current; self.readControl = control
             self.readRenewal = reading.inputRenewal ?? self.readRenewal
             return .init(read: .init(readSource: .axInputMenuCheckmark, provenance: .liveIndependent,

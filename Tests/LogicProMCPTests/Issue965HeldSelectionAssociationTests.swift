@@ -468,6 +468,7 @@ struct Issue965HeldSelectionAssociationTests {
         var zoomRoleReadsAtFirstValue: Int?
         var zoomRoleFaultAtRead: Int?
         var routingReplacement: AXUIElement?
+        var inputReadReplacementPeer: AXUIElement?
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
         var routingSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool?)?
@@ -5918,7 +5919,8 @@ struct Issue965HeldSelectionAssociationTests {
                       "inverse_boundary_control", "inverse_boundary_sink", "inverse_boundary_peer",
                       "inverse_boundary_final_control", "inverse_boundary_final_sink", "inverse_boundary_final_peer",
                       "inverse_boundary_final_document_1", "inverse_boundary_final_document_4",
-                      "retired_track_failure", "retired_track_cancel", "retired_track_changed_input", "retired_track_removed_header"])
+                      "retired_track_failure", "retired_track_cancel", "retired_track_changed_input", "retired_track_removed_header",
+                      "retired_track_peer_failure", "retired_track_peer_cancel", "checked_inverse_input"])
     func registeredInputSagaOwnsItsActualCompensation(_ outcome: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder, cache = StateCache(), registry = TargetRegistry()
@@ -5927,7 +5929,7 @@ struct Issue965HeldSelectionAssociationTests {
             if retiring {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
-                        [index == 0 ? f.routingReplacement ?? f.strips[1] : f.strips[0]])
+                        [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
                 }
             }
             let input = b.element(1_291_200), output = b.element(1_291_201)
@@ -5964,11 +5966,19 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(outputMenu, [outputLeaf]); b.setChildren(outputParent, [outputMenu]); b.setChildren(outputRoot, [outputEcho, outputParent])
             f.routingAction = { element, action in
                 let source = f.routingReplacement ?? f.strips[1]
-                let peer = outcome.hasPrefix("inverse_boundary_") && outcome.hasSuffix("_peer") && f.routingLateScopeInjected ? replacementPeer : f.strips[0]
+                let peer = outcome.hasPrefix("inverse_boundary_") && outcome.hasSuffix("_peer") && f.routingLateScopeInjected ? replacementPeer : f.inputReadReplacementPeer ?? f.strips[0]
                 let census = [peer, source]
                 if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, replacementInput) || CFEqual(element, output) {
                     let inputPressed = !CFEqual(element, output)
                     if inputPressed { f.inputMenuPresses += 1 }
+                    if outcome == "checked_inverse_input", inputPressed, f.inputSagaForwardVerified,
+                       AccessibilityChannel.inputChangeObserver != nil, f.routingDestinationPresses == 1 {
+                        // The display/control still say Bus 2. Only the freshly opened
+                        // menu reveals the intervening change; retained evidence cannot win.
+                        b.setAttribute(one, "AXMenuItemMarkChar", "✓")
+                        b.setAttribute(two, "AXMenuItemMarkChar", "")
+                        f.routingLateScopeInjected = true
+                    }
                     b.setChildren(f.mixer, census + [inputPressed ? root : outputRoot]); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, one) || CFEqual(element, two) {
@@ -5997,7 +6007,13 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingReplacement = replacement
                     }
                     let current = f.routingReplacement ?? f.strips[1]
-                    b.setChildren(f.mixer, [peer, current])
+                    if outcome.hasPrefix("retired_track_peer_"), f.inputSagaForwardVerified,
+                       f.routingDestinationPresses == 1, CFEqual(element, root) {
+                        b.setRole(replacementPeer, kAXLayoutItemRole as String)
+                        b.setChildren(replacementPeer, b.makeAXRuntime().children(peer))
+                        f.inputReadReplacementPeer = replacementPeer
+                    }
+                    b.setChildren(f.mixer, [f.inputReadReplacementPeer ?? peer, current])
                     if retiring { b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [current]) }
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? current : f.window); return true
                 }
@@ -6010,7 +6026,8 @@ struct Issue965HeldSelectionAssociationTests {
             let reference = try #require(capture.mixerReference(at: row))
             b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, retiring ? f.strips[1] : f.window)
             let router = ChannelRouter(), gate = LogicMutationGate(), journal = SagaJournal(), key = "owned-input-saga"
-            let boundaryOutcome = outcome.hasPrefix("inverse_boundary_") ? "failure"
+            let boundaryOutcome = outcome.hasPrefix("inverse_boundary_") || outcome == "checked_inverse_input" ? "failure"
+                : outcome.hasPrefix("retired_track_peer_") ? String(outcome.dropFirst("retired_track_peer_".count))
                 : retiring ? String(outcome.dropFirst("retired_track_".count)) : outcome
             @Sendable func injectInverseBoundary() {
                 guard outcome.hasPrefix("inverse_boundary_"), f.inputSagaForwardVerified, f.routingDestinationPresses == 1,
@@ -6147,12 +6164,12 @@ struct Issue965HeldSelectionAssociationTests {
             // a later document check at the real inverse press, not mere non-injection.
             let orderedFinalScope = outcome == "inverse_boundary_final_document_4" && !f.routingLateScopeInjected
             if orderedFinalScope { #expect(f.inputInverseScopeOrderedAtWrite) }
-            if !orderedFinalScope && (["no_observer", "lost_observer"].contains(outcome) || outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") || outcome == "completed") {
+            if !orderedFinalScope && (["no_observer", "lost_observer", "checked_inverse_input"].contains(outcome) || outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") || outcome == "completed") {
                 #expect(body["state"] as? String == (outcome == "completed" ? "A" : "B"), "Actual input result: \(body)")
                 #expect(body["saga_state"] as? String == (outcome == "completed" ? "completed"
-                    : outcome.hasPrefix("inverse_boundary_") ? "compensationFailed" : "rollbackUncertain"))
+                    : outcome.hasPrefix("inverse_boundary_") || outcome == "checked_inverse_input" ? "compensationFailed" : "rollbackUncertain"))
                 #expect(f.routingDestinationPresses == (outcome == "no_observer" ? 0 : 1))
-                if outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") { #expect(f.routingLateScopeInjected) }
+                if outcome.hasPrefix("late_inverse_") || outcome.hasPrefix("inverse_boundary_") || outcome == "checked_inverse_input" { #expect(f.routingLateScopeInjected) }
                 let presses = f.routingDestinationPresses
                 let replay = await FeatureFlags.withAdr004MutationSagaForTests(true) { await execute(dependencies, wire) }
                 let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
@@ -6163,6 +6180,10 @@ struct Issue965HeldSelectionAssociationTests {
             }
             #expect(body["saga_state"] as? String == "fullyCompensated", "Actual input Saga: \(body)")
             #expect(f.routingDestinationPresses == 2)
+            if outcome.hasPrefix("retired_track_peer_") {
+                #expect(f.inputReadReplacementPeer == nil,
+                    "Do not cancel a redundant input popup between the verified effect and its checked inverse")
+            }
             #expect(b.attributeValue(one, "AXMenuItemMarkChar") as? String == "✓")
             #expect(b.attributeValue(two, "AXMenuItemMarkChar") as? String == "")
             if retiring { #expect(f.routingReplacement != nil && f.inputMenuCancels > 2) }

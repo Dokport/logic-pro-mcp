@@ -68,8 +68,17 @@ extension AccessibilityChannel {
                 return refusal(.staleTargetReference, "The original changed input no longer authorizes this inverse.")
             }
         }
-        let before = await getInputBusObservation(runtime: runtime, timing: timing)
-        recordRead(before, key: "before_acquisition")
+        let before: CheckedOutputReading
+        if let ownedInverse {
+            guard let checked = ownedInverse.retainedCheckedRead() else {
+                return refusal(.staleTargetReference, "The independently checked changed input is no longer current.")
+            }
+            before = checked
+            recordRead(before, key: "retained_before_acquisition")
+        } else {
+            before = await getInputBusObservation(runtime: runtime, timing: timing)
+            recordRead(before, key: "before_acquisition")
+        }
         guard case .bus(let observed)? = before.assignment else {
             return refusal(.readbackUnavailable, "The current input did not have agreeing checked-bus evidence; no destination was pressed.")
         }
@@ -90,11 +99,11 @@ extension AccessibilityChannel {
         extras["strip_count_before"] = population.strips.count
         let inverseProtection: ChangedInputObservation?
         if let ownedInverse {
-            guard let renewed = ownedInverse.following(before), renewed.current.strip.matches(owner),
-                  renewed.control.matches(heldInput), renewed.sink == sink else {
-                return refusal(.staleTargetReference, "Input reacquisition did not preserve the original changed control.")
+            guard ownedInverse.current.strip.matches(owner), ownedInverse.control.matches(heldInput),
+                  ownedInverse.sink == sink, ownedInverse.permits() else {
+                return refusal(.staleTargetReference, "The original changed input control is no longer current.")
             }
-            inverseProtection = renewed
+            inverseProtection = ownedInverse
         } else { inverseProtection = nil }
         func checkedSink(_ source: AXMixerStripBinding.Binding) async -> CheckedOutputReading {
             await AXMixerStripBinding.$current.withValue(source) {
@@ -366,7 +375,7 @@ extension AccessibilityChannel {
         guard recordInputEffect(original: AXMixerStripBinding.outputAssociation, current: after.inputRenewal?.pair ?? afterPair,
             renewal: after.inputRenewal ?? writerRenewal ?? before.inputRenewal,
             control: finalSlot, population: finalPopulation.strips, sink: sink,
-            before: observed, after: actual, runtime: runtime) else {
+            before: observed, after: actual, checkedAfter: after, runtime: runtime) else {
             return uncertain(.readbackUnavailable, "The input changed but native effect custody could not be retained; stop dependent writes.")
         }
         return .success(HonestContract.encodeStateA(extras: extras))

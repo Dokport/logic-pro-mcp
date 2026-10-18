@@ -15,6 +15,8 @@ extension AccessibilityChannel {
         let before: Int
         let after: Int
         let focus: AXUIElement
+        let checkedAfter: CheckedOutputReading
+        let sampledAt: String
 
         func permits() -> Bool {
             let runtime = current.track.runtime
@@ -51,50 +53,29 @@ extension AccessibilityChannel {
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
         }
 
-        /// Follow only this checked read's original-header renewal, never a public ref or label.
-        func following(_ read: CheckedOutputReading) -> Self? {
-            guard read.assignment == .bus(after), let slot = read.inputSlot else { return nil }
-            guard let next = read.inputRenewal else {
-                return permits() && control.matches(slot) ? self : nil
-            }
-            let runtime = current.track.runtime
-            guard next.original.matches(current.strip), next.originalTrack.matches(current.track),
-                  next.pair.track.matches(current.track), next.permits(runtime: runtime),
-                  slot.owner.matches(next.pair.strip) else {
-                Log.info("Input effect renewal refused: original source or current ownership", subsystem: "ax"); return nil
-            }
-            guard
-                  let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: next.pair.strip.mixer, runtime: runtime.ax)?.strips,
-                  census.count == population.count else {
-                Log.info("Input effect renewal refused: population count", subsystem: "ax"); return nil
-            }
-            guard zip(population, census).allSatisfy({ old, new in
-                      CFEqual(old, current.strip.strip) ? CFEqual(new, next.pair.strip.strip) : CFEqual(old, new)
-                  }) else {
-                Log.info("Input effect renewal refused: peer population identity", subsystem: "ax"); return nil
-            }
-            guard let app = AXLogicProElements.appRoot(runtime: runtime),
-                  let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else {
-                Log.info("Input effect renewal refused: focus unavailable", subsystem: "ax"); return nil
-            }
-            let renewed = Self(original: original, current: next.pair, renewal: next, control: slot,
-                population: census, sink: sink, before: before, after: after, focus: focus)
-            guard renewed.permits() else {
-                Log.info("Input effect renewal refused: renewed custody", subsystem: "ax"); return nil
-            }
-            return renewed
+        /// The scalar already obtained an independent checked read after its write.
+        /// Keep that native observation, not a decoded receipt or a new timestamp.
+        /// A redundant popup/Cancel can retire unrelated peers and destroy custody.
+        func retainedCheckedRead() -> CheckedOutputReading? {
+            guard checkedAfter.assignment == .bus(after),
+                  checkedAfter.inputSlot.map(control.matches) == true, permits() else { return nil }
+            var reading = checkedAfter
+            reading.inputRenewal = renewal
+            return reading
         }
     }
 
     static func recordInputEffect(original: HeldSelectionAssociation.Pair?, current: HeldSelectionAssociation.Pair?,
         renewal: OriginalHeaderSourceRenewal?, control: AXMixerInputSlotBinding, population: [AXUIElement], sink: OutputAssignment,
-        before: Int, after: Int, runtime: AXLogicProElements.Runtime) -> Bool {
+        before: Int, after: Int, checkedAfter: CheckedOutputReading, runtime: AXLogicProElements.Runtime) -> Bool {
         guard let observer = inputChangeObserver else { return true }
         guard let original, let current, current.strip.matches(control.owner),
+              checkedAfter.assignment == .bus(after), checkedAfter.inputSlot.map(control.matches) == true,
               let app = AXLogicProElements.appRoot(runtime: runtime),
               let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else { return false }
         let proof = ChangedInputObservation(original: original, current: current, renewal: renewal, control: control,
-            population: population, sink: sink, before: before, after: after, focus: focus)
+            population: population, sink: sink, before: before, after: after, focus: focus,
+            checkedAfter: checkedAfter, sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
         guard proof.permits() else { return false }
         observer(proof)
         return true
