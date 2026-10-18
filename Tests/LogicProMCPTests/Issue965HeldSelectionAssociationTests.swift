@@ -2842,6 +2842,25 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("An owned name may reach the Mixer only when its Send redraws", arguments: [false, true], [false, true])
+    func canonicalNameSendAcceptsDelayedCoupledName(stable: Bool, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: "forward", canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: stable, delayedMixerName: "Selected Canonical",
+                freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("A Send redraw cannot adopt an unrelated Mixer name", arguments: [false, true])
+    func canonicalNameSendRefusesForeignDelayedMixerName(stable: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: "forward", canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: stable, delayedMixerName: "External")
+        }
+    }
+
     @Test("A name edited after dispatch cannot authorize the later Send leaf", arguments: [false, true])
     func canonicalNameSendRefusesALateExternalName(returning: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -3383,6 +3402,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                stableDestinationControls: Bool = false,
                                                stableDestinationBulkReads: Bool = false,
                                                coupledMixerName: Bool = false,
+                                               delayedMixerName: String? = nil,
                                                expireInspectionBeforeSendDispatch: Bool = false,
                                                freshPhysicalReturn: Bool = false,
                                                canonicalMatching: Bool = false,
@@ -3803,6 +3823,10 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, [f.strips[0], source]); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, destination) {
+                    if let delayedMixerName {
+                        b.setAttribute(stableDestinationControls ? b.element(1_965_711) : name,
+                            kAXValueAttribute as String, delayedMixerName)
+                    }
                     if stableDestinationControls {
                         f.routingDestinationPresses += 1
                         b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
@@ -4134,7 +4158,14 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.expireRetainedCapture)
                         #expect(await cache.retainedInspection(id: id) == nil)
                     }
-                    if canonicalSend == "late_name" {
+                    if delayedMixerName == "External" {
+                        #expect(body["state"] as? String == "B")
+                        #expect(body["saga_state"] as? String != "completed")
+                        #expect(body["saga_state"] as? String != "fullyCompensated")
+                        #expect(f.routingNameWrites == ["Selected Canonical"])
+                        #expect(b.attributeValue(stableDestinationControls ? b.element(1_965_711) : name,
+                            kAXValueAttribute as String) as? String == "External")
+                    } else if canonicalSend == "late_name" {
                         #expect(f.routingLateScopeInjected)
                         #expect(f.routingNameWrites == ["Selected Canonical"])
                         #expect(f.routingDestinationPresses == 0, "The later Send must refuse after the approved name is lost")

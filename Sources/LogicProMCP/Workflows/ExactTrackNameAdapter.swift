@@ -322,11 +322,27 @@ enum ExactTrackNameAdapter {
             Log.info("Owned name renewal refused: original source or registry continuity", subsystem: "ax")
             return nil
         }
+        var retainedStripName = mirror.retainedStripName
+        if retainedStripName?.utf8.elementsEqual(proof.before.utf8) == true {
+            // The verified rename can precede its Mixer label propagation.
+            // Only this owned Send renewal may advance the old name to the
+            // exact name already written; arbitrary changed labels stay refused.
+            let observed: String? = AXHelpers.HelpReadGuard.$current.withValue(
+                .init(allowHelpReads: false, stop: { !operationPermitted() })) {
+                    guard operationPermitted(),
+                          case .success(.some(let name)) = AXPluginInstanceIdentity.stripNameResult(
+                            source.pair.strip.strip, runtime: mirror.pair.track.runtime.ax) else { return nil }
+                    return name
+                }
+            if observed?.utf8.elementsEqual(proof.written.utf8) == true {
+                retainedStripName = proof.written
+            }
+        }
         var updated = proof
         updated.mirror = CoupledMirror(pair: source.pair, reference: mirror.reference, snapshot: mirror.snapshot,
             preservedTracks: mirror.preservedTracks, preservedStrips: mirror.preservedStrips,
             registryStrip: mirror.registryStrip ?? mirror.pair.strip, renewal: source,
-            retainedStripName: mirror.retainedStripName)
+            retainedStripName: retainedStripName)
         guard let renewed = updated.mirror,
               await renewed.isCurrent(name: proof.written, project: proof.project, target: proof.target, registry: proof.registry),
               source.permits(runtime: mirror.pair.track.runtime) else {
