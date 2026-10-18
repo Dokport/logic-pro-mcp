@@ -713,13 +713,13 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func ownedMixerFocusAndSoleCreatedSelectionPermitExactInverse(redraw: Bool) async throws {
+    @Test(arguments: [false, true], ["area", "owner"])
+    func ownedMixerFocusAndSoleCreatedSelectionPermitExactInverse(redraw: Bool, focusTarget: String) async throws {
         try await owned {
             let f = Fixture()
             if redraw { f.modelWholePeerRetirement() }
             f.selectCreatedOnCreation = true
-            f.focusOnCreation = f.mixer
+            f.focusOnCreation = focusTarget == "area" ? f.mixer : f.b.element(967_150)
             let context = try f.context(nativeControls: true)
             let result = await context.create()
             #expect(result.status == .created)
@@ -729,14 +729,25 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
-    @Test(arguments: ["other_selection", "multiple_selection", "foreign_mixer"])
+    @Test(arguments: ["other_selection", "multiple_selection", "foreign_mixer", "foreign_owner", "changed_owner"])
     func mixerFocusCannotAuthorizeAnotherSelectionOrMixer(fault: String) async throws {
         try await owned {
             let f = Fixture(); f.modelWholePeerRetirement()
+            if fault == "foreign_owner" {
+                let foreign = f.b.element(967_990)
+                f.b.setRole(foreign, kAXGroupRole as String)
+                f.b.setAttribute(foreign, kAXDescriptionAttribute, AXLocalePolicy.mixerNamedElement.canonical)
+                f.b.setChildren(foreign, [])
+                f.b.setChildren(f.window, f.b.makeAXRuntime().children(f.window) + [foreign])
+            }
             let context = try f.context(nativeControls: true)
             let inverse = try #require(await context.create().inverse)
             f.b.setAttribute(f.app, kAXFocusedUIElementAttribute,
-                fault == "foreign_mixer" ? f.b.element(967_990) : f.mixer)
+                ["foreign_mixer", "foreign_owner"].contains(fault) ? f.b.element(967_990)
+                    : fault == "changed_owner" ? f.b.element(967_150) : f.mixer)
+            if fault == "changed_owner" {
+                f.b.setChildren(f.b.element(967_150), [f.mixer])
+            }
             if fault == "other_selection" { f.selected = [f.retiredPeerCopies![0]] }
             if fault == "multiple_selection" { f.selected.append(f.retiredPeerCopies![0]) }
             #expect(await context.remove(inverse).status == .residual)

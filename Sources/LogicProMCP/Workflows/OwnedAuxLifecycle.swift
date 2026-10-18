@@ -180,6 +180,20 @@ enum OwnedAuxLifecycle {
             // containing Mixer. Its exact identity is necessary but insufficient:
             // the independently read selection must still be this sole strip.
             if CFEqual(focus, bindings[0].mixer) { return selectedOnly(strip) }
+            // Logic 12.3 focuses the enclosing Mixer group rather than its
+            // inner strip area. Reuse discovery's real owner path, not a name
+            // match or arbitrary ancestor, and keep its held child identity.
+            if let outsideMixer,
+               let heldOwner = outsideMixer.first(where: { CFEqual($0.element, focus) }),
+               let discovery = try? AXLogicProElements.mixerPopulationAreaLookup(in: bindings[0].window,
+                    runtime: runtime, requiresCompleteAbsence: true,
+                    checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+               let binding = discovery.binding, CFEqual(binding.mixer, bindings[0].mixer),
+               binding.owners.filter({ CFEqual($0, focus) }).count == 1,
+               unchangedGroup(heldOwner), selectedOnly(strip),
+               case .success(let finalFocus?) = AXHelpers.getAttributeResult(app, kAXFocusedUIElementAttribute,
+                    runtime: runtime.ax) as Result<AXUIElement?, AXHelpers.AXStatusError>,
+               CFEqual(focus, finalFocus) { return true }
             guard let menu, let nodes = footprint(menu) else { return false }
             return nodes.contains(where: { CFEqual($0.element, focus) })
         }
