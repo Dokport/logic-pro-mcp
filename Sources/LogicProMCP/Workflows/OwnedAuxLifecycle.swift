@@ -683,6 +683,11 @@ enum OwnedAuxLifecycle {
                 issued = true
                 // TEMP: held facts only; no new AX reads or input.
                 Log.info("Owned Aux prepared click: phase=before,leaf_cf_hash=\(CFHash(currentCreator)),menu_cf_hash=\(CFHash(finalMenu[0])),point_x=\(frame.midX),point_y=\(frame.midY),original_count=\(bindings.count),last_census_count=\(finalBefore.count)", subsystem: "ax")
+                // Native menu tracking needs the observed pointer move before
+                // this one prepared click. No read or await separates its input.
+                guard mouse.postMouseEvent(.mouseMoved, CGPoint(x: frame.midX, y: frame.midY), 0) else {
+                    return receipt(.pending, diagnostic: "creator_pointer_move_unverified")
+                }
                 let downPosted = pair.postDown()
                 guard downPosted else {
                     Log.info("Owned Aux prepared click: phase=after,down_returned=false,up_attempted=false", subsystem: "ax")

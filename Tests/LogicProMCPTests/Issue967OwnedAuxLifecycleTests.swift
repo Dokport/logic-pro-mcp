@@ -258,7 +258,14 @@ struct Issue967OwnedAuxLifecycleTests {
         }
 
         var mouse: AXMouseHelper.Runtime {
-            .init(postMouseEvent: { _, _, _ in Issue.record("Unprepared mouse event forbidden"); return false },
+            .init(postMouseEvent: { [self] type, point, count in
+                      guard type == .mouseMoved else { Issue.record("Unprepared click forbidden"); return false }
+                      #expect(point == CGPoint(x: 190, y: 210) && count == 0)
+                      mouseEvents.append("move")
+                      if mouseFault == "move_failed" { return false }
+                      betweenClickHalves = true
+                      return true
+                  },
                   postKeyEvent: { _ in Issue.record("Keyboard fallback forbidden"); return false },
                   postUnicodeScalar: { _ in Issue.record("Typing forbidden"); return false },
                   sleepMicros: { _ in Issue.record("Sleep between input halves forbidden") },
@@ -841,11 +848,11 @@ struct Issue967OwnedAuxLifecycleTests {
             let context = try f.context(nativeControls: true)
             #expect(await context.create().status == .created)
             #expect(f.creatorActions.isEmpty)
-            #expect(f.mouseEvents == ["down", "up"])
+            #expect(f.mouseEvents == ["move", "down", "up"])
             #expect(f.hitReads >= 2 && f.mousePreparations == 1)
             #expect(f.readsBetweenClickHalves == 0)
             #expect(await context.create().status == .created)
-            #expect(f.mouseEvents == ["down", "up"] && f.createPresses == 1)
+            #expect(f.mouseEvents == ["move", "down", "up"] && f.createPresses == 1)
         }
     }
 
@@ -867,7 +874,7 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
-    @Test(arguments: ["unknown_effect", "down_failed", "up_failed"])
+    @Test(arguments: ["unknown_effect", "move_failed", "down_failed", "up_failed"])
     func uncertainCreatorClickNeverFallsBackOrReissuesOnTheSameContext(change: String) async throws {
         try await owned {
             let f = Fixture(); f.useNativeAncestorPopupParent(); f.creatorRequiresMouse = true; f.creatorEffectUnknown = true
@@ -877,7 +884,9 @@ struct Issue967OwnedAuxLifecycleTests {
             #expect(await context.create().status == .pending)
             #expect(f.creatorActions.isEmpty && f.deletePresses == 0)
             #expect(f.mousePreparations == 1)
-            #expect(f.mouseEvents == (change == "down_failed" ? ["down"] : ["down", "up"]))
+            let expected = change == "move_failed" ? ["move"]
+                : change == "down_failed" ? ["move", "down"] : ["move", "down", "up"]
+            #expect(f.mouseEvents == expected)
             #expect(f.readsBetweenClickHalves == 0)
         }
     }
