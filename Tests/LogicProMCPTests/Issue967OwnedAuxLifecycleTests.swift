@@ -1240,6 +1240,20 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
+    @Test(arguments: MenuFault.allCases)
+    func definitivelyDisabledMenuSeparatorCannotCompeteWithOwnedDelete(fault: MenuFault) async throws {
+        try await owned {
+            let f = Fixture(); let context = try f.context(nativeControls: true)
+            let proof = try #require(await context.create().inverse)
+            f.selected = [f.created]
+            f.b.setAttribute(f.app, kAXFocusedUIElementAttribute, f.created)
+            f.addFaultedMenuCandidate(creator: false, field: .semantic, fault: fault)
+            f.b.setAttribute(try #require(f.extraMenuItem), kAXEnabledAttribute, 0)
+            #expect(await context.remove(proof).status == .removed)
+            #expect(f.deletePresses == 1)
+        }
+    }
+
     @Test func selectionChangedDuringFinalMenuFocusFootprintRefusesDelete() async throws {
         try await owned {
             let f = Fixture(); let context = try f.context(nativeControls: true)

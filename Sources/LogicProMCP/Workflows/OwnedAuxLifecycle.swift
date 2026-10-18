@@ -498,6 +498,12 @@ enum OwnedAuxLifecycle {
                 permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil }) else { return nil }
             var matches: [AXUIElement] = []
             for element in menu.matches {
+                // Native separators are disabled AXMenuItems with no semantic
+                // identifier. Only an observed disabled state excludes them;
+                // unread/malformed enablement cannot hide a possible competitor.
+                let enabled: Result<NSNumber?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(element, kAXEnabledAttribute, runtime: runtime.ax)
+                guard case .success(let value?) = enabled, value == 0 || value == 1 else { return nil }
+                if value == 0 { continue }
                 let attribute = creator ? kAXTitleAttribute : kAXIdentifierAttribute
                 let text: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(element, attribute, runtime: runtime.ax)
                 // An unread/absent/malformed possible competitor cannot be omitted
@@ -507,9 +513,6 @@ enum OwnedAuxLifecycle {
                 let semanticMatch = creator ? AXLocalePolicy.mixerCreateAuxiliaryChannelStrip.matches(actual, mode: .exactStrict)
                     : actual.utf8.elementsEqual("delete:".utf8)
                 if !semanticMatch { continue }
-                let enabled: Result<NSNumber?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(element, kAXEnabledAttribute, runtime: runtime.ax)
-                guard case .success(let value?) = enabled, value == 0 || value == 1 else { return nil }
-                if value == 0 { continue }
                 guard case .success(let children) = AXHelpers.childrenResult(element, runtime: runtime.ax) else { return nil }
                 if !children.isEmpty { continue }
                 matches.append(element)
