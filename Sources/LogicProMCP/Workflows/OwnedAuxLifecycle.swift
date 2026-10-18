@@ -206,6 +206,7 @@ enum OwnedAuxLifecycle {
         private var observedTrack: AXTrackBinding.Binding?
         private var createdReadFocusBefore: (population: [AXUIElement], selected: AXUIElement)?
         private var inputInitializationDestination: Int?
+        private var inputInitializationInProgress = false
         private var inputInitializationReceipt: InputReceipt?
         private var inputInitializationAfter: (outside: [Node], strips: [[Node]])?
         private var uiEffects = SessionPopulationObservation.UIEffects()
@@ -1149,6 +1150,11 @@ enum OwnedAuxLifecycle {
                   let created = held?.created, CFEqual(created, proof.strip), let track = observedTrack else {
                 return rejected("owned_created_track_required")
             }
+            // Reserve before acquisition can suspend. Actor isolation alone does
+            // not keep another caller from entering while these reads await.
+            guard !inputInitializationInProgress else { return rejected("initialization_in_progress") }
+            inputInitializationInProgress = true
+            defer { inputInitializationInProgress = false }
             if let issued = inputInitializationDestination {
                 guard issued == destination else { return rejected("initialization_destination_conflict") }
                 guard let cached = inputInitializationReceipt, cached.status == .initialized,

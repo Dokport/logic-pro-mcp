@@ -7,6 +7,29 @@ import Testing
 /// Injected native elements only. The English CUA discovery is not CF qualification.
 @Suite("#967 one issued aux creation and exact-object inverse", .serialized)
 struct Issue967OwnedAuxLifecycleTests {
+    private actor PausedSample {
+        private var armed = false
+        private var paused = false
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var observers: [CheckedContinuation<Void, Never>] = []
+        private(set) var count = 0
+
+        func arm() { armed = true }
+        func sample() async {
+            count += 1
+            guard armed, !paused else { return }
+            paused = true
+            for observer in observers { observer.resume() }
+            observers.removeAll()
+            await withCheckedContinuation { continuation = $0 }
+        }
+        func waitUntilPaused() async {
+            if paused { return }
+            await withCheckedContinuation { observers.append($0) }
+        }
+        func resume() { continuation?.resume(); continuation = nil }
+    }
+
     enum MenuFault: CaseIterable, Sendable { case unread, malformed, absent }
     enum MenuField: CaseIterable, Sendable { case semantic, enabled, children }
     struct MenuCase: Sendable {
@@ -896,7 +919,8 @@ struct Issue967OwnedAuxLifecycleTests {
             for menu in [optionMenu, editMenu] { b.setAttribute(menu, kAXParentAttribute, b.element(967_151)) }
         }
 
-        func context(nativeControls: Bool = false) throws -> OwnedAuxLifecycle.Context {
+        func context(nativeControls: Bool = false,
+                     waitForNextSample: @escaping @Sendable () async throws -> Void = {}) throws -> OwnedAuxLifecycle.Context {
             let bindings = original.map { AXMixerStripBinding.Binding(window: window, mixer: mixer, strip: $0,
                 document: "file:///tmp/967-owned.logicx") }
             var population = SessionPopulationObservation.FreshPopulation(
@@ -920,7 +944,7 @@ struct Issue967OwnedAuxLifecycleTests {
             }
             let prepared = OwnedAuxLifecycle.prepare(population: population, options: options, edit: edit,
                 acceptedDefaults: Self.defaults, runtime: runtime, mouse: mouse,
-                initialControls: nativeControls ? nil : provider, settleSamples: 3, waitForNextSample: {})
+                initialControls: nativeControls ? nil : provider, settleSamples: 3, waitForNextSample: waitForNextSample)
             return try #require(prepared)
         }
     }
@@ -1033,11 +1057,13 @@ struct Issue967OwnedAuxLifecycleTests {
             let result = await context.prepareCreatedTrackReadFocus(for: requested)
             let dispatched = ["healthy", "unacked_effect", "no_effect", "late_effect", "wrong_focus"].contains(fault)
             let prepared = ["healthy", "already_rail", "unacked_effect"].contains(fault)
-            #expect((result.status == .readFocusPrepared) == prepared)
+            if prepared { #expect(result.status == .readFocusPrepared) }
+            else { #expect(result.status != .readFocusPrepared) }
             #expect(f.readFocusPresses == (dispatched ? 1 : 0))
             if fault == "late_effect" { f.b.setAttribute(f.app, kAXFocusedUIElementAttribute, f.b.element(f.trackRailID)) }
             let replay = await context.prepareCreatedTrackReadFocus(for: requested)
-            #expect((replay.status == .readFocusPrepared) == (prepared || fault == "late_effect"))
+            if prepared || fault == "late_effect" { #expect(replay.status == .readFocusPrepared) }
+            else { #expect(replay.status != .readFocusPrepared) }
             #expect(f.readFocusPresses == (dispatched ? 1 : 0))
             #expect(f.mouseEvents == inputs && f.selectionSets == 0 && f.deletePresses == 0)
             #expect(f.trackAppendPresses == (fault == "before_track" ? 0 : 1))
@@ -1059,6 +1085,32 @@ struct Issue967OwnedAuxLifecycleTests {
             _ = await context.appendArrangeTrack(for: proof)
             #expect(f.trackAppendPresses == 1)
             #expect((await context.remove(proof)).status == .residual && f.deletePresses == 0)
+        }
+    }
+
+    @Test(arguments: [2, 3])
+    func overlappingInputInitializationDoesNotEnterAcquisition(destination: Int) async throws {
+        let f = Fixture(); f.modelTrackAppend(); f.readFocusFault = "healthy"
+        let sample = PausedSample()
+        try await owned(f) {
+            let context = try f.context(waitForNextSample: { await sample.sample() })
+            let proof = try #require(await context.create().inverse)
+            #expect(await context.appendArrangeTrack(for: proof).status == .appended)
+            await sample.arm()
+            let first = Task { await context.initializeInputBus(for: proof, destination: 2) }
+            await sample.waitUntilPaused()
+            let count = await sample.count
+            let actions = f.mouseEvents
+            let overlap = await context.initializeInputBus(for: proof, destination: destination)
+            #expect(overlap.status == .rejectedBeforeWrite)
+            #expect(overlap.diagnostic == "initialization_in_progress")
+            #expect(await sample.count == count, "An overlapping call must not enter another acquisition")
+            #expect(f.mouseEvents == actions && f.deletePresses == 0)
+            await sample.resume()
+            let original = await first.value
+            #expect(original.status == .rejectedBeforeWrite, "This fixture intentionally has no complete checked-input association")
+            let retry = await context.initializeInputBus(for: proof, destination: 2)
+            #expect(retry.diagnostic != "initialization_in_progress", "A prewrite refusal releases the transient reservation")
         }
     }
 
@@ -1206,7 +1258,7 @@ struct Issue967OwnedAuxLifecycleTests {
             let context = try f.context(nativeControls: true)
             let created = await context.create()
             #expect(created.status == .created)
-            #expect(created.created.map { CFEqual($0, f.created) } == true)
+            #expect(CFEqual(try #require(created.created), f.created))
             #expect(created.inverse != nil)
             #expect(f.createPresses == 1)
             #expect(await context.create().status == .created)
@@ -1235,7 +1287,8 @@ struct Issue967OwnedAuxLifecycleTests {
             } else if ["no_hide_effect", "show_ignored", "cancel_after_hide"].contains(fault) {
                 let expectedPresses = fault == "show_ignored" ? 2 : 1
                 #expect(f.visibilityPresses == expectedPresses)
-                #expect(f.mixerShowing == (fault == "no_hide_effect"))
+                if fault == "no_hide_effect" { #expect(f.mixerShowing) }
+                else { #expect(!f.mixerShowing) }
                 #expect(result.status == .pending && result.inverse == nil)
                 #expect(result.uiEffects.navigationPerformed && result.uiEffects.restoration == "not_restored")
                 #expect(f.selectionSets == 0)
@@ -1243,7 +1296,7 @@ struct Issue967OwnedAuxLifecycleTests {
                 #expect(f.visibilityPresses == expectedPresses && f.createPresses == 1)
             } else {
                 #expect(result.status == .created)
-                #expect(result.created.map { CFEqual($0, f.created) } == true)
+                #expect(CFEqual(try #require(result.created), f.created))
                 #expect(f.visibilityPresses == 2 && f.mixerShowing)
                 #expect(f.createPresses == 1 && f.selectionSets == 1)
                 #expect(result.uiEffects.navigationPerformed)
@@ -1350,7 +1403,7 @@ struct Issue967OwnedAuxLifecycleTests {
                 if fault == "late_selection" { #expect(f.lateSelectionInjected) }
             } else if ["failed", "delayed"].contains(fault) {
                 #expect(result.status == .pending && result.inverse == nil)
-                #expect(result.created.map { CFEqual($0, f.created) } == true)
+                #expect(CFEqual(try #require(result.created), f.created))
                 #expect(await context.create().status == .pending)
                 #expect(f.selectionSets == 1)
                 if fault == "delayed" {
@@ -1360,7 +1413,7 @@ struct Issue967OwnedAuxLifecycleTests {
                 }
             } else {
                 #expect(result.status == .created && result.inverse != nil)
-                #expect(result.created.map { CFEqual($0, f.created) } == true)
+                #expect(CFEqual(try #require(result.created), f.created))
                 #expect(f.selectionSets == 1)
             }
             #expect(f.createPresses == 1 && f.deletePresses == 0)
@@ -1387,7 +1440,7 @@ struct Issue967OwnedAuxLifecycleTests {
             let context = try f.context(nativeControls: true)
             let result = await context.create()
             #expect(result.status == .configurationPartial)
-            #expect(result.created.map { CFEqual($0, f.created) } == true)
+            #expect(CFEqual(try #require(result.created), f.created))
             #expect(result.inverse == nil)
             #expect(await context.create().status == .configurationPartial)
             #expect(f.createPresses == 1 && f.deletePresses == 0)
