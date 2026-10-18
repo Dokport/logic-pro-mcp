@@ -176,6 +176,10 @@ enum OwnedAuxLifecycle {
                   case .success(let focus?) = AXHelpers.getAttributeResult(app, kAXFocusedUIElementAttribute,
                       runtime: runtime.ax) as Result<AXUIElement?, AXHelpers.AXStatusError> else { return false }
             if CFEqual(focus, strip) { return true }
+            // Native Mixer-only Aux selection can leave keyboard focus on the
+            // containing Mixer. Its exact identity is necessary but insufficient:
+            // the independently read selection must still be this sole strip.
+            if CFEqual(focus, bindings[0].mixer) { return selectedOnly(strip) }
             guard let menu, let nodes = footprint(menu) else { return false }
             return nodes.contains(where: { CFEqual($0.element, focus) })
         }

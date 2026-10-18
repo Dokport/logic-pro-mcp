@@ -139,6 +139,7 @@ struct Issue967OwnedAuxLifecycleTests {
         var windowServerProbeAvailable = true
         var retiredPeerCopies: [AXUIElement]?
         var selectCreatedOnCreation = false
+        var focusOnCreation: AXUIElement?
 
         init(delay: Int = 0) {
             self.delay = delay
@@ -274,7 +275,7 @@ struct Issue967OwnedAuxLifecycleTests {
                           if !creatorEffectUnknown { issued = true }
                           if issued && selectCreatedOnCreation {
                               selected = [created]
-                              b.setAttribute(app, kAXFocusedUIElementAttribute, created)
+                              b.setAttribute(app, kAXFocusedUIElementAttribute, focusOnCreation ?? created)
                           }
                           optionOpen = false
                           return mouseFault != "up_failed"
@@ -707,6 +708,37 @@ struct Issue967OwnedAuxLifecycleTests {
             let context = try f.context(nativeControls: true)
             let inverse = try #require(await context.create().inverse)
             f.b.setAttribute(f.b.element(967_801), kAXValueAttribute, 0.5)
+            #expect(await context.remove(inverse).status == .residual)
+            #expect(f.deletePresses == 0)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func ownedMixerFocusAndSoleCreatedSelectionPermitExactInverse(redraw: Bool) async throws {
+        try await owned {
+            let f = Fixture()
+            if redraw { f.modelWholePeerRetirement() }
+            f.selectCreatedOnCreation = true
+            f.focusOnCreation = f.mixer
+            let context = try f.context(nativeControls: true)
+            let result = await context.create()
+            #expect(result.status == .created)
+            let inverse = try #require(result.inverse)
+            #expect(await context.remove(inverse).status == .removed)
+            #expect(f.createPresses == 1 && f.deletePresses == 1)
+        }
+    }
+
+    @Test(arguments: ["other_selection", "multiple_selection", "foreign_mixer"])
+    func mixerFocusCannotAuthorizeAnotherSelectionOrMixer(fault: String) async throws {
+        try await owned {
+            let f = Fixture(); f.modelWholePeerRetirement()
+            let context = try f.context(nativeControls: true)
+            let inverse = try #require(await context.create().inverse)
+            f.b.setAttribute(f.app, kAXFocusedUIElementAttribute,
+                fault == "foreign_mixer" ? f.b.element(967_990) : f.mixer)
+            if fault == "other_selection" { f.selected = [f.retiredPeerCopies![0]] }
+            if fault == "multiple_selection" { f.selected.append(f.retiredPeerCopies![0]) }
             #expect(await context.remove(inverse).status == .residual)
             #expect(f.deletePresses == 0)
         }
