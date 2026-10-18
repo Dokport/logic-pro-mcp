@@ -140,6 +140,7 @@ struct Issue967OwnedAuxLifecycleTests {
         var retiredPeerCopies: [AXUIElement]?
         var selectCreatedOnCreation = false
         var focusOnCreation: AXUIElement?
+        var retiredDeletionPeers: [AXUIElement]?
 
         init(delay: Int = 0) {
             self.delay = delay
@@ -408,7 +409,10 @@ struct Issue967OwnedAuxLifecycleTests {
                     b.setAttribute(app, kAXFocusedUIElementAttribute as String, delete)
                 }
                 if CFEqual(element, edit), expandSelectionOnEdit { selected = [created, original[0]] }
-                if CFEqual(element, delete) { deletePresses += 1; removed = true; editOpen = false }
+                if CFEqual(element, delete) {
+                    deletePresses += 1; removed = true; editOpen = false
+                    if let retiredDeletionPeers { retiredPeerCopies = retiredDeletionPeers }
+                }
                 return true
             }, executeAppleScript: { _ in Issue.record("AppleScript forbidden"); return .error("forbidden") })
             let hit: (@Sendable (AXUIElement, CGPoint) -> Result<AXUIElement?, AXHelpers.AXStatusError>)?
@@ -710,6 +714,28 @@ struct Issue967OwnedAuxLifecycleTests {
             f.b.setAttribute(f.b.element(967_801), kAXValueAttribute, 0.5)
             #expect(await context.remove(inverse).status == .residual)
             #expect(f.deletePresses == 0)
+        }
+    }
+
+    @Test(arguments: ["preserved", "changed_peer", "partial_retirement", "created_live"])
+    func issuedRemovalObservesWholePeerRedrawWithoutReissuingDelete(fault: String) async throws {
+        try await owned {
+            let f = Fixture(); f.modelWholePeerRetirement()
+            let context = try f.context(nativeControls: true)
+            let inverse = try #require(await context.create().inverse)
+            let slider = f.b.element(967_811)
+            f.b.setRole(slider, kAXSliderRole as String)
+            f.b.setAttribute(slider, kAXValueAttribute, fault == "changed_peer" ? 0.5 : 0.75)
+            f.b.setChildren(slider, [])
+            let peers = [f.b.element(967_812), f.b.element(967_813)]
+            for peer in peers { f.b.setRole(peer, kAXLayoutItemRole as String) }
+            f.b.setChildren(peers[0], [slider]); f.b.setChildren(peers[1], [])
+            f.retiredDeletionPeers = fault == "partial_retirement" ? [f.retiredPeerCopies![0], peers[1]] : peers
+            if fault == "created_live" { f.invalidatesDeletedCF = false }
+            let expected: OwnedAuxLifecycle.Status = fault == "preserved" ? .removed : .residual
+            #expect(await context.remove(inverse).status == expected)
+            #expect(await context.remove(inverse).status == expected)
+            #expect(f.createPresses == 1 && f.deletePresses == 1)
         }
     }
 

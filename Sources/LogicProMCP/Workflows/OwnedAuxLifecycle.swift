@@ -426,6 +426,21 @@ enum OwnedAuxLifecycle {
             return zip(expected, current).allSatisfy { $0.matches($1) }
         }
 
+        private func sameValues(_ first: [Node], _ second: [Node]) -> Bool {
+            first.count == second.count && zip(first, second).allSatisfy {
+                $0.fields == $1.fields && $0.children.count == $1.children.count
+            }
+        }
+
+        private func invalidated(_ strip: AXUIElement) -> Bool {
+            guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            let role: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                strip, kAXRoleAttribute, runtime: runtime.ax)
+            guard case .failure(let error) = role, error.source == .axStatus,
+                  error.raw == AXError.invalidUIElement.rawValue else { return false }
+            return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+        }
+
         private func preserved() -> Bool {
             guard let before, let outsideMixer, let excluded = ownedMenuExclusion(),
                   matches(outsideMixer, footprint(bindings[0].window, excluding: [bindings[0].mixer, options, edit],
@@ -456,11 +471,6 @@ enum OwnedAuxLifecycle {
                 guard let tree = footprint(strip) else { return false }
                 trees.append(tree)
             }
-            func sameValues(_ first: [Node], _ second: [Node]) -> Bool {
-                first.count == second.count && zip(first, second).allSatisfy {
-                    $0.fields == $1.fields && $0.children.count == $1.children.count
-                }
-            }
             var candidates: [Int] = []
             for index in current.indices {
                 let peerTrees = trees.enumerated().filter { $0.offset != index }.map(\.element)
@@ -478,6 +488,32 @@ enum OwnedAuxLifecycle {
             preservationPeers = current.enumerated().filter { $0.offset != index }.map(\.element)
             self.before = trees.enumerated().filter { $0.offset != index }.map(\.element)
             observedCreated = current[index]
+            return true
+        }
+
+        /// Terminal observation only, after the one issued deletion. New peer
+        /// objects acquire no reference rebinding or permission for another write.
+        private func removedAfterWholePeerRedraw(_ current: [AXUIElement], strip: AXUIElement) -> Bool {
+            guard deleteIssued, current.count == preservationPeers.count,
+                  !current.contains(where: { CFEqual($0, strip) }),
+                  preservationPeers.allSatisfy({ peer in !current.contains { CFEqual($0, peer) } }),
+                  let before, before.count == current.count,
+                  let outsideMixer, let excluded = ownedMenuExclusion(), excluded.isEmpty,
+                  invalidated(strip),
+                  matches(outsideMixer, footprint(bindings[0].window,
+                    excluding: [bindings[0].mixer, options, edit])) else { return false }
+            var trees: [[Node]] = []
+            for peer in current {
+                guard let tree = footprint(peer) else { return false }
+                trees.append(tree)
+            }
+            guard zip(before, trees).allSatisfy({ sameValues($0, $1) }),
+                  let bookend = census(), same(current, bookend),
+                  zip(current, trees).allSatisfy({ matches($1, footprint($0)) }),
+                  matches(outsideMixer, footprint(bindings[0].window,
+                    excluding: [bindings[0].mixer, options, edit])),
+                  let final = census(), same(current, final),
+                  invalidated(strip), actionContextCurrent() else { return false }
             return true
         }
 
@@ -724,17 +760,15 @@ enum OwnedAuxLifecycle {
             }
             for _ in 0..<samples {
                 do { try await waitForNextSample() } catch { return receipt(.residual, strip: strip) }
-                guard let current = census(), preserved() else { return receipt(.residual, strip: strip) }
+                guard let current = census() else { return receipt(.residual, strip: strip) }
+                if removedAfterWholePeerRedraw(current, strip: strip) { return receipt(.removed, strip: strip) }
+                guard preserved() else { return receipt(.residual, strip: strip) }
                 if same(current, preservationPeers),
                    let bookend = census(), same(current, bookend), preserved() {
-                    let role: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
-                        strip, kAXRoleAttribute, runtime: runtime.ax)
                     // A transient full AX census can equal the original baseline.
                     // That is not removal while the exact owned native object still
                     // reads live. Unknown failures are not deletion certificates.
-                    guard case .failure(let error) = role,
-                          error.source == .axStatus, error.raw == AXError.invalidUIElement.rawValue,
-                          (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { continue }
+                    guard invalidated(strip) else { continue }
                     // This says only that the owned object was removed. Focus/selection
                     // restoration and the existing Saga journal are not qualified here.
                     return receipt(.removed, strip: strip)
