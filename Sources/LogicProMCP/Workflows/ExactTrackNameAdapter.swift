@@ -720,11 +720,15 @@ enum ExactTrackNameAdapter {
             return .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
                 result: TargetRefResolver.staleTargetReferenceResult(action.targetReference.rawValue, operation: "track.rename"))
         }
+        // An owned Send renewal also carries a focus-bound observation. Its
+        // inverse must validate the writer's exact editor, not the observation's
+        // preceding passive focus, while the ordinary Rename menu is open.
+        let holdsEditorCustody = preservingFootprint != nil || mirror?.renewal != nil
         let prewrite: (@Sendable (Bool, AXUIElement?) -> Bool)?
         if let mirror {
             prewrite = { allowPreview, editor in
                 let activeEditor: AXUIElement?
-                if preservingFootprint != nil, let editor,
+                if holdsEditorCustody, let editor,
                    let app = AXLogicProElements.appRoot(runtime: mirror.pair.track.runtime),
                    let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
                         runtime: mirror.pair.track.runtime.ax), CFEqual(focus, editor) {
@@ -735,17 +739,18 @@ enum ExactTrackNameAdapter {
                     && (preservingFootprint?(allowPreview, activeEditor) ?? true)
             }
         } else { prewrite = nil }
-        let menuRail = preservingFootprint == nil ? nil : mirror.flatMap { mirror in
+        let menuRail = !holdsEditorCustody ? nil : mirror.flatMap { mirror in
             AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: false, stop: { !operationPermitted() })) {
                 MenuRailCustody(mirror)
             }
         }
         // Every name leaf and inverse owns a fresh capture; nothing is reused
         // across invocations or reconstructed from the dispatcher JSON.
-        let focusTransport = afterVerifiedWrite == nil ? nil : NameFocusTransportCapture()
+        let restoresRenewedFocus = afterVerifiedWrite == nil && mirror?.renewal != nil
+        let focusTransport = afterVerifiedWrite == nil && !restoresRenewedFocus ? nil : NameFocusTransportCapture()
         let result = await $coupledNameFocusTransport.withValue(focusTransport) {
           await $coupledWriteBoundary.withValue(prewrite) {
-          await $coupledFootprintFocusBookends.withValue(preservingFootprint != nil) {
+          await $coupledFootprintFocusBookends.withValue(holdsEditorCustody) {
             await $coupledMenuRail.withValue(menuRail) {
             await TrackDispatcher.handle(
             command: "rename",
@@ -822,6 +827,40 @@ enum ExactTrackNameAdapter {
         // Only a real A, rebound reference and deciding native after-name can
         // run the composed caller's exact original-custody restoration.
         if let afterVerifiedWrite, !(await afterVerifiedWrite(focusTransport?.value, effect)) { return unverified() }
+        if restoresRenewedFocus, var held = verifiedMirror, let source = held.renewal {
+            let pair = held.pair
+            // A verified menu commit can land on the original rail. Renew that
+            // owned UI effect without querying (and invalidating) its old focus
+            // proof. The existing initializer preserves every original native
+            // path, ordered census, transport and viewport restoration baseline.
+            guard let renewed = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
+                logic: pair.track.runtime, expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: true, restorationBaseline: source.observation),
+                CFEqual(renewed.headers[renewed.originalIndex], pair.track.header),
+                CFEqual(renewed.mixer, pair.strip.mixer),
+                renewed.document.utf8.elementsEqual(pair.track.document.utf8),
+                renewed.strips.filter({ CFEqual($0, pair.strip.strip) }).count == 1,
+                renewed.permitsRead() else {
+                Log.info("Owned name renewal refused: committed-focus baseline", subsystem: "ax")
+                return unverified()
+            }
+            held.renewal = .init(pair: source.pair, index: source.index, original: source.original,
+                originalTrack: source.originalTrack, observation: renewed)
+            let restoredMirror = held
+            guard await restoredMirror.isCurrent(name: after, project: action.projectReference,
+                target: action.targetReference, registry: registry),
+                await renewed.restoreCommittedFocus(source: pair.strip, expectedName: held.retainedStripName ?? after,
+                    transport: focusTransport?.value,
+                    preservingFootprint: { restoredMirror.namesStillHeld(before: after) },
+                    referenceIsCurrent: {
+                        await restoredMirror.isCurrent(name: after, project: action.projectReference,
+                            target: action.targetReference, registry: registry)
+                    }, stoppingWhen: { !operationPermitted() }) else {
+                Log.info("Owned name renewal refused: committed-focus restoration", subsystem: "ax")
+                return unverified()
+            }
+            verifiedMirror = restoredMirror
+        }
         guard preservingFootprint?(true, nil) ?? true else { return unverified() }
         if let mirror = verifiedMirror, !(await mirror.isCurrent(name: after, project: action.projectReference,
                                                target: action.targetReference, registry: registry)) { return unverified() }

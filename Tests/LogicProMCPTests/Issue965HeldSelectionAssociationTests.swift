@@ -2842,6 +2842,27 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Cancellation restores the owned name through its renewed source's ordinary Rename editor", arguments: [false, true])
+    func canonicalNameSendCancellationOwnsItsMenuEditor(returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: "cancel", canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, coupledMixerName: true, inverseNameMenu: true,
+                freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("An owned cancellation menu still refuses changed editor, project and physical membership",
+          arguments: ["foreign_rail", "missing_header", "foreign_focus", "project", "peer"])
+    func canonicalNameSendCancellationRefusesLostEditorCustody(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: "cancel", canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, coupledMixerName: true, inverseNameMenu: true,
+                inverseNameFault: fault)
+        }
+    }
+
     @Test("An owned name may reach the Mixer only when its Send redraws", arguments: [false, true], [false, true])
     func canonicalNameSendAcceptsDelayedCoupledName(stable: Bool, returning: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -3402,6 +3423,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                stableDestinationControls: Bool = false,
                                                stableDestinationBulkReads: Bool = false,
                                                coupledMixerName: Bool = false,
+                                               inverseNameMenu: Bool = false,
+                                               inverseNameFault: String? = nil,
                                                delayedMixerName: String? = nil,
                                                expireInspectionBeforeSendDispatch: Bool = false,
                                                freshPhysicalReturn: Bool = false,
@@ -3411,6 +3434,7 @@ struct Issue965HeldSelectionAssociationTests {
             let f = try Fixture(), b = f.builder
             if stableDestinationBulkReads { f.useBulkReads = true }
             let nameField = b.element(1_971_400)
+            let inverseEditor = b.element(1_971_402), renameItem = b.element(1_971_406)
             if canonicalName {
                 // No real AX activation or mouse fallback from an injected fixture.
                 f.routingMenuRename = true
@@ -3420,9 +3444,45 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setAttribute(nameField, kAXWindowAttribute as String, f.window)
                 b.setChildren(nameField, [])
                 b.setChildren(f.headers[0], [nameField])
+                if inverseNameMenu {
+                    try f.configureOriginalPlateClick()
+                    b.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+                    b.setAttributeSettable(f.rail, kAXValueAttribute as String, false)
+                    let bar = b.element(1_971_403), trackMenu = b.element(1_971_404), menu = b.element(1_971_405)
+                    for (node, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                        (menu, kAXMenuRole), (renameItem, kAXMenuItemRole), (inverseEditor, kAXTextFieldRole)] {
+                        b.setRole(node, role as String)
+                    }
+                    b.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+                    b.setAttribute(renameItem, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+                    b.setChildren(bar, [trackMenu]); b.setChildren(trackMenu, [menu]); b.setChildren(menu, [renameItem])
+                    b.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+                    b.setAttribute(inverseEditor, kAXWindowAttribute as String, f.window)
+                    // The actual menu editor is parented by, but not exported in, the original rail.
+                    b.setAttribute(inverseEditor, kAXParentAttribute as String, f.rail)
+                    b.setAttributeSettable(inverseEditor, kAXValueAttribute as String, true)
+                    b.setChildren(inverseEditor, [])
+                    f.routingNameReturn = {
+                        guard let name = b.attributeValue(inverseEditor, kAXValueAttribute as String) as? String else { return false }
+                        f.routingNameConfirms += 1
+                        b.setAttribute(nameField, kAXDescriptionAttribute as String, name)
+                        b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
+                        b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, name)
+                        b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                        return true
+                    }
+                }
                 f.routingSetter = { element, attribute, value in
+                    if inverseNameMenu, CFEqual(element, inverseEditor), attribute == kAXValueAttribute as String,
+                       let name = value as? String {
+                        f.routingNameWrites.append(name)
+                        b.setAttribute(inverseEditor, kAXValueAttribute as String, name)
+                        return true
+                    }
                     guard CFEqual(element, nameField), attribute == kAXValueAttribute as String,
                           let name = value as? String else { return nil }
+                    if inverseNameMenu, f.routingDestinationPresses == 2 { return false }
                     f.routingNameWrites.append(name)
                     b.setAttribute(nameField, kAXDescriptionAttribute as String, name)
                     b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
@@ -3700,7 +3760,29 @@ struct Issue965HeldSelectionAssociationTests {
             }
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
+                if inverseNameMenu, CFEqual(element, renameItem), action == kAXPressAction as String {
+                    f.routingMenuNameOpens += 1
+                    b.setAttribute(inverseEditor, kAXValueAttribute as String,
+                        b.attributeValue(nameField, kAXDescriptionAttribute as String))
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, inverseEditor)
+                    if let inverseNameFault, inverseNameFault != "foreign_focus" {
+                        f.routingLateScopeInjected = true
+                        switch inverseNameFault {
+                        case "foreign_rail":
+                            let foreign = b.element(1_971_407)
+                            b.setRole(foreign, kAXGroupRole as String); b.setChildren(foreign, [])
+                            b.setAttribute(foreign, kAXWindowAttribute as String, f.window)
+                            b.setAttribute(inverseEditor, kAXParentAttribute as String, foreign)
+                        case "missing_header": b.setChildren(f.rail, [f.headers[0]])
+                        case "project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        case "peer": b.setAttribute(f.headers[1], kAXTitleAttribute as String, "External")
+                        default: Issue.record("Unknown inverse name fault")
+                        }
+                    }
+                    return true
+                }
                 if canonicalName, CFEqual(element, nameField) {
+                    if inverseNameMenu, f.routingDestinationPresses == 2 { return false }
                     if action == kAXConfirmAction as String { f.routingNameConfirms += 1 }
                     return [kAXPressAction as String, kAXConfirmAction as String].contains(action)
                 }
@@ -3829,6 +3911,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if stableDestinationControls {
                         f.routingDestinationPresses += 1
+                        if inverseNameMenu {
+                            b.setAttribute(nameField, kAXValueAttribute as String, NSNumber(value: 0))
+                            b.setAttributeSettable(nameField, kAXValueAttribute as String, false)
+                        }
                         b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
                         b.setAttribute(stereo, "AXMenuItemMarkChar", "")
                         b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
@@ -3907,7 +3993,23 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
+            f.routingRead = { element, attribute in
+                if inverseNameFault == "foreign_focus", f.routingMenuNameOpens == 1,
+                   CFEqual(element, inverseEditor), attribute == kAXParentAttribute as String,
+                   !f.routingLateScopeInjected {
+                    f.routingLateScopeInjected = true
+                    let foreign = b.element(1_971_408)
+                    b.setRole(foreign, kAXTextFieldRole as String)
+                    b.setAttribute(foreign, kAXValueAttribute as String, "Selected Canonical")
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreign)
+                }
+            }
             f.routingReadResult = { element, attribute in
+                if inverseNameMenu, CFEqual(element, f.rail),
+                   [kAXValueAttribute, kAXSelectedTextAttribute, kAXNumberOfCharactersAttribute,
+                    kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
+                    return .failure(.init(raw: AXError.noValue.rawValue))
+                }
                 if sagaMode == "late_inverse_mode", f.routingDestinationPresses == 1, CFEqual(element, stereo) {
                     if attribute == kAXTitleAttribute as String, f.routingClassifierHelpReads > 0 {
                         f.routingClassifierHelpReads += 1
@@ -4158,7 +4260,13 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.expireRetainedCapture)
                         #expect(await cache.retainedInspection(id: id) == nil)
                     }
-                    if delayedMixerName == "External" {
+                    if inverseNameFault != nil {
+                        #expect(f.routingLateScopeInjected)
+                        #expect(body["saga_state"] as? String == "rollbackUncertain")
+                        #expect(f.routingNameWrites == ["Selected Canonical"])
+                        #expect(f.routingDestinationPresses == 2)
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Selected Canonical")
+                    } else if delayedMixerName == "External" {
                         #expect(body["state"] as? String == "B")
                         #expect(body["saga_state"] as? String != "completed")
                         #expect(body["saga_state"] as? String != "fullyCompensated")
@@ -4188,6 +4296,22 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     let writes = f.routingDestinationPresses
                     let nameWrites = f.routingNameWrites
+                    if inverseNameMenu {
+                        #expect(f.routingMenuNameOpens == 1)
+                        #expect(f.routingNameConfirms == (inverseNameFault == nil ? 2 : 1))
+                        if inverseNameFault == nil {
+                            #expect(f.routingFocusClickEvents == [.leftMouseDown, .leftMouseUp])
+                            let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+                                kAXFocusedUIElementAttribute as String, runtime: b.makeAXRuntime()))
+                            #expect(CFEqual(focus, f.strips[1]))
+                            let steps = try #require(body["steps"] as? [[String: Any]])
+                            #expect(steps.count == 2)
+                            for step in steps {
+                                let compensation = try #require(step["compensation"] as? [String: Any])
+                                #expect(compensation["disposition"] as? String == "verified")
+                            }
+                        }
+                    }
                     _ = await apply(dependencies, arguments)
                     #expect(f.routingDestinationPresses == writes && f.routingNameWrites == nameWrites)
                     #expect(!gate.isHeldByEntitledHolder())
