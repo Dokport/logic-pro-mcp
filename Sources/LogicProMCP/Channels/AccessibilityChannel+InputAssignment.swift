@@ -7,7 +7,8 @@ extension AccessibilityChannel {
     /// physical-input, aux creation, or input-format conversion authority.
     static func setInputBusVerified(params: [String: String],
         runtime: AXLogicProElements.Runtime = .production,
-        timing: OutputAssignmentTiming = .live) async -> ChannelResult {
+        timing: OutputAssignmentTiming = .live,
+        ownedInverse: ChangedInputObservation? = nil) async -> ChannelResult {
         let operation = "mixer.set_input_bus_verified"
         var extras: [String: Any] = ["operation": operation, "write_attempted": false,
             "navigation_attempted": false]
@@ -61,8 +62,23 @@ extension AccessibilityChannel {
         }(), original.currentIndex(runtime: runtime) != nil else {
             return refusal(.routingDependencyUnknown, "Only a checked physical-output sink is supported; no input destination was pressed.")
         }
-        let before = await getInputBusObservation(runtime: runtime, timing: timing)
-        recordRead(before, key: "before_acquisition")
+        if let ownedInverse {
+            guard ownedInverse.current.strip.matches(original), ownedInverse.before == destination,
+                  ownedInverse.after == expected, ownedInverse.sink == sink, ownedInverse.permits() else {
+                return refusal(.staleTargetReference, "The original changed input no longer authorizes this inverse.")
+            }
+        }
+        let before: CheckedOutputReading
+        if let ownedInverse {
+            guard let checked = ownedInverse.retainedCheckedRead() else {
+                return refusal(.staleTargetReference, "The independently checked changed input is no longer current.")
+            }
+            before = checked
+            recordRead(before, key: "retained_before_acquisition")
+        } else {
+            before = await getInputBusObservation(runtime: runtime, timing: timing)
+            recordRead(before, key: "before_acquisition")
+        }
         guard case .bus(let observed)? = before.assignment else {
             return refusal(.readbackUnavailable, "The current input did not have agreeing checked-bus evidence; no destination was pressed.")
         }
@@ -81,6 +97,14 @@ extension AccessibilityChannel {
             return refusal(.staleTargetReference, "The checked input has no current physical source/control binding.")
         }
         extras["strip_count_before"] = population.strips.count
+        let inverseProtection: ChangedInputObservation?
+        if let ownedInverse {
+            guard ownedInverse.current.strip.matches(owner), ownedInverse.control.matches(heldInput),
+                  ownedInverse.sink == sink, ownedInverse.permits() else {
+                return refusal(.staleTargetReference, "The original changed input control is no longer current.")
+            }
+            inverseProtection = ownedInverse
+        } else { inverseProtection = nil }
         func checkedSink(_ source: AXMixerStripBinding.Binding) async -> CheckedOutputReading {
             await AXMixerStripBinding.$current.withValue(source) {
                 await getOutputObservation(runtime: runtime, timing: timing)
@@ -99,6 +123,19 @@ extension AccessibilityChannel {
                   sends.allSatisfy({ $0.state == .observedEmpty }) else { return false }
             return true
         }
+        @Sendable func inverseStillCurrent(ownedPopup: AXUIElement?) -> Bool {
+            guard let inverseProtection else { return true }
+            guard inverseProtection.current.strip.matches(owner), inverseProtection.control.matches(heldInput),
+                  inverseProtection.sink == sink,
+                  inverseProtection.renewal.map({ $0.permits(runtime: runtime, ownedPopup: ownedPopup) }) ?? true,
+                  let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: owner.mixer, runtime: runtime.ax)?.strips,
+                  census.count == inverseProtection.population.count,
+                  zip(census, inverseProtection.population).allSatisfy({ CFEqual($0, $1) }),
+                  sinkStillCurrent(owner) else { return false }
+            let input = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
+            guard case .source(let label) = input.reading, let control = input.control else { return false }
+            return inverseProtection.control.matches(.init(owner: owner, control: control, source: label))
+        }
         @Sendable func ownerStillCurrent(ownedPopup: AXUIElement? = nil) -> Bool {
             let currentInput = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
             guard case .source(let label) = currentInput.reading, let control = currentInput.control,
@@ -109,6 +146,7 @@ extension AccessibilityChannel {
                   before.inputRenewal.map({ $0.permits(runtime: runtime, ownedPopup: ownedPopup) }) != false else {
                 Log.info("Input writer custody refused: original association/gate", subsystem: "ax"); return false
             }
+            guard inverseStillCurrent(ownedPopup: ownedPopup) else { return false }
             guard
                   sinkStillCurrent(owner),
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
@@ -333,6 +371,12 @@ extension AccessibilityChannel {
         extras["verify_source"] = "ax_input_menu_checkmark"
         guard actual == destination else {
             return uncertain(.readbackMismatch, "The committed checked input differs from the request; no inverse was attempted.")
+        }
+        guard recordInputEffect(original: AXMixerStripBinding.outputAssociation, current: after.inputRenewal?.pair ?? afterPair,
+            renewal: after.inputRenewal ?? writerRenewal ?? before.inputRenewal,
+            control: finalSlot, population: finalPopulation.strips, sink: sink,
+            before: observed, after: actual, checkedAfter: after, runtime: runtime) else {
+            return uncertain(.readbackUnavailable, "The input changed but native effect custody could not be retained; stop dependent writes.")
         }
         return .success(HonestContract.encodeStateA(extras: extras))
     }

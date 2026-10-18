@@ -842,6 +842,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                 ?? SendRemovalSagaAdapter(plan: plan)
             let sendMode = SendModeSagaAdapter(plan: plan)
             let sendLevel = SendLevelSagaAdapter(plan: plan)
+            let inputBus = InputBusSagaAdapter(plan: plan)
             let journalIssues: [[String: Any]]
             switch await sagaJournal.disposition(for: plan) {
             case .conflict:
@@ -875,14 +876,14 @@ struct SystemDispatcher: OperationTraceDispatching {
                 liveReadback: sagaLiveReadback ?? .unavailable,
                 liveTrackName: liveTrackName,
                 liveTrackNames: liveTrackNames,
-                sendRemoval: sendRemoval, sendMode: sendMode, sendLevel: sendLevel
+                sendRemoval: sendRemoval, sendMode: sendMode, sendLevel: sendLevel, inputBus: inputBus
             )
             let preflight = await MutationSaga(
                 targetRegistry: targetRegistry,
                 routeAvailable: Self.sagaRouteProbe(router: router)
             ).preflight(plan)
             let availability: [SagaBeforeStateAvailability]
-            if sendRemoval != nil || sendMode != nil || sendLevel != nil {
+            if sendRemoval != nil || sendMode != nil || sendLevel != nil || inputBus != nil {
                 guard let mutationGate, let claim = mutationGate.tryAcquire(operation: "saga.send_removal_observation") else {
                     return toolStateCResult(.verifiedOpInProgress, extras: ["write_attempted": false])
                 }
@@ -931,6 +932,13 @@ struct SystemDispatcher: OperationTraceDispatching {
             let sendMode = SendModeSagaAdapter(plan: plan)
             let containsLevel = plan.steps.contains { $0.operationID == .mixerSetSendLevelVerified }
             let sendLevel = SendLevelSagaAdapter(plan: plan)
+            let containsInput = plan.steps.contains { $0.operationID == .mixerSetInputBusVerified }
+            let inputBus = InputBusSagaAdapter(plan: plan)
+            if containsInput, inputBus == nil {
+                return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
+                    hint: "Only one exact Bus-to-Bus input change is supported by this Saga adapter.",
+                    extras: ["write_attempted": false]), traceID: traceID)
+            }
             if containsLevel, sendLevel == nil {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
                     hint: "Only one exact occupied -∞ to -6 dB change is supported by this Saga adapter.",
@@ -947,7 +955,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             let canonicalSendConfirmed = approvedSessionRepair?.plan == plan && sendRemoval != nil
-            if pluginPlan || (containsSend && !canonicalSendConfirmed) || containsMode || containsLevel, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+            if pluginPlan || (containsSend && !canonicalSendConfirmed) || containsMode || containsLevel || containsInput, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
                     hint: "Confirm this exact plan_hash before applying the selected workflow",
                     extras: ["write_attempted": false]), traceID: traceID)
@@ -1054,7 +1062,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     ?? ContinuousClock.now.advanced(by: .seconds(lifecycleBudgetSeconds))
                 let inherited = OperationTraceContext.current
                 let compressorCancellation = SagaAbandonFlag()
-                let approvedContext = (approvedSessionRepair != nil || pluginPlan || sendRemoval != nil || sendMode != nil || sendLevel != nil) ?
+                let approvedContext = (approvedSessionRepair != nil || pluginPlan || sendRemoval != nil || sendMode != nil || sendLevel != nil || inputBus != nil) ?
                     OperationTraceContext(parentTraceID: inherited?.traceID,
                         mutationGateAcquired: mutationClaim != nil,
                         ownsGate: {
@@ -1081,7 +1089,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                         environment: ProcessInfo.processInfo.environment,
                         stepCount: plan.steps.count
                     ), approvedSessionRepair: approvedSessionRepair, confirmedCompressorPlan: compressorPlan,
-                    confirmedSelectedEQPlan: selectedEQPlan, sendRemoval: sendRemoval, sendMode: sendMode, sendLevel: sendLevel
+                    confirmedSelectedEQPlan: selectedEQPlan, sendRemoval: sendRemoval, sendMode: sendMode, sendLevel: sendLevel, inputBus: inputBus
                 )
                 #else
                 let executor = ProductionSagaStepExecutor(
@@ -1092,7 +1100,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                     liveReadback: sagaLiveReadback ?? .unavailable,
                     liveTrackName: liveTrackName,
                     liveTrackNames: liveTrackNames, approvedSessionRepair: approvedSessionRepair,
-                    confirmedCompressorPlan: compressorPlan, confirmedSelectedEQPlan: selectedEQPlan, sendRemoval: sendRemoval, sendMode: sendMode, sendLevel: sendLevel
+                    confirmedCompressorPlan: compressorPlan, confirmedSelectedEQPlan: selectedEQPlan, sendRemoval: sendRemoval, sendMode: sendMode, sendLevel: sendLevel, inputBus: inputBus
                 )
                 #endif
                 let saga = MutationSaga(
