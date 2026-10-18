@@ -276,7 +276,7 @@
     "自動混音"
    ],
    "rationale": "Gates the track-header automation-mode read to the automation control; read-only classifier.",
-   "match": "exact",
+   "match": "exact_strict",
    "coverage": {
     "en-US": "derived",
     "ko-KR": "derived",
@@ -3405,6 +3405,90 @@
     "pt-BR": "derived",
     "zh-CN": "derived",
     "zh-TW": "derived"
+   }
+  },
+  "mixerChannelModeControl": {
+   "canonical": "channel mode",
+   "variants": [
+    "채널 모드",
+    "チャンネルモード",
+    "Kanalmodus",
+    "modo de canal",
+    "mode canal",
+    "modalità canale",
+    "modo do canal",
+    "通道模式",
+    "聲道模式"
+   ],
+   "rationale": "Identifies the channel-mode AXButton whose raw String AXValue describes the format, not an ordinal or a guessed checkbox value. EN/KO raw control shape was read; variants come from this MAMixer row and are not all-locale lifecycle qualification.",
+   "match": "exact_strict",
+   "coverage": {
+    "en-US": "derived",
+    "ko-KR": "derived",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
+   }
+  },
+  "mixerCreateAuxiliaryChannelStrip": {
+   "canonical": "Create New Auxiliary Channel Strip",
+   "variants": [
+    "새로운 보조 채널 스트립 생성",
+    "新規オグジュアリーチャンネルストリップを作成",
+    "Neuen Aux-Channel-Strip erzeugen",
+    "Crear nuevo canal auxiliar",
+    "Créer une tranche de console auxiliaire",
+    "Crea nuova channel strip ausiliaria",
+    "Criar Novo Canal Auxiliar",
+    "创建新的辅助通道条",
+    "製作新的輔助聲道控制排"
+   ],
+   "rationale": "The bounded owned auxiliary lifecycle's unique Mixer Options creator leaf. Values are derived from the installed Logic.framework row. English and Korean menu discovery does not qualify native CF custody, settlement, defaults or inverse behavior in any locale.",
+   "match": "exact_strict",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
+   }
+  },
+  "mixerGainReductionMeterControl": {
+   "canonical": "gain reduction meter",
+   "variants": [
+    "게인 축소 측정기",
+    "ゲインリダクションメーター",
+    "Pegelreduktionsmesser",
+    "medidor de reducción de ganancia",
+    "mesure de la réduction du gain",
+    "misuratore riduzione guadagno",
+    "medidor de redução de ganho",
+    "增益降低指示器",
+    "增益減弱測量計"
+   ],
+   "rationale": "Identifies the gain-reduction AXButton for strict raw default-state reading. EN/KO raw control shape was read; variants are the installed MAMixer row's values, not native lifecycle or plug-in absence qualification.",
+   "match": "exact_strict",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
    }
   },
   "mixerInspectorContext": {

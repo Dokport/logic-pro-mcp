@@ -2339,6 +2339,34 @@ enum AXLocalePolicy {
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/StrTabBtnLabel%7C%7C%7CMixer#value"
     )
 
+    static let mixerCreateAuxiliaryChannelStrip = LabelSet(
+        canonical: "Create New Auxiliary Channel Strip",
+        variants: ["새로운 보조 채널 스트립 생성", "新規オグジュアリーチャンネルストリップを作成",
+                   "Neuen Aux-Channel-Strip erzeugen", "Crear nuevo canal auxiliar",
+                   "Créer une tranche de console auxiliaire", "Crea nuova channel strip ausiliaria",
+                   "Criar Novo Canal Auxiliar", "创建新的辅助通道条", "製作新的輔助聲道控制排"],
+        rationale: "The bounded owned auxiliary lifecycle's unique Mixer Options creator leaf. Values are derived from the installed Logic.framework row. English and Korean menu discovery does not qualify native CF custody, settlement, defaults or inverse behavior in any locale.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Create%20New%20Auxiliary%20Channel%20Strip#value"
+    )
+
+    static let mixerChannelModeControl = LabelSet(
+        canonical: "channel mode",
+        variants: ["채널 모드", "チャンネルモード", "Kanalmodus", "modo de canal", "mode canal",
+                   "modalità canale", "modo do canal", "通道模式", "聲道模式"],
+        rationale: "Identifies the channel-mode AXButton whose raw String AXValue describes the format, not an ordinal or a guessed checkbox value. EN/KO raw control shape was read; variants come from this MAMixer row and are not all-locale lifecycle qualification.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FMAMixer.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/channel%20mode#value"
+    )
+
+    static let mixerGainReductionMeterControl = LabelSet(
+        canonical: "gain reduction meter",
+        variants: ["게인 축소 측정기", "ゲインリダクションメーター", "Pegelreduktionsmesser",
+                   "medidor de reducción de ganancia", "mesure de la réduction du gain",
+                   "misuratore riduzione guadagno", "medidor de redução de ganho",
+                   "增益降低指示器", "增益減弱測量計"],
+        rationale: "Identifies the gain-reduction AXButton for strict raw default-state reading. EN/KO raw control shape was read; variants are the installed MAMixer row's values, not native lifecycle or plug-in absence qualification.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FMAMixer.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/gain%20reduction%20meter#value"
+    )
+
     // Mixer-own toolbar descriptions, matched only inside the retained strip area's owner.
     // EN native roles/descriptions: Docs/tickets/issue-234/axdump234.out:19-40.
     // KO descriptions were read on the bound 12.3 Mixer on 2026-10-06. Remaining members
@@ -3694,6 +3722,7 @@ enum AXLocalePolicy {
         transportKeywordFalseFriends,
         mixerInspectorContext,
         mixerNamedElement,
+        mixerCreateAuxiliaryChannelStrip, mixerChannelModeControl, mixerGainReductionMeterControl,
         mixerPresentationSingle, mixerPresentationTracks, mixerPresentationAll,
         mixerTypeFilterAudio, mixerTypeFilterInstrument, mixerTypeFilterAux, mixerTypeFilterBus,
         mixerTypeFilterInput, mixerTypeFilterOutput, mixerTypeFilterMasterVCA, mixerTypeFilterMIDI,
