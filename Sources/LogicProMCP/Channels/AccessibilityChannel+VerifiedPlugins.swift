@@ -930,7 +930,7 @@ extension AccessibilityChannel {
             isolation: isolated (any Actor)? = #isolation
         ) async -> Bool {
             func refuse(_ reason: String) -> Bool { effects.reason = reason; return false }
-            func owned() async -> Bool {
+            func owned(isolation: isolated (any Actor)? = #isolation) async -> Bool {
                 guard await stillOwned(stoppingWhen: stop, isolation: isolation),
                       let observation = runtime.observeFrontmost?(), observation.isReady,
                       observation.keyboardOwnerPID == acquiredPID,
@@ -939,7 +939,7 @@ extension AccessibilityChannel {
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
                 return true
             }
-            func activity() -> AXLogicProElements.ObservedTransportActivity? {
+            func activity(isolation: isolated (any Actor)? = #isolation) -> AXLogicProElements.ObservedTransportActivity? {
                 try? AXLogicProElements.observedTransportActivity(in: window, runtime: runtime,
                     checking: { try SessionPopulationObservation.requireOwnedAcquisition() })
             }
@@ -947,7 +947,7 @@ extension AccessibilityChannel {
                   let original = activity(), !original.isPlaying, !original.isRecording else {
                 return refuse("owned_mixer_refresh_unavailable")
             }
-            func buttonState() -> (control: AXUIElement, visible: Bool)? {
+            func buttonState(isolation: isolated (any Actor)? = #isolation) -> (control: AXUIElement, visible: Bool)? {
                 guard let current = activity(), !current.isPlaying, !current.isRecording,
                       CFEqual(original.controlBar, current.controlBar), CFEqual(original.play, current.play),
                       CFEqual(original.record, current.record),
@@ -979,7 +979,7 @@ extension AccessibilityChannel {
                   await owned() else {
                 return refuse("owned_mixer_refresh_before_changed")
             }
-            func observed(_ visible: Bool) async -> Bool {
+            func observed(_ visible: Bool, isolation: isolated (any Actor)? = #isolation) async -> Bool {
                 let end = min(OperationTraceContext.current?.deadline ?? ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)),
                     ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)))
                 repeat {
