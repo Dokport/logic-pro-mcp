@@ -583,7 +583,7 @@ enum OwnedAuxLifecycle {
                     runtime: runtime.ax) == true,
                   preserved(), let bookend = census(), same(current, bookend),
                   selectionIsEmpty(), mixerIsFocused(), actionContextCurrent(),
-                  selectionIsEmpty() else { return false }
+                  selectionIsEmpty(), actionContextCurrent() else { return false }
             createdSelectionIssued = true
             uiEffects.navigationPerformed = true; uiEffects.restoration = "not_restored"
             uiEffects.attempted.append("created_aux_selection")
@@ -769,7 +769,8 @@ enum OwnedAuxLifecycle {
                         parent.children.contains(where: { CFEqual($0, candidate.element) })
                     }
                     for old in candidates where old.fields[kAXRoleAttribute] == .text(kAXScrollBarRole as String)
-                        && old.fields[kAXEnabledAttribute] == .number(0) && old.fields[kAXValueAttribute] == .number(1)
+                        && old.fields[kAXEnabledAttribute] == .number(0)
+                        && (old.fields[kAXValueAttribute] == .number(0) || old.fields[kAXValueAttribute] == .number(1))
                         && old.children.isEmpty {
                         guard let actual = node(old.element, in: current) else { return false }
                         if old.matches(actual) { continue }
@@ -1111,7 +1112,7 @@ enum OwnedAuxLifecycle {
                       case .success(let previousChildren) = AXHelpers.childrenResult(edit, runtime: runtime.ax),
                       let outsideMixer, let before,
                       let previousOwnedMenu = ownedMenuExclusion(), previousOwnedMenu.isEmpty,
-                      permitted(), actionContextCurrent(), selectedOnly(strip),
+                      permitted(), actionContextCurrent(), selectedOnly(strip), actionContextCurrent(),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return receipt(.residual, strip: strip) }
                 ownedMenu = nil
                 let opened = AXHelpers.performAction(edit, kAXPressAction, runtime: runtime.ax)
@@ -1123,7 +1124,7 @@ enum OwnedAuxLifecycle {
                       let final = census(), same(current, final), preserved(),
                       matches(proof.footprint, footprint(strip)), focusedOn(strip, allowing: edit),
                       permitted(), let decidingMenu = ownedMenuExclusion(), decidingMenu.count == 1,
-                      actionContextCurrent(), selectedOnly(strip),
+                      actionContextCurrent(), selectedOnly(strip), actionContextCurrent(),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return menuRefusal(.residual, strip: strip) }
                 deleteIssued = true
                 _ = AXHelpers.performAction(delete, kAXPressAction, runtime: runtime.ax)

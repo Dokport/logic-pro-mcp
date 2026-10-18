@@ -143,6 +143,14 @@ struct Issue967OwnedAuxLifecycleTests {
         var retiredDeletionPeers: [AXUIElement]?
         var selectionAfterCreation: [AXUIElement]?
         var selectionSets = 0
+        var selectionReads = 0
+        var selectionReadAtSet = 0
+        var selectionReadAtEdit = 0
+        var selectionReadAtDelete = 0
+        var scopeLossAtSelectionRead: Int?
+        var scopeLossKind = "project"
+        var scopeLossInjected = false
+        var editPresses = 0
         var selectionSetChanges = true
         var selectionSetAcknowledged = true
         var lateSelectionChange = false
@@ -202,7 +210,7 @@ struct Issue967OwnedAuxLifecycleTests {
                 b.setRole(viewport, kAXScrollAreaRole as String)
                 b.setRole(bar, kAXScrollBarRole as String)
                 b.setAttribute(bar, kAXEnabledAttribute, false)
-                b.setAttribute(bar, kAXValueAttribute, 1)
+                b.setAttribute(bar, kAXValueAttribute, fault == "zero_scrollbar" ? 0 : 1)
                 b.setChildren(bar, [])
                 b.setChildren(viewport, fault == "unrelated_scrollbar" ? [bar] : [canvas, bar])
                 b.setChildren(window, b.makeAXRuntime().children(window).filter { !CFEqual($0, canvas) }
@@ -513,6 +521,7 @@ struct Issue967OwnedAuxLifecycleTests {
                        Issue.record("Unexpected lifecycle setter"); return false
                    }
                    selectionSets += 1
+                   selectionReadAtSet = selectionReads
                    if selectionSetChanges { selected = values }
                    return selectionSetAcknowledged
                }, performActionHandler: { [self] element, action in
@@ -573,12 +582,15 @@ struct Issue967OwnedAuxLifecycleTests {
                 }
                 if CFEqual(element, options), cancelOnOptions { cancelled = true }
                 if CFEqual(element, create) { optionOpen = false }
-                if CFEqual(element, edit) { editOpen = true }
+                if CFEqual(element, edit) {
+                    editOpen = true; editPresses += 1; selectionReadAtEdit = selectionReads
+                }
                 if CFEqual(element, edit), focusMenuOnEdit {
                     b.setAttribute(app, kAXFocusedUIElementAttribute as String, delete)
                 }
                 if CFEqual(element, edit), expandSelectionOnEdit { selected = [created, original[0]] }
                 if CFEqual(element, delete) {
+                    selectionReadAtDelete = selectionReads
                     deletePresses += 1; removed = true; editOpen = false
                     if let retiredDeletionPeers { retiredPeerCopies = retiredDeletionPeers }
                 }
@@ -628,6 +640,16 @@ struct Issue967OwnedAuxLifecycleTests {
 
         private func attributeResult(_ element: AXUIElement, _ attribute: String) -> Result<AnyObject?, AXHelpers.AXStatusError>? {
             noteRead()
+            if CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute {
+                selectionReads += 1
+                if selectionReads == scopeLossAtSelectionRead, !scopeLossInjected {
+                    scopeLossInjected = true
+                    let observed = selected as CFArray
+                    if scopeLossKind == "project" { b.setAttribute(window, kAXDocumentAttribute, "file:///tmp/967-other.logicx") }
+                    else { cancelled = true }
+                    return .success(observed)
+                }
+            }
             if trackAppended, trackAppendFault == "post_header_edit", currentlyReadingFootprint,
                !trackAppendPostEditDelivered, CFEqual(element, app) {
                 trackAppendPostEditDelivered = true
@@ -955,7 +977,7 @@ struct Issue967OwnedAuxLifecycleTests {
         }
     }
 
-    @Test(arguments: ["activated_scrollbar", "unrelated_scrollbar", "scrollbar_bad_value", "scrollbar_bad_child", "scrollbar_added_content"])
+    @Test(arguments: ["activated_scrollbar", "zero_scrollbar", "unrelated_scrollbar", "scrollbar_bad_value", "scrollbar_bad_child", "scrollbar_added_content"])
     func appendedTrackMayActivateOnlyItsExistingCanvasScrollbar(fault: String) async throws {
         let f = Fixture(); f.modelTrackAppend(fault)
         try await owned(f) {
@@ -963,7 +985,7 @@ struct Issue967OwnedAuxLifecycleTests {
             let aux = await context.create()
             let proof = try #require(aux.inverse)
             let result = await context.appendArrangeTrack(for: proof)
-            #expect(result.status == (fault == "activated_scrollbar" ? .appended : .configurationPartial))
+            #expect(result.status == (["activated_scrollbar", "zero_scrollbar"].contains(fault) ? .appended : .configurationPartial))
             #expect(result.track != nil)
             #expect(f.trackAppendPresses == 1)
             _ = await context.appendArrangeTrack(for: proof)
@@ -985,6 +1007,46 @@ struct Issue967OwnedAuxLifecycleTests {
             _ = await context.appendArrangeTrack(for: proof)
             #expect(f.trackAppendPresses == 1 && f.createPresses == 1)
             #expect((await context.remove(proof)).status == .residual && f.deletePresses == 0)
+        }
+    }
+
+    @Test(arguments: ["selection", "edit", "delete"], ["project", "cancellation"])
+    func finalSelectionReadCannotOutliveItsActionScope(stage: String, loss: String) async throws {
+        func configured() -> Fixture {
+            let f = Fixture()
+            if stage == "selection" {
+                f.modelWholePeerRetirement(); f.selectionAfterCreation = []
+                f.focusOnCreation = f.mixer
+                f.b.setAttributeSettable(f.mixer, kAXSelectedChildrenAttribute, true)
+            } else { f.selectCreatedOnCreation = true }
+            return f
+        }
+        // Learn the last actual selection read before this fake native action,
+        // not a hard-coded read count. The fault must be delivered in both RED
+        // and GREEN runs; scope loss occurs while returning a still-valid value.
+        let control = configured()
+        try await owned(control) {
+            let context = try control.context(nativeControls: stage == "selection")
+            let aux = await context.create()
+            let proof = try #require(aux.inverse)
+            if stage != "selection" { #expect(await context.remove(proof).status == .removed) }
+        }
+        let boundary = stage == "selection" ? control.selectionReadAtSet
+            : stage == "edit" ? control.selectionReadAtEdit : control.selectionReadAtDelete
+        #expect(boundary > 0)
+        let f = configured(); f.scopeLossAtSelectionRead = boundary; f.scopeLossKind = loss
+        try await owned(f) {
+            let context = try f.context(nativeControls: stage == "selection")
+            let aux = await context.create()
+            if stage == "selection" {
+                #expect(aux.inverse == nil && f.selectionSets == 0)
+            } else {
+                let proof = try #require(aux.inverse)
+                #expect(await context.remove(proof).status == .residual)
+                #expect(f.deletePresses == 0)
+                if stage == "edit" { #expect(f.editPresses == 0) }
+            }
+            #expect(f.scopeLossInjected)
         }
     }
 
