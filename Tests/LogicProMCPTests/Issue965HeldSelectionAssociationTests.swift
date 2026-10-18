@@ -2853,7 +2853,7 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("An owned cancellation menu still refuses changed editor, project and physical membership",
-          arguments: ["foreign_rail", "missing_header", "foreign_focus", "project", "peer"])
+          arguments: ["foreign_rail", "missing_header", "foreign_focus", "project", "peer", "late_membership"])
     func canonicalNameSendCancellationRefusesLostEditorCustody(fault: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
@@ -3765,7 +3765,7 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(inverseEditor, kAXValueAttribute as String,
                         b.attributeValue(nameField, kAXDescriptionAttribute as String))
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, inverseEditor)
-                    if let inverseNameFault, inverseNameFault != "foreign_focus" {
+                    if let inverseNameFault, !["foreign_focus", "late_membership"].contains(inverseNameFault) {
                         f.routingLateScopeInjected = true
                         switch inverseNameFault {
                         case "foreign_rail":
@@ -3994,6 +3994,15 @@ struct Issue965HeldSelectionAssociationTests {
                 Issue.record("Only the owned send popup, one destination leaf and Cancel may run"); return false
             }
             f.routingRead = { element, attribute in
+                // The inverse already committed its own name. Lose a peer
+                // while the pure renewed peer-name group is being read: its
+                // final complete membership bookend must still reject it.
+                if inverseNameFault == "late_membership", f.routingNameConfirms == 2,
+                   CFEqual(element, b.element(1_965_710)), attribute == kAXValueAttribute as String,
+                   !f.routingLateScopeInjected {
+                    f.routingLateScopeInjected = true
+                    b.setChildren(f.rail, [f.headers[0]])
+                }
                 if inverseNameFault == "foreign_focus", f.routingMenuNameOpens == 1,
                    CFEqual(element, inverseEditor), attribute == kAXParentAttribute as String,
                    !f.routingLateScopeInjected {
@@ -4263,9 +4272,11 @@ struct Issue965HeldSelectionAssociationTests {
                     if inverseNameFault != nil {
                         #expect(f.routingLateScopeInjected)
                         #expect(body["saga_state"] as? String == "rollbackUncertain")
-                        #expect(f.routingNameWrites == ["Selected Canonical"])
+                        #expect(f.routingNameWrites == (inverseNameFault == "late_membership"
+                            ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
                         #expect(f.routingDestinationPresses == 2)
-                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Selected Canonical")
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String
+                            == (inverseNameFault == "late_membership" ? "Duplicate" : "Selected Canonical"))
                     } else if delayedMixerName == "External" {
                         #expect(body["state"] as? String == "B")
                         #expect(body["saga_state"] as? String != "completed")
@@ -4298,7 +4309,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let nameWrites = f.routingNameWrites
                     if inverseNameMenu {
                         #expect(f.routingMenuNameOpens == 1)
-                        #expect(f.routingNameConfirms == (inverseNameFault == nil ? 2 : 1))
+                        #expect(f.routingNameConfirms == (inverseNameFault == nil || inverseNameFault == "late_membership" ? 2 : 1))
                         if inverseNameFault == nil {
                             #expect(f.routingFocusClickEvents == [.leftMouseDown, .leftMouseUp])
                             let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,

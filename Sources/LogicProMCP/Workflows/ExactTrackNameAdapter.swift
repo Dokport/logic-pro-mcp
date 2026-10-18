@@ -502,7 +502,16 @@ enum ExactTrackNameAdapter {
         }
 
         private func renewedPeerStripNames(ownedEditor: AXUIElement? = nil) -> [String]? {
-            guard let renewal, membershipStillHeld(ownedEditor: ownedEditor) else { return nil }
+            guard membershipStillHeld(ownedEditor: ownedEditor),
+                  let names = readRenewedPeerStripNames(),
+                  membershipStillHeld(ownedEditor: ownedEditor), operationPermitted() else { return nil }
+            return names
+        }
+
+        /// Pure name reads only. Callers bracket the whole read group with
+        /// fresh complete membership checks; this helper grants no custody.
+        private func readRenewedPeerStripNames() -> [String]? {
+            guard let renewal else { return nil }
             var names: [String] = []
             for strip in renewal.observation.strips where !CFEqual(strip, pair.strip.strip) {
                 guard operationPermitted(),
@@ -510,7 +519,7 @@ enum ExactTrackNameAdapter {
                         runtime: pair.track.runtime.ax) else { return nil }
                 names.append(name)
             }
-            guard names.count == preservedStrips.count, membershipStillHeld(ownedEditor: ownedEditor), operationPermitted() else { return nil }
+            guard names.count == preservedStrips.count, operationPermitted() else { return nil }
             return names
         }
 
@@ -531,7 +540,9 @@ enum ExactTrackNameAdapter {
                       source.exposure == nil || source.currentIndex() == index else { return false }
             }
             if renewal != nil {
-                guard let names = renewedPeerStripNames(ownedEditor: ownedEditor), names.count == preservedStrips.count,
+                // Track and strip names form one pure read group, already
+                // bracketed here. Do not nest another complete census pair.
+                guard let names = readRenewedPeerStripNames(), names.count == preservedStrips.count,
                       zip(names, preservedStrips).allSatisfy({ name, row in
                           row.name.map { name.utf8.elementsEqual($0.utf8) } == true
                       }) else { return false }
