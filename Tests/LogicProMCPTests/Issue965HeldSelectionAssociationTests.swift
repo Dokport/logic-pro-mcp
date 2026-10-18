@@ -2850,6 +2850,28 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Composed stable Send custody survives the native bulk-read path",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendRetainsSurvivingNativeControlsWithBulkReads(mode: String, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, stableDestinationBulkReads: true,
+                freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("A coupled Mixer name remains owned through a stable Send change",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendRetainsCoupledMixerName(mode: String, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, stableDestinationBulkReads: true,
+                coupledMixerName: true, freshPhysicalReturn: returning)
+        }
+    }
+
     @Test(arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project", "physical_slot", "mixed", "missing_witness", "decoded", "unsupported_pair", "physical_removal"])
     func canonicalPhysicalSendReturnRetainsItsTypedBeforeAndOriginalControl(mode: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -3348,11 +3370,14 @@ struct Issue965HeldSelectionAssociationTests {
                                                canonicalPhysical: Bool = false,
                                                canonicalName: Bool = false,
                                                stableDestinationControls: Bool = false,
+                                               stableDestinationBulkReads: Bool = false,
+                                               coupledMixerName: Bool = false,
                                                freshPhysicalReturn: Bool = false,
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
+            if stableDestinationBulkReads { f.useBulkReads = true }
             let nameField = b.element(1_971_400)
             if canonicalName {
                 // No real AX activation or mouse fallback from an injected fixture.
@@ -3369,6 +3394,7 @@ struct Issue965HeldSelectionAssociationTests {
                     f.routingNameWrites.append(name)
                     b.setAttribute(nameField, kAXDescriptionAttribute as String, name)
                     b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
+                    if coupledMixerName { b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, name) }
                     return true
                 }
             }
