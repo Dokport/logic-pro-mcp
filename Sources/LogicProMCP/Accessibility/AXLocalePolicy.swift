@@ -2339,6 +2339,13 @@ enum AXLocalePolicy {
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/StrTabBtnLabel%7C%7C%7CMixer#value"
     )
 
+    static let controlBarMixerToggle = LabelSet(
+        canonical: "Mixer",
+        variants: ["믹서", "ミキサー", "Mezclador", "Table de mixage", "混音器"],
+        rationale: "Discovers the unique Control Bar Mixer checkbox from its own view-button row. Native ownership, observed boolean direction, complete membership and transport checks remain required; static aliases do not qualify navigation in every locale.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/StrViewBtns%7C%7C%7CMixer#value"
+    )
+
     static let mixerCreateAuxiliaryChannelStrip = LabelSet(
         canonical: "Create New Auxiliary Channel Strip",
         variants: ["새로운 보조 채널 스트립 생성", "新規オグジュアリーチャンネルストリップを作成",
@@ -3722,7 +3729,7 @@ enum AXLocalePolicy {
         transportKeywordFalseFriends,
         mixerInspectorContext,
         mixerNamedElement,
-        mixerCreateAuxiliaryChannelStrip, mixerChannelModeControl, mixerGainReductionMeterControl,
+        controlBarMixerToggle, mixerCreateAuxiliaryChannelStrip, mixerChannelModeControl, mixerGainReductionMeterControl,
         mixerPresentationSingle, mixerPresentationTracks, mixerPresentationAll,
         mixerTypeFilterAudio, mixerTypeFilterInstrument, mixerTypeFilterAux, mixerTypeFilterBus,
         mixerTypeFilterInput, mixerTypeFilterOutput, mixerTypeFilterMasterVCA, mixerTypeFilterMIDI,

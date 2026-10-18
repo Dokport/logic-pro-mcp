@@ -149,6 +149,12 @@ struct Issue967OwnedAuxLifecycleTests {
         var selectionSettableObserved = false
         var selectionDecisionFocusObserved = false
         var lateSelectionInjected = false
+        var latentCreationUntilRefresh = false
+        var mixerShowing = true
+        var creationExposed = false
+        var visibilityPresses = 0
+        var topologyFault = "success"
+        var topologyButtonStates = 0
 
         init(delay: Int = 0) {
             self.delay = delay
@@ -385,6 +391,18 @@ struct Issue967OwnedAuxLifecycleTests {
                    if selectionSetChanges { selected = values }
                    return selectionSetAcknowledged
                }, performActionHandler: { [self] element, action in
+                if latentCreationUntilRefresh, CFEqual(element, b.element(967_145)), action == kAXPressAction {
+                    visibilityPresses += 1
+                    if topologyFault == "no_hide_effect", mixerShowing { return false }
+                    if topologyFault == "show_ignored", !mixerShowing { return false }
+                    mixerShowing.toggle()
+                    b.setAttribute(element, kAXValueAttribute, mixerShowing ? 1 : 0)
+                    if mixerShowing { creationExposed = true }
+                    b.setAttribute(app, kAXFocusedUIElementAttribute,
+                        mixerShowing ? (topologyFault == "stale_focus" ? original[0] : b.element(967_150)) : b.element(967_146))
+                    if topologyFault == "cancel_after_hide", !mixerShowing { cancelled = true }
+                    return topologyFault != "unacked_effect"
+                }
                 if action == kAXCancelAction as String {
                     if CFEqual(element, optionMenu) {
                         optionCancelPresses += 1
@@ -455,6 +473,12 @@ struct Issue967OwnedAuxLifecycleTests {
                 children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
                 actionNames: base.ax.actionNames, actionNamesResult: { [self] element in
                     noteRead()
+                    if latentCreationUntilRefresh, issued, CFEqual(element, b.element(967_145)) {
+                        topologyButtonStates += 1
+                        if topologyFault == "late_project", topologyButtonStates == 2 {
+                            b.setAttribute(window, kAXDocumentAttribute, "file:///tmp/967-other.logicx")
+                        }
+                    }
                     if CFEqual(element, create), creatorActionNamesUnread {
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
                     }
@@ -580,6 +604,9 @@ struct Issue967OwnedAuxLifecycleTests {
         }
 
         private func currentChildren(_ element: AXUIElement) -> [AXUIElement]? {
+            if latentCreationUntilRefresh, !mixerShowing, CFEqual(element, window) {
+                return b.makeAXRuntime().children(window).filter { !CFEqual($0, b.element(967_150)) }
+            }
             if let owner = alternateMenuOwner, CFEqual(element, owner) {
                 var children = alternateOwnerChildren
                 if alternateOwnerReordered, optionOpen { children.reverse() }
@@ -604,7 +631,8 @@ struct Issue967OwnedAuxLifecycleTests {
             if removed && removalDelay > 0 { removalDelay -= 1; removalPending = true }
             let originals = issued && retiredPeerCopies != nil ? retiredPeerCopies!
                 : replaceOriginal ? [b.element(967_098), original[1]] : original
-            return originals + (issued && (!removed || removalPending) ? [replacementCreated ?? created] : [])
+            return originals + (issued && (!latentCreationUntilRefresh || creationExposed)
+                && (!removed || removalPending) ? [replacementCreated ?? created] : [])
                 + (additional ? [b.element(967_099)] : [])
         }
 
@@ -622,6 +650,25 @@ struct Issue967OwnedAuxLifecycleTests {
             b.setChildren(copies[0], [copiedControl]); b.setChildren(copies[1], [])
             retiredPeerCopies = copies
             selectCreatedOnCreation = true
+        }
+
+        func modelLatentCreationUntilOwnedRefresh() {
+            modelWholePeerRetirement()
+            latentCreationUntilRefresh = true; selectCreatedOnCreation = false
+            selectionAfterCreation = []
+            b.setAttributeSettable(mixer, kAXSelectedChildrenAttribute, true)
+            b.setAttribute(window, kAXTitleAttribute, "967-owned - Tracks")
+            b.setAttribute(app, kAXFrontmostAttribute, true)
+            let toggle = b.element(967_145), rail = b.element(967_146)
+            b.setRole(toggle, kAXCheckBoxRole as String)
+            b.setAttribute(toggle, kAXTitleAttribute, "Mixer")
+            b.setAttribute(toggle, kAXValueAttribute, 1)
+            b.setAttribute(toggle, kAXEnabledAttribute, true)
+            b.setChildren(toggle, []); b.setActionNames(toggle, [kAXPressAction as String])
+            let bar = b.element(967_140)
+            b.setChildren(bar, b.makeAXRuntime().children(bar) + [toggle])
+            b.setRole(rail, kAXListRole as String); b.setAttribute(rail, kAXIdentifierAttribute, "Track Headers")
+            b.setChildren(rail, []); b.setChildren(window, b.makeAXRuntime().children(window) + [rail])
         }
 
         func makeOnePeerIdenticalToTheCreatedAux() {
@@ -693,6 +740,11 @@ struct Issue967OwnedAuxLifecycleTests {
             population.mixerPresentation = .init(mode: "all", typeFilters: Dictionary(uniqueKeysWithValues:
                 ["audio", "instrument", "aux", "bus", "input", "output", "master_vca", "midi"].map { ($0, Optional(true)) }))
             population.presentationObservation = .init(mixerVisible: true, isPlaying: false, isRecording: false, uiLocale: "en-US")
+            if latentCreationUntilRefresh {
+                population.presentationBinding = .init(window: window, title: "967-owned - Tracks",
+                    document: "file:///tmp/967-owned.logicx", mixer: mixer, transport: nil, runtime: runtime)
+                #expect(population.presentationBinding?.navigationBaseline != nil)
+            }
             let provider: @Sendable (AXUIElement) -> [OwnedAuxLifecycle.Field: AXUIElement]? = { [self] strip in
                 CFEqual(strip, created) ? controls : nil
             }
@@ -743,6 +795,44 @@ struct Issue967OwnedAuxLifecycleTests {
             let inverse = try #require(created.inverse)
             #expect(await context.remove(inverse).status == .removed)
             #expect(f.deletePresses == 1)
+        }
+    }
+
+    @Test(arguments: ["success", "unacked_effect", "late_project", "stale_focus", "no_hide_effect", "show_ignored", "cancel_after_hide"])
+    func oneOwnedDisplayRefreshExposesAndSelectsTheLatentCreation(fault: String) async throws {
+        let f = Fixture(); f.modelLatentCreationUntilOwnedRefresh()
+        f.topologyFault = fault
+        try await owned(f) {
+            let context = try f.context(nativeControls: true)
+            let result = await context.create()
+            if fault == "late_project" {
+                #expect(f.topologyButtonStates >= 2)
+                #expect(f.visibilityPresses == 0 && f.mixerShowing)
+                #expect(result.status == .pending && result.inverse == nil)
+            } else if fault == "stale_focus" {
+                #expect(f.visibilityPresses == 2 && f.mixerShowing)
+                #expect(result.uiEffects.restoration != "restored")
+                #expect(result.status == .pending && result.inverse == nil)
+            } else if ["no_hide_effect", "show_ignored", "cancel_after_hide"].contains(fault) {
+                let expectedPresses = fault == "show_ignored" ? 2 : 1
+                #expect(f.visibilityPresses == expectedPresses)
+                #expect(f.mixerShowing == (fault == "no_hide_effect"))
+                #expect(result.status == .pending && result.inverse == nil)
+                #expect(result.uiEffects.navigationPerformed && result.uiEffects.restoration == "not_restored")
+                #expect(f.selectionSets == 0)
+                #expect(await context.create().status == .pending)
+                #expect(f.visibilityPresses == expectedPresses && f.createPresses == 1)
+            } else {
+                #expect(result.status == .created)
+                #expect(result.created.map { CFEqual($0, f.created) } == true)
+                #expect(f.visibilityPresses == 2 && f.mixerShowing)
+                #expect(f.createPresses == 1 && f.selectionSets == 1)
+                #expect(result.uiEffects.navigationPerformed)
+                #expect(result.uiEffects.restoration == "not_restored")
+                #expect(await context.create().status == .created)
+                #expect(f.visibilityPresses == 2 && f.createPresses == 1)
+            }
+            #expect(f.deletePresses == 0)
         }
     }
 

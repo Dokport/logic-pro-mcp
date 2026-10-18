@@ -782,6 +782,30 @@
     "zh-TW": "AXWindow#1/AXGroup#5"
    }
   },
+  "controlBarMixerToggle": {
+   "canonical": "Mixer",
+   "variants": [
+    "믹서",
+    "ミキサー",
+    "Mezclador",
+    "Table de mixage",
+    "混音器"
+   ],
+   "rationale": "Discovers the unique Control Bar Mixer checkbox from its own view-button row. Native ownership, observed boolean direction, complete membership and transport checks remain required; static aliases do not qualify navigation in every locale.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "derived",
+    "ko-KR": "derived",
+    "ja-JP": "derived",
+    "de-DE": "derived",
+    "es-ES": "derived",
+    "fr-FR": "derived",
+    "it-IT": "derived",
+    "pt-BR": "derived",
+    "zh-CN": "derived",
+    "zh-TW": "derived"
+   }
+  },
   "controlSurfaceAddButton": {
    "canonical": "Add",
    "variants": [

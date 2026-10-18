@@ -54,9 +54,12 @@ enum OwnedAuxLifecycle {
         let defaults: [Field: Value]?
         let inverse: OwnedInverse?
         let diagnostic: String?
-        init(status: Status, created: AXUIElement?, defaults: [Field: Value]?, inverse: OwnedInverse?, diagnostic: String? = nil) {
+        let uiEffects: SessionPopulationObservation.UIEffects
+        init(status: Status, created: AXUIElement?, defaults: [Field: Value]?, inverse: OwnedInverse?, diagnostic: String? = nil,
+             uiEffects: SessionPopulationObservation.UIEffects = .init()) {
             self.status = status; self.created = created; self.defaults = defaults
             self.inverse = inverse; self.diagnostic = diagnostic
+            self.uiEffects = uiEffects
         }
     }
 
@@ -82,6 +85,7 @@ enum OwnedAuxLifecycle {
         private let acceptedDefaults: [Field: Value]
         private let runtime: AXLogicProElements.Runtime
         private let mouse: AXMouseHelper.Runtime
+        private let topologyNavigation: AccessibilityChannel.OwnedMixerObservationNavigation?
         private let initialControls: (@Sendable (AXUIElement) -> [Field: AXUIElement]?)?
         private let samples: Int
         private let waitForNextSample: @Sendable () async throws -> Void
@@ -94,6 +98,8 @@ enum OwnedAuxLifecycle {
         private var observedCreated: AXUIElement?
         private var createdSelectionPending = false
         private var createdSelectionIssued = false
+        private var topologyRefreshAttempted = false
+        private var uiEffects = SessionPopulationObservation.UIEffects()
         private var ownedMenu: (control: AXUIElement, reportedParent: AXUIElement,
                                 popupParent: AXUIElement, attachmentParent: AXUIElement,
                                 ancestor: Node?, children: [AXUIElement], menu: AXUIElement)?
@@ -101,12 +107,14 @@ enum OwnedAuxLifecycle {
         fileprivate init(bindings: [AXMixerStripBinding.Binding], options: AXUIElement,
                          edit: AXUIElement, acceptedDefaults: [Field: Value],
                          runtime: AXLogicProElements.Runtime, mouse: AXMouseHelper.Runtime,
+                         topologyNavigation: AccessibilityChannel.OwnedMixerObservationNavigation?,
                          initialControls: (@Sendable (AXUIElement) -> [Field: AXUIElement]?)?,
                          samples: Int, waitForNextSample: @escaping @Sendable () async throws -> Void) {
             self.bindings = bindings; self.options = options; self.edit = edit
             preservationPeers = bindings.map(\.strip)
             self.acceptedDefaults = acceptedDefaults; self.runtime = runtime
             self.mouse = mouse
+            self.topologyNavigation = topologyNavigation
             self.initialControls = initialControls; self.samples = samples
             self.waitForNextSample = waitForNextSample
         }
@@ -119,7 +127,7 @@ enum OwnedAuxLifecycle {
             if status == .pending {
                 Log.info("Owned Aux click receipt: status=pending,diagnostic=\(diagnostic ?? "none"),issued=\(issued),created_retained=\(observedCreated != nil),original_count=\(bindings.count)", subsystem: "ax")
             }
-            return .init(status: status, created: strip, defaults: defaults, inverse: inverse, diagnostic: diagnostic)
+            return .init(status: status, created: strip, defaults: defaults, inverse: inverse, diagnostic: diagnostic, uiEffects: uiEffects)
         }
 
         private func ownsNativeKeyboard(_ pid: pid_t) -> Bool {
@@ -518,6 +526,30 @@ enum OwnedAuxLifecycle {
             return selected.isEmpty
         }
 
+        private func permitsTopologyRefreshActuation() -> Bool {
+            issued && !deleteIssued && observedCreated == nil && actionContextCurrent()
+        }
+
+        private func refreshLatentCreation(_ current: [AXUIElement]) async -> Bool {
+            guard !topologyRefreshAttempted, permitsTopologyRefreshActuation(),
+                  current.count == bindings.count,
+                  bindings.allSatisfy({ original in !current.contains { CFEqual($0, original.strip) } }),
+                  let before, before.count == current.count, let topologyNavigation,
+                  let outsideMixer, let menus = ownedMenuExclusion(), menus.isEmpty,
+                  matches(outsideMixer, footprint(bindings[0].window,
+                    excluding: [bindings[0].mixer, options, edit])) else { return false }
+            for (expected, peer) in zip(before, current) {
+                guard let tree = footprint(peer), sameValues(expected, tree) else { return false }
+            }
+            guard let bookend = census(), same(current, bookend), permitsTopologyRefreshActuation() else { return false }
+            topologyRefreshAttempted = true
+            let refreshed = await topologyNavigation.refreshAfterIssuedCreation(expectedMixer: bindings[0].mixer,
+                permittingActuation: { [self] in permitsTopologyRefreshActuation() },
+                stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil })
+            uiEffects = topologyNavigation.effects
+            return refreshed
+        }
+
         /// Select only the already retained, structurally unique creation. An
         /// empty Mixer selection may be acquired once; another selection is not
         /// ours to replace. Lost/late acknowledgement never permits a new setter.
@@ -535,11 +567,14 @@ enum OwnedAuxLifecycle {
                   selectionIsEmpty(), mixerIsFocused(), actionContextCurrent(),
                   selectionIsEmpty() else { return false }
             createdSelectionIssued = true
+            uiEffects.navigationPerformed = true; uiEffects.restoration = "not_restored"
+            uiEffects.attempted.append("created_aux_selection")
             _ = AXHelpers.setAttribute(bindings[0].mixer, kAXSelectedChildrenAttribute,
                 [strip] as CFArray, runtime: runtime.ax)
             guard selectedOnly(strip), focusedOn(strip),
                   let after = census(), same(current, after), preserved(), actionContextCurrent() else { return false }
             createdSelectionPending = false
+            uiEffects.changed.append("created_aux_selection")
             return true
         }
 
@@ -754,7 +789,11 @@ enum OwnedAuxLifecycle {
             }
             for _ in 0..<samples {
                 do { try await waitForNextSample() } catch { return receipt(.pending, strip: observedCreated) }
-                guard let current = census() else { return receipt(.pending, strip: observedCreated, diagnostic: "source_unavailable") }
+                guard var current = census() else { return receipt(.pending, strip: observedCreated, diagnostic: "source_unavailable") }
+                if !originalsInOrder(current), await refreshLatentCreation(current) {
+                    guard let refreshed = census() else { return receipt(.pending, diagnostic: "created_population_refresh_unverified") }
+                    current = refreshed
+                }
                 if !originalsInOrder(current), !retainCreationAfterWholeRedraw(current) {
                     return receipt(.pending, strip: observedCreated, diagnostic: "population_changed_after_creation")
                 }
@@ -857,6 +896,11 @@ enum OwnedAuxLifecycle {
                   && $0.projectPath?.utf8.elementsEqual(population.project?.filePath?.utf8 ?? "".utf8) == true }),
               acceptedDefaults.count == Field.allCases.count, settleSamples > 0, settleSamples <= 120 else { return nil }
         return Context(bindings: bindings, options: options, edit: edit, acceptedDefaults: acceptedDefaults,
-            runtime: runtime, mouse: mouse, initialControls: initialControls, samples: settleSamples, waitForNextSample: waitForNextSample)
+            runtime: runtime, mouse: mouse,
+            topologyNavigation: population.presentationBinding.flatMap { binding in
+                guard CFEqual(binding.window, bindings[0].window), let mixer = binding.mixer,
+                      CFEqual(mixer, bindings[0].mixer), binding.document.utf8.elementsEqual(bindings[0].document.utf8) else { return nil }
+                return binding.navigationBaseline
+            }, initialControls: initialControls, samples: settleSamples, waitForNextSample: waitForNextSample)
     }
 }

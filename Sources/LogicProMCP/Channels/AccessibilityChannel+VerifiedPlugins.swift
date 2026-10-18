@@ -635,6 +635,7 @@ extension AccessibilityChannel {
         var menuOpen = false
         private var focusRestoreAttempted = false
         private var mixerSelectionRestorationPending = false
+        private var topologyRefreshIssued = false
         var effects = SessionPopulationObservation.UIEffects()
 
         init?(
@@ -681,7 +682,8 @@ extension AccessibilityChannel {
             return nil
         }
 
-        private func stillOwned(stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
+        private func stillOwned(stoppingWhen stop: @Sendable () -> Bool,
+                                isolation: isolated (any Actor)? = #isolation) async -> Bool {
             guard !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   await referenceIsCurrent(),
                   runtime.logicProPID() == acquiredPID,
@@ -916,6 +918,103 @@ extension AccessibilityChannel {
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { effects.reason = "navigation_cancelled"; return }
             } while ContinuousClock.now < end
             effects.reason = "mixer_reveal_unverified"
+        }
+
+        /// The lifecycle caller has already issued its one creation and observed
+        /// full strip retirement. Refresh only this retained window's checked
+        /// Control Bar toggle; generic temporary/final visibility rules stay intact.
+        func refreshAfterIssuedCreation(
+            expectedMixer: AXUIElement,
+            permittingActuation: () async -> Bool,
+            stoppingWhen stop: @escaping @Sendable () -> Bool,
+            isolation: isolated (any Actor)? = #isolation
+        ) async -> Bool {
+            func refuse(_ reason: String) -> Bool { effects.reason = reason; return false }
+            func owned() async -> Bool {
+                guard await stillOwned(stoppingWhen: stop, isolation: isolation),
+                      let observation = runtime.observeFrontmost?(), observation.isReady,
+                      observation.keyboardOwnerPID == acquiredPID,
+                      runtime.focusedApplicationPID() == acquiredPID,
+                      await permittingActuation(), !stop(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                return true
+            }
+            func activity() -> AXLogicProElements.ObservedTransportActivity? {
+                try? AXLogicProElements.observedTransportActivity(in: window, runtime: runtime,
+                    checking: { try SessionPopulationObservation.requireOwnedAcquisition() })
+            }
+            guard !topologyRefreshIssued, !effects.navigationPerformed, await owned(),
+                  let original = activity(), !original.isPlaying, !original.isRecording else {
+                return refuse("owned_mixer_refresh_unavailable")
+            }
+            func buttonState() -> (control: AXUIElement, visible: Bool)? {
+                guard let current = activity(), !current.isPlaying, !current.isRecording,
+                      CFEqual(original.controlBar, current.controlBar), CFEqual(original.play, current.play),
+                      CFEqual(original.record, current.record),
+                      case .success(let census) = AXHelpers.censusDescendantResult(of: current.controlBar,
+                        role: kAXCheckBoxRole, maxDepth: 4, runtime: runtime.ax, requiresCompleteTraversal: true,
+                        permittingRead: { !stop() && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil }) else { return nil }
+                var matches: [AXUIElement] = []
+                for element in census.matches {
+                    switch AXLocalePolicy.elementMatchesResult(element, AXLocalePolicy.controlBarMixerToggle, runtime: runtime.ax) {
+                    case .success(true): matches.append(element)
+                    case .success(false): break
+                    case .failure: return nil
+                    }
+                }
+                guard matches.count == 1, let control = matches.first,
+                      case .success(let enabled?) = AXHelpers.getAttributeResult(control, kAXEnabledAttribute,
+                        runtime: runtime.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, enabled == 1,
+                      case .success(let actions)? = runtime.ax.actionNamesResult?(control),
+                      actions.contains(kAXPressAction as String),
+                      case .success(let value?) = AXHelpers.getAttributeResult(control, kAXValueAttribute,
+                        runtime: runtime.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, value == 0 || value == 1 else { return nil }
+                return (control, value.boolValue)
+            }
+            guard let initial = buttonState(), initial.visible,
+                  let lookup = try? AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: runtime,
+                    requiresCompleteAbsence: true, checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                  let area = lookup.binding, CFEqual(area.mixer, expectedMixer), await owned(),
+                  let deciding = buttonState(), deciding.visible, CFEqual(initial.control, deciding.control),
+                  await owned() else {
+                return refuse("owned_mixer_refresh_before_changed")
+            }
+            func observed(_ visible: Bool) async -> Bool {
+                let end = min(OperationTraceContext.current?.deadline ?? ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)),
+                    ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)))
+                repeat {
+                    guard await owned(), let state = buttonState(), CFEqual(initial.control, state.control),
+                          let lookup = try? AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: runtime,
+                            requiresCompleteAbsence: true, checking: { try SessionPopulationObservation.requireOwnedAcquisition() }) else { return false }
+                    switch lookup.lookup {
+                    case .found(let mixer):
+                        guard CFEqual(mixer, expectedMixer) else { return false }
+                        if visible && state.visible { return true }
+                    case .notFound: if !visible && !state.visible { return true }
+                    case .childrenUnread: return false
+                    }
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { return false }
+                } while ContinuousClock.now < end
+                return false
+            }
+            topologyRefreshIssued = true
+            effects.navigationPerformed = true; effects.restoration = "not_restored"
+            effects.attempted.append("mixer_refresh_hide")
+            _ = AXHelpers.performAction(initial.control, kAXPressAction, runtime: runtime.ax)
+            guard await observed(false) else { return refuse("owned_mixer_refresh_hide_unverified") }
+            effects.changed.append("mixer_visibility")
+            guard await owned(), let deciding = buttonState(), !deciding.visible,
+                  CFEqual(initial.control, deciding.control), await owned() else { return refuse("owned_mixer_refresh_show_refused") }
+            effects.attempted.append("mixer_refresh_show")
+            _ = AXHelpers.performAction(initial.control, kAXPressAction, runtime: runtime.ax)
+            guard await observed(true), await owned(), let final = buttonState(), final.visible,
+                  CFEqual(initial.control, final.control) else { return refuse("owned_mixer_refresh_show_unverified") }
+            effects.changed.append("mixer_visibility_restoration")
+            // This helper restores visibility, not the retired original focus.
+            // Even a cached equal CF is not a live-path restoration certificate.
+            effects.restoration = "not_restored"
+            effects.reason = "owned_creation_focus_unverified"
+            return true
         }
 
         /// An actual owned Select All relationship, not selection synthesized from our census.
