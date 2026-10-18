@@ -120,21 +120,22 @@ class TheGuardActuallyRefusesSomething(unittest.TestCase):
                 else:
                     os.environ["LPM_AX_COMPARISON_ROOTS"] = before_root
 
-    #: `Mixer` is shipped by Apple and translated by Apple, so it satisfies conditions 2 and 3.
+    #: `Copy` is translated by Apple and is not already a production LabelSet member.
+    #: `Mixer` became a member for the owned Mixer refresh path, so it no longer plants a finding.
     _READ = 'let title = AXHelpers.getTitle(element) ?? ""\n'
 
     def test_the_plain_comparison_is_refused(self):
-        problems = self._scan(self._READ + 'if title == "Mixer" { }\n')
+        problems = self._scan(self._READ + 'if title == "Copy" { }\n')
         self.assertTrue(problems, "a translated label compared against an AX reading must fail")
-        self.assertIn("Mixer", problems[0])
+        self.assertIn("Copy", problems[0])
 
     def test_a_waiver_excuses_it(self):
-        self.assertEqual(self._scan(self._READ + 'if title == "Mixer" { }\n',
-                                    waiver={"Mixer": "declared safe by the case"}), [])
+        self.assertEqual(self._scan(self._READ + 'if title == "Copy" { }\n',
+                                    waiver={"Copy": "declared safe by the case"}), [])
 
     def test_a_comparison_against_a_non_ax_variable_is_not_refused(self):
         """The control. Without it the cases above would pass on a rule that fires on everything."""
-        self.assertEqual(self._scan('let commandName = "x"\nif commandName == "Mixer" { }\n'), [])
+        self.assertEqual(self._scan('let commandName = "x"\nif commandName == "Copy" { }\n'), [])
 
     def test_an_untranslated_literal_is_not_refused(self):
         """`MIDI` is in the corpus and identical in every locale — matching it by literal is safe,
@@ -149,8 +150,8 @@ class TheGuardActuallyRefusesSomething(unittest.TestCase):
             # so a comparison against it is correctly not a finding -- the first version of this
             # case chose it and failed for the right reason, which is what a positive case is for.
             ("lowercased", self._READ + 'if title.lowercased() == "copy" { }\n'),
-            ("collection", self._READ + 'return ["Mixer", "Cut"].contains(title)\n'),
-            ("switch", self._READ + 'switch title {\ncase "Mixer":\n    break\ndefault:\n    break\n}\n'),
+            ("collection", self._READ + 'return ["Copy", "Cut"].contains(title)\n'),
+            ("switch", self._READ + 'switch title {\ncase "Copy":\n    break\ndefault:\n    break\n}\n'),
         ]:
             with self.subTest(shape=label):
                 self.assertTrue(self._scan(source), f"{label} must be refused like `==` is")
@@ -324,7 +325,8 @@ class AConstantIsClassifiedByItsLiteral(unittest.TestCase):
     literal-initialized String constant is now classified by that literal's bytes.
 
     Mutation killed: constant resolution disabled (`resolve_constant` returning `[]`) turns the
-    three planted cases green, and this class red."""
+    three planted cases green, and this class red. The fixtures now use `Copy`: unlike `Mixer`,
+    it is not already a production LabelSet member."""
 
     _READ = 'let value = AXHelpers.getValue(element) ?? ""\n'
 
@@ -332,11 +334,11 @@ class AConstantIsClassifiedByItsLiteral(unittest.TestCase):
         return TheGuardActuallyRefusesSomething._scan(self, source, None)
 
     PLANTED = {
-        "static let, ==": 'enum Planted { static let mixerLabel = "Mixer" }\n'
-                          'if value == Planted.mixerLabel { }\n',
-        "local let, contains": 'let localLabel = "Mixer"\nif value.contains(localLabel) { }\n',
-        "static let, hasPrefix": 'enum Planted { static let mixerLabel = "Mixer" }\n'
-                                 'if value.hasPrefix(Planted.mixerLabel) { }\n',
+        "static let, ==": 'enum Planted { static let copyLabel = "Copy" }\n'
+                          'if value == Planted.copyLabel { }\n',
+        "local let, contains": 'let localLabel = "Copy"\nif value.contains(localLabel) { }\n',
+        "static let, hasPrefix": 'enum Planted { static let copyLabel = "Copy" }\n'
+                                 'if value.hasPrefix(Planted.copyLabel) { }\n',
     }
 
     def test_a_label_in_a_constant_is_refused(self):
@@ -344,16 +346,16 @@ class AConstantIsClassifiedByItsLiteral(unittest.TestCase):
             with self.subTest(shape=shape):
                 problems = self._scan(self._READ + code)
                 self.assertEqual(len(problems), 1, problems)
-                self.assertIn("'Mixer'", problems[0])
+                self.assertIn("'Copy'", problems[0])
                 self.assertIn("TRANSLATES", problems[0])
 
     def test_the_inline_control_stays_refused(self):
-        problems = self._scan(self._READ + 'if value == "Mixer" { }\n')
+        problems = self._scan(self._READ + 'if value == "Copy" { }\n')
         self.assertEqual(len(problems), 1, problems)
-        self.assertIn("'Mixer'", problems[0])
+        self.assertIn("'Copy'", problems[0])
 
     def test_an_instance_member_is_not_a_constant(self):
-        source = (self._READ + 'enum K { static let title = "Mixer" }\n'
+        source = (self._READ + 'enum K { static let title = "Copy" }\n'
                   + 'if value == before.title { }\n')
         self.assertEqual(self._scan(source), [])
 
@@ -501,14 +503,14 @@ class TheEntryPointRefuses(unittest.TestCase):
             os.makedirs(root)
             with open(os.path.join(root, "Offender.swift"), "w", encoding="utf-8") as handle:
                 handle.write('let title = AXHelpers.getTitle(element) ?? ""\n'
-                             'if title == "Mixer" { }\n')
+                             'if title == "Copy" { }\n')
             proc = subprocess.run(
                 [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                               "check-ax-comparisons-use-labelsets.py")],
                 capture_output=True, text=True,
                 env=dict(os.environ, LPM_AX_COMPARISON_ROOTS=root))
             self.assertEqual(proc.returncode, 1, (proc.stdout + proc.stderr)[:300])
-            self.assertIn("Mixer", proc.stdout + proc.stderr)
+            self.assertIn("Copy", proc.stdout + proc.stderr)
 
     def test_main_accepts_a_clean_tree(self):
         """The control: without it the case above passes on an entry point that always fails."""
@@ -516,7 +518,7 @@ class TheEntryPointRefuses(unittest.TestCase):
             root = os.path.join(tmp, "Sources")
             os.makedirs(root)
             with open(os.path.join(root, "Fine.swift"), "w", encoding="utf-8") as handle:
-                handle.write('let commandName = "x"\nif commandName == "Mixer" { }\n')
+                handle.write('let commandName = "x"\nif commandName == "Copy" { }\n')
             proc = subprocess.run(
                 [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                               "check-ax-comparisons-use-labelsets.py")],
