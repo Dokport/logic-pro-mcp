@@ -177,6 +177,9 @@ final class SagaPartialStateFaultSeam: @unchecked Sendable {
 final class SendRemovalSagaAdapter: @unchecked Sendable {
     @TaskLocal static var requiredSendControl: AXLogicProElements.AssignedSendMenuControl?
     @TaskLocal static var requiredNameCheck: (@Sendable (AXMixerStripBinding.Binding) -> Bool)?
+    // The deciding before-read already checked this native pair under this
+    // operation's gate. Inspection-cache eviction cannot erase that tether.
+    @TaskLocal static var checkedSourcePair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     let forward: SagaStep
     private let capturedControl: AXLogicProElements.AssignedSendMenuControl?
     private let approved: ApprovedSessionRepair?
@@ -423,8 +426,10 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                         }) {
                             await Self.$requiredSendControl.withValue(self.capturedControl) {
                                 await Self.$requiredNameCheck.withValue(nameCheck) {
-                                    await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
-                                        router: router, cache: cache, targetRegistry: registry)
+                                    await Self.$checkedSourcePair.withValue(held) {
+                                        await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                                            router: router, cache: cache, targetRegistry: registry)
+                                    }
                                 }
                             }
                         }

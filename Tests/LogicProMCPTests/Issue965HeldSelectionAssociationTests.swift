@@ -523,6 +523,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
+        var captureClockReadsAfterName = 0
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
         var coupledGuardPlayReads = 0
@@ -2822,12 +2823,22 @@ struct Issue965HeldSelectionAssociationTests {
 
     @Test("One retained approval composes an actual track rename and its occupied Send destination change",
           arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project",
-                      "mixed", "physical_slot", "missing_witness", "decoded"], [false, true])
+                      "mixed", "physical_slot", "missing_witness", "decoded", "expired"], [false, true])
     func canonicalNameAndPhysicalSendUseTheSameRetainedApproval(mode: String, returning: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
                 canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
                 freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("An admitted name/Send operation keeps its checked native pair when inspection retention expires before dispatch",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendKeepsItsPairAcrossInspectionExpiry(mode: String, stable: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: stable, expireInspectionBeforeSendDispatch: true)
         }
     }
 
@@ -3372,6 +3383,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                stableDestinationControls: Bool = false,
                                                stableDestinationBulkReads: Bool = false,
                                                coupledMixerName: Bool = false,
+                                               expireInspectionBeforeSendDispatch: Bool = false,
                                                freshPhysicalReturn: Bool = false,
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil) async throws {
@@ -3410,7 +3422,13 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? mixerOwner : $0 })
             let captureNow = ContinuousClock.now
             let cache = StateCache(sessionCaptureNow: {
-                f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
+                if expireInspectionBeforeSendDispatch, !f.routingNameWrites.isEmpty {
+                    f.captureClockReadsAfterName += 1
+                    // The journal before-read and executor's deciding before-read
+                    // both succeed. Only the dispatcher's later cache lookup expires.
+                    if f.captureClockReadsAfterName >= 3 { f.expireRetainedCapture = true }
+                }
+                return f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
             }), registry = TargetRegistry()
             let replacement = b.element(1_965_2600), root = b.element(1_965_2601)
             let restoredSource = b.element(1_965_2700)
@@ -4108,8 +4126,14 @@ struct Issue965HeldSelectionAssociationTests {
                     let arguments: [String: Value] = ["plan_id": .string(planID),
                         "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
                         "confirmed": .bool(true), "idempotency_key": .string(key)]
+                    if canonicalSend == "expired" { f.expireRetainedCapture = true }
                     let result = await apply(dependencies, arguments)
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if expireInspectionBeforeSendDispatch {
+                        #expect(f.captureClockReadsAfterName >= 3)
+                        #expect(f.expireRetainedCapture)
+                        #expect(await cache.retainedInspection(id: id) == nil)
+                    }
                     if canonicalSend == "late_name" {
                         #expect(f.routingLateScopeInjected)
                         #expect(f.routingNameWrites == ["Selected Canonical"])
@@ -4117,7 +4141,7 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "External")
                         #expect(body["saga_state"] as? String != "completed")
                         #expect(body["saga_state"] as? String != "fullyCompensated")
-                    } else if ["replacement", "wrong_digest", "wrong_project"].contains(canonicalSend) {
+                    } else if ["replacement", "wrong_digest", "wrong_project", "expired"].contains(canonicalSend) {
                         #expect(body["state"] as? String == "C", "Actual refusal: \(sharedToolText(result))")
                         #expect(f.routingNameWrites.isEmpty && f.routingDestinationPresses == 0)
                     } else {
