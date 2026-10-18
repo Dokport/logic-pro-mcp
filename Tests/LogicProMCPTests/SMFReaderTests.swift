@@ -329,6 +329,73 @@ func testSMFDocumentRejectsUnreadableArtifactWithoutPartialMetadata(fault: Strin
     }
 }
 
+@Test func testSMFTrackExtractionPreservesOriginalEventsAndAllMatchingChunks() throws {
+    let conductor = trackData([
+        0, 0xFF, 0x51, 3, 7, 0xA1, 0x20,
+        0, 0xFF, 0x58, 4, 4, 2, 0x18, 8,
+        0, 0xFF, 0x2F, 0,
+    ])
+    let first = namedSMFTrack("Target", events: [
+        0, 0xCF, 9, 0, 0xBF, 7, 100, 0, 0xEF, 0, 64,
+        0, 0xF0, 3, 0x7D, 1, 0xF7,
+        0xF8, 0, 0x9F, 60, 100, 0x83, 0x60, 0x8F, 60, 0,
+        0, 0xFF, 0x2F, 0,
+    ])
+    let peer = namedSMFTrack("Peer", events: [0, 0x90, 72, 64, 1, 0x80, 72, 0, 0, 0xFF, 0x2F, 0])
+    let last = namedSMFTrack("Target", events: [
+        0x88, 0xB8, 0, 0x90, 67, 90, 0x87, 0x40, 0x80, 67, 0, 0, 0xFF, 0x2F, 0,
+    ])
+    let input = smfData(format: 1, tracks: [conductor, first, peer, last])
+    let exported = try SMFReader.extractTracks(namedInstrument: "Target", from: input)
+    #expect(exported == smfData(format: 1, tracks: [conductor, first, last]))
+    let document = try SMFReader.parseDocument(exported)
+    #expect(document.trackCount == 3 && document.ticksPerQuarter == 480)
+    #expect(document.notes.map(\.pitch) == [60, 67])
+    #expect(document.notes.map(\.startTick) == [15_360, 138_240])
+    #expect(document.notes.map(\.channel) == [16, 1])
+    #expect(document.tempoChanges.first?.microsecondsPerQuarter == 500_000)
+}
+
+@Test func testSMFTrackExtractionMatchesExactUTF8MetadataNotRegionNameOrNearMiss() throws {
+    let conductor = trackData([0, 0xFF, 0x2F, 0])
+    let first = namedSMFTrack("대상", events: [0, 0x90, 60, 100, 1, 0x80, 60, 0, 0, 0xFF, 0x2F, 0])
+    let regionName = Array("대상".utf8)
+    let regionMetadata = [UInt8(0), 0xFF, 3] + SMFWriter.encodeVLQ(regionName.count) + regionName
+    let peer = namedSMFTrack("대상 ", events: regionMetadata
+        + [0, 0x90, 72, 100, 1, 0x80, 72, 0, 0, 0xFF, 0x2F, 0])
+    let input = smfData(format: 1, tracks: [conductor, first, peer])
+    #expect(try SMFReader.extractTracks(namedInstrument: "대상", from: input)
+        == smfData(format: 1, tracks: [conductor, first]))
+    #expect(throws: SMFReader.TrackExtractionError.instrumentNotFound) {
+        try SMFReader.extractTracks(namedInstrument: "Other", from: input)
+    }
+}
+
+@Test(arguments: ["unnamed", "renamed", "late_name", "invalid_utf8", "channel_conductor", "format_zero"])
+func testSMFTrackExtractionRefusesUnownedOrAmbiguousFileLayout(fault: String) {
+    let end: [UInt8] = [0, 0xFF, 0x2F, 0]
+    let conductor = trackData(fault == "channel_conductor" ? [0, 0xB0, 7, 100] + end : end)
+    let target = namedSMFTrack("Target", events: end)
+    let other: [UInt8]
+    switch fault {
+    case "unnamed": other = trackData([0, 0x90, 72, 100, 1, 0x80, 72, 0] + end)
+    case "renamed": other = namedSMFTrack("Peer", events: [0, 0xFF, 4, 6] + Array("Target".utf8) + end)
+    case "late_name": other = trackData([1, 0xFF, 4, 4] + Array("Peer".utf8) + end)
+    case "invalid_utf8": other = trackData([0, 0xFF, 4, 1, 0xFF] + end)
+    default: other = namedSMFTrack("Peer", events: end)
+    }
+    let input = fault == "format_zero" ? smfData(tracks: [target])
+        : smfData(format: 1, tracks: [conductor, target, other])
+    #expect(throws: SMFReader.TrackExtractionError.unsupportedFileLayout) {
+        try SMFReader.extractTracks(namedInstrument: "Target", from: input)
+    }
+}
+
+private func namedSMFTrack(_ instrument: String, events: [UInt8]) -> [UInt8] {
+    let name = Array(instrument.utf8)
+    return trackData([0, 0xFF, 4] + SMFWriter.encodeVLQ(name.count) + name + events)
+}
+
 private func smfData(
     format: Int = 0,
     division: Int = 480,
