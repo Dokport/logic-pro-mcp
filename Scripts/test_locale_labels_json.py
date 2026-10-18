@@ -382,6 +382,7 @@ def main():
 
     # 18. A record's EXPECTATION is not a reading. These blocks are element-shaped on purpose, and
     #     that shape let a counterexample — "this is NOT what we see" — back a claim that we do.
+    # A synthetic label keeps this provenance witness independent of product matching-mode changes.
     hyp = Path(tempfile.mkdtemp())
     (hyp / "h.json").write_text(json.dumps({
         "id": "h", "date": D, "host": {"locale": "ko-KR"},
@@ -394,8 +395,8 @@ def main():
                                                        observed="not 오토메이션 control")},
                      ko_measured, declared=("AXGroup",))
     case("an `expected` block is not a sighting",
-         any("carried it" in x for x in guard.provenance_problems("automationModeContext", fixture)),
-         guard.provenance_problems("automationModeContext", fixture))
+         any("carried it" in x for x in guard.provenance_problems("fixtureAutomationContext", fixture)),
+         guard.provenance_problems("fixtureAutomationContext", fixture))
     # ...and the same bytes NOT under a hypothesis key are read, so the case above is not vacuous.
     (hyp / "h2.json").write_text(json.dumps({
         "id": "h2", "date": D, "host": {"locale": "ko-KR"},
@@ -406,8 +407,8 @@ def main():
                                                     observed="not 오토메이션 control")},
                   ko_measured, declared=("AXGroup",))
     case("...but the same row outside one is",
-         guard.provenance_problems("automationModeContext", seen) == [],
-         guard.provenance_problems("automationModeContext", seen))
+         guard.provenance_problems("fixtureAutomationContext", seen) == [],
+         guard.provenance_problems("fixtureAutomationContext", seen))
 
     # 18b. Coverage names the ATTRIBUTE it was read from, as provenance already does. Without it a
     #      string found in ANY attribute backed the claim, and some labels record in their own
