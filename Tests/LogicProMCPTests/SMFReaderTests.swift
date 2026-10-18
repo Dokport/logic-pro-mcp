@@ -258,6 +258,77 @@ import Foundation
     #expect(notes[1] == SMFReader.Note(pitch: 64, velocity: 90, startBar: 2, startBeat: 1.5, durationBeats: 0.5, channel: 2))
 }
 
+@Test func testSMFDocumentRetainsExactTicksAndTempoMeterChanges() throws {
+    let conductor = trackData([
+        0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,
+        0x00, 0xFF, 0x58, 0x04, 0x03, 0x02, 0x18, 0x08,
+        0x8F, 0x00, 0xFF, 0x51, 0x03, 0x06, 0x1A, 0x80,
+        0x00, 0xFF, 0x58, 0x04, 0x06, 0x03, 0x18, 0x08,
+        0x00, 0xFF, 0x2F, 0x00,
+    ])
+    let notes = trackData([
+        0x8B, 0x20, 0x91, 0x3C, 0x64,
+        0x81, 0x70, 0x91, 0x3C, 0x50,
+        0x81, 0x70, 0x81, 0x3C, 0x00,
+        0x81, 0x70, 0x81, 0x3C, 0x00,
+        0x00, 0xFF, 0x2F, 0x00,
+    ])
+    let data = smfData(format: 1, division: 960, tracks: [conductor, notes])
+    let document = try SMFReader.parseDocument(data)
+    #expect(document.format == 1 && document.trackCount == 2 && document.ticksPerQuarter == 960)
+    #expect(document.notes.count == 2)
+    let first = try #require(document.notes.first), last = try #require(document.notes.last)
+    #expect(first.pitch == 60 && first.velocity == 100 && first.channel == 2)
+    #expect(first.startTick == 1440 && first.durationTicks == 480)
+    #expect(last.startTick == 1680 && last.durationTicks == 480 && last.velocity == 80)
+    #expect(document.tempoChanges.map(\.tick) == [0, 1920])
+    #expect(document.tempoChanges.map(\.microsecondsPerQuarter) == [500_000, 400_000])
+    #expect(document.timeSignatures.map(\.tick) == [0, 1920])
+    #expect(document.timeSignatures.map { $0.signature.numerator } == [3, 6])
+    #expect(document.timeSignatures.map { $0.signature.denominator } == [4, 8])
+    let compatible = try SMFReader.parse(data)
+    #expect(compatible.count == 2 && compatible[0].channel == 2)
+    #expect(compatible[0].durationBeats == 0.5 && compatible[1].durationBeats == 0.75)
+}
+
+@Test func testSMFDocumentKeepsNonzeroFileTicksAndSeparatedNotes() throws {
+    let data = try SMFWriter.generate(events: [
+        .init(pitch: 60, offsetTicks: 0, durationTicks: 1, velocity: 1, channel: 0),
+        .init(pitch: 72, offsetTicks: 122_880, durationTicks: 241, velocity: 127, channel: 15),
+    ], bar: 9, tempo: 120, timeSignature: (4, 4))
+    let document = try SMFReader.parseDocument(data)
+    #expect(document.format == 0 && document.trackCount == 1 && document.ticksPerQuarter == 480)
+    #expect(document.notes.map(\.startTick) == [15_360, 138_240])
+    #expect(document.notes.map(\.durationTicks) == [1, 241])
+    #expect(document.notes.map(\.channel) == [1, 16])
+    #expect(document.notes.map(\.velocity) == [1, 127])
+}
+
+@Test func testSMFDocumentDoesNotInventObservedTempoOrMeter() throws {
+    let data = smfData(tracks: [trackData([
+        0x00, 0x90, 0x3C, 0x64,
+        0x00, 0x80, 0x3C, 0x00,
+        0x00, 0xFF, 0x2F, 0x00,
+    ])])
+    let document = try SMFReader.parseDocument(data)
+    #expect(document.tempoChanges.isEmpty && document.timeSignatures.isEmpty)
+    #expect(document.notes.first?.durationTicks == 0)
+    #expect(try SMFReader.parse(data).first?.startBeat == 1)
+}
+
+@Test(arguments: ["zero_tempo", "missing_end", "dangling_note"])
+func testSMFDocumentRejectsUnreadableArtifactWithoutPartialMetadata(fault: String) {
+    let events: [UInt8]
+    switch fault {
+    case "zero_tempo": events = [0, 0xFF, 0x51, 3, 0, 0, 0, 0, 0xFF, 0x2F, 0]
+    case "missing_end": events = [0, 0xFF, 0x51, 3, 7, 0xA1, 0x20]
+    default: events = [0, 0x90, 60, 100, 0, 0xFF, 0x2F, 0]
+    }
+    #expect(throws: SMFReaderError.self) {
+        try SMFReader.parseDocument(smfData(tracks: [trackData(events)]))
+    }
+}
+
 private func smfData(
     format: Int = 0,
     division: Int = 480,
