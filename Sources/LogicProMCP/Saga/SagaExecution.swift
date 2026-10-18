@@ -176,8 +176,10 @@ final class SagaPartialStateFaultSeam: @unchecked Sendable {
 /// The journal records checked scalar facts; those facts cannot recreate this capsule.
 final class SendRemovalSagaAdapter: @unchecked Sendable {
     @TaskLocal static var requiredSendControl: AXLogicProElements.AssignedSendMenuControl?
+    @TaskLocal static var requiredNameCheck: (@Sendable (AXMixerStripBinding.Binding) -> Bool)?
     let forward: SagaStep
     private let capturedControl: AXLogicProElements.AssignedSendMenuControl?
+    private let approved: ApprovedSessionRepair?
     private var pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var footprint: [SendSlotObservation]?
     private var removal: AccessibilityChannel.RemovedSendObservation?
@@ -230,14 +232,17 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
         guard Self.accepts(plan), let forward = plan.steps.first else { return nil }
         self.forward = forward
         self.capturedControl = nil
+        self.approved = nil
     }
 
     init?(approved: ApprovedSessionRepair) {
-        guard approved.plan.steps.count == 1, let forward = approved.plan.steps.first,
+        let sends = approved.plan.steps.filter { $0.operationID == .mixerSetSendOutputVerified }
+        guard sends.count == 1, let forward = sends.first,
               let (pair, control) = approved.sendRemovalCustody(for: forward) else { return nil }
         self.forward = forward
         self.pair = pair
         self.capturedControl = control
+        self.approved = approved
     }
 
     /// Only an internally constructed inverse may carry the checked scalar.
@@ -383,7 +388,14 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 guard !self.attempted, await self.read(self.forward, cache: cache, registry: registry) != nil else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Before send footprint changed")
                 }
+                if let approved = self.approved, approved.hasMatchingNameGoals,
+                   await approved.nameGoalEvidence(afterExecution: true) == nil {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Approved name changed before Send")
+                }
                 self.attempted = true
+                let nameCheck: (@Sendable (AXMixerStripBinding.Binding) -> Bool)?
+                if let approved = self.approved { nameCheck = { source in approved.sendNameHeld(at: source) } }
+                else { nameCheck = nil }
                 var params = self.forward.params
                 params["target_ref"] = .string(self.forward.targetRef!.rawValue)
                 let upstream = AccessibilityChannel.sendRemovalObserver
@@ -410,12 +422,19 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                             }
                         }) {
                             await Self.$requiredSendControl.withValue(self.capturedControl) {
-                                await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
-                                    router: router, cache: cache, targetRegistry: registry)
+                                await Self.$requiredNameCheck.withValue(nameCheck) {
+                                    await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                                        router: router, cache: cache, targetRegistry: registry)
+                                }
                             }
                         }
                     }
                 }
+            }
+            if let approved = self.approved, approved.hasMatchingNameGoals,
+               let source = self.inverseConsumed ? self.restored?.restoredSend?.source : self.change?.source,
+               !(await approved.renewNameAfterSend(source)) {
+                return .init(state: .stateB, writeBoundaryCrossed: true, detail: "Owned name continuity after Send is unverified")
             }
             let mapped = ProductionSagaStepExecutor.mapResponse(response, operationID: step.operationID)
             if case .text(let text, _, _) = response.content.first,

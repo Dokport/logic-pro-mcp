@@ -1036,6 +1036,7 @@ extension AccessibilityChannel {
                           currentSendMode(in: root, runtime: runtime.ax) == created.mode,
                           created.permits(runtime: runtime, ownedPopup: root) else { return false }
                 }
+                if let nameHeld = SendRemovalSagaAdapter.requiredNameCheck, !nameHeld(physical) { return false }
                 return writerMenuOwned()
             }
             func closeBeforeRefusal(_ error: HonestContract.FailureError, _ hint: String) -> CheckedOutputReading {
