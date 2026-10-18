@@ -4306,6 +4306,16 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: "late_deciding_settlement")
     }
 
+    @Test func registeredOwnedSelectAllReturnsFirstStripFocusThenRestoresNonfirstOriginal() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: "select_all_first_focus")
+    }
+
+    @Test(arguments: ["partial", "foreign", "document", "unacked"])
+    func registeredSelectAllFirstFocusRequiresTheExactIssuedCompleteSelection(fault: String) async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "select_all_first_focus_" + fault)
+    }
+
     @Test(arguments: ["late_deciding_foreign", "late_deciding_subset", "late_deciding_unread", "late_deciding_document", "late_deciding_cancel"])
     func registeredLateSelectAllSettlementDoesNotAdoptUnknownOrForeignSelection(fault: String) async throws {
         try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: fault)
@@ -4404,7 +4414,9 @@ struct Issue965FreshPopulationAcquisitionTests {
         if fault == "filter_off" { fixture.builder.setAttribute(filterControls[2], kAXValueAttribute as String, 0) }
         if fault == "not_settable" { fixture.builder.setAttributeSettable(mixer, kAXSelectedChildrenAttribute as String, false) }
         if fault == "duplicate_original" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [strips[3], strips[3]]) }
-        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, strips[0])
+        let firstFocusTransition = fault.hasPrefix("select_all_first_focus")
+        let initialFocus = firstFocusTransition ? original[0] : strips[0]
+        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initialFocus)
         fixture.builder.setAttribute(fixture.app, kAXFocusedWindowAttribute as String, fixture.window)
         fixture.builder.setAttribute(fixture.app, kAXFrontmostAttribute as String, true)
         let bar = fixture.builder.element(966_050), edit = fixture.builder.element(966_051), selectAll = fixture.builder.element(966_052)
@@ -4447,8 +4459,8 @@ struct Issue965FreshPopulationAcquisitionTests {
         let selectionReads = Reads()
         let sharedRead = fault.hasPrefix("full_population_shared")
         let snapshotReads = Reads()
-        let nativeRead = passiveMixerAttributeRead(strips[0])
-        let selectionReturnsFocus = fault == "restore_selected_focus" || fault.hasPrefix("restore_focus_") || fullPopulation
+        let nativeRead = passiveMixerAttributeRead(initialFocus)
+        let selectionReturnsFocus = fault == "restore_selected_focus" || fault.hasPrefix("restore_focus_") || fullPopulation || firstFocusTransition
         let result = try await inspect(fixture: fixture,
             domains: fullPopulation ? ["tracks", "hierarchy", "strips", "associations"] : ["tracks", "strips"], navigation: fault != "no_navigation",
             targetReferences: fullPopulation,
@@ -4477,8 +4489,18 @@ struct Issue965FreshPopulationAcquisitionTests {
                     if fault == "late_document" { fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
                     if fault == "late_focus" { fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header) }
                     if fault == "replaced_census" { fixture.builder.setChildren(mixer, Array(strips.dropLast())) }
+                    if firstFocusTransition {
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
+                            fault == "select_all_first_focus_foreign" ? fixture.header : strips[0])
+                        if fault == "select_all_first_focus_partial" {
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [strips[0]])
+                        }
+                        if fault == "select_all_first_focus_document" {
+                            fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                    }
                     fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, false)
-                    return true
+                    return fault != "select_all_first_focus_unacked"
                 }
                 return nil
             }, focusSetter: { element, attribute, value in
@@ -4494,10 +4516,10 @@ struct Issue965FreshPopulationAcquisitionTests {
                     fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initial ? strips[0] : strips[1])
                     return true
                 }
-                if CFEqual(element, strips[0]), attribute == kAXFocusedAttribute as String {
+                if CFEqual(element, initialFocus), attribute == kAXFocusedAttribute as String {
                     fixture.events.record("restore_captured_focus")
                     if fault != "restore_focus_ack_only" {
-                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, strips[0])
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initialFocus)
                     }
                     if fault == "restore_focus_selection_drift" {
                         fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
@@ -4619,13 +4641,13 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
             section = body["strips"] as? [String: Any] ?? [:]
         } else { section = try #require(body["strips"] as? [String: Any]) }
-        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch", "late_deciding_settlement"].contains(fault)
+        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch", "late_deciding_settlement", "select_all_first_focus"].contains(fault)
             || (["full_population_restore_focus", "full_population_shared"].contains(fault) && originalCount == 1)
             || (originalCount == strips.count && ["noop_selection", "restore_ack_only", "restore_focus_false",
                 "restore_focus_ack_only", "restore_focus_unselected", "restore_focus_selection_drift"].contains(fault))
         if completeExpected {
             #expect(section["coverage"] as? String == "complete")
-            let focusInverse = fault == "restore_focus_unselected" || (selectionReturnsFocus && !CFEqual(original[0], strips[0]))
+            let focusInverse = fault == "restore_focus_unselected" || (selectionReturnsFocus && !CFEqual(original[0], initialFocus))
             #expect(fixture.events.recorded.filter { $0 != "association_select" } == ["open_edit", "select_all", "restore_mixer_selection"]
                 + (focusInverse ? ["restore_captured_focus"] : []))
             #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
@@ -4634,6 +4656,13 @@ struct Issue965FreshPopulationAcquisitionTests {
                 #expect(!changed.contains("mixer_selection") && !changed.contains("mixer_selection_restoration"))
             }
         } else { #expect(section["coverage"] as? String != "complete") }
+        if firstFocusTransition {
+            #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)
+            if completeExpected {
+                let actual = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+                #expect(CFEqual(actual as AnyObject, initialFocus))
+            } else { #expect(!fixture.events.recorded.contains("restore_mixer_selection")) }
+        }
         if fault == "delayed_dispatch" {
             #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)
             #expect(selectionReads.recorded.contains("pending_menu_read"))

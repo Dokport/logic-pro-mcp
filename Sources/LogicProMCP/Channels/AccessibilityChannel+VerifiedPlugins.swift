@@ -1198,6 +1198,34 @@ extension AccessibilityChannel {
                   let visible = elements(kAXVisibleChildrenAttribute as String), subset(visible, of: strips),
                   let originalFrames = frames(),
                   let originalPath = Self.retainedPath(binding.mixer, in: window, runtime: runtime.ax) else { return nil }
+            var selectionWasAccepted = false
+            var firstSelectionFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus?
+            defer {
+                if firstSelectionFocus != nil { readFocusScope?.retainMixerInverseFocus(nil) }
+            }
+            func ownedFirstSelectionFocus() -> Bool {
+                // Native Select All can focus the first captured strip, even
+                // when the original focus/selection is a different strip.
+                // Only its exact complete selected population corroborates this
+                // request-owned read focus; a partial/foreign set grants none.
+                guard selectionWasAccepted, let first = strips.first, !CFEqual(first, focus),
+                      let current: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+                      CFEqual(current, first), let selected = elements(kAXSelectedChildrenAttribute as String),
+                      sameSet(selected, strips) else { return false }
+                if firstSelectionFocus == nil {
+                    guard let observed = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(window: window, logic: runtime),
+                          CFEqual(observed.focus, first), CFEqual(observed.window, window),
+                          observed.document.utf8.elementsEqual(document.utf8), observed.permits() else { return false }
+                    firstSelectionFocus = observed
+                    readFocusScope?.retainMixerInverseFocus(observed)
+                }
+                guard firstSelectionFocus?.permits() == true,
+                      let bookend = elements(kAXSelectedChildrenAttribute as String), sameSet(bookend, strips) else { return false }
+                return true
+            }
+            func selectionReadFocusOwned() -> Bool {
+                (sameFocus() && passive.permits()) || ownedFirstSelectionFocus()
+            }
             func held(ownedSelectionFocus: AXUIElement? = nil) async -> Bool {
                 let selectionFocus = ownedSelectionFocus.map { expected in
                     guard original.filter({ CFEqual($0, expected) }).count == 1,
@@ -1206,7 +1234,7 @@ extension AccessibilityChannel {
                     return CFEqual(current, expected)
                 } ?? false
                 guard await stillOwned(stoppingWhen: stop), runtime.focusedApplicationPID() == acquiredPID,
-                      ownedMenuFocus() || selectionFocus,
+                      ownedMenuFocus() || selectionFocus || ownedFirstSelectionFocus(),
                       let currentPath = Self.retainedPath(binding.mixer, in: window, runtime: runtime.ax), same(originalPath, currentPath),
                       let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: runtime.ax),
                       same(strips, current.strips),
@@ -1262,6 +1290,8 @@ extension AccessibilityChannel {
             mixerSelectionRestorationPending = true
             let accepted = AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax)
             menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
+            selectionWasAccepted = accepted
+            _ = ownedFirstSelectionFocus()
             if accepted {
                 // A successful dispatch can settle after its ACK. Observe at
                 // most three owned states before cancelling a still-open menu;
@@ -1275,7 +1305,7 @@ extension AccessibilityChannel {
                         menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
                     }
                     if !menuOpen {
-                        guard sameFocus(), passive.permits(),
+                        guard selectionReadFocusOwned(),
                               let observed = elements(kAXSelectedChildrenAttribute as String), subset(observed, of: strips) else {
                             effects.reason = "mixer_global_selection_unverified"; return nil
                         }
@@ -1289,7 +1319,7 @@ extension AccessibilityChannel {
                     }
                 }
             }
-            guard await dismissOwnedMenu(stoppingWhen: stop), await held(), sameFocus(), passive.permits(),
+            guard await dismissOwnedMenu(stoppingWhen: stop), await held(), selectionReadFocusOwned(),
                   let selected = elements(kAXSelectedChildrenAttribute as String), subset(selected, of: strips) else {
                 effects.reason = "mixer_global_selection_unverified"; return nil
             }
@@ -1304,7 +1334,7 @@ extension AccessibilityChannel {
                 // arbitrary changed subset. One matching bookend, no retry leaf,
                 // new deadline or transfer of the captured original selection/focus.
                 guard accepted, sameSet(selected, original), sameSet(decidingSelected, strips),
-                      await held(), sameFocus(), passive.permits(),
+                      await held(), selectionReadFocusOwned(),
                       let settled = elements(kAXSelectedChildrenAttribute as String), sameSet(settled, strips) else {
                     effects.reason = "mixer_selection_restoration_conflict"; return nil
                 }
