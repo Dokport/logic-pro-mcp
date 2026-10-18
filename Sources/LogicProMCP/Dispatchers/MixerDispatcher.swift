@@ -195,8 +195,22 @@ struct MixerDispatcher: OperationTraceDispatching {
                       let targetRegistry else {
                     return TargetRefResolver.staleTargetReferenceResult(params["target_ref"]?.stringValue, operation: operation)
                 }
-                let pair = await cache.retainedMixerAssociation(reference: reference, source: physical,
+                let cachedPair = await cache.retainedMixerAssociation(reference: reference, source: physical,
                     snapshot: await targetRegistry.currentSnapshot)
+                let pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
+                if let checked = SendRemovalSagaAdapter.checkedSourcePair {
+                    guard checked.strip.matches(physical),
+                          cachedPair.map({ $0.strip.matches(checked.strip) && $0.track.matches(checked.track) }) ?? true,
+                          checked.track.currentIndex() != nil,
+                          physical.currentIndex(runtime: checked.track.runtime) != nil,
+                          (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                        return TargetRefResolver.staleTargetReferenceResult(reference.rawValue, operation: operation)
+                    }
+                    // Request-local history only. The native writer still proves
+                    // the source/control and independently renews its own effect.
+                    // No cache entry, TTL, reference or unstarted plan is renewed.
+                    pair = checked
+                } else { pair = cachedPair }
                 if creating, pair == nil {
                     return toolTextResult(.error(HonestContract.encodeStateC(error: .staleSnapshot,
                         hint: "Fresh-empty creation requires its retained original-header association; acquire a fresh selected-source inspection.",

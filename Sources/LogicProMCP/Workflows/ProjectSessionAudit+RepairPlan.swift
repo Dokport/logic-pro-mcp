@@ -486,6 +486,10 @@ extension ProjectSessionAudit {
             steps.removeAll { $0.objectValue?["kind"] == .string("local_output") }
             steps.append(localOutputStep)
         }
+        if let localSendStep, !names.isEmpty {
+            steps.removeAll { $0.objectValue?["kind"] == .string("local_send_output") }
+            steps.append(localSendStep)
+        }
         steps = auxSteps + steps
         if let sort = policy.trackSort {
             let tracks = SessionPopulationObservation.build(request: request, capture: capture).tracks

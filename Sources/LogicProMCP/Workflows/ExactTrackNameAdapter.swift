@@ -318,15 +318,37 @@ enum ExactTrackNameAdapter {
                   ? source.original.currentIndex(runtime: mirror.pair.track.runtime) == source.index
                   : source.original.currentIndex(runtime: mirror.pair.track.runtime) == nil),
               source.permits(runtime: mirror.pair.track.runtime),
-              await proof.registry.resolve(mirror.reference)?.physicalMixerStrip?.matches(mirror.registryStrip ?? mirror.pair.strip) == true else { return nil }
+              await proof.registry.resolve(mirror.reference)?.physicalMixerStrip?.matches(mirror.registryStrip ?? mirror.pair.strip) == true else {
+            Log.info("Owned name renewal refused: original source or registry continuity", subsystem: "ax")
+            return nil
+        }
+        var retainedStripName = mirror.retainedStripName
+        if retainedStripName?.utf8.elementsEqual(proof.before.utf8) == true {
+            // The verified rename can precede its Mixer label propagation.
+            // Only this owned Send renewal may advance the old name to the
+            // exact name already written; arbitrary changed labels stay refused.
+            let observed: String? = AXHelpers.HelpReadGuard.$current.withValue(
+                .init(allowHelpReads: false, stop: { !operationPermitted() })) {
+                    guard operationPermitted(),
+                          case .success(.some(let name)) = AXPluginInstanceIdentity.stripNameResult(
+                            source.pair.strip.strip, runtime: mirror.pair.track.runtime.ax) else { return nil }
+                    return name
+                }
+            if observed?.utf8.elementsEqual(proof.written.utf8) == true {
+                retainedStripName = proof.written
+            }
+        }
         var updated = proof
         updated.mirror = CoupledMirror(pair: source.pair, reference: mirror.reference, snapshot: mirror.snapshot,
             preservedTracks: mirror.preservedTracks, preservedStrips: mirror.preservedStrips,
             registryStrip: mirror.registryStrip ?? mirror.pair.strip, renewal: source,
-            retainedStripName: mirror.retainedStripName)
+            retainedStripName: retainedStripName)
         guard let renewed = updated.mirror,
               await renewed.isCurrent(name: proof.written, project: proof.project, target: proof.target, registry: proof.registry),
-              source.permits(runtime: mirror.pair.track.runtime) else { return nil }
+              source.permits(runtime: mirror.pair.track.runtime) else {
+            Log.info("Owned name renewal refused: renewed mirror or final source continuity", subsystem: "ax")
+            return nil
+        }
         return updated
     }
 
@@ -362,8 +384,12 @@ enum ExactTrackNameAdapter {
 
         func permitsStripName(_ name: String, before: String, after: String?) -> Bool {
             let expected = retainedStripName ?? before
-            return name.utf8.elementsEqual(expected.utf8)
+            let accepted = name.utf8.elementsEqual(expected.utf8)
                 || (expected.utf8.elementsEqual(before.utf8) && after.map { name.utf8.elementsEqual($0.utf8) } == true)
+            if !accepted {
+                Log.info("Owned name mirror refused: retained strip name changed (matches track name: \(name.utf8.elementsEqual(before.utf8)))", subsystem: "ax")
+            }
+            return accepted
         }
 
         /// Only adapter-issued earlier effects can revise this capture's peers.
@@ -552,12 +578,19 @@ enum ExactTrackNameAdapter {
                   pair.strip.projectPath?.utf8.elementsEqual(path.utf8) == true,
                   pair.track.document.utf8.elementsEqual(pair.strip.document.utf8),
                   await registry.resolve(target)?.physicalTrack?.matches(pair.track) == true,
-                  await registry.resolve(reference)?.physicalMixerStrip?.matches(registryStrip ?? pair.strip) == true else { return false }
+                  await registry.resolve(reference)?.physicalMixerStrip?.matches(registryStrip ?? pair.strip) == true else {
+                Log.info("Owned name mirror refused: operation or registry snapshot", subsystem: "ax")
+                return false
+            }
             let read = namesStillHeld(before: name)
+            if !read { Log.info("Owned name mirror refused: native names or membership", subsystem: "ax") }
             guard read, await registry.currentSnapshot == snapshot,
                   await registry.resolveCurrentProject(project)?.descriptor == projectBinding.descriptor,
                   // Actor bookends cannot replace the later native pair read.
-                  namesStillHeld(before: name), operationPermitted() else { return false }
+                  namesStillHeld(before: name), operationPermitted() else {
+                Log.info("Owned name mirror refused: final name or registry bookend", subsystem: "ax")
+                return false
+            }
             return true
         }
     }

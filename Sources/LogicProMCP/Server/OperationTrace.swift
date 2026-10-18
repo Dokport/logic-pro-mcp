@@ -237,7 +237,8 @@ struct OperationTrace: Sendable {
 }
 
 actor OperationTraceStore {
-    static let shared = OperationTraceStore()
+    // The default remains process-shared; injected scopes can isolate their trace lifetime.
+    @TaskLocal static var shared = OperationTraceStore()
     static let defaultMaximumTraceCount = 128
     static let defaultMaximumBytes = 8 * 1024 * 1024
     static let attributePrivacyClasses: [String: TracePrivacyClass] = [

@@ -523,6 +523,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
+        var captureClockReadsAfterName = 0
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
         var coupledGuardPlayReads = 0
@@ -2820,6 +2821,87 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("One retained approval composes an actual track rename and its occupied Send destination change",
+          arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project",
+                      "mixed", "physical_slot", "missing_witness", "decoded", "expired"], [false, true])
+    func canonicalNameAndPhysicalSendUseTheSameRetainedApproval(mode: String, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("An admitted name/Send operation keeps its checked native pair when inspection retention expires before dispatch",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendKeepsItsPairAcrossInspectionExpiry(mode: String, stable: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: stable, expireInspectionBeforeSendDispatch: true)
+        }
+    }
+
+    @Test("An owned name may reach the Mixer only when its Send redraws", arguments: [false, true], [false, true])
+    func canonicalNameSendAcceptsDelayedCoupledName(stable: Bool, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: "forward", canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: stable, delayedMixerName: "Selected Canonical",
+                freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("A Send redraw cannot adopt an unrelated Mixer name", arguments: [false, true])
+    func canonicalNameSendRefusesForeignDelayedMixerName(stable: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: "forward", canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: stable, delayedMixerName: "External")
+        }
+    }
+
+    @Test("A name edited after dispatch cannot authorize the later Send leaf", arguments: [false, true])
+    func canonicalNameSendRefusesALateExternalName(returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: "late_name", canonicalPhysical: true, canonicalName: true,
+                freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("A composed Send that preserves its original controls still publishes owned effect custody",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendRetainsSurvivingNativeControls(mode: String, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("Composed stable Send custody survives the native bulk-read path",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendRetainsSurvivingNativeControlsWithBulkReads(mode: String, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, stableDestinationBulkReads: true,
+                freshPhysicalReturn: returning)
+        }
+    }
+
+    @Test("A coupled Mixer name remains owned through a stable Send change",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalNameSendRetainsCoupledMixerName(mode: String, returning: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(restoring: true, emptyModeMenu: true,
+                canonicalSend: mode, canonicalPhysical: true, canonicalName: true,
+                stableDestinationControls: true, stableDestinationBulkReads: true,
+                coupledMixerName: true, freshPhysicalReturn: returning)
+        }
+    }
+
     @Test(arguments: ["forward", "cancel", "replacement", "late_replacement", "wrong_digest", "wrong_project", "physical_slot", "mixed", "missing_witness", "decoded", "unsupported_pair", "physical_removal"])
     func canonicalPhysicalSendReturnRetainsItsTypedBeforeAndOriginalControl(mode: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -3316,11 +3398,38 @@ struct Issue965HeldSelectionAssociationTests {
                                                creationSaga: String? = nil,
                                                canonicalSend: String? = nil,
                                                canonicalPhysical: Bool = false,
+                                               canonicalName: Bool = false,
+                                               stableDestinationControls: Bool = false,
+                                               stableDestinationBulkReads: Bool = false,
+                                               coupledMixerName: Bool = false,
+                                               delayedMixerName: String? = nil,
+                                               expireInspectionBeforeSendDispatch: Bool = false,
                                                freshPhysicalReturn: Bool = false,
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
+            if stableDestinationBulkReads { f.useBulkReads = true }
+            let nameField = b.element(1_971_400)
+            if canonicalName {
+                // No real AX activation or mouse fallback from an injected fixture.
+                f.routingMenuRename = true
+                b.setRole(nameField, kAXTextFieldRole as String)
+                b.setAttribute(nameField, kAXDescriptionAttribute as String, "Duplicate")
+                b.setAttribute(nameField, kAXValueAttribute as String, "0")
+                b.setAttribute(nameField, kAXWindowAttribute as String, f.window)
+                b.setChildren(nameField, [])
+                b.setChildren(f.headers[0], [nameField])
+                f.routingSetter = { element, attribute, value in
+                    guard CFEqual(element, nameField), attribute == kAXValueAttribute as String,
+                          let name = value as? String else { return nil }
+                    f.routingNameWrites.append(name)
+                    b.setAttribute(nameField, kAXDescriptionAttribute as String, name)
+                    b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
+                    if coupledMixerName { b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, name) }
+                    return true
+                }
+            }
             let inspectTypedMode = inspectSendWitness?.hasPrefix("typed_mode") == true
             let projectionWitness = inspectSendWitness.map {
                 $0.hasPrefix("typed_mode_projection_") ? String($0.dropFirst("typed_mode_".count)) : $0
@@ -3333,7 +3442,13 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? mixerOwner : $0 })
             let captureNow = ContinuousClock.now
             let cache = StateCache(sessionCaptureNow: {
-                f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
+                if expireInspectionBeforeSendDispatch, !f.routingNameWrites.isEmpty {
+                    f.captureClockReadsAfterName += 1
+                    // The journal before-read and executor's deciding before-read
+                    // both succeed. Only the dispatcher's later cache lookup expires.
+                    if f.captureClockReadsAfterName >= 3 { f.expireRetainedCapture = true }
+                }
+                return f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
             }), registry = TargetRegistry()
             let replacement = b.element(1_965_2600), root = b.element(1_965_2601)
             let restoredSource = b.element(1_965_2700)
@@ -3585,6 +3700,10 @@ struct Issue965HeldSelectionAssociationTests {
             }
             b.setActionNames(root, [kAXCancelAction as String])
             f.routingAction = { element, action in
+                if canonicalName, CFEqual(element, nameField) {
+                    if action == kAXConfirmAction as String { f.routingNameConfirms += 1 }
+                    return [kAXPressAction as String, kAXConfirmAction as String].contains(action)
+                }
                 if modeCommand != nil, action == kAXPressAction as String,
                    CFEqual(element, mode) || CFEqual(element, preFader) || CFEqual(element, postPan) {
                     modePeerBoundary?.beforeLeafPeerReads = modePeerBoundary?.peerReads ?? 0
@@ -3704,6 +3823,19 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, [f.strips[0], source]); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, destination) {
+                    if let delayedMixerName {
+                        b.setAttribute(stableDestinationControls ? b.element(1_965_711) : name,
+                            kAXValueAttribute as String, delayedMixerName)
+                    }
+                    if stableDestinationControls {
+                        f.routingDestinationPresses += 1
+                        b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                        b.setChildren(f.mixer, f.strips)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                        return true
+                    }
                     f.routingDestinationPresses += 1; f.routingReplacement = replacement
                     b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
@@ -3745,6 +3877,15 @@ struct Issue965HeldSelectionAssociationTests {
                     return true
                 }
                 if restoring, action == kAXPressAction as String, CFEqual(element, stereo) {
+                    if stableDestinationControls {
+                        f.routingDestinationPresses += 1
+                        b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", "")
+                        b.setChildren(f.mixer, f.strips)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                        return true
+                    }
                     f.routingDestinationPresses += 1; f.routingReplacement = restoredSource
                     b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
                     b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
@@ -3904,6 +4045,11 @@ struct Issue965HeldSelectionAssociationTests {
                 await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: journal,
                     mode: canonicalSend == "cancel" ? "cancel" : "completed", idempotencyKey: key,
                     beforeForward: {
+                        if canonicalName, canonicalSend == "late_name" {
+                            b.setAttribute(nameField, kAXDescriptionAttribute as String, "External")
+                            b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External")
+                            f.routingLateScopeInjected = true
+                        }
                         if canonicalSend == "late_replacement" {
                             let decoy = b.element(1_965_2799)
                             b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
@@ -3956,19 +4102,28 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     let request = try #require(await cache.retainedInspection(id: id)).request
                     let blocked = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: parsed, policyValue: .object(policy),
-                        names: [], capture: altered, request: request, snapshotCurrent: true)
+                        names: canonicalName ? [.init(target: "source", name: "Selected Canonical")] : [],
+                        capture: altered, request: request, snapshotCurrent: true)
                     let executable = try #require(sharedJSONObject(blocked.json)?["executable"] as? Bool)
                     #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
+                    if canonicalName { #expect(f.routingNameWrites.isEmpty) }
                     return
                 }
-                let plannedText = sharedToolText(await planHandler(dependencies,
-                    ["snapshot_id": .string(id), "policy": .object(policy)]))
+                var planArguments: [String: Value] = ["snapshot_id": .string(id), "policy": .object(policy)]
+                if canonicalName {
+                    #expect(ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
+                        targetReference: target, expectedBefore: "Duplicate", desiredAfter: "Selected Canonical"), capture: capture))
+                    planArguments["names"] = .array([.object([
+                        "target": .string("source"), "name": .string("Selected Canonical")])])
+                }
+                let plannedText = sharedToolText(await planHandler(dependencies, planArguments))
                 let planned = try #require(sharedJSONObject(plannedText))
                 if ["physical_slot", "mixed", "unsupported_pair", "physical_removal"].contains(canonicalSend) {
                     let executable = try #require(planned["executable"] as? Bool)
                     #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
+                    if canonicalName { #expect(f.routingNameWrites.isEmpty) }
                     return
                 }
                 let executable = try #require(planned["executable"] as? Bool)
@@ -3976,6 +4131,68 @@ struct Issue965HeldSelectionAssociationTests {
                 let planID = try #require(planned["plan_id"] as? String)
                 let digest = try #require(planned["digest"] as? String)
                 let preview = try #require(planned["steps"] as? [[String: Any]])
+                if canonicalName {
+                    try #require(executable, "The combined task must be executable, not a supported subset")
+                    #expect(preview.count == 2)
+                    #expect(preview.first?["kind"] as? String == "name")
+                    #expect(preview.last?["kind"] as? String == "local_send_output")
+                    #expect(preview.last?["dependencies"] as? [String] == ["name_source"])
+                    if canonicalSend == "replacement" {
+                        let decoy = b.element(1_965_2799)
+                        b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
+                        b.setChildren(decoy, []); b.setActionNames(decoy, [kAXPressAction as String])
+                        b.setChildren(b.element(1_965_2621), [b.element(1_965_2622), decoy])
+                    }
+                    if canonicalSend == "wrong_project" {
+                        b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
+                    let arguments: [String: Value] = ["plan_id": .string(planID),
+                        "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
+                        "confirmed": .bool(true), "idempotency_key": .string(key)]
+                    if canonicalSend == "expired" { f.expireRetainedCapture = true }
+                    let result = await apply(dependencies, arguments)
+                    let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if expireInspectionBeforeSendDispatch {
+                        #expect(f.captureClockReadsAfterName >= 3)
+                        #expect(f.expireRetainedCapture)
+                        #expect(await cache.retainedInspection(id: id) == nil)
+                    }
+                    if delayedMixerName == "External" {
+                        #expect(body["state"] as? String == "B")
+                        #expect(body["saga_state"] as? String != "completed")
+                        #expect(body["saga_state"] as? String != "fullyCompensated")
+                        #expect(f.routingNameWrites == ["Selected Canonical"])
+                        #expect(b.attributeValue(stableDestinationControls ? b.element(1_965_711) : name,
+                            kAXValueAttribute as String) as? String == "External")
+                    } else if canonicalSend == "late_name" {
+                        #expect(f.routingLateScopeInjected)
+                        #expect(f.routingNameWrites == ["Selected Canonical"])
+                        #expect(f.routingDestinationPresses == 0, "The later Send must refuse after the approved name is lost")
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "External")
+                        #expect(body["saga_state"] as? String != "completed")
+                        #expect(body["saga_state"] as? String != "fullyCompensated")
+                    } else if ["replacement", "wrong_digest", "wrong_project", "expired"].contains(canonicalSend) {
+                        #expect(body["state"] as? String == "C", "Actual refusal: \(sharedToolText(result))")
+                        #expect(f.routingNameWrites.isEmpty && f.routingDestinationPresses == 0)
+                    } else {
+                        let compensated = canonicalSend == "cancel" || canonicalSend == "late_replacement"
+                        #expect(body["saga_state"] as? String == (compensated ? "fullyCompensated" : "completed"),
+                            "Actual apply: \(sharedToolText(result))")
+                        #expect(f.routingNameWrites == (compensated ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
+                        #expect(f.routingDestinationPresses == (canonicalSend == "late_replacement" ? 0 : compensated ? 2 : 1))
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == (compensated ? "Duplicate" : "Selected Canonical"))
+                        if canonicalSend == "late_replacement" {
+                            #expect(f.routingLateScopeInjected && f.routingBypassMenuOpens == 0)
+                        }
+                    }
+                    let writes = f.routingDestinationPresses
+                    let nameWrites = f.routingNameWrites
+                    _ = await apply(dependencies, arguments)
+                    #expect(f.routingDestinationPresses == writes && f.routingNameWrites == nameWrites)
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
+                }
                 if canonicalMatching {
                     try #require(executable)
                     #expect(preview.isEmpty)

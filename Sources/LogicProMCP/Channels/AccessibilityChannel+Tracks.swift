@@ -3427,12 +3427,21 @@ extension AccessibilityChannel {
                 return ExactTrackNameAdapter.operationPermitted()
             }
             if AXHelpers.isAttributeSettable(editor, kAXValueAttribute as String, runtime: runtime.ax) == true {
-                guard editorIsHeld(),
-                      let value: String = AXHelpers.getAttribute(editor, kAXValueAttribute as String, runtime: runtime.ax),
-                      value.utf8.elementsEqual(expected.utf8),
-                      case .textEditing = readLogicKeyboardFocus(runtime: runtime),
-                      ExactTrackNameAdapter.coupledMenuWritePermitted(ownedEditor: editor), editorIsHeld() else {
-                    return refusal("Ordinary rename lost its held editor before the value setter")
+                guard editorIsHeld() else {
+                    return refusal("Ordinary rename lost initial editor custody before the value setter")
+                }
+                guard let value: String = AXHelpers.getAttribute(editor, kAXValueAttribute as String, runtime: runtime.ax),
+                      value.utf8.elementsEqual(expected.utf8) else {
+                    return refusal("Ordinary rename editor value changed before the value setter")
+                }
+                guard case .textEditing = readLogicKeyboardFocus(runtime: runtime) else {
+                    return refusal("Ordinary rename lost text focus before the value setter")
+                }
+                guard ExactTrackNameAdapter.coupledMenuWritePermitted(ownedEditor: editor) else {
+                    return refusal("Ordinary rename coupled footprint refused before the value setter")
+                }
+                guard editorIsHeld() else {
+                    return refusal("Ordinary rename lost final editor custody before the value setter")
                 }
                 attempted = true
                 // Use the actual String-valued editor, never the passive header label.
