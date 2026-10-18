@@ -13,6 +13,7 @@ private actor SagaSurfaceWriteProbeChannel: Channel {
     private let updatesState: Bool
     private var calls: [(operation: String, params: [String: String])] = []
     private var boundarySeenAtFirstDispatch = false
+    private var injectForeignTrace = false
 
     init(
         cache: StateCache = StateCache(),
@@ -29,12 +30,19 @@ private actor SagaSurfaceWriteProbeChannel: Channel {
     func start() async throws {}
     func stop() async {}
 
+    func enableForeignTrace() { injectForeignTrace = true }
+
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
         calls.append((operation, params))
         if calls.count == 1 {
-            boundarySeenAtFirstDispatch = await OperationTraceStore.shared.recent(limit: 128)
-                .first { $0.operationID == OperationID.systemSagaExecute.rawValue }?
-                .events.contains { $0.phase == .writeBoundaryCrossed } ?? false
+            if injectForeignTrace {
+                let foreign = await OperationTraceStore.shared.start(operationID: OperationID.systemSagaExecute.rawValue)
+                await OperationTraceStore.shared.complete(foreign)
+            }
+            if let parent = OperationTraceContext.current?.parentTraceID {
+                boundarySeenAtFirstDispatch = await OperationTraceStore.shared.trace(parent)?
+                    .events.contains { $0.phase == .writeBoundaryCrossed } ?? false
+            }
         }
         if failureCalls.contains(calls.count) {
             return .error(HonestContract.encodeStateC(
@@ -178,7 +186,9 @@ struct SagaSurfaceTests {
     private func withTraceEnabled<Result>(
         _ operation: () async throws -> Result
     ) async rethrows -> Result {
-        try await FeatureFlags.withAdr005OperationTraceForTests(true, operation: operation)
+        try await OperationTraceStore.$shared.withValue(OperationTraceStore()) {
+            try await FeatureFlags.withAdr005OperationTraceForTests(true, operation: operation)
+        }
     }
 
     private func resultObject(_ result: CallTool.Result) throws -> [String: Any] {
@@ -1666,30 +1676,29 @@ struct SagaSurfaceTests {
     func executeTraceBoundaryPrecedesStepDispatch() async throws {
         try await withTraceEnabled {
             try await withSagaFeatures {
-                await OperationTraceStore.shared.clear()
                 let fixture = await makeFixture()
-                let result = await dispatch(
-                    command: "saga_execute",
-                    params: plan(idempotencyKey: "trace-execute", steps: [
-                        step(
-                            operationID: .tracksRename,
-                            target: fixture.targets[0],
-                            valueParameter: "name",
-                            value: .string("Trace Bass")
-                        ),
-                    ]),
-                    fixture: fixture
-                )
+                await fixture.channel.enableForeignTrace()
+                let result = await OperationTraceContext.$current.withValue(OperationTraceContext()) {
+                    await dispatch(
+                        command: "saga_execute",
+                        params: plan(idempotencyKey: "trace-execute", steps: [
+                            step(
+                                operationID: .tracksRename,
+                                target: fixture.targets[0],
+                                valueParameter: "name",
+                                value: .string("Trace Bass")
+                            ),
+                        ]),
+                        fixture: fixture
+                    )
+                }
                 let object = try resultObject(result)
-                let trace = try #require(
-                    await OperationTraceStore.shared.recent(limit: 128)
-                        .first { $0.operationID == OperationID.systemSagaExecute.rawValue }
-                )
+                let traceID = try #require(object["trace_id"] as? String)
+                let trace = try #require(await OperationTraceStore.shared.trace(TraceID(rawValue: traceID)))
 
                 #expect(object["state"] as? String == "A")
                 #expect(trace.events.contains { $0.phase == .writeBoundaryCrossed })
                 #expect(await fixture.channel.sawSystemBoundaryAtFirstDispatch())
-                await OperationTraceStore.shared.clear()
             }
         }
     }
@@ -1698,30 +1707,33 @@ struct SagaSurfaceTests {
     func executeTraceDoesNotCrossForBlockingDialog() async throws {
         try await withTraceEnabled {
             try await withSagaFeatures {
-                await OperationTraceStore.shared.clear()
                 let fixture = await makeFixture()
-                let result = await dispatch(
-                    command: "saga_execute",
-                    params: plan(idempotencyKey: "trace-no-dispatch", steps: [
-                        step(
-                            operationID: .tracksRename,
-                            target: fixture.targets[0],
-                            valueParameter: "name",
-                            value: .string("Blocked")
-                        ),
-                    ]),
-                    fixture: fixture,
-                    dialogPresent: { true }
-                )
-                let trace = try #require(
-                    await OperationTraceStore.shared.recent(limit: 128)
-                        .first { $0.operationID == OperationID.systemSagaExecute.rawValue }
-                )
+                let context = OperationTraceContext()
+                let result = await OperationTraceContext.$current.withValue(context) {
+                    await dispatch(
+                        command: "saga_execute",
+                        params: plan(idempotencyKey: "trace-no-dispatch", steps: [
+                            step(
+                                operationID: .tracksRename,
+                                target: fixture.targets[0],
+                                valueParameter: "name",
+                                value: .string("Blocked")
+                            ),
+                        ]),
+                        fixture: fixture,
+                        dialogPresent: { true }
+                    )
+                }
+                // A different invocation may finish while this refused call is awaiting validation.
+                let foreign = await OperationTraceStore.shared.start(operationID: OperationID.systemSagaExecute.rawValue)
+                await OperationTraceStore.shared.record(foreign, phase: .writeBoundaryCrossed)
+                await OperationTraceStore.shared.complete(foreign)
+                let traceID = try #require(context.traceID)
+                let trace = try #require(await OperationTraceStore.shared.trace(traceID))
 
                 #expect(result.isError!)
                 #expect(!trace.events.contains { $0.phase == .writeBoundaryCrossed })
                 #expect(await fixture.channel.writeCount() == 0)
-                await OperationTraceStore.shared.clear()
             }
         }
     }
