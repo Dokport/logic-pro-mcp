@@ -218,6 +218,8 @@ Also open, outside the ADR set:
 
 | #1118 | OPEN | Feature request: observe markers without requiring an already-open Marker List; current unreadable/cache behavior is documented. Candidate ruler or last-saved project sources must retain provenance; owned opt-in navigation/restoration is an alternative. No implementation or fresh native qualification claimed. |
 
+| #1287 | closed | Closed by the pull request carrying this row. Reference-bound native whole-project MIDI export retains every target-owned raw chunk, including separated offscreen regions, and shares its managed file path with structured tick-based note reads. Cycle and region-selection preference controls, native transpose/quantization projection, wrong-reference and existing-file refusals accompany focused tests. Project/import equivalence and general loop/alias playback semantics remain explicitly unproven; #302 is not closed by this artifact-scoped provider. |
+
 ### Three reopen reasons, checked rather than inferred
 
 The instruction that produced this file asked for these to be established, not guessed:
