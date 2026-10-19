@@ -648,7 +648,9 @@ extension AccessibilityChannel {
             extras.merge(facts) { _, new in new }
             return refuse(error, hint + "; nothing was pressed.")
         }
-        if inputBusOnly, includingNonBusInputs || AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact) {
+        if inputBusOnly, includingNonBusInputs
+            || AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+            || InputAssignment.classifiedMenuTitle(originalLabel)?.busOutputAssignment != nil {
             // A foreign system alert can own the keyboard while Logic still
             // reports AXFrontmost. Refuse before opening a native popup that
             // the same keyboard-ownership boundary would forbid us to acquire.
@@ -656,7 +658,7 @@ extension AccessibilityChannel {
                   runtime.focusedApplicationPID() == pid,
                   AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
                   LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 else {
-                return refuse(.readbackUnavailable, "The neutral input read requires current Logic keyboard ownership; nothing was pressed.")
+                return refuse(.readbackUnavailable, "The input read requires current Logic keyboard ownership; nothing was pressed.")
             }
         }
         guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
@@ -673,15 +675,20 @@ extension AccessibilityChannel {
             if opened == nil || !(opened?.isEmpty ?? true) || !sourceOwned() { break }
             if timing.pollIntervalMs > 0 { try? await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) }
         } while !Task.isCancelled && Date() < deadline
-        // Neutral input/output native menus are not among the Mixer's AXChildren. This
+        // Native input and neutral-output menus may be absent from Mixer AXChildren. This
         // read-only alternate discovery is scoped to our own just-issued press,
         // absent pre-existing AX/CG popups and the unchanged original source.
         let nativePopup: NativeOutputReadPopup?
-        @Sendable func nativeNeutralScope(_ root: AXUIElement) -> Bool {
+        @Sendable func nativePopupScope(_ root: AXUIElement) -> Bool {
             if inputBusOnly {
                 if includingNonBusInputs {
                     guard let input = currentInputMenuAssignment(in: root, runtime: runtime.ax) else { return false }
                     return input != .noInput || hasCheckedNoInputMenu(in: root, runtime: runtime.ax)
+                }
+                if InputAssignment.classifiedMenuTitle(originalLabel)?.busOutputAssignment != nil {
+                    // The label only selects this existing reader. Agreeing live
+                    // root/leaf checks, never the label, establish the Bus value.
+                    return currentInputMenuBusAssignment(in: root, runtime: runtime.ax) != nil
                 }
                 return AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
                     && hasCheckedNoInputMenu(in: root, runtime: runtime.ax)
@@ -691,11 +698,12 @@ extension AccessibilityChannel {
         if sendOrdinal == nil, sendReplacement == nil,
            (inputBusOnly
                 ? (AXLocalePolicy.unassignedInputSlotLabel.matches(originalLabel, mode: .exact)
+                    || InputAssignment.classifiedMenuTitle(originalLabel)?.busOutputAssignment != nil
                     || (includingNonBusInputs && InputAssignment.classifiedMenuTitle(originalLabel) != nil))
                 : OutputAssignment.observed(slotLabel: originalLabel) == .noOutput),
            opened?.isEmpty == true, let app, sourceOwned(),
            let observed = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
-           nativeNeutralScope(observed.root),
+           nativePopupScope(observed.root),
            sourceOwned() {
             nativePopup = observed
             opened = [observed.root]
@@ -706,7 +714,7 @@ extension AccessibilityChannel {
             guard ordinary.isEmpty, let app, let windows = runtime.onScreenWindowList() else { return nil }
             if LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 { return [] }
             guard let current = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
-                  current.matches(nativePopup), nativeNeutralScope(current.root) else { return nil }
+                  current.matches(nativePopup), nativePopupScope(current.root) else { return nil }
             return [nativePopup.root]
         }
         defer { observingPopupFocus(nil) }

@@ -17,6 +17,7 @@ extension AccessibilityChannel {
             .error(HonestContract.encodeStateC(error: error, hint: hint, extras: extras))
         }
         func uncertain(_ reason: HonestContract.UncertainReason, _ hint: String) -> ChannelResult {
+            Log.info("Input verification uncertain: \(hint)", subsystem: "ax")
             extras["hint"] = hint
             return .success(HonestContract.encodeStateB(reason: reason, extras: extras))
         }
@@ -24,6 +25,12 @@ extension AccessibilityChannel {
             if let data = read.result.message.data(using: .utf8),
                let receipt = try? JSONSerialization.jsonObject(with: data) {
                 extras[key] = receipt
+                if let summary = receipt as? [String: Any], summary["state"] as? String != "A" {
+                    let effects = summary["ui_effects"] as? [String: Any]
+                    let status = ["state", "error", "popup_menu_state", "focus_restoration", "source_custody_after_cleanup"]
+                        .map { "\($0)=\(summary[$0].map(String.init(describing:)) ?? "unavailable")" }.joined(separator: ",")
+                    Log.info("Input acquisition unavailable: stage=\(key),\(status),restoration=\(effects?["restoration"] as? String ?? "unavailable"),reason=\(effects?["reason"] as? String ?? "none")", subsystem: "ax")
+                }
                 // The final acquisition may navigate after an earlier writer inverse restored.
                 // Merge receipts only; no decoded field supplies source or write authority.
                 if key == "after_acquisition",

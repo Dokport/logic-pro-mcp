@@ -108,7 +108,10 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     // A Track intent addresses this exact original header, not the retired mix_ ref.
                     let renewal = await AccessibilityChannel.renewSourceThroughOriginalHeader(captured,
                         original: captured.strip, runtime: captured.track.runtime)
-                    guard let source = renewal.source, source.permits(runtime: captured.track.runtime) else { return nil }
+                    guard let source = renewal.source, source.permits(runtime: captured.track.runtime) else {
+                        Log.info("Input Saga source renewal unavailable: restoration=\(renewal.effects.restoration),reason=\(renewal.effects.reason ?? "none")", subsystem: "saga")
+                        return nil
+                    }
                     held = source.pair; self.readRenewal = source
                 } else { held = captured }
             }
@@ -118,7 +121,8 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                 }
             }
             let current = reading.inputRenewal?.pair ?? held
-            guard reading.result.isSuccess, let receipt = decodedJSONObject(reading.result.message),
+            let receipt = decodedJSONObject(reading.result.message)
+            guard reading.result.isSuccess, let receipt,
                   receipt["state"] as? String == "A", receipt["popup_menu_state"] as? String == "closed",
                   case .bus(let actual)? = reading.assignment,
                   actual == Self.bus(self.forward.params["expected_current"]),
@@ -128,7 +132,14 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                   reading.inputRenewal.map({ $0.original.matches(held.strip) && $0.originalTrack.matches(held.track)
                     && $0.permits(runtime: held.track.runtime) }) ?? current.strip.matches(held.strip),
                   await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
-                    operation: "saga.input_bus") == nil else { return nil }
+                    operation: "saga.input_bus") == nil else {
+                // Only existing bounded status fields, never project/target data.
+                let effects = receipt?["ui_effects"] as? [String: Any]
+                let status = ["state", "error", "popup_menu_state", "focus_restoration", "source_custody_after_cleanup"]
+                    .map { "\($0)=\(receipt?[$0].map(String.init(describing:)) ?? "unavailable")" }.joined(separator: ",")
+                Log.info("Input Saga before-state unavailable: \(status),restoration=\(effects?["restoration"] as? String ?? "unavailable"),reason=\(effects?["reason"] as? String ?? "none")", subsystem: "saga")
+                return nil
+            }
             self.pair = current; self.readControl = control
             self.readRenewal = reading.inputRenewal ?? self.readRenewal
             return .init(read: .init(readSource: .axInputMenuCheckmark, provenance: .liveIndependent,

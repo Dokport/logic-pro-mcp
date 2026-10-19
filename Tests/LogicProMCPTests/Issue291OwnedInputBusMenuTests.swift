@@ -14,6 +14,7 @@ struct Issue291OwnedInputBusMenuTests {
     }
     private func prepare(_ number: Int = 1) throws -> Prepared {
         let f = try Issue291PhysicalStripReferenceTests.Fixture()
+        f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
         f.b.setAttribute(f.outputs[0],kAXDescriptionAttribute as String,"Bus 256")
         f.b.setAttribute(f.outputs[0],kAXHelpAttribute as String,"Input slot. Choose the channel strip input source.")
         f.b.setActionNames(f.outputs[0],[kAXPressAction as String])
@@ -39,6 +40,116 @@ struct Issue291OwnedInputBusMenuTests {
         return await AXMixerStripBinding.$current.withValue(binding) {
             await AccessibilityChannel.getInputBusVerified(runtime:f.logic,timing:.immediate)
         }
+    }
+
+    @Test("Assigned Bus window-root popups retain the same checked input through both owned readers",
+          arguments: [false, true], ["owned", "wrong_window", "wrong_mixer", "frame_disagrees",
+              "nonreciprocal_root", "foreign_popup", "duplicate_popup", "source_changed",
+              "document_changed", "foreign_focus", "contradictory_marks", "unread_mark",
+              "preexisting_foreign_focus", "unread_focus", "not_frontmost", "unread_frontmost"])
+    func assignedBusWindowRootPopup(internalReader: Bool, fault: String) async throws {
+        let p = try prepare(1), f = p.f
+        let wrapper = f.b.element(291_960)
+        f.b.setAttribute(f.app, kAXFrontmostAttribute as String, true)
+        f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "Bus 1")
+        f.b.setRole(wrapper, kAXPopUpButtonRole as String)
+        f.b.setAttribute(wrapper, kAXParentAttribute as String, f.mixer)
+        f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.window)
+        f.b.setAttribute(f.root, kAXWindowAttribute as String, f.window)
+        f.b.setFrame(f.root, x: 20, y: 100, width: 230, height: 175)
+        // This wrapper deliberately leaves the root outside Mixer AXChildren.
+        f.outputMenuWrapper = wrapper
+        f.popupFrame = CGRect(x: 20, y: 100, width: 230, height: 175)
+        switch fault {
+        case "not_frontmost": f.b.setAttribute(f.app, kAXFrontmostAttribute as String, false)
+        case "wrong_window": f.b.setAttribute(wrapper, kAXWindowAttribute as String, f.b.element(291_961))
+        case "wrong_mixer": f.b.setAttribute(wrapper, kAXParentAttribute as String, f.b.element(291_961))
+        case "frame_disagrees": f.b.setFrame(f.root, x: 21, y: 100, width: 230, height: 175)
+        case "nonreciprocal_root":
+            f.onChildrenResultRead = { node in
+                if CFEqual(node, wrapper) { f.b.setChildren(wrapper, []) }
+            }
+        case "contradictory_marks": f.b.setAttribute(p.leaf, kAXTitleAttribute as String, "Bus 2 ← Audio 2")
+        case "unread_mark":
+            f.attributeReadResult = { node, attribute in
+                if CFEqual(node, p.leaf), attribute == "AXMenuItemMarkChar" {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return nil
+            }
+        case "unread_frontmost":
+            f.attributeReadResult = { node, attribute in
+                if CFEqual(node, f.app), attribute == kAXFrontmostAttribute as String { return .success(nil) }
+                return nil
+            }
+        default: break
+        }
+        if fault == "foreign_popup" || fault == "duplicate_popup" {
+            f.onChildrenResultRead = { node in
+                guard CFEqual(node, f.mixer), !f.mutations.isEmpty else { return }
+                let popup: [String: Any] = [kCGWindowOwnerPID as String: fault == "foreign_popup" ? f.pid + 1 : f.pid,
+                    kCGWindowNumber as String: 291_901,
+                    kCGWindowLayer as String: LogicOnScreenWindows.popupMenuLevel,
+                    kCGWindowBounds as String: CGRect(x: 20, y: 100, width: 230, height: 175).dictionaryRepresentation]
+                f.popupWindowsOverride = [popup]
+                if fault == "duplicate_popup" {
+                    var other = popup
+                    other[kCGWindowNumber as String] = 291_902
+                    f.popupWindowsOverride?.append(other)
+                }
+            }
+        }
+        f.outputHitTest = { app, point in
+            #expect(CFEqual(app, f.app))
+            #expect(point == CGPoint(x: 135, y: 187.5))
+            switch fault {
+            case "source_changed": f.reorder([1])
+            case "document_changed": f.b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///wrong.logicx")
+            case "foreign_focus": f.b.setAttribute(f.app, kAXFrontmostAttribute as String, false)
+            default: break
+            }
+            return .success(p.echo)
+        }
+        let binding = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let base = f.logic
+        let runtime: AXLogicProElements.Runtime
+        if fault == "preexisting_foreign_focus" || fault == "unread_focus" {
+            runtime = .init(logicProPID: base.logicProPID, ax: base.ax,
+                onScreenWindowList: base.onScreenWindowList,
+                focusedApplicationPID: { fault == "preexisting_foreign_focus" ? f.pid + 1 : nil })
+        } else { runtime = base }
+        let reading = await AXMixerStripBinding.$current.withValue(binding) {
+            if internalReader {
+                return await AccessibilityChannel.getCheckedInputObservation(runtime: runtime, timing: .immediate)
+            }
+            return await AccessibilityChannel.getInputBusObservation(runtime: runtime, timing: .immediate)
+        }
+        let body = try #require(sharedJSONObject(reading.result.message))
+        if fault != "owned" {
+            #expect(body["state"] as? String == "C")
+            #expect(reading.assignment == nil)
+            #expect(reading.inputSlot == nil)
+            let writeAttempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!writeAttempted)
+            let expectedActions = ["preexisting_foreign_focus", "unread_focus", "not_frontmost", "unread_frontmost"].contains(fault) ? 0 : 1
+            #expect(f.mutations.count == expectedActions)
+            #expect(f.mutations.allSatisfy { CFEqual($0.0, f.outputs[0]) && $0.1 == kAXPressAction as String })
+            return
+        }
+        #expect(body["state"] as? String == "A")
+        #expect(reading.assignment == .bus(1))
+        let inputSlot = try #require(reading.inputSlot)
+        #expect(inputSlot.owner.matches(binding))
+        #expect(body["popup_menu_state"] as? String == "closed")
+        #expect(body["output_checkmark_reads_observed"] as? Int == 2)
+        let readsAgree = try #require(body["output_checkmark_reads_agree"] as? Bool)
+        #expect(readsAgree)
+        #expect(f.mutations.count == 2)
+        #expect(CFEqual(f.mutations.first!.0, f.outputs[0]))
+        #expect(f.mutations.first!.1 == kAXPressAction as String)
+        #expect(CFEqual(f.mutations.last!.0, f.root))
+        #expect(f.mutations.last!.1 == kAXCancelAction as String)
     }
 
     private func prepareInputDomain(_ kind: String) throws -> (Prepared, InputAssignment) {
