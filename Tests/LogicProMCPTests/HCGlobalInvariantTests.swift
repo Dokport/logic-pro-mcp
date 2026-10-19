@@ -332,6 +332,8 @@ struct HCGlobalInvariantTests {
             // #575: routes to the REGION channel rather than to an `edit.*` operation — the command
             // is an edit-family verb on the current selection, the implementation lives with the
             // other region readbacks.
+            RouteCase(tool: "logic_midi", command: "export_track_midi", params: ["project_ref": .string("prj_00000000-0000-0000-0000-000000000001"), "target_ref": .string("trk_00000000-0000-0000-0000-000000000002"), "path": .string("/tmp/hc-track.mid")], operation: "midi.export_track_midi", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_midi", command: "read_track_notes", params: ["project_ref": .string("prj_00000000-0000-0000-0000-000000000001"), "target_ref": .string("trk_00000000-0000-0000-0000-000000000002")], operation: "midi.read_track_notes", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_edit", command: "move_to_playhead", params: [:], operation: "region.move_to_playhead", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_edit", command: "bounce_in_place", params: [:], operation: "edit.bounce_in_place", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_edit", command: "normalize", params: [:], operation: "edit.normalize", destinations: [], invariant: .minimumV1),
@@ -420,6 +422,15 @@ struct HCGlobalInvariantTests {
             saveAsProjectPath: try Self.makeLogicProjectPath(create: false)
         )
         for routeCase in Self.routeCases(fixtures: fixtures) where routeCase.tool == "logic_midi" {
+            if ["export_track_midi", "read_track_notes"].contains(routeCase.command) {
+                // These use the request-owned native provider, not ChannelRouter.
+                #expect(ChannelRouter.routingTable[routeCase.operation] == nil)
+                let result = try await Self.execute(routeCase)
+                let body = try #require(sharedJSONObject(sharedToolText(result)))
+                #expect(body["state"] as? String == "A")
+                #expect(body["provider"] as? String == "native_whole_project_smf_export")
+                continue
+            }
             let destinations = try #require(ChannelRouter.routingTable[routeCase.operation])
             #expect(
                 destinations == routeCase.destinations,
@@ -605,7 +616,14 @@ struct HCGlobalInvariantTests {
             }
             return await MixerDispatcher.handle(command: routeCase.command, params: routeCase.params, router: router, cache: cache)
         case "logic_midi":
-            return await MIDIDispatcher.handle(command: routeCase.command, params: routeCase.params, router: router, cache: cache)
+            return await MIDIDispatcher.handle(command: routeCase.command, params: routeCase.params, router: router, cache: cache,
+                trackFileExport: { _, _, _ in
+                    // Envelope/dispatcher fixture, never native qualification.
+                    let bytes = Data([0x4D,0x54,0x68,0x64,0,0,0,6,0,1,0,2,1,0xE0,
+                        0x4D,0x54,0x72,0x6B,0,0,0,4,0,0xFF,0x2F,0,
+                        0x4D,0x54,0x72,0x6B,0,0,0,12,0,0x90,60,100,1,0x80,60,0,0,0xFF,0x2F,0])
+                    return .init(document: try SMFReader.parseDocument(bytes))
+                })
         case "logic_edit":
             return await EditDispatcher.handle(command: routeCase.command, params: routeCase.params, router: router, cache: cache)
         case "logic_navigate":

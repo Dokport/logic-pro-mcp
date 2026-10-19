@@ -990,6 +990,8 @@ struct OperationRegistryTests {
         ("midi.send_sysex", "send_sysex", .mutating, .short, .none),
         ("midi.play_sequence", "play_sequence", .mutating, .medium, .none),
         ("midi.import_file", "import_file", .mutating, .long, .readbackRequired),
+        ("midi.export_track_midi", "export_track_midi", .mutating, .long, .readbackRequired),
+        ("midi.read_track_notes", "read_track_notes", .mutating, .long, .readbackRequired),
         ("midi.list_ports", "list_ports", .readOnly, .short, .none),
         ("midi.create_virtual_port", "create_virtual_port", .mutating, .short, .none),
         ("midi.step_input", "step_input", .mutating, .short, .none),
@@ -1031,7 +1033,8 @@ struct OperationRegistryTests {
             #expect(spec.command == entry.command)
             #expect(spec.mutability == entry.mutability)
             #expect(spec.confirmation == .none)
-            #expect(spec.target == .none)
+            let expectedTarget: TargetPolicy = ["export_track_midi", "read_track_notes"].contains(entry.command) ? .acceptsStableTarget : .none
+            #expect(spec.target == expectedTarget)
             #expect(spec.verification == entry.verification)
             #expect(spec.retry == .neverAutomatic)
             #expect(spec.deadline == entry.deadline)
@@ -1059,6 +1062,7 @@ struct OperationRegistryTests {
             "send_note", "send_chord", "send_cc", "send_program_change", "send_pitch_bend",
             "send_aftertouch", "send_sysex", "play_sequence", "import_file", "create_virtual_port",
             "step_input", "mmc_play", "mmc_stop", "mmc_record", "mmc_locate",
+            "export_track_midi", "read_track_notes",
         ]))
         #expect(OperationRegistry.mutatingCommands(tool: tool) == expected)
         #expect(!expected.contains("list_ports"))
@@ -1072,7 +1076,7 @@ struct OperationRegistryTests {
     func midiDeadlineParity() {
         #expect(Self.midiCommands.filter { $0.deadline == .short }.count == 14)
         #expect(Self.midiCommands.filter { $0.deadline == .medium }.map(\.command) == ["play_sequence"])
-        #expect(Self.midiCommands.filter { $0.deadline == .long }.map(\.command) == ["import_file"])
+        #expect(Self.midiCommands.filter { $0.deadline == .long }.map(\.command) == ["import_file", "export_track_midi", "read_track_notes"])
 
         for entry in Self.midiCommands {
             #expect(OperationRegistry.deadlineSeconds(tool: "logic_midi", command: entry.command)

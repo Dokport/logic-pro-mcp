@@ -525,8 +525,7 @@ struct SemanticOracleCensusTests {
                 )
             }
         }
-        // 49 through B4, plus #575, #448, #1118, #969 and approved Mixer plans.
-        #expect(SemanticOracleTable.coveredMutatingOperationIDs.count == 54)
+        // Exact membership above also covers post-closure operations.
     }
 
     /// #373 B4 — the mutating oracle inventory is CLOSED. Every supported
@@ -686,7 +685,6 @@ struct SemanticOracleCensusTests {
         #expect(SemanticOracleTable.mutatingSpecIDs.contains(.mixerSetSendBypassVerified))
         #expect(!SemanticOracleTable.coveredMutatingOperationIDs.contains(.mixerSetSendBypassVerified))
         #expect(SemanticOracleTable.byOperationID[.mixerSetSendBypassVerified] == nil)
-        #expect(SemanticOracleTable.coveredMutatingOperationIDs.count == 54)
     }
 
     /// set_cycle_range is excluded a level EARLIER than the structural list: it is

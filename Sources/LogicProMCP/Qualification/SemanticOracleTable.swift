@@ -253,6 +253,7 @@ enum SemanticOracleTable {
         .navigateToggleView,
         .navigateCaptureMarkers,
         .projectApplySessionRepair,
+        .midiExportTrackMIDI, .midiReadTrackNotes,
     ]
 
     /// Every mutating operation the table covers: the B1 verified-write increment
@@ -626,6 +627,7 @@ enum SemanticOracleTable {
         editMoveToPlayhead,
         navigateSetMixerVisibility,
         projectApplySessionRepair,
+        midiExportTrackMIDI, midiReadTrackNotes,
     ]
 
     static let byOperationID: [OperationID: OperationOracle] = Dictionary(
@@ -2661,6 +2663,26 @@ enum SemanticOracleTable {
     )
 
     // MARK: - #373 Phase B3 — midi safe-mutation oracles
+
+    // File-artifact facts only; these do not pin project/import equivalence.
+    static let midiExportTrackMIDI = nativeTrackMIDIOracle(.midiExportTrackMIDI)
+    static let midiReadTrackNotes = nativeTrackMIDIOracle(.midiReadTrackNotes)
+
+    private static func nativeTrackMIDIOracle(_ id: OperationID) -> OperationOracle {
+        SafeMutationOracle.oracle(id, semantics: [
+            .valueEquals(key: "provider", expected: .string("native_whole_project_smf_export")),
+            .valueEquals(key: "verification_scope", expected: .string("export_artifact_and_track_binding")),
+            .valueEquals(key: "timing_origin", expected: .string("smf_tick_zero")),
+            .valueEquals(key: "project_timeline_mapping", expected: .string("unproven")),
+            .valueEquals(key: "import_comparison", expected: .string("not_performed")),
+            .valueEquals(key: "smf_format", expected: .number(1)),
+            .numericRange(key: "ppq", min: 1, max: 32_767),
+            .numericRange(key: "smf_track_count", min: 2, max: 65_535),
+            .typedField(key: "project_ref", type: .string),
+            .typedField(key: "target_ref", type: .string),
+            .typedField(key: "notes", type: .array),
+        ] + (id == .midiExportTrackMIDI ? [.typedField(key: "path", type: .string)] : []))
+    }
 
     // AccessibilityChannel+MIDIImport `defaultImportMIDIFile` → encodeStateA (chain
     // [.accessibility]). State A is reached ONLY when a new track appeared
