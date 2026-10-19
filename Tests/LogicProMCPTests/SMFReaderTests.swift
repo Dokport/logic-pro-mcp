@@ -371,7 +371,26 @@ func testSMFDocumentRejectsUnreadableArtifactWithoutPartialMetadata(fault: Strin
     }
 }
 
-@Test(arguments: ["unnamed", "renamed", "late_name", "invalid_utf8", "channel_conductor", "format_zero"])
+@Test func testSMFTrackExtractionPreservesRegionOffsetBeforeOwnerMetadata() throws {
+    let end: [UInt8] = [0, 0xFF, 0x2F, 0]
+    let conductor = trackData(end)
+    let first = namedSMFTrack("Target", events: [0xF8, 0, 0x90, 60, 100, 1, 0x80, 60, 0] + end)
+    // Logic places a separate region's offset before its channel-prefix and
+    // name metadata, not between a tick-zero owner label and the first note.
+    var laterEvents = SMFWriter.encodeVLQ(184_320)
+    laterEvents += [0xFF, 0x20, 1, 0, 0, 0xFF, 3, 6]
+    laterEvents += Array("Region".utf8)
+    laterEvents += [0, 0xFF, 4, 6] + Array("Target".utf8)
+    laterEvents += [0, 0xB0, 110, 0, 0xF8, 0, 0x90, 60, 100, 1, 0x80, 60, 0] + end
+    let later = trackData(laterEvents)
+    let peer = namedSMFTrack("Peer", events: [0, 0x90, 67, 100, 1, 0x80, 67, 0] + end)
+    let exported = try SMFReader.extractTracks(namedInstrument: "Target",
+        from: smfData(format: 1, tracks: [conductor, first, later, peer]))
+    #expect(exported == smfData(format: 1, tracks: [conductor, first, later]))
+    #expect(try SMFReader.parseDocument(exported).notes.map(\.startTick) == [15_360, 199_680])
+}
+
+@Test(arguments: ["unnamed", "renamed", "unowned_prefix", "unowned_sysex", "late_name_after_note", "invalid_utf8", "channel_conductor", "format_zero"])
 func testSMFTrackExtractionRefusesUnownedOrAmbiguousFileLayout(fault: String) {
     let end: [UInt8] = [0, 0xFF, 0x2F, 0]
     let conductor = trackData(fault == "channel_conductor" ? [0, 0xB0, 7, 100] + end : end)
@@ -380,7 +399,10 @@ func testSMFTrackExtractionRefusesUnownedOrAmbiguousFileLayout(fault: String) {
     switch fault {
     case "unnamed": other = trackData([0, 0x90, 72, 100, 1, 0x80, 72, 0] + end)
     case "renamed": other = namedSMFTrack("Peer", events: [0, 0xFF, 4, 6] + Array("Target".utf8) + end)
-    case "late_name": other = trackData([1, 0xFF, 4, 4] + Array("Peer".utf8) + end)
+    case "unowned_prefix": other = trackData([0, 0xB0, 7, 100, 1, 0xFF, 4, 4] + Array("Peer".utf8) + end)
+    case "unowned_sysex": other = trackData([0, 0xF0, 2, 0x7D, 0xF7, 1, 0xFF, 4, 4] + Array("Peer".utf8) + end)
+    case "late_name_after_note": other = trackData([0, 0x90, 72, 100, 0, 0xFF, 4, 4]
+        + Array("Peer".utf8) + [1, 0x80, 72, 0] + end)
     case "invalid_utf8": other = trackData([0, 0xFF, 4, 1, 0xFF] + end)
     default: other = namedSMFTrack("Peer", events: end)
     }

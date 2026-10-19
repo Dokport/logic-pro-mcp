@@ -45,6 +45,7 @@ struct SMFReader {
         let originalChunk: Data
         let instrumentNames: [InstrumentName]
         let hasNonMetaEvents: Bool
+        let hasUnownedEvents: Bool
     }
 
     struct TempoChange: Equatable {
@@ -101,7 +102,8 @@ struct SMFReader {
             tempoChanges.append(contentsOf: track.tempoChanges)
             timeSignatures.append(contentsOf: track.timeSignatures)
             fileTracks.append(FileTrack(originalChunk: Data(fileBytes[chunkStart..<reader.index]),
-                instrumentNames: track.instrumentNames, hasNonMetaEvents: track.hasNonMetaEvents))
+                instrumentNames: track.instrumentNames, hasNonMetaEvents: track.hasNonMetaEvents,
+                hasUnownedEvents: track.hasUnownedEvents))
         }
         guard reader.isAtEnd else { throw SMFReaderError.invalidTrackLength }
 
@@ -112,7 +114,8 @@ struct SMFReader {
 
     /// Exact file-metadata selection only, never a Logic target-identity proof.
     /// The supported layout has one meta-only conductor followed by tracks with
-    /// one UTF-8 instrument-name event at tick zero. Original chunks (including
+    /// one UTF-8 instrument-name event before any channel or SysEx event. The
+    /// initial region offset may precede its metadata. Original chunks (including
     /// controllers, programs, SysEx and unknown metadata) are copied, not encoded
     /// from the notes projection. A caller still needs independent host binding.
     static func extractTracks(namedInstrument name: String, from data: Data) throws -> Data {
@@ -126,7 +129,7 @@ struct SMFReader {
         var matching: [FileTrack] = []
         for track in document.fileTracks.dropFirst() {
             guard track.instrumentNames.count == 1, let observed = track.instrumentNames.first,
-                  observed.tick == 0, !observed.bytes.isEmpty,
+                  !track.hasUnownedEvents, !observed.bytes.isEmpty,
                   String(data: observed.bytes, encoding: .utf8) != nil else {
                 throw TrackExtractionError.unsupportedFileLayout
             }
@@ -148,6 +151,7 @@ struct SMFReader {
         let timeSignatures: [TimeSignatureChange]
         let instrumentNames: [InstrumentName]
         let hasNonMetaEvents: Bool
+        let hasUnownedEvents: Bool
     }
 
     private struct NoteKey: Hashable {
@@ -186,6 +190,7 @@ struct SMFReader {
         var timeSignatures: [TimeSignatureChange] = []
         var instrumentNames: [InstrumentName] = []
         var hasNonMetaEvents = false
+        var hasUnownedEvents = false
         var sawEndOfTrack = false
 
         while !reader.isAtEnd {
@@ -203,10 +208,12 @@ struct SMFReader {
                 }
             } else if first == 0xF0 || first == 0xF7 {
                 hasNonMetaEvents = true
+                hasUnownedEvents = hasUnownedEvents || instrumentNames.isEmpty
                 runningStatus = nil
                 try reader.skip(try reader.readVLQ())
             } else {
                 hasNonMetaEvents = true
+                hasUnownedEvents = hasUnownedEvents || instrumentNames.isEmpty
                 try parseChannelEvent(
                     firstByte: first,
                     tick: tick,
@@ -221,7 +228,8 @@ struct SMFReader {
         guard sawEndOfTrack else { throw SMFReaderError.missingEndOfTrack }
         guard active.values.allSatisfy(\.isEmpty) else { throw SMFReaderError.danglingNotes }
         return ParsedTrack(notes: notes, tempoChanges: tempoChanges, timeSignatures: timeSignatures,
-            instrumentNames: instrumentNames, hasNonMetaEvents: hasNonMetaEvents)
+            instrumentNames: instrumentNames, hasNonMetaEvents: hasNonMetaEvents,
+            hasUnownedEvents: hasUnownedEvents)
     }
 
     private static func parseMetaEvent(
