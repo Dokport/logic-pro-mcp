@@ -191,7 +191,7 @@ enum ProcessUtils {
     static func logicOwnsTheKeyboard() -> Bool {
         let observed = keyboardOwnershipObservation()
         if !observed.isReady {
-            Log.info("Logic keyboard ownership unavailable: \(observed.reason.rawValue)", subsystem: "process")
+            Log.info("Logic keyboard ownership unavailable: \(observed.diagnostic)", subsystem: "process")
         }
         return observed.isReady
     }
