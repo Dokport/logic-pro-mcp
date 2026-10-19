@@ -23,6 +23,34 @@
   "retired"
  ],
  "labels": {
+  "allMIDITracksAsMIDIFileMenuItem": {
+   "canonical": "All MIDI Tracks as MIDI File…",
+   "variants": [
+    "모든 MIDI 트랙을 MIDI 파일로…",
+    "すべてのMIDIトラックをMIDIファイルとして…",
+    "Alle MIDI-Spuren als MIDI-Datei …",
+    "Todas las pistas MIDI como archivo MIDI…",
+    "Toutes les pistes MIDI en fichiers MIDI…",
+    "Tutte le tracce MIDI come file MIDI…",
+    "Todas as Pistas de MIDI como Arquivo de MIDI…",
+    "所有 MIDI 轨道为 MIDI 文件…",
+    "將所有 MIDI 音軌轉換為 MIDI 檔案⋯"
+   ],
+   "rationale": "Whole-project MIDI export leaf, distinct from Selection as MIDI and the separate Export All MIDI Tracks key-command name. The Korean leaf was observed in the native File > Export menu; the remaining spellings are derived from this installed menu row, not additional live qualifications.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "derived",
+    "ko-KR": "derived",
+    "ja-JP": "derived",
+    "de-DE": "derived",
+    "es-ES": "derived",
+    "fr-FR": "derived",
+    "it-IT": "derived",
+    "pt-BR": "derived",
+    "zh-CN": "derived",
+    "zh-TW": "derived"
+   }
+  },
   "allTracksAsAudioFilesMenuItem": {
    "canonical": "All Tracks as Audio Files…",
    "variants": [

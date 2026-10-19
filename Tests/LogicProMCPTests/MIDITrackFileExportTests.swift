@@ -78,6 +78,14 @@ private final class MIDIFileExportFixture {
     #expect(result.document.notes.map(\.pitch) == [60])
 }
 
+@Test func midiWholeProjectExportLeafIsDistinctFromSelectionAndKeyCommandNames() {
+    let labels = AXLocalePolicy.allMIDITracksAsMIDIFileMenuItem
+    #expect(labels.matches("모든 MIDI 트랙을 MIDI 파일로…", mode: .exactStrict))
+    #expect(labels.matches("All MIDI Tracks as MIDI File…", mode: .exactStrict))
+    #expect(!labels.matches("선택 범위를 MIDI 파일로…", mode: .exactStrict))
+    #expect(!labels.matches("Export All MIDI Tracks as MIDI File…", mode: .exactStrict))
+}
+
 @MainActor @Test func midiTrackFileExportPublishesOnlyTheBoundTrackWithoutReplacingFiles() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)

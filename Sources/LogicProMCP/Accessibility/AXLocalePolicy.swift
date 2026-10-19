@@ -682,6 +682,13 @@ enum AXLocalePolicy {
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/All%20Tracks%20as%20Audio%20Files%E2%80%A6#value"
     )
 
+    static let allMIDITracksAsMIDIFileMenuItem = LabelSet(
+        canonical: "All MIDI Tracks as MIDI File…",
+        variants: ["모든 MIDI 트랙을 MIDI 파일로…", "すべてのMIDIトラックをMIDIファイルとして…", "Alle MIDI-Spuren als MIDI-Datei\u{00A0}…", "Todas las pistas MIDI como archivo MIDI…", "Toutes les pistes MIDI en fichiers MIDI…", "Tutte le tracce MIDI come file MIDI…", "Todas as Pistas de MIDI como Arquivo de MIDI…", "所有 MIDI 轨道为 MIDI 文件…", "將所有 MIDI 音軌轉換為 MIDI 檔案⋯"],
+        rationale: "Whole-project MIDI export leaf, distinct from Selection as MIDI and the separate Export All MIDI Tracks key-command name. The Korean leaf was observed in the native File > Export menu; the remaining spellings are derived from this installed menu row, not additional live qualifications.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/All%20MIDI%20Tracks%20as%20MIDI%20File%E2%80%A6#value"
+    )
+
     /// #369: controls inside the per-track stem-export panel. The panel's own
     /// window title is the OS Open-panel string, so it is not a usable signal.
     static let oneFilePerTrackPopupValue = LabelSet(
@@ -3587,6 +3594,7 @@ enum AXLocalePolicy {
         controlSurfaceModelLabel,
         exportMenuItem,
         allTracksAsAudioFilesMenuItem,
+        allMIDITracksAsMIDIFileMenuItem,
         oneFilePerTrackPopupValue,
         stemExportCommitButton,
         stemExportDismissButton,
