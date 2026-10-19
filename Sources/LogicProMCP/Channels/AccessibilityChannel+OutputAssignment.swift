@@ -568,6 +568,17 @@ extension AccessibilityChannel {
         let originalTrack: AXTrackBinding.Binding
         let observation: HeldSelectionAssociation
 
+        /// A retired original focus can be restored only through its actual selected header.
+        func restoresOriginalFocus(of prior: HeldSelectionAssociation, source: AXMixerStripBinding.Binding,
+            runtime: AXLogicProElements.Runtime) -> Bool {
+            original.matches(source)
+                && CFEqual(prior.originalFocus, source.strip)
+                && CFEqual(prior.headers[prior.originalIndex], pair.track.header)
+                && CFEqual(observation.originalFocus, pair.strip.strip)
+                && CFEqual(observation.headers[observation.originalIndex], pair.track.header)
+                && permits(runtime: runtime)
+        }
+
         /// Renew after the caller's deciding slot read; the pair itself is not permission.
         func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil) -> Bool {
             guard pair.strip.currentIndex(runtime: runtime) == index,

@@ -628,11 +628,8 @@ actor AccessibilityChannel: Channel {
                             // pair and its verified selection inverse can qualify it.
                             let renewedOriginalFocus = read.inputRenewal.map { renewal in
                                 guard let association else { return false }
-                                return CFEqual(association.originalFocus, owner.strip)
-                                    && CFEqual(association.headers[association.originalIndex], renewal.pair.track.header)
-                                    && CFEqual(renewal.observation.originalFocus, renewal.pair.strip.strip)
-                                    && CFEqual(renewal.observation.headers[renewal.observation.originalIndex], renewal.pair.track.header)
-                                    && renewal.permits(runtime: runtime.logicRuntime)
+                                return renewal.restoresOriginalFocus(of: association, source: owner,
+                                    runtime: runtime.logicRuntime)
                             } ?? false
                             let restored = receipt?["popup_menu_state"] as? String == "closed"
                                 && (receipt?["focus_restoration"] as? String == "restored" || renewedOriginalFocus)

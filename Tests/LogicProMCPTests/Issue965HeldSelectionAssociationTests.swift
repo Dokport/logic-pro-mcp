@@ -543,6 +543,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingWindowListRead: (@Sendable () -> Void)?
         var inputForeignScopeHelpReads = 0
+        var inputSetterDispatches = 0
         var routingSelection: (@Sendable (Int) -> Void)?
         var sharedThirdStrip = false
         var thirdSharesOriginalStrip = false
@@ -6364,6 +6365,12 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
 
+    @Test(arguments: ["matching", "matching_different_display", "matching_renewal", "matching_renewal_rail", "matching_preopen_focus", "matching_checkmark", "matching_control",
+                      "matching_project", "matching_focus", "matching_peer", "matching_cleanup", "matching_late_proof_document"])
+    func matchingCanonicalInputUsesIndependentReadWithoutSetter(outcome: String) async throws {
+        try await assertRegisteredInputSaga(outcome, canonical: true)
+    }
+
     @Test func canonicalInputStringsCannotConstructTheApprovedAdapter() {
         let step = SagaStep(operationID: .mixerSetInputBusVerified, targetRef: .init(rawValue: "trk_source"),
             params: ["destination": .object(["kind": .string("bus"), "number": .int(2)]),
@@ -6374,6 +6381,11 @@ struct Issue965HeldSelectionAssociationTests {
         let forged = SagaPlan(steps: [step], idempotencyKey: "input-custody-forgery",
             canonicalPlanID: "plan_supplied", canonicalDigest: String(repeating: "0", count: 64))
         #expect(InputBusSagaAdapter(plan: forged) == nil)
+        var unchanged = step.params
+        unchanged["destination"] = .object(["kind": .string("bus"), "number": .int(1)])
+        let noOp = SagaStep(operationID: step.operationID, targetRef: step.targetRef,
+            params: unchanged, expectedInverse: step.expectedInverse)
+        #expect(InputBusSagaAdapter(plan: .init(steps: [noOp], idempotencyKey: "generic-input-noop")) == nil)
     }
 
     private func injectForeignInputEditor(_ f: Fixture) {
@@ -6409,7 +6421,7 @@ struct Issue965HeldSelectionAssociationTests {
             let policy: Value = .object(["schema": .string(ProjectSessionAudit.intentPolicySchema),
                 "project_ref": .string(project.rawValue),
                 "targets": .array([.object(["handle": .string("source"), "track_ref": .string(trackReference.rawValue)])]),
-                "inputs": .array([.object(["target": .string("source"), "bus": .int(2)])])])
+                "inputs": .array([.object(["target": .string("source"), "bus": .int(outcome.hasPrefix("matching") ? 1 : 2)])])])
             let planner = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
             let planned = await planner(dependencies, ["snapshot_id": .string(snapshotID), "policy": policy])
             let preview = try #require(sharedJSONObject(sharedToolText(planned)))
@@ -6417,6 +6429,10 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(executable, "The qualified singleton input must have an executable plan: \(preview)")
             #expect(f.routingDestinationPresses == 0)
             guard executable else { return }
+            if outcome.hasPrefix("matching") {
+                try await assertMatchingInputExecution(f, dependencies: dependencies, preview: preview, key: key, outcome: outcome)
+                return
+            }
             let id = try #require(preview["plan_id"] as? String)
             let digest = try #require(preview["digest"] as? String)
             let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
@@ -6477,6 +6493,7 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(body["state"] as? String == "A", "Actual canonical input result: \(body)")
                 #expect(body["saga_state"] as? String == "completed")
                 #expect(f.routingDestinationPresses == 1)
+                #expect(f.inputSetterDispatches == 1, "The same fixture observes actual changed-input dispatch")
             } else {
                 #expect(body["state"] as? String == "B", "Actual unverified input result: \(body)")
                 #expect(f.routingDestinationPresses == (outcome == "no_observer" ? 0 : 1))
@@ -6503,13 +6520,124 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    private func assertMatchingInputExecution(_ f: Fixture, dependencies: HandlerDependencies,
+                                               preview: [String: Any], key: String, outcome: String) async throws {
+        let steps = try #require(preview["steps"] as? [[String: Any]])
+        #expect(steps.isEmpty, "An already-matching input is not a mutating task")
+        #expect(preview["unchanged_tasks"] as? [String] == ["input_source"])
+        let id = try #require(preview["plan_id"] as? String), digest = try #require(preview["digest"] as? String)
+        let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
+        let params: [String: Value] = ["plan_id": .string(id), "digest": .string(digest),
+            "confirmed": .bool(true), "idempotency_key": .string(key)]
+        let approval = try #require(await ApprovedSessionRepair.retained(id: id, digest: digest, key: key,
+            cache: dependencies.cache, registry: dependencies.targetRegistry, journal: dependencies.sagaJournal))
+        #expect(InputBusSagaAdapter(approved: approval) == nil, "Matching approval is not an input writer")
+        let readOnly = try #require(InputBusSagaAdapter(matchingInput: approval))
+        let gate = try #require(dependencies.mutationGate)
+        let claim = try #require(gate.tryAcquire(operation: "matching-input-readonly-control"))
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        let denied = await OperationTraceContext.$current.withValue(context) {
+            #expect(gate.stillOwns(claim), "The read-only refusal is not caused by a missing gate")
+            return await readOnly.run(readOnly.forward, router: dependencies.router,
+                cache: dependencies.cache, registry: dependencies.targetRegistry)
+        }
+        gate.release(claim)
+        #expect(denied.state == .stateC && !denied.writeBoundaryCrossed)
+        #expect(f.inputSetterDispatches == 0)
+        let b = f.builder, input = b.element(1_291_200)
+        switch outcome {
+        case "matching_checkmark":
+            b.setAttribute(b.element(1_291_203), kAXTitleAttribute as String, "Bus 2")
+            b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "")
+            b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "✓")
+        case "matching_control":
+            let replacement = b.element(1_291_499)
+            b.setButton(replacement, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+            b.setChildren(replacement, []); b.setActionNames(replacement, [kAXPressAction as String])
+            b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).map { CFEqual($0, input) ? replacement : $0 })
+        case "matching_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+        case "matching_focus": injectForeignInputEditor(f)
+        case "matching_peer": b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
+        case "matching_cleanup":
+            let previous = f.routingAction
+            f.routingAction = { element, action in
+                let result = previous?(element, action) ?? false
+                if action == kAXCancelAction as String, CFEqual(element, b.element(1_291_202)) {
+                    f.routingLateScopeInjected = true
+                    injectForeignInputEditor(f)
+                }
+                return result
+            }
+        case "matching_late_proof_document":
+            let reads = f.inputMenuPresses
+            f.routingWindowListRead = {
+                guard f.inputMenuPresses > reads, AXMixerStripBinding.current == nil, !f.routingLateScopeInjected else { return }
+                f.routingLateScopeInjected = true
+                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+            }
+            let previous = f.routingRead
+            f.routingRead = { element, attribute in
+                previous?(element, attribute)
+                if f.routingLateScopeInjected, attribute == kAXHelpAttribute as String { f.inputForeignScopeHelpReads += 1 }
+            }
+        case "matching_preopen_focus":
+            let reads = f.inputMenuPresses
+            f.routingWindowListRead = {
+                guard AXMixerStripBinding.current != nil, f.inputMenuPresses == reads, !f.routingLateScopeInjected else { return }
+                f.routingLateScopeInjected = true
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[0])
+            }
+        default: break
+        }
+        let beforeReads = f.inputMenuPresses
+        let result = await apply(dependencies, params)
+        let body = try #require(sharedJSONObject(sharedToolText(result)))
+        if !["matching", "matching_different_display", "matching_renewal"].contains(outcome) {
+            #expect(body["state"] as? String == "C", "Actual matching refusal: \(body)")
+            #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
+            if outcome == "matching_checkmark" { #expect(f.inputMenuPresses > beforeReads) }
+            if ["matching_cleanup", "matching_late_proof_document", "matching_preopen_focus"].contains(outcome) { #expect(f.routingLateScopeInjected) }
+            if outcome == "matching_late_proof_document" { #expect(f.inputForeignScopeHelpReads == 0) }
+            if outcome == "matching_renewal_rail" {
+                #expect(f.routingReplacement != nil, "Reach the real Cancel-retired source before the reader refuses changed focus")
+                let receipt = try #require(body["input_read_receipt"] as? [String: Any])
+                #expect(receipt["state"] as? String == "C")
+            }
+            return
+        }
+        #expect(body["state"] as? String == "A", "Actual matching input result: \(body)")
+        let verified = try #require(body["verified"] as? Bool)
+        #expect(verified)
+        let writeAttempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!writeAttempted)
+        #expect(body["writes_performed"] as? Int == 0)
+        #expect(f.inputMenuPresses > beforeReads, "Completion must independently reread the native input")
+        #expect(f.inputSetterDispatches == 0)
+        #expect(f.routingDestinationPresses == 0)
+        if outcome == "matching_renewal" {
+            #expect(f.routingReplacement != nil, "Reach the actual Cancel-retired source and original-header renewal")
+        }
+        let goals = try #require(body["goal_evidence"] as? [[String: Any]])
+        let read = try #require(goals.first?["read"] as? [String: Any])
+        #expect(read["read_source"] as? String == "ax_input_menu_checkmark")
+        #expect(read["observed"] as? String == "bus:1")
+        let reads = f.inputMenuPresses
+        let replay = await apply(dependencies, params)
+        let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+        let duplicate = try #require(replayBody["duplicate"] as? Bool)
+        #expect(duplicate)
+        #expect(f.inputMenuPresses == reads, "Replay must not reacquire a native popup")
+        #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
+    }
+
     private func assertRegisteredInputSaga(_ outcome: String, canonical: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder, cache = StateCache(), registry = TargetRegistry()
             f.useBulkReads = outcome.contains("_final_")
             let retiring = outcome.hasPrefix("retired_track_")
             let canonicalRenewal = canonical && outcome.hasPrefix("owned_renewal")
-            if retiring || canonicalRenewal {
+            let matchingRenewal = canonical && outcome.hasPrefix("matching_renewal")
+            if retiring || canonicalRenewal || matchingRenewal {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
@@ -6527,7 +6655,7 @@ struct Issue965HeldSelectionAssociationTests {
             let mixerOwner = b.element(1_291_213)
             b.setRole(mixerOwner, kAXGroupRole as String); b.setAttribute(mixerOwner, kAXDescriptionAttribute as String, "Mixer")
             b.setChildren(mixerOwner, [f.mixer]); b.setChildren(f.window, [f.rail, mixerOwner, b.element(1_965_720)])
-            b.setButton(input, description: canonical && outcome == "different_display" ? "Bus 256" : "Bus 1",
+            b.setButton(input, description: canonical && outcome.hasSuffix("different_display") ? "Bus 256" : "Bus 1",
                 help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
             b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output destination.", x: 0, y: 30, width: 60, height: 20)
             for control in [input, output] { b.setChildren(control, []); b.setActionNames(control, [kAXPressAction as String]) }
@@ -6604,6 +6732,7 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXCancelAction as String, CFEqual(element, root) || CFEqual(element, outputRoot) {
                     if CFEqual(element, root) { f.inputMenuCancels += 1 }
                     let willRetire = retiring || (canonicalRenewal && InputBusSagaAdapter.writePermission != nil)
+                        || (matchingRenewal && f.inputMenuCancels > 1)
                     if willRetire, CFEqual(element, root) {
                         let replacement = b.element(1_291_300 + f.inputMenuCancels)
                         b.setRole(replacement, kAXLayoutItemRole as String)
@@ -6622,7 +6751,8 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, [f.inputReadReplacementPeer ?? peer, current])
                     if willRetire { b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [current]) }
                     if !canonical || willRetire {
-                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, willRetire ? current : f.window)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                            outcome == "matching_renewal_rail" && willRetire ? f.rail : willRetire ? current : f.window)
                     }
                     return true
                 }
@@ -6720,6 +6850,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     f.routingLateScopeInjected = true
                 }, beforeForward: {
+                    f.inputSetterDispatches += 1
                     guard canonical, outcome.hasPrefix("dispatch_") else { return }
                     f.routingLateScopeInjected = true
                     if outcome == "dispatch_focus" {

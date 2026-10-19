@@ -2,7 +2,7 @@
 import Foundation
 import MCP
 
-/// One confirmed Bus-to-Bus input change on the scalar writer's checked physical sink.
+/// The scalar input executor and its capture-bound, read-only matching-goal reader.
 final class InputBusSagaAdapter: @unchecked Sendable {
     typealias WritePermission = @Sendable (AccessibilityChannel.HeldSelectionAssociation.Pair,
         AccessibilityChannel.OriginalHeaderSourceRenewal?, AXMixerInputSlotBinding, AXUIElement?) -> Bool
@@ -11,6 +11,8 @@ final class InputBusSagaAdapter: @unchecked Sendable {
     @TaskLocal static var heldWriteFocus: AccessibilityChannel.HeldSelectionAssociation?
     let forward: SagaStep
     private let capture: SessionPopulationObservation.Capture?
+    private let matchingOnly: Bool
+    private(set) var matchingReadReceipt: String?
     private var footprintProof: AccessibilityChannel.HeldSelectionAssociation?
     private var pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var readControl: AXMixerInputSlotBinding?
@@ -43,13 +45,24 @@ final class InputBusSagaAdapter: @unchecked Sendable {
     init?(plan: SagaPlan) {
         guard Self.accepts(plan), let forward = plan.steps.first else { return nil }
         self.forward = forward
-        capture = nil
+        capture = nil; matchingOnly = false
     }
 
     init?(approved: ApprovedSessionRepair) {
         guard approved.plan.steps.count == 1, let forward = approved.plan.steps.first,
               let (pair, control, capture) = approved.inputCustody(for: forward) else { return nil }
-        self.forward = forward; self.pair = pair; readControl = control; self.capture = capture
+        self.forward = forward; self.pair = pair; readControl = control; self.capture = capture; matchingOnly = false
+    }
+
+    /// This selector is never a plan step or a setter capability.
+    init?(matchingInput approved: ApprovedSessionRepair) {
+        guard let (selector, pair, control, capture) = approved.matchingInputReadCustody() else { return nil }
+        forward = selector; self.pair = pair; readControl = control; self.capture = capture; matchingOnly = true
+    }
+
+    func readMatchingGoal(cache: StateCache, registry: TargetRegistry) async -> ObservedState? {
+        guard matchingOnly else { return nil }
+        return await read(forward, cache: cache, registry: registry)
     }
 
     func supports(_ step: SagaStep) -> Bool {
@@ -224,6 +237,13 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     held = source.pair; self.readRenewal = source
                 } else { held = captured }
             }
+            let originalFocusProof: AccessibilityChannel.HeldSelectionAssociation?
+            if self.matchingOnly {
+                guard let control = self.readControl, let before = Self.bus(self.forward.params["expected_current"]),
+                      self.footprintHeld(held, renewal: self.readRenewal, assignment: .bus(before), control: control)
+                else { return nil }
+                originalFocusProof = self.footprintProof
+            } else { originalFocusProof = nil }
             let reading = await AXMixerStripBinding.$current.withValue(held.strip) {
                 await AXMixerStripBinding.$outputAssociation.withValue(held) {
                     await AccessibilityChannel.getInputBusObservation(runtime: held.track.runtime,
@@ -232,8 +252,14 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             }
             let current = reading.inputRenewal?.pair ?? held
             let receipt = decodedJSONObject(reading.result.message)
+            if self.matchingOnly { self.matchingReadReceipt = reading.result.message }
             guard reading.result.isSuccess, let receipt,
                   receipt["state"] as? String == "A", receipt["popup_menu_state"] as? String == "closed",
+                  !self.matchingOnly || receipt["focus_restoration"] as? String == "restored" || {
+                      guard let originalFocusProof, let renewal = reading.inputRenewal else { return false }
+                      return renewal.restoresOriginalFocus(of: originalFocusProof, source: held.strip,
+                          runtime: held.track.runtime)
+                  }(),
                   case .bus(let actual)? = reading.assignment,
                   actual == Self.bus(self.forward.params["expected_current"]),
                   let control = reading.inputSlot, control.owner.matches(current.strip),
@@ -261,6 +287,9 @@ final class InputBusSagaAdapter: @unchecked Sendable {
     }
 
     func run(_ step: SagaStep, router: ChannelRouter, cache: StateCache, registry: TargetRegistry) async -> StepResult {
+        guard !matchingOnly else {
+            return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Matching input custody is read-only")
+        }
         let permission: WritePermission?
         if capture == nil { permission = nil }
         else { permission = { [self] pair, renewal, control, popup in
