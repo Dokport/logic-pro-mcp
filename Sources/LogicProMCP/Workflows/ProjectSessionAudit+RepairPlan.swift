@@ -126,11 +126,14 @@ extension ProjectSessionAudit {
             source: capture, request: request)
         let localInputStep = ApprovedSessionRepair.capturedInputStep(policy: policy, names: names,
             source: capture, request: request)
-        let capturedLocalTask = localOutputStep != nil || localSendStep != nil || matchingSendID != nil || localInputStep != nil
+        let matchingInputID = ApprovedSessionRepair.capturedMatchingInputID(policy: policy, names: names,
+            source: capture, request: request)
+        let capturedLocalTask = localOutputStep != nil || localSendStep != nil || matchingSendID != nil
+            || localInputStep != nil || matchingInputID != nil
         let viewOnly = policy.mixerVisible != nil && policy.trackSort == nil && policy.targets.isEmpty && policy.roles.isEmpty
             && policy.outputs.isEmpty && policy.sends.isEmpty && policy.receivers.isEmpty && names.isEmpty && policy.protectedPaths.isEmpty
         var reasons = Set<String>()
-        if !policy.inputs.isEmpty, localInputStep == nil { reasons.insert("input_goal_verification_unavailable") }
+        if !policy.inputs.isEmpty, localInputStep == nil, matchingInputID == nil { reasons.insert("input_goal_verification_unavailable") }
         reasons.formUnion(naming.reasons.values)
         if !snapshotCurrent { reasons.insert("snapshot_changed") }
         if !viewOnly && !capturedLocalTask && request.scope != .wholeProject { reasons.insert("whole_project_scope_required") }
@@ -313,6 +316,7 @@ extension ProjectSessionAudit {
         }
         var steps: [Value] = []
         for input in policy.inputs {
+            if matchingInputID != nil { continue }
             if let localInputStep {
                 steps.append(localInputStep)
                 continue
@@ -333,6 +337,7 @@ extension ProjectSessionAudit {
         var unchanged: [Value] = keptObservations?.compactMap { observation in
             observation.objectValue?["bus"]?.intValue.map { .string("receiver_keep_bus_\($0)") }
         } ?? []
+        if let matchingInputID { unchanged.append(.string(matchingInputID)) }
         var routingIDs: [String] = []
         // The current aux adapter supplies no factual predicted graph. Do not claim a protected
         // path survived a fabricated new-object topology or silently skip that canonical prefix.
@@ -610,7 +615,7 @@ extension ProjectSessionAudit {
             "receiver_questions": .array(receiverQuestions.keys.sorted().compactMap { receiverQuestions[$0] }),
             "findings": .array(try (capturedLocalTask ? [] : assessment.findings).map { try repairPlanValue($0) }
                 + (localSendStep == nil && matchingSendID == nil ? assessment.sendFindings ?? [] : []).map { try repairPlanValue($0) }
-                + (localInputStep == nil ? assessment.inputFindings ?? [] : []).map { try repairPlanValue($0) }),
+                + (localInputStep == nil && matchingInputID == nil ? assessment.inputFindings ?? [] : []).map { try repairPlanValue($0) }),
             "new_object_inventory": .array(inventory),
             "planning_options": options.wire,
             "executable": .bool(reasons.isEmpty),
