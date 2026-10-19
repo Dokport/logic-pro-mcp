@@ -165,9 +165,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   return source.channelStrips.filter { $0.physicalBinding?.matches(owner) == true }.count == 1
               }) else { return nil }
         if let name = names.first {
-            guard before != input.bus else { return nil }
             if !row.name.utf8.elementsEqual(name.name.utf8) {
-                guard ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
+                guard before != input.bus,
+                      ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
                     targetReference: target.trackRef, expectedBefore: row.name, desiredAfter: name.name), capture: source)
                 else { return nil }
             }
@@ -721,7 +721,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             if input.before == input.desired {
                 guard steps.isEmpty else { return nil }
                 return .init(plan: .init(steps: [], idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest),
-                    projectRef: issued, document: captured.document,
+                    projectRef: issued, document: captured.document, nameGoals: goals,
                     cacheProjectEpoch: source.capture.projectEpoch, inputTask: input,
                     registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
             }
@@ -1826,8 +1826,22 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   await projectIsCurrent() else { return false }
             return true
         }
-        guard await current(), let observed = await reader.readMatchingGoal(cache: cache, registry: registry),
-              observed.value == .string("bus:\(task.before)"),
+        if hasMatchingNameGoals {
+            guard await nameGoalEvidence() != nil else { return refused() }
+        }
+        guard await current(), var observed = await reader.readMatchingGoal(cache: cache, registry: registry),
+              observed.value == .string("bus:\(task.before)") else { return refused() }
+        var names: [[String: Any]] = []
+        if hasMatchingNameGoals {
+            guard let evidence = await nameGoalEvidence(),
+                  let afterNames = await reader.readMatchingGoal(cache: cache, registry: registry),
+                  afterNames.value == observed.value else { return refused() }
+            // The final input read also corroborates the complete original name
+            // footprint after the independent name samples. Neither reader can
+            // turn an unchanged goal into a writer or an inverse capsule.
+            names = evidence; observed = afterNames
+        }
+        guard observed.value == .string("bus:\(task.before)"),
               let evidence = observed.read, evidence.readSource == .axInputMenuCheckmark,
               evidence.provenance == .liveIndependent,
               let data = try? JSONEncoder().encode(evidence),
@@ -1838,7 +1852,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let stored = SagaWire.storedOutcome(plan: plan, outcome: outcome)
         guard var body = decodedJSONObject(stored.body) else { return refused() }
         body["write_attempted"] = false; body["writes_performed"] = 0
-        body["goal_evidence"] = [["target_ref": task.reference.rawValue, "mixer_ref": task.mixerRef.rawValue, "read": read]]
+        body["goal_evidence"] = [["target_ref": task.reference.rawValue, "mixer_ref": task.mixerRef.rawValue, "read": read]] + names
         return .init(body: HonestContract.jsonString(body), isError: stored.isError)
     }
 
