@@ -18,15 +18,18 @@ extension MIDIDispatcher {
             }
             path = value
         } else { path = nil }
-        guard let export else {
-            return midiFilePayload(["error": "native_export_unavailable", "hint": "This command requires the registered request-owned native export provider."], isError: true)
-        }
         let traceID = await startTraceIfEnabled(command: command)
+        guard let export else {
+            return await finalizeTrace(midiFilePayload(["error": "native_export_unavailable", "success": false,
+                "verified": false, "state": "C", "operation": "midi.\(command)",
+                "hint": "This command requires the registered request-owned native export provider."], isError: true), traceID: traceID)
+        }
         let result: CallTool.Result
         do {
             let exported = try await export(project, track, path)
             let document = exported.document
             var payload: [String: Any] = [
+                "success": true, "state": "A", "operation": "midi.\(command)",
                 "verified": true, "project_ref": project, "target_ref": track,
                 "provider": "native_whole_project_smf_export",
                 "verification_scope": "export_artifact_and_track_binding",
@@ -59,7 +62,8 @@ extension MIDIDispatcher {
             case is MIDITrackExportPanel.Failure: code = "native_export_unverified"
             default: code = "midi_export_failed"
             }
-            result = midiFilePayload(["error": code, "verified": false,
+            result = midiFilePayload(["error": code, "verified": false, "success": false,
+                "state": "C", "operation": "midi.\(command)",
                 "hint": "No completed export or note observation is reported. Inspect the explicit destination before retrying after a file-write failure; native UI cleanup may be unconfirmed.",
                 "detail": String(describing: error), "ui_effects": ["restoration": "unconfirmed"]], isError: true)
         }

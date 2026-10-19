@@ -30,6 +30,7 @@ func midiTrackCommandsWireExactReferencesAndReturnFileTimelineFacts(command: Str
     let failed = try #require(result.isError)
     #expect(!failed)
     let body = try #require(sharedJSONObject(sharedToolText(result)))
+    #expect(body["state"] as? String == "A")
     #expect(body["timing_origin"] as? String == "smf_tick_zero")
     #expect(body["project_timeline_mapping"] as? String == "unproven")
     #expect(body["import_comparison"] as? String == "not_performed")
@@ -77,8 +78,22 @@ func midiTrackCommandsRejectMalformedRequestsBeforeTheProvider(fault: String) as
     #expect(failed)
     let body = try #require(sharedJSONObject(sharedToolText(result)))
     #expect(body["error"] as? String == "incomplete_track_population")
+    #expect(body["state"] as? String == "C")
     let verified = try #require(body["verified"] as? Bool)
     #expect(!verified)
+}
+
+@Test func midiTrackCommandsMissingNativeProviderIsATracedRefusal() async throws {
+    let context = OperationTraceContext()
+    let result = await OperationTraceContext.$current.withValue(context) {
+        await MIDIDispatcher.handle(command: "read_track_notes",
+            params: ["project_ref": .string(midiCommandProject), "target_ref": .string(midiCommandTrack)],
+            router: ChannelRouter(), cache: StateCache())
+    }
+    let body = try #require(sharedJSONObject(sharedToolText(result)))
+    #expect(body["error"] as? String == "native_export_unavailable")
+    #expect(body["state"] as? String == "C")
+    #expect(context.traceID != nil)
 }
 
 @Test func midiTrackCommandsDeclareExclusiveRefRequiredNeverRetryOperations() throws {
