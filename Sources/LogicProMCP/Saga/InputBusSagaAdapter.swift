@@ -282,7 +282,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     operation: "saga.input_bus") == nil else {
                 // Only existing bounded status fields, never project/target data.
                 let effects = receipt?["ui_effects"] as? [String: Any]
-                let status = ["state", "error", "popup_menu_state", "focus_restoration", "source_custody_after_cleanup"]
+                let status = ["state", "error", "hint", "popup_menu_state", "focus_restoration", "source_custody_after_cleanup"]
                     .map { "\($0)=\(receipt?[$0].map(String.init(describing:)) ?? "unavailable")" }.joined(separator: ",")
                 Log.info("Input Saga before-state unavailable: \(status),restoration=\(effects?["restoration"] as? String ?? "unavailable"),reason=\(effects?["reason"] as? String ?? "none")", subsystem: "saga")
                 return nil
