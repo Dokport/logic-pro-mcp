@@ -370,13 +370,17 @@ actor MutationSaga {
                 && step.operationID == .mixerSetSendOutputVerified
                 && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
                 && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
+            let approvedInput = approvedSessionRepair?.supports(step) == true
+                && step.operationID == .mixerSetInputBusVerified
+                && plan.canonicalPlanID == approvedSessionRepair?.plan.canonicalPlanID
+                && plan.canonicalDigest == approvedSessionRepair?.plan.canonicalDigest
             let definition = (SendRemovalSagaAdapter.accepts(plan) || approvedSend)
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_send_output_verified", valueParameter: "destination", tolerance: .exact)
                 : SendModeSagaAdapter.accepts(plan)
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_send_mode_verified", valueParameter: "mode", tolerance: .exact)
                 : SendLevelSagaAdapter.accepts(plan)
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_send_level_verified", valueParameter: "level_db", tolerance: .exact)
-                : InputBusSagaAdapter.accepts(plan)
+                : (InputBusSagaAdapter.accepts(plan) || approvedInput)
                 ? ReversibleDefinition(tool: .logicMixer, command: "set_input_bus_verified", valueParameter: "destination", tolerance: .exact)
                 : approvedSort ? ReversibleDefinition(tool: .logicTracks, command: "sort_verified",
                 valueParameter: "expected_order", tolerance: .exact)

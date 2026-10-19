@@ -102,7 +102,8 @@ extension AccessibilityChannel {
             before = checked
             recordRead(before, key: "retained_before_acquisition")
         } else {
-            before = await getInputBusObservation(runtime: runtime, timing: timing)
+            before = await getInputBusObservation(runtime: runtime, timing: timing,
+                requiringOriginalInputControl: InputBusSagaAdapter.requiredInputControl)
             recordRead(before, key: "before_acquisition")
         }
         let observed = before.inputAssignment ?? before.assignment.flatMap { value -> InputAssignment? in
@@ -177,6 +178,10 @@ extension AccessibilityChannel {
                 Log.info("Input writer custody refused: original association/gate", subsystem: "ax"); return false
             }
             guard inverseStillCurrent(ownedPopup: ownedPopup) else { return false }
+            if let permission = InputBusSagaAdapter.writePermission {
+                guard let pair, pair.strip.matches(owner),
+                      permission(pair, before.inputRenewal, heldInput, ownedPopup) else { return false }
+            }
             guard
                   sinkStillCurrent(owner),
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
@@ -212,7 +217,10 @@ extension AccessibilityChannel {
               let app = AXLogicProElements.appRoot(runtime: runtime),
               let originalFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
               before.inputRenewal.map({ $0.permits(runtime: runtime) })
-                ?? (readLogicKeyboardFocus(of: originalFocus, runtime: runtime) == .notTextEditing),
+                ?? (readLogicKeyboardFocus(of: originalFocus, runtime: runtime) == .notTextEditing
+                    || InputBusSagaAdapter.writePermission != nil),
+              // The canonical context's exact held passive-focus proof is
+              // renewed by ownerStillCurrent; default scalar focus is unchanged.
               ownerStillCurrent() else { return refusal(.staleTargetReference, "Original input custody changed before its popup opened.") }
         let press = AXHelpers.performActionResult(heldInput.control, kAXPressAction as String, runtime: runtime.ax)
         let pressSucceeded: Bool
@@ -239,7 +247,8 @@ extension AccessibilityChannel {
             guard let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else { return false }
             if CFEqual(focus, originalFocus) {
                 guard before.inputRenewal.map({ $0.permits(runtime: runtime, ownedPopup: root) })
-                    ?? (readLogicKeyboardFocus(of: focus, runtime: runtime) == .notTextEditing) else { return false }
+                    ?? (readLogicKeyboardFocus(of: focus, runtime: runtime) == .notTextEditing
+                        || InputBusSagaAdapter.writePermission != nil) else { return false }
             } else {
                 guard AXHelpers.getRole(focus, runtime: runtime.ax) == kAXTextFieldRole as String,
                       case .success(let rows) = AXHelpers.childrenResult(root, runtime: runtime.ax),

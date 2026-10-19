@@ -219,7 +219,7 @@ struct Issue291InputAssignmentTests {
                 let unowned = AccessibilityChannel.ChangedInputObservation(original: proof.original, current: proof.current,
                     renewal: proof.renewal, control: proof.control, population: proof.population, sink: proof.sink,
                     before: .physical([1, 2]), after: proof.after, creation: nil, focus: proof.focus,
-                    checkedAfter: proof.checkedAfter, sampledAt: proof.sampledAt)
+                    checkedAfter: proof.checkedAfter, sampledAt: proof.sampledAt, heldFocus: nil)
                 f.unownedPhysicalEffectAccepted = unowned.permits()
             }) { await f.write(1) }
         }

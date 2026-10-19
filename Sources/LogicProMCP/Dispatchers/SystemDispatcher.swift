@@ -842,7 +842,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                 ?? SendRemovalSagaAdapter(plan: plan)
             let sendMode = SendModeSagaAdapter(plan: plan)
             let sendLevel = SendLevelSagaAdapter(plan: plan)
-            let inputBus = InputBusSagaAdapter(plan: plan)
+            let inputBus = approvedSessionRepair.flatMap { InputBusSagaAdapter(approved: $0) }
+                ?? InputBusSagaAdapter(plan: plan)
             let journalIssues: [[String: Any]]
             switch await sagaJournal.disposition(for: plan) {
             case .conflict:
@@ -933,7 +934,8 @@ struct SystemDispatcher: OperationTraceDispatching {
             let containsLevel = plan.steps.contains { $0.operationID == .mixerSetSendLevelVerified }
             let sendLevel = SendLevelSagaAdapter(plan: plan)
             let containsInput = plan.steps.contains { $0.operationID == .mixerSetInputBusVerified }
-            let inputBus = InputBusSagaAdapter(plan: plan)
+            let inputBus = approvedSessionRepair.flatMap { InputBusSagaAdapter(approved: $0) }
+                ?? InputBusSagaAdapter(plan: plan)
             if containsInput, inputBus == nil {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
                     hint: "Only one exact Bus-to-Bus input change is supported by this Saga adapter.",
@@ -955,7 +957,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                     extras: ["write_attempted": false]), traceID: traceID)
             }
             let canonicalSendConfirmed = approvedSessionRepair?.plan == plan && sendRemoval != nil
-            if pluginPlan || (containsSend && !canonicalSendConfirmed) || containsMode || containsLevel || containsInput, params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
+            let canonicalInputConfirmed = approvedSessionRepair?.plan == plan && inputBus != nil
+            if pluginPlan || (containsSend && !canonicalSendConfirmed) || containsMode || containsLevel || (containsInput && !canonicalInputConfirmed), params["confirmed_plan_hash"]?.stringValue != SagaJournal.planHash(plan) {
                 return await finalizeTrace(SagaWire.scopedStateC(.invalidParams,
                     hint: "Confirm this exact plan_hash before applying the selected workflow",
                     extras: ["write_attempted": false]), traceID: traceID)
