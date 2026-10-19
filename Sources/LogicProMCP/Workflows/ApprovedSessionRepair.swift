@@ -78,8 +78,17 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let control: AXMixerInputSlotBinding
         let before: Int
         let desired: Int
+        let sink: OutputAssignment
         let capture: SessionPopulationObservation.Capture
         let handle: String
+    }
+
+    /// Name protection observes the input's checked sink; this adds no output goal or writer.
+    private var nameFootprintTask: OutputTask? {
+        if let outputTask { return outputTask }
+        guard let input = inputTask, !changedNameGoals.isEmpty else { return nil }
+        return .init(reference: input.reference, mixerRef: input.mixerRef, pair: input.pair,
+            before: input.sink, desired: input.sink, capture: input.capture, handle: input.handle)
     }
     private struct ReceiverKeep: Sendable {
         let bus: Int
@@ -114,11 +123,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         names: [ProjectSessionAudit.ApprovedName], source: SessionPopulationObservation.Capture,
         request: SessionPopulationObservation.Request) -> InputTask? {
         guard FeatureFlags.adr002TargetRef, FeatureFlags.adr004MutationSaga,
-              names.isEmpty, policy.targets.count == 1, policy.inputs.count == 1,
+              names.count <= 1, policy.targets.count == 1, policy.inputs.count == 1,
               policy.outputs.isEmpty, policy.sends.isEmpty, policy.roles.isEmpty,
               policy.receivers.isEmpty, policy.protectedPaths.isEmpty,
               policy.trackSort == nil, policy.mixerVisible == nil,
               let target = policy.targets.first, target.mixerRef == nil,
+              names.allSatisfy({ $0.target == target.handle }),
               let input = policy.inputs.first, input.target == target.handle,
               OutputAssignment.busNumbers.contains(input.bus), request.allowUINavigation,
               Set([SessionPopulationObservation.Domain.tracks, .strips, .associations, .routing]).isSubset(of: request.domains),
@@ -154,19 +164,30 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         let sends = strip.sendSlots, sends.allSatisfy({ $0.state == .observedEmpty }) else { return false }
                   return source.channelStrips.filter { $0.physicalBinding?.matches(owner) == true }.count == 1
               }) else { return nil }
+        if let name = names.first {
+            guard before != input.bus else { return nil }
+            if !row.name.utf8.elementsEqual(name.name.utf8) {
+                guard ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
+                    targetReference: target.trackRef, expectedBefore: row.name, desiredAfter: name.name), capture: source)
+                else { return nil }
+            }
+        }
         return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair, control: control,
-            before: before, desired: input.bus, capture: source, handle: target.handle)
+            before: before, desired: input.bus, sink: sink, capture: source, handle: target.handle)
     }
 
     static func capturedInputStep(policy: ProjectSessionAudit.IntentPolicy,
         names: [ProjectSessionAudit.ApprovedName], source: SessionPopulationObservation.Capture,
         request: SessionPopulationObservation.Request) -> Value? {
         guard let task = capturedInput(policy: policy, names: names, source: source, request: request),
-              task.before != task.desired else { return nil }
+              task.before != task.desired,
+              let capturedName = source.tracks.first(where: { $0.physicalBinding?.matches(task.pair.track) == true })?.name
+        else { return nil }
         return .object(["id": .string("input_" + task.handle), "kind": .string("input_assignment"),
             "target_ref": .string(task.reference.rawValue), "mixer_ref": .string(task.mixerRef.rawValue),
             "before": assignmentValue(.bus(task.before)), "after": assignmentValue(.bus(task.desired)),
-            "dependencies": .array([]), "blocked_reasons": .array([]),
+            "dependencies": .array(names.filter { !$0.name.utf8.elementsEqual(capturedName.utf8) }
+                .map { .string("name_" + $0.target) }), "blocked_reasons": .array([]),
             "required_invariants": .array(["captured_track_strip_pair", "original_input_control",
                 "local_strip_footprint", "checked_input_readback", "conditional_owned_input_inverse"].map(Value.string))])
     }
@@ -434,9 +455,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                       names: [ProjectSessionAudit.ApprovedName],
                                       source: SessionPopulationObservation.Capture,
                                       request: SessionPopulationObservation.Request) -> CapturedGoals? {
-        if !originalPolicy.inputs.isEmpty {
-            guard let input = capturedInput(policy: originalPolicy, names: names, source: source, request: request),
-                  case .issued(let project)? = source.projectIssuance else { return nil }
+        let input = capturedInput(policy: originalPolicy, names: names, source: source, request: request)
+        guard originalPolicy.inputs.isEmpty || input != nil else { return nil }
+        if let input, names.isEmpty {
+            guard case .issued(let project)? = source.projectIssuance else { return nil }
             return .init(projectRef: project, document: input.pair.track.document, mixer: nil,
                 names: [], renameCapture: nil, input: input)
         }
@@ -524,7 +546,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   let document = goals.first?.binding.document else { return nil }
             return .init(projectRef: issued, document: document, mixer: nil, names: goals,
                 renameCapture: changed.isEmpty && !goals.contains(where: { $0.mixerRef != nil }) ? nil : source,
-                selectionOrigin: selectionOrigin, output: output, send: send)
+                selectionOrigin: selectionOrigin, output: output, send: send, input: input)
         }
         guard policyValue.objectValue?["presentation"]?.objectValue.map({ Set($0.keys) == ["mixer_visible"] }) == true,
               let fresh = source.freshPopulation, fresh.stable,
@@ -595,6 +617,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private var sortLeafOrder: [String]?
     private struct NameExecution {
         var ran = false
+        var capturedRead: ExactTrackNameAdapter.CapturedCoupledRead?
         var inverse: ExactTrackNameAdapter.OwnedInverse?
         var restored: ExactTrackNameAdapter.OwnedInverse?
     }
@@ -690,9 +713,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   current.physicalTrack?.matches(goal.binding) == true else { return nil }
         }
         let changed = goals.filter { !$0.before.utf8.elementsEqual($0.name.utf8) }
-        if let input = captured.input {
-            guard changed.isEmpty,
-                  let current = await registry.resolve(input.reference), current.kind == .track,
+        if let input = captured.input, changed.isEmpty {
+            guard let current = await registry.resolve(input.reference), current.kind == .track,
                   current.physicalTrack?.matches(input.pair.track) == true,
                   let mixer = await registry.resolve(input.mixerRef), mixer.kind == .mixerStrip,
                   mixer.physicalMixerStrip?.matches(input.pair.strip) == true else { return nil }
@@ -703,15 +725,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     cacheProjectEpoch: source.capture.projectEpoch, inputTask: input,
                     registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
             }
-            guard unchanged.isEmpty,
-                  steps == [capturedInputStep(policy: policy, names: names, source: source.capture, request: source.request)] else { return nil }
-            let saga = SagaPlan(steps: [.init(operationID: .mixerSetInputBusVerified, targetRef: input.reference,
-                params: ["destination": assignmentValue(.bus(input.desired)),
-                    "expected_current": assignmentValue(.bus(input.before)), "replace_existing": .bool(true),
-                    "project_ref": .string(issued.rawValue)],
-                expectedInverse: .init(operationID: .mixerSetInputBusVerified, valueParameter: "destination"))],
+            guard steps == [capturedInputStep(policy: policy, names: names, source: source.capture, request: source.request)] else { return nil }
+            let saga = SagaPlan(steps: [inputSagaStep(input, project: issued)],
                 idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
-            return .init(plan: saga, projectRef: issued, document: captured.document,
+            return .init(plan: saga, projectRef: issued, document: captured.document, nameGoals: goals,
                 cacheProjectEpoch: source.capture.projectEpoch, inputTask: input,
                 registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
         }
@@ -787,7 +804,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         if let renameCapture = captured.renameCapture, !changed.isEmpty {
             guard steps.count == changed.count + (captured.output == nil ? 0 : 1)
-                + (captured.send == nil ? 0 : 1) else { return nil }
+                + (captured.send == nil ? 0 : 1) + (captured.input == nil ? 0 : 1) else { return nil }
             for (value, goal) in zip(steps, changed) {
                 guard let step = value.objectValue,
                       step["kind"] == .string("name"), step["target_ref"] == .string(goal.reference.rawValue),
@@ -828,11 +845,19 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         "project_ref": .string(issued.rawValue)],
                     expectedInverse: .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination")))
             }
+            if let input = captured.input {
+                guard steps.last == capturedInputStep(policy: policy, names: names, source: source.capture, request: source.request),
+                      let current = await registry.resolve(input.reference), current.kind == .track,
+                      current.physicalTrack?.matches(input.pair.track) == true,
+                      let mixer = await registry.resolve(input.mixerRef), mixer.kind == .mixerStrip,
+                      mixer.physicalMixerStrip?.matches(input.pair.strip) == true else { return nil }
+                sagaSteps.append(inputSagaStep(input, project: issued))
+            }
             let saga = SagaPlan(steps: sagaSteps,
                 idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
             return .init(plan: saga, projectRef: issued, document: captured.document, nameGoals: goals,
                 renameCapture: renameCapture, selectionOrigin: captured.selectionOrigin,
-                cacheProjectEpoch: source.capture.projectEpoch, outputTask: captured.output, sendTask: captured.send,
+                cacheProjectEpoch: source.capture.projectEpoch, outputTask: captured.output, sendTask: captured.send, inputTask: captured.input,
                 registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
         }
         if steps.isEmpty {
@@ -902,9 +927,19 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     func inputCustody(for step: SagaStep) -> (AccessibilityChannel.HeldSelectionAssociation.Pair,
         AXMixerInputSlotBinding, SessionPopulationObservation.Capture)? {
         guard let task = inputTask, step.operationID == .mixerSetInputBusVerified,
-              supports(step), plan.steps.count == 1, plan.canonicalPlanID != nil,
+              supports(step), plan.steps.last == step,
+              plan.steps.count == 1 || (plan.steps.count == 2 && changedNameGoals.count == 1
+                && plan.steps.first?.operationID == .tracksRename), plan.canonicalPlanID != nil,
               plan.canonicalDigest != nil else { return nil }
         return (task.pair, task.control, task.capture)
+    }
+
+    private static func inputSagaStep(_ task: InputTask, project: TargetReference) -> SagaStep {
+        .init(operationID: .mixerSetInputBusVerified, targetRef: task.reference,
+            params: ["destination": assignmentValue(.bus(task.desired)),
+                "expected_current": assignmentValue(.bus(task.before)), "replace_existing": .bool(true),
+                "project_ref": .string(project.rawValue)],
+            expectedInverse: .init(operationID: .mixerSetInputBusVerified, valueParameter: "destination"))
     }
 
     func matchingInputReadCustody() -> (SagaStep, AccessibilityChannel.HeldSelectionAssociation.Pair,
@@ -930,13 +965,64 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     /// Carry only this plan's independently observed Send effect through the
     /// earlier owned name. The registry's original strip is never rebound.
     func renewNameAfterSend(_ source: AccessibilityChannel.OriginalHeaderSourceRenewal) async -> Bool {
-        guard let task = sendTask, source.originalTrack.matches(task.pair.track) else { return false }
+        guard let task = sendTask else { return false }
+        return await renewNameAfterRouting(source, reference: task.reference, pair: task.pair)
+    }
+
+    func renewNameAfterInput(_ source: AccessibilityChannel.OriginalHeaderSourceRenewal) async -> Bool {
+        guard let task = inputTask else { return false }
+        if let goal = changedNameGoals.first, nameExecutions[goal.reference]?.ran != true {
+            guard changedNameGoals.count == 1, goal.reference == task.reference,
+                  source.originalTrack.matches(task.pair.track), let capture = renameCapture,
+                  let read = await ExactTrackNameAdapter.renewingCapturedCoupledRead(nameAction(goal), capture: capture,
+                    registry: registry, prior: nameExecutions[goal.reference]?.capturedRead, through: source) else { return false }
+            nameExecutions[goal.reference, default: .init()].capturedRead = read
+        } else {
+            guard await renewNameAfterRouting(source, reference: task.reference, pair: task.pair) else { return false }
+        }
+        if nameFootprintTask != nil {
+            outputPair = source.pair; outputRenewal = source; outputProof = source.observation
+        }
+        return true
+    }
+
+    private func renewNameAfterRouting(_ source: AccessibilityChannel.OriginalHeaderSourceRenewal,
+        reference: TargetReference, pair: AccessibilityChannel.HeldSelectionAssociation.Pair) async -> Bool {
+        guard source.originalTrack.matches(pair.track) else { return false }
         guard let goal = changedNameGoals.first else { return true }
-        guard changedNameGoals.count == 1, goal.reference == task.reference,
+        guard changedNameGoals.count == 1, goal.reference == reference,
               let proof = nameExecutions[goal.reference]?.inverse,
               let renewed = await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source) else { return false }
         nameExecutions[goal.reference, default: .init()].inverse = renewed
         return true
+    }
+
+    func inputNameEffect(at source: AccessibilityChannel.HeldSelectionAssociation.Pair) -> ExactTrackNameAdapter.VerifiedNameEffect? {
+        guard let task = inputTask, changedNameGoals.count == 1, let goal = changedNameGoals.first,
+              goal.reference == task.reference, source.track.matches(task.pair.track),
+              let effect = nameExecutions[goal.reference]?.inverse.flatMap(ExactTrackNameAdapter.recordedNameEffect),
+              effect.matches(source), effect.trackName.utf8.elementsEqual(goal.name.utf8),
+              case .success(let name?) = AXValueExtractors.extractTrackNameResult(from: source.track.header, runtime: source.track.runtime.ax),
+              name.utf8.elementsEqual(effect.trackName.utf8),
+              case .success(let stripName?) = AXPluginInstanceIdentity.stripNameResult(source.strip.strip, runtime: source.track.runtime.ax),
+              stripName.utf8.elementsEqual(effect.stripName.utf8),
+              source.track.currentIndex() != nil, source.strip.currentIndex(runtime: source.track.runtime) != nil else { return nil }
+        return effect
+    }
+
+    func inputNameHeld(at source: AccessibilityChannel.HeldSelectionAssociation.Pair) -> Bool {
+        guard hasMatchingNameGoals else { return true }
+        if !changedNameGoals.isEmpty { return inputNameEffect(at: source) != nil }
+        // The input adapter still proves the original source/control and full
+        // captured footprint. An unchanged name is corroboration, not an effect
+        // receipt or permission to replace the name baseline.
+        guard nameGoals.count == 1, let goal = nameGoals.first, let task = inputTask,
+              goal.reference == task.reference, source.track.matches(goal.binding),
+              goal.before.utf8.elementsEqual(goal.name.utf8),
+              case .success(let name?) = AXValueExtractors.extractTrackNameResult(
+                from: source.track.header, runtime: source.track.runtime.ax),
+              name.utf8.elementsEqual(goal.name.utf8) else { return false }
+        return source.track.currentIndex() != nil && source.strip.currentIndex(runtime: source.track.runtime) != nil
     }
 
     /// Corroborate the owned name at the actual Send leaf, not just before
@@ -1221,6 +1307,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 observed = await ExactTrackNameAdapter.readCapturedCoupledName(nameAction(goal),
                     capture: capture, registry: registry,
                     preserveCurrentPeers: execution?.inverse != nil && step.params["name"] == .string(goal.before),
+                    capturedRead: execution?.capturedRead,
                     ownedPeerEffects: step.params["name"] == .string(goal.before) ? [] : ownedNameEffects)
             }
             guard let name = observed,
@@ -1240,7 +1327,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
 
     private func heldOutputProof(_ pair: AccessibilityChannel.HeldSelectionAssociation.Pair,
                                  restorationBaseline: AccessibilityChannel.HeldSelectionAssociation? = nil) -> AccessibilityChannel.HeldSelectionAssociation? {
-        guard let task = outputTask,
+        guard let task = nameFootprintTask,
               pair.track.matches(task.pair.track), pair.track.currentIndex() != nil,
               let proof = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
                 logic: pair.track.runtime, expectedProject: nil, requiresProjectReference: false,
@@ -1260,7 +1347,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                      ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil,
                                      ownedStripNamePreview: [String]? = nil,
                                      verifiedNameEffect: ExactTrackNameAdapter.VerifiedNameEffect? = nil) -> Bool {
-        guard let task = outputTask, let proof = outputProof else { return false }
+        guard let task = nameFootprintTask, let proof = outputProof else { return false }
         let runtime = pair.track.runtime
         @Sendable func permitted() -> Bool {
             guard let proof = self.outputProof else { return false }
@@ -1394,7 +1481,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     private func outputReading() async -> OutputAssignment? {
-        guard let task = outputTask, await projectIsCurrent(allowPendingCancellation: true),
+        guard let task = nameFootprintTask, await projectIsCurrent(allowPendingCancellation: true),
               let target = await registry.resolve(task.reference), target.kind == .track,
               target.physicalTrack?.matches(task.pair.track) == true else { return nil }
         let pair = outputPair ?? task.pair, runtime = pair.track.runtime
@@ -1559,7 +1646,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     observed = await ExactTrackNameAdapter.readOwnedCoupledName(proof, ownedPeerEffects: ownedNameEffects)
                 } else {
                     observed = await ExactTrackNameAdapter.readCapturedCoupledName(nameAction(goal),
-                        capture: capture, registry: registry, ownedPeerEffects: afterExecution ? ownedNameEffects : [])
+                        capture: capture, registry: registry, capturedRead: nameExecutions[goal.reference]?.capturedRead,
+                        ownedPeerEffects: afterExecution ? ownedNameEffects : [])
                 }
                 guard let coupled = observed,
                     coupled.utf8.elementsEqual(expected.utf8),
@@ -1619,7 +1707,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let runtime = goal.binding.runtime
         let preserving: (@Sendable (Bool, AXUIElement?) -> Bool)?
         let afterVerifiedWrite: ExactTrackNameAdapter.PostVerifiedWrite?
-        if let task = outputTask {
+        if let task = nameFootprintTask {
             guard await outputReading() == task.before else {
                 return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
             }
@@ -1686,6 +1774,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 router: router, cache: cache, registry: registry,
                 liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
                 liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
+                capturedRead: execution?.capturedRead,
                 ownedPeerEffects: ownedNameEffects, selectionOrigin: selectionOrigin, preservingFootprint: preserving,
                 afterVerifiedWrite: afterVerifiedWrite)
             nameExecutions[goal.reference, default: .init()].inverse = receipt.inverse

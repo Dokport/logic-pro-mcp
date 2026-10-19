@@ -6,11 +6,14 @@ import MCP
 final class InputBusSagaAdapter: @unchecked Sendable {
     typealias WritePermission = @Sendable (AccessibilityChannel.HeldSelectionAssociation.Pair,
         AccessibilityChannel.OriginalHeaderSourceRenewal?, AXMixerInputSlotBinding, AXUIElement?) -> Bool
+    typealias SourceRenewalObserver = @Sendable (AccessibilityChannel.OriginalHeaderSourceRenewal) async -> Bool
     @TaskLocal static var requiredInputControl: AXMixerInputSlotBinding?
     @TaskLocal static var writePermission: WritePermission?
     @TaskLocal static var heldWriteFocus: AccessibilityChannel.HeldSelectionAssociation?
+    @TaskLocal static var sourceRenewalObserver: SourceRenewalObserver?
     let forward: SagaStep
     private let capture: SessionPopulationObservation.Capture?
+    private let approved: ApprovedSessionRepair?
     private let matchingOnly: Bool
     private(set) var matchingReadReceipt: String?
     private var footprintProof: AccessibilityChannel.HeldSelectionAssociation?
@@ -45,19 +48,19 @@ final class InputBusSagaAdapter: @unchecked Sendable {
     init?(plan: SagaPlan) {
         guard Self.accepts(plan), let forward = plan.steps.first else { return nil }
         self.forward = forward
-        capture = nil; matchingOnly = false
+        capture = nil; approved = nil; matchingOnly = false
     }
 
     init?(approved: ApprovedSessionRepair) {
-        guard approved.plan.steps.count == 1, let forward = approved.plan.steps.first,
+        guard let forward = approved.plan.steps.first(where: { $0.operationID == .mixerSetInputBusVerified }),
               let (pair, control, capture) = approved.inputCustody(for: forward) else { return nil }
-        self.forward = forward; self.pair = pair; readControl = control; self.capture = capture; matchingOnly = false
+        self.forward = forward; self.pair = pair; readControl = control; self.capture = capture; self.approved = approved; matchingOnly = false
     }
 
     /// This selector is never a plan step or a setter capability.
     init?(matchingInput approved: ApprovedSessionRepair) {
         guard let (selector, pair, control, capture) = approved.matchingInputReadCustody() else { return nil }
-        forward = selector; self.pair = pair; readControl = control; self.capture = capture; matchingOnly = true
+        forward = selector; self.pair = pair; readControl = control; self.capture = capture; self.approved = approved; matchingOnly = true
     }
 
     func readMatchingGoal(cache: StateCache, registry: TargetRegistry) async -> ObservedState? {
@@ -163,13 +166,19 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             }
         }
         var expected = capture.channelStrips
+        var expectedTracks = capture.tracks
+        if let name = approved?.inputNameEffect(at: pair) {
+            guard let trackIndex = expectedTracks.firstIndex(where: { $0.physicalBinding?.matches(pair.track) == true }) else { return false }
+            expectedTracks[trackIndex].name = name.trackName
+            expected[index].name = name.stripName
+        }
         expected[index].input = strips[index].input
         expected[index].inputObservation = strips[index].inputObservation
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let input = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
             AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
         }
-        guard let a = try? encoder.encode(capture.tracks), let b = try? encoder.encode(tracks), a == b,
+        guard let a = try? encoder.encode(expectedTracks), let b = try? encoder.encode(tracks), a == b,
               let c = try? encoder.encode(expected), let d = try? encoder.encode(strips), c == d,
               case .source(let label) = input.reading, let currentControl = input.control,
               control.matches(.init(owner: pair.strip, control: currentControl, source: label)),
@@ -251,6 +260,8 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                 }
             }
             let current = reading.inputRenewal?.pair ?? held
+            if let approved = self.approved, approved.hasMatchingNameGoals, let source = reading.inputRenewal,
+               !(await approved.renewNameAfterInput(source)) { return nil }
             let receipt = decodedJSONObject(reading.result.message)
             if self.matchingOnly { self.matchingReadReceipt = reading.result.message }
             guard reading.result.isSuccess, let receipt,
@@ -271,7 +282,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     operation: "saga.input_bus") == nil else {
                 // Only existing bounded status fields, never project/target data.
                 let effects = receipt?["ui_effects"] as? [String: Any]
-                let status = ["state", "error", "popup_menu_state", "focus_restoration", "source_custody_after_cleanup"]
+                let status = ["state", "error", "hint", "popup_menu_state", "focus_restoration", "source_custody_after_cleanup"]
                     .map { "\($0)=\(receipt?[$0].map(String.init(describing:)) ?? "unavailable")" }.joined(separator: ",")
                 Log.info("Input Saga before-state unavailable: \(status),restoration=\(effects?["restoration"] as? String ?? "unavailable"),reason=\(effects?["reason"] as? String ?? "none")", subsystem: "saga")
                 return nil
@@ -306,11 +317,18 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             guard let assignment else { return false }
             return footprintHeld(pair, renewal: renewal ?? effect?.renewal ?? readRenewal,
                 assignment: assignment, control: control, popup: popup)
+                && (approved?.inputNameHeld(at: pair) ?? true)
         } }
-        return await Self.$requiredInputControl.withValue(capture == nil ? nil : readControl) {
-            await Self.$writePermission.withValue(permission) {
-                await Self.$heldWriteFocus.withValue(capture == nil ? nil : footprintProof) {
-                    await runWithCustody(step, router: router, cache: cache, registry: registry)
+        let onRenewal: SourceRenewalObserver?
+        if let approved, approved.hasMatchingNameGoals {
+            onRenewal = { source in await approved.renewNameAfterInput(source) }
+        } else { onRenewal = nil }
+        return await Self.$sourceRenewalObserver.withValue(onRenewal) {
+            await Self.$requiredInputControl.withValue(capture == nil ? nil : readControl) {
+                await Self.$writePermission.withValue(permission) {
+                    await Self.$heldWriteFocus.withValue(capture == nil ? nil : footprintProof) {
+                        await runWithCustody(step, router: router, cache: cache, registry: registry)
+                    }
                 }
             }
         }
@@ -347,6 +365,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                 response = toolTextResult(result)
             } else {
                 guard !self.attempted, self.beforeStillCurrent(), let held = self.pair,
+                      self.approved?.inputNameHeld(at: held) ?? true,
                       await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
                         operation: "saga.input_bus") == nil else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Before input source changed")
@@ -372,6 +391,11 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     }
                     return await MixerDispatcher.finalizeTrace(toolTextResult(result), traceID: traceID)
                 }
+            }
+            if let approved = self.approved, approved.hasMatchingNameGoals,
+               let current = self.inverseConsumed ? self.restored?.current : self.effect?.current,
+               !approved.inputNameHeld(at: current) {
+                return .init(state: .stateB, writeBoundaryCrossed: true, detail: "Owned name continuity after input is unverified")
             }
             let mapped = ProductionSagaStepExecutor.mapResponse(response, operationID: step.operationID)
             if case .text(let text, _, _) = response.content.first,

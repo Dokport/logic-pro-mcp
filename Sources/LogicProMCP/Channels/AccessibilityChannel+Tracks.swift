@@ -3417,18 +3417,32 @@ extension AccessibilityChannel {
                 return refusal("Ordinary rename menu did not expose its observed name editor")
             }
             func editorIsHeld(allowOwnNamePreview: Bool = false) -> Bool {
-                guard runtime.logicProPID() == heldPID, runtime.focusedApplicationPID() == heldPID,
-                      processRuntime.logicIsFrontmost(),
-                      let app = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, heldApp),
+                func unavailable(_ component: String) -> Bool {
+                    Log.info("Ordinary rename editor custody unavailable: \(component)", subsystem: "ax")
+                    return false
+                }
+                guard runtime.logicProPID() == heldPID else { return unavailable("logic_process") }
+                guard runtime.focusedApplicationPID() == heldPID else { return unavailable("focused_process") }
+                guard processRuntime.logicIsFrontmost() else { return unavailable("keyboard_owner") }
+                guard let app = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, heldApp) else {
+                    return unavailable("application")
+                }
+                guard
                       let focused: AXUIElement = AXHelpers.getAttribute(
-                        app, kAXFocusedUIElementAttribute, runtime: runtime.ax), CFEqual(focused, editor),
+                        app, kAXFocusedUIElementAttribute, runtime: runtime.ax), CFEqual(focused, editor) else {
+                    return unavailable("focused_editor")
+                }
+                guard
                       let editorWindow: AXUIElement = AXHelpers.getAttribute(editor, kAXWindowAttribute, runtime: runtime.ax),
-                      CFEqual(editorWindow, window), targetStillHeld(requiringExclusiveSelection: true),
-                      let current = readHeldName(),
+                      CFEqual(editorWindow, window) else { return unavailable("editor_window") }
+                guard targetStillHeld(requiringExclusiveSelection: true) else { return unavailable("original_target") }
+                guard let current = readHeldName(),
                       current.utf8.elementsEqual(expected.utf8)
-                        || (allowOwnNamePreview && current.utf8.elementsEqual(desired.utf8)),
-                      let finalFocus: AXUIElement = AXHelpers.getAttribute(
-                        app, kAXFocusedUIElementAttribute, runtime: runtime.ax), CFEqual(finalFocus, editor) else { return false }
+                        || (allowOwnNamePreview && current.utf8.elementsEqual(desired.utf8)) else { return unavailable("original_name") }
+                guard let finalFocus: AXUIElement = AXHelpers.getAttribute(
+                        app, kAXFocusedUIElementAttribute, runtime: runtime.ax), CFEqual(finalFocus, editor) else {
+                    return unavailable("final_editor_focus")
+                }
                 return ExactTrackNameAdapter.operationPermitted()
             }
             if AXHelpers.isAttributeSettable(editor, kAXValueAttribute as String, runtime: runtime.ax) == true {

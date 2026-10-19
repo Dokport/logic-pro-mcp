@@ -3519,6 +3519,7 @@ struct Issue965HeldSelectionAssociationTests {
                     if inverseNameMenu, f.routingDestinationPresses == 2 { return false }
                     f.routingNameWrites.append(name)
                     b.setAttribute(nameField, kAXDescriptionAttribute as String, name)
+                    b.setAttribute(nameField, kAXValueAttribute as String, name)
                     b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
                     if coupledMixerName { b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, name) }
                     return true
@@ -6371,6 +6372,29 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
 
+    @Test func canonicalInputAndApprovedNameRetainOneOrderedPlan() async throws {
+        try await assertRegisteredInputSaga("composed_name_preview", canonical: true)
+    }
+
+    @Test(arguments: ["completed", "wrong_digest", "foreign_project", "changed_peer", "changed_name",
+                      "replaced_control", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_name",
+                      "owned_renewal", "owned_renewal_cancel", "cancel", "failure", "late_inverse_name"])
+    func matchingApprovedNameRemainsAnObservedGoalDuringInputChange(outcome: String) async throws {
+        try await assertRegisteredInputSaga("retained_name_" + outcome, canonical: true)
+    }
+
+    @Test(arguments: ["composed_name_execution", "composed_name_execution_preflight_renewal",
+                      "composed_name_execution_wrong_digest", "composed_name_execution_foreign_project",
+                      "composed_name_execution_changed_peer", "composed_name_execution_changed_input",
+                      "composed_name_execution_replaced_control", "composed_name_execution_cancel",
+                      "composed_name_execution_failure", "composed_name_execution_preflight_renewal_cancel",
+                      "composed_name_execution_preflight_renewal_failure", "composed_name_execution_preflight_renewal_peer",
+                      "composed_name_execution_preflight_renewal_project", "composed_name_execution_preflight_renewal_header",
+                      "composed_name_execution_external_name"])
+    func canonicalInputAndApprovedNameExecuteBothActualWriters(outcome: String) async throws {
+        try await assertRegisteredInputSaga(outcome, canonical: true)
+    }
+
     @Test func canonicalInputStringsCannotConstructTheApprovedAdapter() {
         let step = SagaStep(operationID: .mixerSetInputBusVerified, targetRef: .init(rawValue: "trk_source"),
             params: ["destination": .object(["kind": .string("bus"), "number": .int(2)]),
@@ -6399,7 +6423,9 @@ struct Issue965HeldSelectionAssociationTests {
 
     private func assertCanonicalInputExecution(_ f: Fixture, dependencies: HandlerDependencies,
                                                snapshotID: String, capture: SessionPopulationObservation.Capture,
-                                               trackReference: TargetReference, key: String, outcome: String) async throws {
+                                               trackReference: TargetReference, key: String, outcome requestedOutcome: String) async throws {
+        let retainedName = requestedOutcome.hasPrefix("retained_name_")
+        let outcome = retainedName ? String(requestedOutcome.dropFirst("retained_name_".count)) : requestedOutcome
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             guard case .issued(let project)? = capture.projectIssuance else {
                 Issue.record("The captured input needs an issued project"); return
@@ -6423,12 +6449,109 @@ struct Issue965HeldSelectionAssociationTests {
                 "targets": .array([.object(["handle": .string("source"), "track_ref": .string(trackReference.rawValue)])]),
                 "inputs": .array([.object(["target": .string("source"), "bus": .int(outcome.hasPrefix("matching") ? 1 : 2)])])])
             let planner = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
-            let planned = await planner(dependencies, ["snapshot_id": .string(snapshotID), "policy": policy])
+            var planning: [String: Value] = ["snapshot_id": .string(snapshotID), "policy": policy]
+            if outcome.hasPrefix("composed_name_") {
+                planning["names"] = .array([.object(["target": .string("source"), "name": .string("Approved Input Source")])])
+            }
+            if retainedName {
+                let row = try #require(capture.tracks.first { $0.physicalBinding?.matches(pair.track) == true })
+                planning["names"] = .array([.object(["target": .string("source"), "name": .string(row.name)])])
+            }
+            let planned = await planner(dependencies, planning)
             let preview = try #require(sharedJSONObject(sharedToolText(planned)))
             let executable = try #require(preview["executable"] as? Bool)
             #expect(executable, "The qualified singleton input must have an executable plan: \(preview)")
             #expect(f.routingDestinationPresses == 0)
             guard executable else { return }
+            if retainedName {
+                let steps = try #require(preview["steps"] as? [[String: Any]])
+                #expect(steps.compactMap { $0["kind"] as? String } == ["input_assignment"])
+                #expect(steps.first?["dependencies"] as? [String] == [])
+                #expect(preview["unchanged_tasks"] as? [String] == ["name_source"])
+            }
+            if outcome.hasPrefix("composed_name_") {
+                let steps = try #require(preview["steps"] as? [[String: Any]])
+                #expect(steps.compactMap { $0["kind"] as? String } == ["name", "input_assignment"])
+                #expect(steps.last?["dependencies"] as? [String] == ["name_source"])
+                let id = try #require(preview["plan_id"] as? String)
+                let digest = try #require(preview["digest"] as? String)
+                let approval = try #require(await ApprovedSessionRepair.retained(
+                    id: id, digest: digest, key: key,
+                    cache: dependencies.cache, registry: dependencies.targetRegistry, journal: dependencies.sagaJournal))
+                #expect(approval.plan.steps.map(\.operationID) == [.tracksRename, .mixerSetInputBusVerified])
+                #expect(f.routingNameWrites.isEmpty && f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
+                if outcome.hasPrefix("composed_name_execution") {
+                    let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
+                    var params: [String: Value] = ["plan_id": .string(id), "digest": .string(digest),
+                        "confirmed": .bool(true), "idempotency_key": .string(key)]
+                    let b = f.builder
+                    let refusal = ["_wrong_digest", "_foreign_project", "_changed_peer", "_changed_input", "_replaced_control",
+                                   "_preflight_renewal_peer", "_preflight_renewal_project", "_preflight_renewal_header"]
+                        .contains { outcome.hasSuffix($0) }
+                    if outcome.hasSuffix("_wrong_digest") { params["digest"] = .string(String(repeating: "0", count: 64)) }
+                    if outcome.hasSuffix("_foreign_project") {
+                        b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    if outcome.hasSuffix("_changed_peer") {
+                        b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
+                    }
+                    if outcome.hasSuffix("_changed_input") {
+                        b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "")
+                        b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "✓")
+                    }
+                    if outcome.hasSuffix("_replaced_control") {
+                        let replacement = b.element(1_291_499)
+                        b.setButton(replacement, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+                        b.setChildren(replacement, []); b.setActionNames(replacement, [kAXPressAction as String])
+                        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).map {
+                            CFEqual($0, b.element(1_291_200)) ? replacement : $0
+                        })
+                    }
+                    let result = await apply(dependencies, params)
+                    let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if refusal {
+                        #expect(body["state"] as? String == "C", "Whole composed-plan refusal: \(body)")
+                        #expect(f.routingNameWrites.isEmpty && f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
+                        if outcome.contains("_preflight_renewal") {
+                            #expect(f.routingReplacement != nil && f.routingLateScopeInjected,
+                                "Reach the actual retired-source and changed protection boundary")
+                        }
+                        return
+                    }
+                    if outcome.hasSuffix("_external_name") {
+                        #expect(body["state"] as? String == "B", "External edits must not be overwritten: \(body)")
+                        #expect(f.routingLateScopeInjected && f.routingNameWrites == ["Approved Input Source"])
+                        #expect(f.routingDestinationPresses == 1)
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "External Name")
+                        return
+                    }
+                    let compensated = outcome.hasSuffix("_cancel") || outcome.hasSuffix("_failure")
+                    if compensated {
+                        #expect(body["state"] as? String == "C", "Composed compensation: \(body)")
+                        #expect(body["saga_state"] as? String == "fullyCompensated")
+                        #expect(f.routingNameWrites == ["Approved Input Source", "Duplicate"])
+                        #expect(f.inputSetterDispatches == 1 && f.routingDestinationPresses == 2,
+                            "The owned inverse uses its actual native capsule, not a second public dispatch")
+                        #expect(b.attributeValue(b.element(1_291_206), "AXMenuItemMarkChar") as? String == "✓")
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Duplicate")
+                    } else {
+                        #expect(body["state"] as? String == "A", "Actual composed name/input: \(body)")
+                        #expect(body["saga_state"] as? String == "completed")
+                        #expect(f.routingNameWrites == ["Approved Input Source"])
+                        #expect(f.inputSetterDispatches == 1 && f.routingDestinationPresses == 1)
+                    }
+                    if outcome.contains("_preflight_renewal") {
+                        #expect(f.routingReplacement != nil, "Reach the actual preflight Cancel-retired source")
+                    }
+                    let replay = await apply(dependencies, params)
+                    let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                    let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                    #expect(duplicate)
+                    let writes = compensated ? 2 : 1
+                    #expect(f.routingNameWrites.count == writes && f.inputSetterDispatches == 1 && f.routingDestinationPresses == writes)
+                }
+                return
+            }
             if outcome.hasPrefix("matching") {
                 try await assertMatchingInputExecution(f, dependencies: dependencies, preview: preview, key: key, outcome: outcome)
                 return
@@ -6444,6 +6567,9 @@ struct Issue965HeldSelectionAssociationTests {
             if outcome == "foreign_focus" { injectForeignInputEditor(f) }
             if outcome == "changed_peer" {
                 f.builder.setAttribute(f.builder.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
+            }
+            if outcome == "changed_name" {
+                f.builder.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
             }
             if outcome == "replaced_control" {
                 let replacement = f.builder.element(1_291_499)
@@ -6475,7 +6601,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let result = await apply(dependencies, params)
             let body = try #require(sharedJSONObject(sharedToolText(result)))
-            let prewriteRefusal = ["wrong_digest", "replaced_control", "foreign_project", "changed_peer", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_focus", "late_proof_document"].contains(outcome)
+            let prewriteRefusal = ["wrong_digest", "replaced_control", "foreign_project", "changed_peer", "changed_name", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_focus", "dispatch_name", "late_proof_document"].contains(outcome)
             if prewriteRefusal {
                 #expect(body["state"] as? String == "C", "Actual input refusal: \(body)")
                 #expect(f.routingDestinationPresses == 0)
@@ -6494,10 +6620,23 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(body["saga_state"] as? String == "completed")
                 #expect(f.routingDestinationPresses == 1)
                 #expect(f.inputSetterDispatches == 1, "The same fixture observes actual changed-input dispatch")
+                if retainedName {
+                    let evidence = try #require(body["goal_evidence"] as? [[String: Any]])
+                    #expect(evidence.count == 1)
+                    let read = try #require(evidence.first?["read"] as? [String: Any])
+                    #expect(read["observed"] as? String == "Duplicate")
+                    #expect(read["read_source"] as? String == "ax_track_name")
+                }
             } else {
                 #expect(body["state"] as? String == "B", "Actual unverified input result: \(body)")
                 #expect(f.routingDestinationPresses == (outcome == "no_observer" ? 0 : 1))
                 if outcome.hasPrefix("late_inverse_") { #expect(f.routingLateScopeInjected) }
+            }
+            if retainedName {
+                #expect(f.routingNameWrites.isEmpty && f.routingNameConfirms == 0,
+                    "An unchanged approved name must never acquire a name writer")
+                let expectedName = ["changed_name", "dispatch_name", "late_inverse_name"].contains(outcome) ? "External Name" : "Duplicate"
+                #expect(f.builder.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == expectedName)
             }
             let presses = f.routingDestinationPresses
             let reads = f.inputMenuPresses
@@ -6630,14 +6769,17 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
     }
 
-    private func assertRegisteredInputSaga(_ outcome: String, canonical: Bool = false) async throws {
+    private func assertRegisteredInputSaga(_ requestedOutcome: String, canonical: Bool = false) async throws {
+        let retainedName = requestedOutcome.hasPrefix("retained_name_")
+        let outcome = retainedName ? String(requestedOutcome.dropFirst("retained_name_".count)) : requestedOutcome
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder, cache = StateCache(), registry = TargetRegistry()
             f.useBulkReads = outcome.contains("_final_")
             let retiring = outcome.hasPrefix("retired_track_")
             let canonicalRenewal = canonical && outcome.hasPrefix("owned_renewal")
             let matchingRenewal = canonical && outcome.hasPrefix("matching_renewal")
-            if retiring || canonicalRenewal || matchingRenewal {
+            let composedRenewal = canonical && outcome.hasPrefix("composed_name_execution_preflight_renewal")
+            if retiring || canonicalRenewal || matchingRenewal || composedRenewal {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
@@ -6693,10 +6835,44 @@ struct Issue965HeldSelectionAssociationTests {
             b.setAttribute(two, "AXMenuItemMarkChar", "")
             b.setChildren(submenu, [one, two]); b.setChildren(parent, [submenu]); b.setChildren(root, [echo, parent])
             b.setChildren(outputMenu, [outputLeaf]); b.setChildren(outputParent, [outputMenu]); b.setChildren(outputRoot, [outputEcho, outputParent])
+            let nameField = b.element(1_971_400)
+            if outcome.hasPrefix("composed_name_execution") {
+                // The real name writer receives only this fixture's native AX editor.
+                // Any fallback remains inside the fake channel, never the desktop.
+                f.routingMenuRename = true
+                b.setRole(nameField, kAXTextFieldRole as String)
+                b.setAttribute(nameField, kAXDescriptionAttribute as String, "Duplicate")
+                b.setAttribute(nameField, kAXValueAttribute as String, "0")
+                b.setAttribute(nameField, kAXWindowAttribute as String, f.window)
+                b.setActionNames(nameField, [kAXPressAction as String, kAXConfirmAction as String])
+                b.setChildren(nameField, []); b.setChildren(f.headers[0], [nameField])
+                f.routingSetter = { element, attribute, value in
+                    guard CFEqual(element, nameField), attribute == kAXValueAttribute as String,
+                          let name = value as? String else { return nil }
+                    f.routingNameWrites.append(name)
+                    b.setAttribute(nameField, kAXDescriptionAttribute as String, name)
+                    b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
+                    return true
+                }
+            }
             f.routingAction = { element, action in
                 let source = f.routingReplacement ?? f.strips[1]
                 let peer = outcome.hasPrefix("inverse_boundary_") && outcome.hasSuffix("_peer") && f.routingLateScopeInjected ? replacementPeer : f.inputReadReplacementPeer ?? f.strips[0]
                 let census = [peer, source]
+                if outcome.hasPrefix("composed_name_execution"), CFEqual(element, nameField) {
+                    if action == kAXPressAction as String {
+                        b.setAttributeSettable(nameField, kAXValueAttribute as String, true)
+                        b.setAttribute(nameField, kAXValueAttribute as String,
+                            b.attributeValue(nameField, kAXDescriptionAttribute as String))
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, nameField); return true
+                    }
+                    if action == kAXConfirmAction as String {
+                        f.routingNameConfirms += 1
+                        b.setAttribute(b.element(1_965_711), kAXValueAttribute as String,
+                            b.attributeValue(nameField, kAXDescriptionAttribute as String))
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, source); return true
+                    }
+                }
                 if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, replacementInput) || CFEqual(element, output) {
                     let inputPressed = !CFEqual(element, output)
                     if inputPressed { f.inputMenuPresses += 1 }
@@ -6733,6 +6909,7 @@ struct Issue965HeldSelectionAssociationTests {
                     if CFEqual(element, root) { f.inputMenuCancels += 1 }
                     let willRetire = retiring || (canonicalRenewal && InputBusSagaAdapter.writePermission != nil)
                         || (matchingRenewal && f.inputMenuCancels > 1)
+                        || (composedRenewal && f.inputMenuCancels > 1)
                     if willRetire, CFEqual(element, root) {
                         let replacement = b.element(1_291_300 + f.inputMenuCancels)
                         b.setRole(replacement, kAXLayoutItemRole as String)
@@ -6754,6 +6931,20 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
                             outcome == "matching_renewal_rail" && willRetire ? f.rail : willRetire ? current : f.window)
                     }
+                    if composedRenewal, willRetire, !f.routingLateScopeInjected {
+                        if outcome.hasSuffix("_peer") {
+                            b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
+                        } else if outcome.hasSuffix("_project") {
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        } else if outcome.hasSuffix("_header") {
+                            let foreign = b.element(1_971_499)
+                            b.setRole(foreign, kAXGroupRole as String)
+                            b.setAttribute(foreign, kAXTitleAttribute as String, "Duplicate")
+                            b.setAttribute(foreign, kAXSelectedAttribute as String, true); b.setChildren(foreign, [])
+                            b.setChildren(f.rail, b.makeAXRuntime().children(f.rail).map { CFEqual($0, f.headers[0]) ? foreign : $0 })
+                        } else { return true }
+                        f.routingLateScopeInjected = true
+                    }
                     return true
                 }
                 Issue.record("Unexpected input Saga action"); return false
@@ -6770,6 +6961,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let router = ChannelRouter(), gate = LogicMutationGate(), journal = SagaJournal(), key = "owned-input-saga"
             let boundaryOutcome = canonicalRenewal ? (outcome.hasSuffix("_cancel") ? "cancel" : outcome.hasSuffix("_failure") ? "failure" : "completed")
+                : outcome.hasPrefix("composed_name_execution") ? (outcome.hasSuffix("_cancel") ? "cancel" : outcome.hasSuffix("_failure") || outcome.hasSuffix("_external_name") ? "failure" : "completed")
                 : outcome.hasPrefix("inverse_boundary_") || outcome == "checked_inverse_input" ? "failure"
                 : outcome.hasPrefix("retired_track_peer_") ? String(outcome.dropFirst("retired_track_peer_".count))
                 : retiring ? String(outcome.dropFirst("retired_track_".count)) : outcome
@@ -6837,6 +7029,12 @@ struct Issue965HeldSelectionAssociationTests {
                 operation: "mixer.set_input_bus_verified", idempotencyKey: key, afterForward: {
                     f.inputSagaForwardVerified = true
                     switch outcome {
+                    case "late_inverse_name":
+                        b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
+                    case "composed_name_execution_external_name":
+                        b.setAttribute(b.element(1_971_400), kAXDescriptionAttribute as String, "External Name")
+                        b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
+                        b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, "External Name")
                     case "late_inverse_input": b.setAttribute(input, kAXDescriptionAttribute as String, "Bus 256")
                     case "late_inverse_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     case "late_inverse_source": b.setChildren(f.mixer, [f.strips[0]])
@@ -6853,7 +7051,9 @@ struct Issue965HeldSelectionAssociationTests {
                     f.inputSetterDispatches += 1
                     guard canonical, outcome.hasPrefix("dispatch_") else { return }
                     f.routingLateScopeInjected = true
-                    if outcome == "dispatch_focus" {
+                    if outcome == "dispatch_name" {
+                        b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
+                    } else if outcome == "dispatch_focus" {
                         injectForeignInputEditor(f)
                     } else if outcome == "dispatch_peer" {
                         b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
@@ -6878,7 +7078,7 @@ struct Issue965HeldSelectionAssociationTests {
             let wrongTrackReference = try #require(capture.issued?.byRow.last ?? nil)
             if canonical {
                 try await assertCanonicalInputExecution(f, dependencies: dependencies, snapshotID: snapshotID,
-                    capture: capture, trackReference: trackReference, key: key, outcome: outcome)
+                    capture: capture, trackReference: trackReference, key: key, outcome: requestedOutcome)
                 return
             }
             let target = outcome == "wrong_target" ? try #require(capture.mixerReference(at: 0))

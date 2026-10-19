@@ -137,6 +137,47 @@ enum ExactTrackNameAdapter {
         fileprivate var stripBefore: String? = nil
     }
 
+    /// A read-only continuation of the original capture, never an owned write
+    /// or inverse. Only an actual original-header acquisition can advance it.
+    struct CapturedCoupledRead: Sendable {
+        fileprivate let action: Action
+        fileprivate let registry: TargetRegistry
+        fileprivate let mirror: CoupledMirror
+    }
+
+    private static func capturedNameMirror(_ action: Action, capture: SessionPopulationObservation.Capture,
+        source: AXTrackBinding.Binding, registry: TargetRegistry, read: CapturedCoupledRead?) -> CoupledMirror? {
+        guard let original = capturedMirror(action, capture: capture, source: source) else { return nil }
+        guard let read else { return original }
+        guard read.registry === registry, read.action.projectReference == action.projectReference,
+              read.action.targetReference == action.targetReference,
+              read.action.expectedBefore.utf8.elementsEqual(action.expectedBefore.utf8),
+              read.action.desiredAfter.utf8.elementsEqual(action.desiredAfter.utf8),
+              read.mirror.snapshot == original.snapshot, read.mirror.reference == original.reference,
+              read.mirror.pair.track.matches(original.pair.track),
+              (read.mirror.registryStrip ?? read.mirror.pair.strip).matches(original.pair.strip) else { return nil }
+        return read.mirror
+    }
+
+    static func renewingCapturedCoupledRead(_ action: Action, capture: SessionPopulationObservation.Capture,
+        registry: TargetRegistry, prior: CapturedCoupledRead?,
+        through source: AccessibilityChannel.OriginalHeaderSourceRenewal) async -> CapturedCoupledRead? {
+        guard let track = await registry.resolve(action.targetReference)?.physicalTrack,
+              let mirror = capturedNameMirror(action, capture: capture, source: track, registry: registry, read: prior),
+              mirror.pair.track.matches(source.originalTrack), mirror.pair.strip.matches(source.original),
+              (source.pair.strip.matches(source.original)
+                ? source.original.currentIndex(runtime: mirror.pair.track.runtime) == source.index
+                : source.original.currentIndex(runtime: mirror.pair.track.runtime) == nil),
+              source.permits(runtime: mirror.pair.track.runtime) else { return nil }
+        let renewed = CoupledMirror(pair: source.pair, reference: mirror.reference, snapshot: mirror.snapshot,
+            preservedTracks: mirror.preservedTracks, preservedStrips: mirror.preservedStrips,
+            registryStrip: mirror.registryStrip ?? mirror.pair.strip, renewal: source)
+        guard await readHeldCoupledName(renewed, project: action.projectReference, target: action.targetReference,
+                  registry: registry, expectedName: action.expectedBefore) != nil,
+              source.permits(runtime: mirror.pair.track.runtime) else { return nil }
+        return .init(action: action, registry: registry, mirror: renewed)
+    }
+
     static func recordedNameEffect(_ proof: OwnedInverse) -> VerifiedNameEffect? {
         guard let mirror = proof.mirror, let name = mirror.retainedStripName else { return nil }
         return .init(pair: mirror.pair, trackName: proof.written, stripName: name)
@@ -177,6 +218,7 @@ enum ExactTrackNameAdapter {
         router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
         liveTrackName: @escaping @Sendable (Int) -> String?,
         liveTrackNames: @escaping @Sendable () -> [Int: String]?,
+        capturedRead: CapturedCoupledRead? = nil,
         ownedPeerEffects: [OwnedInverse] = [], selectionOrigin: AXTrackBinding.Binding? = nil,
         preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
         afterVerifiedWrite: PostVerifiedWrite? = nil
@@ -188,7 +230,7 @@ enum ExactTrackNameAdapter {
         guard let snapshot = capture.targetSnapshot, await registry.currentSnapshot == snapshot,
               let target = await registry.resolve(action.targetReference), let source = target.physicalTrack,
               target.kind == .track,
-              let captured = capturedMirror(action, capture: capture, source: source),
+              let captured = capturedNameMirror(action, capture: capture, source: source, registry: registry, read: capturedRead),
               let mirror = captured.acknowledging(ownedPeerEffects, project: action.projectReference,
                   target: action.targetReference, registry: registry) else { return reject() }
         return await applySelecting(action, router: router, cache: cache, registry: registry,
@@ -229,10 +271,11 @@ enum ExactTrackNameAdapter {
 
     static func readCapturedCoupledName(_ action: Action, capture: SessionPopulationObservation.Capture,
                                        registry: TargetRegistry, preserveCurrentPeers: Bool = false,
+                                       capturedRead: CapturedCoupledRead? = nil,
                                        ownedPeerEffects: [OwnedInverse] = []) async -> String? {
         guard let target = await registry.resolve(action.targetReference), target.kind == .track,
               let source = target.physicalTrack,
-              let captured = capturedMirror(action, capture: capture, source: source),
+              let captured = capturedNameMirror(action, capture: capture, source: source, registry: registry, read: capturedRead),
               var mirror = captured.acknowledging(ownedPeerEffects, project: action.projectReference,
                   target: action.targetReference, registry: registry) else { return nil }
         if preserveCurrentPeers {
