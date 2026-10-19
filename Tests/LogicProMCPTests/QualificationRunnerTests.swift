@@ -3129,7 +3129,10 @@ struct QualificationRunnerTests {
         result, calls = ReleaseFinalArtifactConsumerTests().run_consumer(
             'supplied', candidate=sys.argv[1], bundle_path=sys.argv[2], verifier=sys.argv[3],
             trusted_key=sys.argv[4], commit=sys.argv[5], entrypoint=entry,
-            public_input_shape=target, reverify_timeout=5)
+            # Keep the tight liveness bound for every planted FIFO. Healthy
+            # controls perform real archive/signature verification and use the
+            # helper's ordinary bounded budget instead of the FIFO probe's.
+            public_input_shape=target, reverify_timeout=5 if target is not None else 30)
         print(json.dumps({'exit': result.returncode, 'timed_out': result.timed_out,
                           'calls': calls, 'stdout': result.stdout, 'stderr': result.stderr}))
         """, fixture.executableURL.path, fixture.directory.path, verifier.path,
