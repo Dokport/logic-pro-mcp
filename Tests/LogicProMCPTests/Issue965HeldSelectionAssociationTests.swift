@@ -6365,7 +6365,7 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
 
-    @Test(arguments: ["matching", "matching_different_display", "matching_checkmark", "matching_control",
+    @Test(arguments: ["matching", "matching_different_display", "matching_renewal", "matching_renewal_rail", "matching_preopen_focus", "matching_checkmark", "matching_control",
                       "matching_project", "matching_focus", "matching_peer", "matching_cleanup", "matching_late_proof_document"])
     func matchingCanonicalInputUsesIndependentReadWithoutSetter(outcome: String) async throws {
         try await assertRegisteredInputSaga(outcome, canonical: true)
@@ -6580,17 +6580,29 @@ struct Issue965HeldSelectionAssociationTests {
                 previous?(element, attribute)
                 if f.routingLateScopeInjected, attribute == kAXHelpAttribute as String { f.inputForeignScopeHelpReads += 1 }
             }
+        case "matching_preopen_focus":
+            let reads = f.inputMenuPresses
+            f.routingWindowListRead = {
+                guard AXMixerStripBinding.current != nil, f.inputMenuPresses == reads, !f.routingLateScopeInjected else { return }
+                f.routingLateScopeInjected = true
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[0])
+            }
         default: break
         }
         let beforeReads = f.inputMenuPresses
         let result = await apply(dependencies, params)
         let body = try #require(sharedJSONObject(sharedToolText(result)))
-        if !["matching", "matching_different_display"].contains(outcome) {
+        if !["matching", "matching_different_display", "matching_renewal"].contains(outcome) {
             #expect(body["state"] as? String == "C", "Actual matching refusal: \(body)")
             #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
             if outcome == "matching_checkmark" { #expect(f.inputMenuPresses > beforeReads) }
-            if outcome == "matching_cleanup" || outcome == "matching_late_proof_document" { #expect(f.routingLateScopeInjected) }
+            if ["matching_cleanup", "matching_late_proof_document", "matching_preopen_focus"].contains(outcome) { #expect(f.routingLateScopeInjected) }
             if outcome == "matching_late_proof_document" { #expect(f.inputForeignScopeHelpReads == 0) }
+            if outcome == "matching_renewal_rail" {
+                #expect(f.routingReplacement != nil, "Reach the real Cancel-retired source before the reader refuses changed focus")
+                let receipt = try #require(body["input_read_receipt"] as? [String: Any])
+                #expect(receipt["state"] as? String == "C")
+            }
             return
         }
         #expect(body["state"] as? String == "A", "Actual matching input result: \(body)")
@@ -6602,6 +6614,9 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.inputMenuPresses > beforeReads, "Completion must independently reread the native input")
         #expect(f.inputSetterDispatches == 0)
         #expect(f.routingDestinationPresses == 0)
+        if outcome == "matching_renewal" {
+            #expect(f.routingReplacement != nil, "Reach the actual Cancel-retired source and original-header renewal")
+        }
         let goals = try #require(body["goal_evidence"] as? [[String: Any]])
         let read = try #require(goals.first?["read"] as? [String: Any])
         #expect(read["read_source"] as? String == "ax_input_menu_checkmark")
@@ -6621,7 +6636,8 @@ struct Issue965HeldSelectionAssociationTests {
             f.useBulkReads = outcome.contains("_final_")
             let retiring = outcome.hasPrefix("retired_track_")
             let canonicalRenewal = canonical && outcome.hasPrefix("owned_renewal")
-            if retiring || canonicalRenewal {
+            let matchingRenewal = canonical && outcome.hasPrefix("matching_renewal")
+            if retiring || canonicalRenewal || matchingRenewal {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
@@ -6716,6 +6732,7 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXCancelAction as String, CFEqual(element, root) || CFEqual(element, outputRoot) {
                     if CFEqual(element, root) { f.inputMenuCancels += 1 }
                     let willRetire = retiring || (canonicalRenewal && InputBusSagaAdapter.writePermission != nil)
+                        || (matchingRenewal && f.inputMenuCancels > 1)
                     if willRetire, CFEqual(element, root) {
                         let replacement = b.element(1_291_300 + f.inputMenuCancels)
                         b.setRole(replacement, kAXLayoutItemRole as String)
@@ -6734,7 +6751,8 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, [f.inputReadReplacementPeer ?? peer, current])
                     if willRetire { b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [current]) }
                     if !canonical || willRetire {
-                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, willRetire ? current : f.window)
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                            outcome == "matching_renewal_rail" && willRetire ? f.rail : willRetire ? current : f.window)
                     }
                     return true
                 }

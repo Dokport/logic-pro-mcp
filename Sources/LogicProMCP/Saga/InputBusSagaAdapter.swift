@@ -237,6 +237,13 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     held = source.pair; self.readRenewal = source
                 } else { held = captured }
             }
+            let originalFocusProof: AccessibilityChannel.HeldSelectionAssociation?
+            if self.matchingOnly {
+                guard let control = self.readControl, let before = Self.bus(self.forward.params["expected_current"]),
+                      self.footprintHeld(held, renewal: self.readRenewal, assignment: .bus(before), control: control)
+                else { return nil }
+                originalFocusProof = self.footprintProof
+            } else { originalFocusProof = nil }
             let reading = await AXMixerStripBinding.$current.withValue(held.strip) {
                 await AXMixerStripBinding.$outputAssociation.withValue(held) {
                     await AccessibilityChannel.getInputBusObservation(runtime: held.track.runtime,
@@ -248,7 +255,11 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             if self.matchingOnly { self.matchingReadReceipt = reading.result.message }
             guard reading.result.isSuccess, let receipt,
                   receipt["state"] as? String == "A", receipt["popup_menu_state"] as? String == "closed",
-                  !self.matchingOnly || receipt["focus_restoration"] as? String == "restored",
+                  !self.matchingOnly || receipt["focus_restoration"] as? String == "restored" || {
+                      guard let originalFocusProof, let renewal = reading.inputRenewal else { return false }
+                      return renewal.restoresOriginalFocus(of: originalFocusProof, source: held.strip,
+                          runtime: held.track.runtime)
+                  }(),
                   case .bus(let actual)? = reading.assignment,
                   actual == Self.bus(self.forward.params["expected_current"]),
                   let control = reading.inputSlot, control.owner.matches(current.strip),
