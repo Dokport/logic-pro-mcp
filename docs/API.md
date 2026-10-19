@@ -289,6 +289,8 @@ Common commands: `send_note`, `send_chord`, `send_cc`, `send_program_change`, `s
 
 Both commands use Logic's native whole-project MIDI export, then retain the conductor and all chunks whose sole instrument-name event matches the target and precedes every channel/SysEx event. A region's initial offset can precede its metadata; those original tick deltas and other MIDI events are not rewritten. Responses report notes in exported-file ticks (`ppq`, `start_tick`, `end_tick`, `duration_ticks`), observed tempo/meter events and explicit `project_timeline_mapping: "unproven"` / `import_comparison: "not_performed"`. They do not prove authored-file import equivalence or original region edit semantics. The provider does not change selection or Cycle; the Save panel's last-used folder preference is not restored. UI/export failures report no verified result and may require checking panel cleanup before retrying. Existing destination files are never overwritten.
 
+The native export was observed to apply region transposition and quantization to the artifact while leaving the source region's parameters and underlying notes unchanged. It is not a raw, pre-parameter dump or a general playback-equivalence guarantee. Loop/alias expansion is not independently qualified: the provider never joins regions, expands loops, converts aliases or permanently applies parameters in the project. Inspect the exported artifact before relying on those representations. A track omitted by Logic's export returns `track_midi_not_exported`, not a fabricated verified-empty note list.
+
 Channels are 1-based (`1..16`) to match Logic's UI.
 
 `send_sysex` accepts `{ bytes: [Int] }` or `{ data: "F0 ... F7" }` and rejects payloads over 1024 bytes before routing to CoreMIDI.
