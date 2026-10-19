@@ -512,6 +512,54 @@ private actor ExactNameChannel: Channel {
 
 @Suite("#968 exact-local track naming adapter")
 struct Issue968ExactTrackNameAdapterTests {
+    @Test(arguments: ["healthy", "foreign_keyboard", "foreign_focus", "foreign_window"])
+    func coupledNameMustOwnTheKeyboardBeforeOpeningItsEditor(fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            f.passiveHeaderNameLabel = true
+            f.builder.setAttribute(f.field, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setAttributeSettable(f.field, kAXValueAttribute as String, false)
+            let bar = f.builder.element(968_430), trackMenu = f.builder.element(968_431)
+            let menu = f.builder.element(968_432), rename = f.builder.element(968_433)
+            let editor = f.builder.element(968_434), otherWindow = f.builder.element(968_435)
+            f.renameMenuItem = rename; f.menuFocusedEditor = editor
+            f.builder.setAttribute(f.app, kAXMenuBarAttribute as String, bar)
+            for (element, role) in [(bar, kAXMenuBarRole), (trackMenu, kAXMenuBarItemRole),
+                                   (menu, kAXMenuRole), (rename, kAXMenuItemRole),
+                                   (editor, kAXTextFieldRole), (otherWindow, kAXWindowRole)] {
+                f.builder.setRole(element, role as String)
+            }
+            f.builder.setAttribute(trackMenu, kAXTitleAttribute as String, AXLocalePolicy.trackMenuBar.canonical)
+            f.builder.setAttribute(rename, kAXTitleAttribute as String, AXLocalePolicy.renameTrackMenuItem.canonical)
+            f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+            f.builder.setAttribute(editor, kAXParentAttribute as String, f.rail)
+            f.builder.setAttribute(editor, kAXValueAttribute as String, "A")
+            f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+            f.builder.setChildren(bar, [trackMenu]); f.builder.setChildren(trackMenu, [menu])
+            f.builder.setChildren(menu, [rename])
+            let (capture, project, target, _, _) = try await f.coupledCapture()
+            if fault == "foreign_keyboard" { f.logicIsFrontmost = false }
+            if fault == "foreign_focus" { f.observedFocusedPID = 9002 }
+            if fault == "foreign_window" {
+                f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, otherWindow)
+            }
+            let receipt = await f.applyCoupled(capture, project: project, target: target)
+            let body = try #require(sharedJSONObject(sharedToolText(receipt.result)))
+            if fault == "healthy" {
+                #expect(receipt.status == .applied, "Healthy coupled menu control: \(body)")
+                #expect(f.events == ["rename_menu"])
+                #expect(f.menuEditorValueWrites == ["C"] && f.writes == ["C"])
+            } else {
+                #expect(receipt.status == .rejectedBeforeWrite, "Reject before opening a foreign-owned editor: \(body)")
+                #expect(body["state"] as? String == "C")
+                let attempted = try #require(body["write_attempted"] as? Bool)
+                #expect(!attempted)
+                #expect(f.events.isEmpty, "A known unsafe owner must not first open Rename and then report uncertain rollback")
+                #expect(f.menuEditorValueWrites.isEmpty && f.writes.isEmpty && !f.postedReturn)
+            }
+        }
+    }
+
     @Test func registeredOrdinaryRenameAcquiresItsRetainedWindowBeforeOpeningTheEditor() async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = ExactNameFixture("Audio 1")

@@ -3356,12 +3356,17 @@ extension AccessibilityChannel {
                 }
         }
         func ordinaryWindowIsFocused() -> Bool {
-            guard ordinaryAcquisition else { return true }
+            // Every physically bound exact rename needs this pre-actuation
+            // custody, including coupled requests that do not acquire selection.
+            guard acquire else { return true }
             guard let heldApp, let heldPID, runtime.logicProPID() == heldPID,
                   runtime.focusedApplicationPID() == heldPID, processRuntime.logicIsFrontmost(),
                   let app = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, heldApp),
                   let focusedWindow: AXUIElement = AXHelpers.getAttribute(
-                    heldApp, kAXFocusedWindowAttribute, runtime: runtime.ax) else { return false }
+                    heldApp, kAXFocusedWindowAttribute, runtime: runtime.ax) else {
+                Log.info("Physical exact rename refused window or keyboard custody before editor acquisition", subsystem: "ax")
+                return false
+            }
             return CFEqual(focusedWindow, window)
         }
         if ordinaryAcquisition, !ordinaryWindowIsFocused() {
