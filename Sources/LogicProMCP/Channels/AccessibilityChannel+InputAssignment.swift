@@ -8,7 +8,8 @@ extension AccessibilityChannel {
     static func setInputBusVerified(params: [String: String],
         runtime: AXLogicProElements.Runtime = .production,
         timing: OutputAssignmentTiming = .live,
-        ownedInverse: ChangedInputObservation? = nil) async -> ChannelResult {
+        ownedInverse: ChangedInputObservation? = nil,
+        ownedCreation: OwnedAuxLifecycle.InputInitializationProof? = nil) async -> ChannelResult {
         let operation = "mixer.set_input_bus_verified"
         var extras: [String: Any] = ["operation": operation, "write_attempted": false,
             "navigation_attempted": false]
@@ -44,10 +45,22 @@ extension AccessibilityChannel {
         guard params.keys.allSatisfy({ ["destination", "expected_current", "replace_existing"].contains($0) }),
               params["replace_existing"] == "true",
               let rawDestination = params["destination"], case .bus(let destination)? = OutputAssignment(token: rawDestination),
-              let rawExpected = params["expected_current"], case .bus(let expected)? = OutputAssignment(token: rawExpected),
               let original = AXMixerStripBinding.current, original.currentIndex(runtime: runtime) != nil else {
             return refusal(.invalidParams,
                 "A current physical Mixer reference, Bus 1..256 destination and expected_current, and replace_existing:true are required.")
+        }
+        let expected: InputAssignment
+        if let ownedCreation {
+            guard ownedInverse == nil, params["expected_current"] == nil,
+                  ownedCreation.destination == destination, ownedCreation.permitsBefore(original) else {
+                return refusal(.staleTargetReference, "The original creation does not authorize this exact initialization.")
+            }
+            expected = ownedCreation.before
+        } else {
+            guard let raw = params["expected_current"], case .bus(let number)? = OutputAssignment(token: raw) else {
+                return refusal(.invalidParams, "Ordinary input replacement requires a checked Bus expected_current.")
+            }
+            expected = .bus(number)
         }
         guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
             return refusal(.staleTargetReference, "The operation no longer owns its mutation gate or deadline.")
@@ -63,13 +76,19 @@ extension AccessibilityChannel {
             return refusal(.routingDependencyUnknown, "Only a checked physical-output sink is supported; no input destination was pressed.")
         }
         if let ownedInverse {
-            guard ownedInverse.current.strip.matches(original), ownedInverse.before == destination,
-                  ownedInverse.after == expected, ownedInverse.sink == sink, ownedInverse.permits() else {
+            guard ownedInverse.current.strip.matches(original), ownedInverse.before == .bus(destination),
+                  expected == .bus(ownedInverse.after), ownedInverse.creation == nil,
+                  ownedInverse.sink == sink, ownedInverse.permits() else {
                 return refusal(.staleTargetReference, "The original changed input no longer authorizes this inverse.")
             }
         }
         let before: CheckedOutputReading
-        if let ownedInverse {
+        if let ownedCreation {
+            guard let checked = ownedCreation.retainedCheckedRead() else {
+                return refusal(.staleTargetReference, "The actual created input observation is no longer current.")
+            }
+            before = checked; recordRead(before, key: "retained_created_input_acquisition")
+        } else if let ownedInverse {
             guard let checked = ownedInverse.retainedCheckedRead() else {
                 return refusal(.staleTargetReference, "The independently checked changed input is no longer current.")
             }
@@ -79,10 +98,14 @@ extension AccessibilityChannel {
             before = await getInputBusObservation(runtime: runtime, timing: timing)
             recordRead(before, key: "before_acquisition")
         }
-        guard case .bus(let observed)? = before.assignment else {
+        let observed = before.inputAssignment ?? before.assignment.flatMap { value -> InputAssignment? in
+            if case .bus(let number) = value { return .bus(number) }; return nil
+        }
+        guard let observed, ownedCreation != nil || observed.busOutputAssignment != nil else {
             return refusal(.readbackUnavailable, "The current input did not have agreeing checked-bus evidence; no destination was pressed.")
         }
-        extras["before"] = OutputAssignment.bus(observed).json
+        if case .bus(let number) = observed { extras["before"] = OutputAssignment.bus(number).json }
+        else { extras["creation_owned_initialization"] = true; extras["initial_input"] = String(describing: observed) }
         guard observed == expected else {
             return refusal(.staleSnapshot, "expected_current does not match the checked input; no destination was pressed.")
         }
@@ -171,8 +194,8 @@ extension AccessibilityChannel {
         guard ownerStillCurrent() else {
             return refusal(.routingDependencyUnknown, "The source must remain a stopped physical-output sink with every send observed empty.")
         }
-        if observed == destination {
-            extras["after"] = OutputAssignment.bus(observed).json; extras["changed"] = false
+        if observed == .bus(destination) {
+            extras["after"] = OutputAssignment.bus(destination).json; extras["changed"] = false
             extras["verify_source"] = "ax_input_menu_checkmark"
             return .success(HonestContract.encodeStateA(extras: extras))
         }
@@ -262,8 +285,8 @@ extension AccessibilityChannel {
         }
         // AXPress can report failure after Logic actually opens the menu. The
         // observed owned root and agreeing checked values, not its ACK, decide.
-        guard popupOwned(), currentInputMenuBusAssignment(in: root, runtime: runtime.ax) == expected,
-              popupOwned(), currentInputMenuBusAssignment(in: root, runtime: runtime.ax) == expected else {
+        guard popupOwned(), currentInputMenuAssignment(in: root, runtime: runtime.ax) == expected,
+              popupOwned(), currentInputMenuAssignment(in: root, runtime: runtime.ax) == expected else {
             return await refuseAndClose(.staleSnapshot, "Checked current input changed with the popup open; nothing was selected.")
         }
         let choice = outputMenuChoice(for: .bus(destination), in: root, runtime: runtime.ax, receiverArrow: "←")
@@ -276,7 +299,9 @@ extension AccessibilityChannel {
               actions.contains(kAXPressAction as String), popupOwned(),
               case .item(let finalItem, let finalPath) = outputMenuChoice(for: .bus(destination),
                   in: root, runtime: runtime.ax, receiverArrow: "←"),
-              CFEqual(finalItem, item), finalPath == path, popupOwned() else {
+              CFEqual(finalItem, item), finalPath == path, popupOwned(),
+              ownedCreation.map({ $0.permitsBefore(owner, popup: root) }) ?? true,
+              popupOwned() else {
             return await refuseAndClose(.staleTargetReference, "Original source/menu action custody changed; nothing was selected.")
         }
         extras["write_attempted"] = true; extras["menu_path"] = path
@@ -367,7 +392,7 @@ extension AccessibilityChannel {
         }
         extras["popup_menu_state"] = "closed"
         extras["after"] = OutputAssignment.bus(actual).json
-        extras["changed"] = actual != observed
+        extras["changed"] = InputAssignment.bus(actual) != observed
         extras["verify_source"] = "ax_input_menu_checkmark"
         guard actual == destination else {
             return uncertain(.readbackMismatch, "The committed checked input differs from the request; no inverse was attempted.")
@@ -375,7 +400,7 @@ extension AccessibilityChannel {
         guard recordInputEffect(original: AXMixerStripBinding.outputAssociation, current: after.inputRenewal?.pair ?? afterPair,
             renewal: after.inputRenewal ?? writerRenewal ?? before.inputRenewal,
             control: finalSlot, population: finalPopulation.strips, sink: sink,
-            before: observed, after: actual, checkedAfter: after, runtime: runtime) else {
+            before: observed, after: actual, checkedAfter: after, runtime: runtime, creation: ownedCreation) else {
             return uncertain(.readbackUnavailable, "The input changed but native effect custody could not be retained; stop dependent writes.")
         }
         return .success(HonestContract.encodeStateA(extras: extras))

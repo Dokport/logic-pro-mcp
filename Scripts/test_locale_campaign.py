@@ -462,27 +462,27 @@ def main():
     #      installed — and the guard, reading the document, agrees with it.
     json.dump(census([row("AXMenuItem", "AXMenuBar/AXMenuBarItem[F]/AXMenu/AXMenuItem[x]",
                           title="자동화 확장")]), open(cpath, "w"))
-    doc_exact = labels(automationModeContext=("automation", ["자동화"]))
+    doc_exact = labels(fixtureAutomationContext=("automation", ["자동화"]))
     lp_m = write(tmp, doc_exact)
     _, _, props_m, _ = propose.main(cpath, lp_m)
     case("a label declaring `exact` is not matched by containment",
-         "automationModeContext" not in props_m, props_m)
+         "fixtureAutomationContext" not in props_m, props_m)
     json.dump(census([row("AXMenuItem", "AXMenuBar/AXMenuBarItem[F]/AXMenu/AXMenuItem[자동화]",
                           title="자동화")]), open(cpath, "w"))
-    doc_m2 = labels(automationModeContext=("automation", ["자동화"]))
+    doc_m2 = labels(fixtureAutomationContext=("automation", ["자동화"]))
     # `roles` DECLARED, or `apply` skips this label before it reaches the line under test —
-    # `automationModeContext` has no role hint in its name. Without it this case passed while the
+    # The synthetic label has no Swift consumer or role hint. Without declared roles this passed while the
     # mutation it exists to catch changed nothing, which is the failure mode round two named.
-    doc_m2["labels"]["automationModeContext"]["roles"] = ["AXMenuItem"]
+    doc_m2["labels"]["fixtureAutomationContext"]["roles"] = ["AXMenuItem"]
     lp_m2 = write(tmp, doc_m2)
     _, _, props_m2, _ = propose.main(cpath, lp_m2)
-    assert props_m2.get("automationModeContext"), "the fixture must propose, or apply never runs"
+    assert props_m2.get("fixtureAutomationContext"), "the fixture must propose, or apply never runs"
     propose.apply(lp_m2, json.load(open(cpath)), props_m2,
                   {"arrange.menus": "2026-09-05-ko-KR-arrange-menus-census"})
     case("...and --apply leaves that declaration alone",
-         json.load(open(lp_m2, encoding="utf-8"))["labels"]["automationModeContext"]["match"]
+         json.load(open(lp_m2, encoding="utf-8"))["labels"]["fixtureAutomationContext"]["match"]
          == "exact",
-         json.load(open(lp_m2, encoding="utf-8"))["labels"]["automationModeContext"].get("match"))
+         json.load(open(lp_m2, encoding="utf-8"))["labels"]["fixtureAutomationContext"].get("match"))
 
     # 10d. A label the Swift cannot speak about and the ledger does not declare has NO agreed mode.
     #      The guard refuses it outright, so a proposal made under a guess is one made under a rule
@@ -490,17 +490,17 @@ def main():
     #      by installing the rule that legitimised its own match. Round five, 2026-09-07.
     json.dump(census([row("AXMenuItem", "AXMenuBar/AXMenuBarItem[F]/AXMenu/AXMenuItem[x]",
                           title="자동화 확장")]), open(cpath, "w"))
-    undeclared = labels(automationModeContext=("automation", ["자동화"]))
-    undeclared["labels"]["automationModeContext"].pop("match")
-    undeclared["labels"]["automationModeContext"]["roles"] = ["AXMenuItem"]
+    undeclared = labels(fixtureAutomationContext=("automation", ["자동화"]))
+    undeclared["labels"]["fixtureAutomationContext"].pop("match")
+    undeclared["labels"]["fixtureAutomationContext"]["roles"] = ["AXMenuItem"]
     lp_u = write(tmp, undeclared)
     _, _, props_u, _ = propose.main(cpath, lp_u)
     case("a label with no agreed match mode is not proposed at all",
-         "automationModeContext" not in props_u, props_u)
+         "fixtureAutomationContext" not in props_u, props_u)
     propose.apply(lp_u, json.load(open(cpath)), props_u, {})
     case("...and --apply does not install a guessed mode for it",
-         "match" not in json.load(open(lp_u, encoding="utf-8"))["labels"]["automationModeContext"],
-         json.load(open(lp_u, encoding="utf-8"))["labels"]["automationModeContext"])
+         "match" not in json.load(open(lp_u, encoding="utf-8"))["labels"]["fixtureAutomationContext"],
+         json.load(open(lp_u, encoding="utf-8"))["labels"]["fixtureAutomationContext"])
 
     # 10e. A record is chosen by FILENAME, and nothing makes that name agree with its `host.locale`.
     #      Writing the census locale into a block citing a record measured elsewhere is a block the

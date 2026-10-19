@@ -635,6 +635,7 @@ extension AccessibilityChannel {
         var menuOpen = false
         private var focusRestoreAttempted = false
         private var mixerSelectionRestorationPending = false
+        private var topologyRefreshIssued = false
         var effects = SessionPopulationObservation.UIEffects()
 
         init?(
@@ -681,7 +682,8 @@ extension AccessibilityChannel {
             return nil
         }
 
-        private func stillOwned(stoppingWhen stop: @Sendable () -> Bool) async -> Bool {
+        private func stillOwned(stoppingWhen stop: @Sendable () -> Bool,
+                                isolation: isolated (any Actor)? = #isolation) async -> Bool {
             guard !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   await referenceIsCurrent(),
                   runtime.logicProPID() == acquiredPID,
@@ -918,6 +920,103 @@ extension AccessibilityChannel {
             effects.reason = "mixer_reveal_unverified"
         }
 
+        /// The lifecycle caller has already issued its one creation and observed
+        /// full strip retirement. Refresh only this retained window's checked
+        /// Control Bar toggle; generic temporary/final visibility rules stay intact.
+        func refreshAfterIssuedCreation(
+            expectedMixer: AXUIElement,
+            permittingActuation: () async -> Bool,
+            stoppingWhen stop: @escaping @Sendable () -> Bool,
+            isolation: isolated (any Actor)? = #isolation
+        ) async -> Bool {
+            func refuse(_ reason: String) -> Bool { effects.reason = reason; return false }
+            func owned(isolation: isolated (any Actor)? = #isolation) async -> Bool {
+                guard await stillOwned(stoppingWhen: stop, isolation: isolation),
+                      let observation = runtime.observeFrontmost?(), observation.isReady,
+                      observation.keyboardOwnerPID == acquiredPID,
+                      runtime.focusedApplicationPID() == acquiredPID,
+                      await permittingActuation(), !stop(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                return true
+            }
+            func activity(isolation: isolated (any Actor)? = #isolation) -> AXLogicProElements.ObservedTransportActivity? {
+                try? AXLogicProElements.observedTransportActivity(in: window, runtime: runtime,
+                    checking: { try SessionPopulationObservation.requireOwnedAcquisition() })
+            }
+            guard !topologyRefreshIssued, !effects.navigationPerformed, await owned(),
+                  let original = activity(), !original.isPlaying, !original.isRecording else {
+                return refuse("owned_mixer_refresh_unavailable")
+            }
+            func buttonState(isolation: isolated (any Actor)? = #isolation) -> (control: AXUIElement, visible: Bool)? {
+                guard let current = activity(), !current.isPlaying, !current.isRecording,
+                      CFEqual(original.controlBar, current.controlBar), CFEqual(original.play, current.play),
+                      CFEqual(original.record, current.record),
+                      case .success(let census) = AXHelpers.censusDescendantResult(of: current.controlBar,
+                        role: kAXCheckBoxRole, maxDepth: 4, runtime: runtime.ax, requiresCompleteTraversal: true,
+                        permittingRead: { !stop() && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil }) else { return nil }
+                var matches: [AXUIElement] = []
+                for element in census.matches {
+                    switch AXLocalePolicy.elementMatchesResult(element, AXLocalePolicy.controlBarMixerToggle, runtime: runtime.ax) {
+                    case .success(true): matches.append(element)
+                    case .success(false): break
+                    case .failure: return nil
+                    }
+                }
+                guard matches.count == 1, let control = matches.first,
+                      case .success(let enabled?) = AXHelpers.getAttributeResult(control, kAXEnabledAttribute,
+                        runtime: runtime.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, enabled == 1,
+                      case .success(let actions)? = runtime.ax.actionNamesResult?(control),
+                      actions.contains(kAXPressAction as String),
+                      case .success(let value?) = AXHelpers.getAttributeResult(control, kAXValueAttribute,
+                        runtime: runtime.ax) as Result<NSNumber?, AXHelpers.AXStatusError>, value == 0 || value == 1 else { return nil }
+                return (control, value.boolValue)
+            }
+            guard let initial = buttonState(), initial.visible,
+                  let lookup = try? AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: runtime,
+                    requiresCompleteAbsence: true, checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                  let area = lookup.binding, CFEqual(area.mixer, expectedMixer), await owned(),
+                  let deciding = buttonState(), deciding.visible, CFEqual(initial.control, deciding.control),
+                  await owned() else {
+                return refuse("owned_mixer_refresh_before_changed")
+            }
+            func observed(_ visible: Bool, isolation: isolated (any Actor)? = #isolation) async -> Bool {
+                let end = min(OperationTraceContext.current?.deadline ?? ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)),
+                    ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)))
+                repeat {
+                    guard await owned(), let state = buttonState(), CFEqual(initial.control, state.control),
+                          let lookup = try? AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: runtime,
+                            requiresCompleteAbsence: true, checking: { try SessionPopulationObservation.requireOwnedAcquisition() }) else { return false }
+                    switch lookup.lookup {
+                    case .found(let mixer):
+                        guard CFEqual(mixer, expectedMixer) else { return false }
+                        if visible && state.visible { return true }
+                    case .notFound: if !visible && !state.visible { return true }
+                    case .childrenUnread: return false
+                    }
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { return false }
+                } while ContinuousClock.now < end
+                return false
+            }
+            topologyRefreshIssued = true
+            effects.navigationPerformed = true; effects.restoration = "not_restored"
+            effects.attempted.append("mixer_refresh_hide")
+            _ = AXHelpers.performAction(initial.control, kAXPressAction, runtime: runtime.ax)
+            guard await observed(false) else { return refuse("owned_mixer_refresh_hide_unverified") }
+            effects.changed.append("mixer_visibility")
+            guard await owned(), let deciding = buttonState(), !deciding.visible,
+                  CFEqual(initial.control, deciding.control), await owned() else { return refuse("owned_mixer_refresh_show_refused") }
+            effects.attempted.append("mixer_refresh_show")
+            _ = AXHelpers.performAction(initial.control, kAXPressAction, runtime: runtime.ax)
+            guard await observed(true), await owned(), let final = buttonState(), final.visible,
+                  CFEqual(initial.control, final.control) else { return refuse("owned_mixer_refresh_show_unverified") }
+            effects.changed.append("mixer_visibility_restoration")
+            // This helper restores visibility, not the retired original focus.
+            // Even a cached equal CF is not a live-path restoration certificate.
+            effects.restoration = "not_restored"
+            effects.reason = "owned_creation_focus_unverified"
+            return true
+        }
+
         /// An actual owned Select All relationship, not selection synthesized from our census.
         /// Limited to an already exposed All view; no filter or page navigation is inferred.
         func observeWholeStripSelectionFromRetainedHeader(
@@ -1099,6 +1198,34 @@ extension AccessibilityChannel {
                   let visible = elements(kAXVisibleChildrenAttribute as String), subset(visible, of: strips),
                   let originalFrames = frames(),
                   let originalPath = Self.retainedPath(binding.mixer, in: window, runtime: runtime.ax) else { return nil }
+            var selectionWasAccepted = false
+            var firstSelectionFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus?
+            defer {
+                if firstSelectionFocus != nil { readFocusScope?.retainMixerInverseFocus(nil) }
+            }
+            func ownedFirstSelectionFocus() -> Bool {
+                // Native Select All can focus the first captured strip, even
+                // when the original focus/selection is a different strip.
+                // Only its exact complete selected population corroborates this
+                // request-owned read focus; a partial/foreign set grants none.
+                guard selectionWasAccepted, let first = strips.first, !CFEqual(first, focus),
+                      let current: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
+                      CFEqual(current, first), let selected = elements(kAXSelectedChildrenAttribute as String),
+                      sameSet(selected, strips) else { return false }
+                if firstSelectionFocus == nil {
+                    guard let observed = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(window: window, logic: runtime),
+                          CFEqual(observed.focus, first), CFEqual(observed.window, window),
+                          observed.document.utf8.elementsEqual(document.utf8), observed.permits() else { return false }
+                    firstSelectionFocus = observed
+                    readFocusScope?.retainMixerInverseFocus(observed)
+                }
+                guard firstSelectionFocus?.permits() == true,
+                      let bookend = elements(kAXSelectedChildrenAttribute as String), sameSet(bookend, strips) else { return false }
+                return true
+            }
+            func selectionReadFocusOwned() -> Bool {
+                (sameFocus() && passive.permits()) || ownedFirstSelectionFocus()
+            }
             func held(ownedSelectionFocus: AXUIElement? = nil) async -> Bool {
                 let selectionFocus = ownedSelectionFocus.map { expected in
                     guard original.filter({ CFEqual($0, expected) }).count == 1,
@@ -1107,7 +1234,7 @@ extension AccessibilityChannel {
                     return CFEqual(current, expected)
                 } ?? false
                 guard await stillOwned(stoppingWhen: stop), runtime.focusedApplicationPID() == acquiredPID,
-                      ownedMenuFocus() || selectionFocus,
+                      ownedMenuFocus() || selectionFocus || ownedFirstSelectionFocus(),
                       let currentPath = Self.retainedPath(binding.mixer, in: window, runtime: runtime.ax), same(originalPath, currentPath),
                       let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: runtime.ax),
                       same(strips, current.strips),
@@ -1163,6 +1290,8 @@ extension AccessibilityChannel {
             mixerSelectionRestorationPending = true
             let accepted = AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax)
             menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
+            selectionWasAccepted = accepted
+            _ = ownedFirstSelectionFocus()
             if accepted {
                 // A successful dispatch can settle after its ACK. Observe at
                 // most three owned states before cancelling a still-open menu;
@@ -1176,7 +1305,7 @@ extension AccessibilityChannel {
                         menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
                     }
                     if !menuOpen {
-                        guard sameFocus(), passive.permits(),
+                        guard selectionReadFocusOwned(),
                               let observed = elements(kAXSelectedChildrenAttribute as String), subset(observed, of: strips) else {
                             effects.reason = "mixer_global_selection_unverified"; return nil
                         }
@@ -1190,7 +1319,7 @@ extension AccessibilityChannel {
                     }
                 }
             }
-            guard await dismissOwnedMenu(stoppingWhen: stop), await held(), sameFocus(), passive.permits(),
+            guard await dismissOwnedMenu(stoppingWhen: stop), await held(), selectionReadFocusOwned(),
                   let selected = elements(kAXSelectedChildrenAttribute as String), subset(selected, of: strips) else {
                 effects.reason = "mixer_global_selection_unverified"; return nil
             }
@@ -1205,7 +1334,7 @@ extension AccessibilityChannel {
                 // arbitrary changed subset. One matching bookend, no retry leaf,
                 // new deadline or transfer of the captured original selection/focus.
                 guard accepted, sameSet(selected, original), sameSet(decidingSelected, strips),
-                      await held(), sameFocus(), passive.permits(),
+                      await held(), selectionReadFocusOwned(),
                       let settled = elements(kAXSelectedChildrenAttribute as String), sameSet(settled, strips) else {
                     effects.reason = "mixer_selection_restoration_conflict"; return nil
                 }

@@ -12,15 +12,22 @@ extension AccessibilityChannel {
         let control: AXMixerInputSlotBinding
         let population: [AXUIElement]
         let sink: OutputAssignment
-        let before: Int
+        let before: InputAssignment
         let after: Int
+        let creation: OwnedAuxLifecycle.InputInitializationProof?
         let focus: AXUIElement
         let checkedAfter: CheckedOutputReading
         let sampledAt: String
 
         func permits() -> Bool {
             let runtime = current.track.runtime
-            guard before != after, (1...256).contains(before), (1...256).contains(after),
+            switch before {
+            case .bus(let number): guard creation == nil, (1...256).contains(number) else { return false }
+            case .physical:
+                guard creation?.authorizes(original: original, current: current, before: before, after: after) == true else { return false }
+            case .noInput: return false
+            }
+            guard before != .bus(after), (1...256).contains(after),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   original.track.matches(current.track),
                   renewal.map({ $0.pair.track.matches(current.track) && $0.pair.strip.matches(current.strip)
@@ -67,14 +74,15 @@ extension AccessibilityChannel {
 
     static func recordInputEffect(original: HeldSelectionAssociation.Pair?, current: HeldSelectionAssociation.Pair?,
         renewal: OriginalHeaderSourceRenewal?, control: AXMixerInputSlotBinding, population: [AXUIElement], sink: OutputAssignment,
-        before: Int, after: Int, checkedAfter: CheckedOutputReading, runtime: AXLogicProElements.Runtime) -> Bool {
+        before: InputAssignment, after: Int, checkedAfter: CheckedOutputReading, runtime: AXLogicProElements.Runtime,
+        creation: OwnedAuxLifecycle.InputInitializationProof? = nil) -> Bool {
         guard let observer = inputChangeObserver else { return true }
         guard let original, let current, current.strip.matches(control.owner),
               checkedAfter.assignment == .bus(after), checkedAfter.inputSlot.map(control.matches) == true,
               let app = AXLogicProElements.appRoot(runtime: runtime),
               let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else { return false }
         let proof = ChangedInputObservation(original: original, current: current, renewal: renewal, control: control,
-            population: population, sink: sink, before: before, after: after, focus: focus,
+            population: population, sink: sink, before: before, after: after, creation: creation, focus: focus,
             checkedAfter: checkedAfter, sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
         guard proof.permits() else { return false }
         observer(proof)
