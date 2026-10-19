@@ -1160,6 +1160,11 @@ struct Issue965HeldSelectionAssociationTests {
                 "Keep the captured baseline, Saga before/after and inverse-ownership reads, and each checked scalar writer; duplicate adapter reads consume the same bounded native lifecycle")
     }
 
+    @Test("An unavailable input goal cannot authorize only the supported output subset")
+    func mixedInputCannotExecuteOnlyItsSupportedOutput() async throws {
+        try await assertCanonicalPhysicalOutput(mode: "mixed_input")
+    }
+
     @Test("Protected footprint rows retain full Help guards without repeating whole custody discovery for non-Help metadata")
     func coupledFootprintDoesNotRepeatWholeOwnershipAtEveryMetadataRow() async throws {
         let f = try Fixture()
@@ -1786,6 +1791,32 @@ struct Issue965HeldSelectionAssociationTests {
                             : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])])])]
                 guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
                     Issue.record("The explicit typed physical output must parse"); return
+                }
+                if mode == "mixed_input" {
+                    #expect(ApprovedSessionRepair.canVerifyCapturedGoals(policy: policy, policyValue: .object(raw),
+                        names: [], source: capture, request: retained.request),
+                        "Reach a genuinely supported output before adding the unavailable input task")
+                    var mixed = raw
+                    mixed["inputs"] = .array([.object(["target": .string("source"), "bus": .int(2)])])
+                    guard case .accepted(let mixedPolicy) = ProjectSessionAudit.parseIntentPolicy(mixed) else {
+                        Issue.record("The explicit mixed policy must parse"); return
+                    }
+                    let blocked = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: mixedPolicy,
+                        policyValue: .object(mixed), names: [], capture: capture,
+                        request: retained.request, snapshotCurrent: true)
+                    let preview = try #require(sharedJSONObject(blocked.json))
+                    let executable = try #require(preview["executable"] as? Bool)
+                    #expect(!executable)
+                    let steps = try #require(preview["steps"] as? [[String: Any]])
+                    #expect(steps.contains { $0["kind"] as? String == "input_assignment" })
+                    #expect(!ApprovedSessionRepair.canVerifyCapturedGoals(policy: mixedPolicy,
+                        policyValue: .object(mixed), names: [], source: capture, request: retained.request))
+                    #expect(await cache.retainRepairPlan(blocked, snapshotID: id))
+                    let approved = await ApprovedSessionRepair.retained(id: blocked.id, digest: blocked.digest,
+                        key: "blocked-mixed-input", cache: cache, registry: registry, journal: SagaJournal())
+                    #expect(approved == nil)
+                    #expect(f.routingDestinationPresses == 0)
+                    return
                 }
                 let names: [ProjectSessionAudit.ApprovedName] = composed
                     ? [.init(target: "source", name: mode == "coupled_same" ? "Duplicate" : "Selected Canonical")] : []
@@ -5831,6 +5862,16 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(finding.observed?.objectValue?["kind"] == .string("bus"))
         #expect(finding.observed?.objectValue?["number"] == .int(number))
         #expect(finding.target.trackRef == reference.rawValue)
+        let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+            names: [], capture: capture, request: .init(scope: .selection,
+                domains: [.tracks, .strips, .associations, .routing], allowUINavigation: true), snapshotCurrent: true)
+        let preview = try #require(sharedJSONObject(plan.json))
+        let steps = try #require(preview["steps"] as? [[String: Any]])
+        let input = try #require(steps.first { $0["kind"] as? String == "input_assignment" })
+        #expect((input["before"] as? [String: Any])?["kind"] as? String == "bus")
+        #expect((input["before"] as? [String: Any])?["number"] as? Int == number)
+        let executable = try #require(preview["executable"] as? Bool)
+        #expect(!executable, "A historical checked value is not a retained canonical execution adapter")
     }
 
     private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false, keep: Bool = false,

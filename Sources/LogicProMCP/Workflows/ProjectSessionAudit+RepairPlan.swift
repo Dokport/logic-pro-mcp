@@ -312,10 +312,11 @@ extension ProjectSessionAudit {
         var steps: [Value] = []
         for input in policy.inputs {
             let target = policy.targets.first { $0.handle == input.target }
+            let observed = assessment.inputFindings?.first { $0.target.handle == input.target }?.observed
             steps.append(.object([
                 "id": .string("input_" + input.target), "kind": .string("input_assignment"),
                 "target_ref": target.map { .string($0.trackRef.rawValue) } ?? .null,
-                "before": .null,
+                "before": observed ?? .null,
                 "after": .object(["kind": .string("bus"), "number": .int(input.bus)]),
                 "dependencies": .array([]),
                 "blocked_reasons": .array([.string("input_goal_verification_unavailable")]),
