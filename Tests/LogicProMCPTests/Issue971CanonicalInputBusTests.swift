@@ -55,6 +55,23 @@ struct Issue971CanonicalInputBusTests {
     }
 
     @Test
+    func anInputTargetOutsideTheCaptureKeepsTheSharedScopeVerdict() throws {
+        var raw = policy(.array([.object(["target": .string("source"), "bus": .int(2)])]))
+        raw["targets"] = .array([.object(["handle": .string("source"),
+            "track_ref": .string("trk_00000000-0000-0000-0000-000000000003")])])
+        guard case .accepted(let parsed) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+            Issue.record("The explicit out-of-capture target must parse"); return
+        }
+        let capture = unboundCapture()
+        let assessment = ProjectSessionAudit.assessIntent(policy: parsed, capture: capture,
+            graph: SessionPopulationObservation.routingGraph(capture: capture))
+        let input = try #require(assessment.inputFindings?.first)
+        #expect(input.status == .outsideScope)
+        #expect(input.reasons == [ProjectSessionAudit.IntentReason.targetNotInSnapshot.rawValue])
+        #expect(input.observed == nil)
+    }
+
+    @Test
     func anUnobservedInputCannotDisappearFromTheCanonicalPreview() throws {
         let raw = policy(.array([.object(["target": .string("source"), "bus": .int(2)])]))
         guard case .accepted(let parsed) = ProjectSessionAudit.parseIntentPolicy(raw) else {

@@ -1453,9 +1453,20 @@ extension ProjectSessionAudit {
                 observed: observed, expected: intent, reasons: reasons)
         }
         if let gate { return finding(gate.status, reasons: [gate.reason.rawValue]) }
-        guard capture.referencesEnabled, !capture.referencesStale, let issued = capture.issued,
-              case .located(let index) = locate(target.trackRef, in: issued),
-              let fresh = capture.freshPopulation, fresh.stable else {
+        let issued: IssuedTrackReferences
+        switch trackReferences(of: capture) {
+        case .unreadable(let reason): return finding(.unverified, reasons: [reason.rawValue])
+        case .issued(let references): issued = references
+        }
+        guard !capture.referencesStale else {
+            return finding(.unverified, reasons: [IntentReason.targetSnapshotStale.rawValue])
+        }
+        let index: Int
+        switch locate(target.trackRef, in: issued) {
+        case .unlocated(let status, let reason): return finding(status, reasons: [reason.rawValue])
+        case .located(let value): index = value
+        }
+        guard let fresh = capture.freshPopulation, fresh.stable else {
             return finding(.unverified, reasons: ["captured_input_association_unverified"])
         }
         let rows = capture.tracks.filter { $0.id == index }
