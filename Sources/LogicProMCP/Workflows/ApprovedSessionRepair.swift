@@ -166,8 +166,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               }) else { return nil }
         if let name = names.first {
             if !row.name.utf8.elementsEqual(name.name.utf8) {
-                guard before != input.bus,
-                      ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
+                guard ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
                     targetReference: target.trackRef, expectedBefore: row.name, desiredAfter: name.name), capture: source)
                 else { return nil }
             }
@@ -803,8 +802,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
         }
         if let renameCapture = captured.renameCapture, !changed.isEmpty {
+            let inputSteps = captured.input.map { $0.before == $0.desired ? 0 : 1 } ?? 0
             guard steps.count == changed.count + (captured.output == nil ? 0 : 1)
-                + (captured.send == nil ? 0 : 1) + (captured.input == nil ? 0 : 1) else { return nil }
+                + (captured.send == nil ? 0 : 1) + inputSteps else { return nil }
             for (value, goal) in zip(steps, changed) {
                 guard let step = value.objectValue,
                       step["kind"] == .string("name"), step["target_ref"] == .string(goal.reference.rawValue),
@@ -846,12 +846,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     expectedInverse: .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination")))
             }
             if let input = captured.input {
-                guard steps.last == capturedInputStep(policy: policy, names: names, source: source.capture, request: source.request),
-                      let current = await registry.resolve(input.reference), current.kind == .track,
+                guard let current = await registry.resolve(input.reference), current.kind == .track,
                       current.physicalTrack?.matches(input.pair.track) == true,
                       let mixer = await registry.resolve(input.mixerRef), mixer.kind == .mixerStrip,
                       mixer.physicalMixerStrip?.matches(input.pair.strip) == true else { return nil }
-                sagaSteps.append(inputSagaStep(input, project: issued))
+                if input.before != input.desired {
+                    guard steps.last == capturedInputStep(policy: policy, names: names, source: source.capture, request: source.request) else { return nil }
+                    sagaSteps.append(inputSagaStep(input, project: issued))
+                }
             }
             let saga = SagaPlan(steps: sagaSteps,
                 idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
@@ -944,7 +946,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
 
     func matchingInputReadCustody() -> (SagaStep, AccessibilityChannel.HeldSelectionAssociation.Pair,
         AXMixerInputSlotBinding, SessionPopulationObservation.Capture)? {
-        guard verifiesMatchingInputOnly, let task = inputTask,
+        guard hasMatchingInputGoal, let task = inputTask,
               plan.canonicalPlanID != nil, plan.canonicalDigest != nil else { return nil }
         let selector = SagaStep(operationID: .mixerSetInputBusVerified, targetRef: task.reference,
             params: ["destination": Self.assignmentValue(.bus(task.desired)),
@@ -1604,7 +1606,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     var verifiesMatchingNamesOnly: Bool { !nameGoals.isEmpty && mixerTask == nil && inputTask == nil && plan.steps.isEmpty }
     var verifiesReceiverKeepsOnly: Bool { !receiverKeeps.isEmpty && nameGoals.isEmpty && mixerTask == nil && plan.steps.isEmpty }
     var verifiesMatchingSendOnly: Bool { sendTask.map { $0.desired == $0.before } == true && plan.steps.isEmpty }
-    var verifiesMatchingInputOnly: Bool { inputTask.map { $0.desired == $0.before } == true && plan.steps.isEmpty }
+    var hasMatchingInputGoal: Bool { inputTask.map { $0.desired == $0.before } ?? false }
+    var verifiesMatchingInputOnly: Bool { hasMatchingInputGoal && plan.steps.isEmpty }
     var hasMatchingNameGoals: Bool { !nameGoals.isEmpty }
 
     /// The same issued-name proof is used before a composed forward action and
@@ -1806,17 +1809,19 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 "write_attempted": false, "writes_performed": 0]))
     }
 
-    /// Reuse the input reader and protected footprint without calling a scalar writer.
-    func verifyMatchingInput() async -> SagaJournal.StoredOutcome {
-        let reader = InputBusSagaAdapter(matchingInput: self)
-        func refused() -> SagaJournal.StoredOutcome {
-            var extras: [String: Any] = ["goal_verification_failure": "approved_matching_input_unverified",
-                "idempotency_key": plan.idempotencyKey, "write_attempted": false, "writes_performed": 0]
-            if let receipt = reader?.matchingReadReceipt.flatMap(decodedJSONObject) { extras["input_read_receipt"] = receipt }
-            return SagaWire.storedOutcome(from: SagaWire.scopedStateC(.staleTargetReference,
-                hint: "The approved input's original native control, protected footprint or checked Bus no longer agrees.", extras: extras))
-        }
-        guard verifiesMatchingInputOnly, let task = inputTask, let reader else { return refused() }
+    /// A read-only goal failure before the execution journal has applied any step.
+    func matchingInputGoalRefusal(reader: InputBusSagaAdapter?) -> SagaJournal.StoredOutcome {
+        var extras: [String: Any] = ["goal_verification_failure": "approved_matching_input_unverified",
+            "idempotency_key": plan.idempotencyKey, "write_attempted": false, "writes_performed": 0]
+        if let receipt = reader?.matchingReadReceipt.flatMap(decodedJSONObject) { extras["input_read_receipt"] = receipt }
+        return SagaWire.storedOutcome(from: SagaWire.scopedStateC(.staleTargetReference,
+            hint: "The approved input's original native control, protected footprint or checked Bus no longer agrees.", extras: extras))
+    }
+
+    /// Reuse the same actual reader across an owned name step. This returns
+    /// observations, never a completed execution or a setter capability.
+    func matchingInputGoalEvidence(using reader: InputBusSagaAdapter, afterExecution: Bool = false) async -> [[String: Any]]? {
+        guard hasMatchingInputGoal, let task = inputTask else { return nil }
         func current() async -> Bool {
             guard await projectIsCurrent(),
                   let track = await registry.resolve(task.reference), track.kind == .track,
@@ -1827,15 +1832,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             return true
         }
         if hasMatchingNameGoals {
-            guard await nameGoalEvidence() != nil else { return refused() }
+            guard await nameGoalEvidence(afterExecution: afterExecution) != nil else { return nil }
         }
         guard await current(), var observed = await reader.readMatchingGoal(cache: cache, registry: registry),
-              observed.value == .string("bus:\(task.before)") else { return refused() }
+              observed.value == .string("bus:\(task.before)") else { return nil }
         var names: [[String: Any]] = []
         if hasMatchingNameGoals {
-            guard let evidence = await nameGoalEvidence(),
+            guard let evidence = await nameGoalEvidence(afterExecution: afterExecution),
                   let afterNames = await reader.readMatchingGoal(cache: cache, registry: registry),
-                  afterNames.value == observed.value else { return refused() }
+                  afterNames.value == observed.value else { return nil }
             // The final input read also corroborates the complete original name
             // footprint after the independent name samples. Neither reader can
             // turn an unchanged goal into a writer or an inverse capsule.
@@ -1846,13 +1851,23 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               evidence.provenance == .liveIndependent,
               let data = try? JSONEncoder().encode(evidence),
               let read = try? JSONSerialization.jsonObject(with: data),
-              await current() else { return refused() }
+              await current() else { return nil }
+        return [["target_ref": task.reference.rawValue, "mixer_ref": task.mixerRef.rawValue, "read": read]] + names
+    }
+
+    /// Only an empty plan can turn these read-only observations into completion.
+    func verifyMatchingInput() async -> SagaJournal.StoredOutcome {
+        let reader = InputBusSagaAdapter(matchingInput: self)
+        guard verifiesMatchingInputOnly, let reader,
+              let evidence = await matchingInputGoalEvidence(using: reader) else {
+            return matchingInputGoalRefusal(reader: reader)
+        }
         let outcome = SagaOutcome(idempotencyKey: plan.idempotencyKey, state: .completed, complete: true,
             journal: [], stateHistory: [.validated, .running, .completed], preflightIssues: [])
         let stored = SagaWire.storedOutcome(plan: plan, outcome: outcome)
-        guard var body = decodedJSONObject(stored.body) else { return refused() }
+        guard var body = decodedJSONObject(stored.body) else { return matchingInputGoalRefusal(reader: reader) }
         body["write_attempted"] = false; body["writes_performed"] = 0
-        body["goal_evidence"] = [["target_ref": task.reference.rawValue, "mixer_ref": task.mixerRef.rawValue, "read": read]] + names
+        body["goal_evidence"] = evidence
         return .init(body: HonestContract.jsonString(body), isError: stored.isError)
     }
 
