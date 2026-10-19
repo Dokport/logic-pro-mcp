@@ -46,6 +46,11 @@ final class MIDITrackExportPanel {
         case unavailable(String)
     }
 
+    private struct AttributeReadError: Error {
+        let attribute: String
+        let status: Int32
+    }
+
     private let window: AXUIElement
     private let document: String
     private let runtime: AXLogicProElements.Runtime
@@ -120,7 +125,7 @@ final class MIDITrackExportPanel {
             try assertKeyboardFocus(panel, app: app, sheet: go)
             guard keyboard.post(36, []) else { throw Failure.unavailable("go_to_folder_return_refused") }
             stage = "directory_navigation"
-            _ = try await wait("directory_navigation") { () throws -> AXUIElement? in
+            _ = try await wait("directory_navigation", allowingRetiringElement: true) { () throws -> AXUIElement? in
                 try self.assertOwned(panel, app: app)
                 return try self.unique(identifier: "GoToWindow", role: kAXSheetRole as String, in: panel, optional: true) == nil ? panel : nil
             }
@@ -154,6 +159,9 @@ final class MIDITrackExportPanel {
                !nodes.contains(where: { AXHelpers.getRole($0, runtime: runtime.ax) == kAXSheetRole as String }),
                let cancel = try? required(identifier: "CancelButton", role: kAXButtonRole as String, in: panel) {
                 _ = AXHelpers.performAction(cancel, kAXPressAction as String, runtime: runtime.ax)
+            }
+            if let read = error as? AttributeReadError {
+                throw Failure.unavailable("\(stage):panel_attribute_unreadable:\(read.attribute):\(read.status)")
             }
             if case Failure.unavailable(let detail) = error {
                 throw Failure.unavailable("\(stage):\(detail)")
@@ -311,7 +319,7 @@ final class MIDITrackExportPanel {
                 throw Failure.unavailable("malformed_panel_attribute:\(attribute)")
             }
             return result
-        case .failure(let error): throw Failure.unavailable("panel_attribute_unreadable:\(attribute):\(error.raw)")
+        case .failure(let error): throw AttributeReadError(attribute: attribute, status: error.raw)
         }
     }
 
@@ -340,11 +348,18 @@ final class MIDITrackExportPanel {
         _ = AXHelpers.performAction(element, action, runtime: runtime.ax)
     }
 
-    private func wait(_ stage: String, _ read: @MainActor () throws -> AXUIElement?) async throws -> AXUIElement {
+    private func wait(_ stage: String, allowingRetiringElement: Bool = false,
+                      _ read: @MainActor () throws -> AXUIElement?) async throws -> AXUIElement {
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         for attempt in 0..<100 {
             try Task.checkCancellation(); _ = try currentApp()
-            if let found = try read() { return found }
+            do {
+                if let found = try read() { return found }
+            } catch let error as AttributeReadError where allowingRetiringElement && error.status == AXError.invalidUIElement.rawValue {
+                // The GoTo sheet can remain in one children snapshot while
+                // AppKit retires it. Reacquire read-only under the same custody;
+                // never repeat Return, Save, or another action.
+            }
             guard ContinuousClock.now < deadline else { throw Failure.unavailable("panel_transition_not_observed:\(stage)") }
             if attempt < 99 { try await sleep(100_000_000) }
         }

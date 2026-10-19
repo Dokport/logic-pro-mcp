@@ -78,6 +78,13 @@ private struct MIDIExportPanelFixture {
             }
             return nil
         }, attributeValueResultHandler: { element, attribute in
+            if (fault == "retiring_go" || fault == "persistent_retiring_go"), CFEqual(element, go), attribute == kAXRoleAttribute as String,
+               b.attributeValue(app, "returns") as? Int == 1,
+               (fault == "persistent_retiring_go" || b.attributeValue(app, "retired_read") == nil) {
+                b.setAttribute(app, "retired_read", true)
+                if fault == "retiring_go" { b.setChildren(panel, [name, save, cancel, browser]) }
+                return .failure(.init(raw: AXError.invalidUIElement.rawValue))
+            }
             if fault == "unreadable_role", CFEqual(element, b.element(18)), attribute == kAXRoleAttribute as String {
                 return .failure(.init(raw: AXError.cannotComplete.rawValue))
             }
@@ -103,6 +110,7 @@ private struct MIDIExportPanelFixture {
             if key == 36 {
                 b.setAttribute(app, "returns", (b.attributeValue(app, "returns") as? Int ?? 0) + 1)
                 b.setChildren(panel, [name, save, cancel, browser] + extras)
+                if fault == "retiring_go" || fault == "persistent_retiring_go" { b.setChildren(panel, [name, save, cancel, browser, go]) }
                 if fault == "replaced_panel" { b.setAttribute(app, kAXWindowsAttribute as String, [window, b.element(20)]) }
                 if fault == "other_focused_window" {
                     b.setAttribute(app, kAXWindowsAttribute as String, [window, panel, b.element(22)])
@@ -122,6 +130,15 @@ private struct MIDIExportPanelFixture {
     var cancelPresses: Int { builder.attributeValue(builder.element(11), "presses") as? Int ?? 0 }
 }
 
+@MainActor @Test func midiExportPanelWaitsForARetiringGoToSheetWithoutRepeatingActions() async throws {
+    let temporary = try ExportTemporaryFiles.temporaryExportFile()
+    defer { ExportTemporaryFiles.cleanupTemporaryExportFile(temporary) }
+    let f = MIDIExportPanelFixture(destination: temporary.fileURL, fault: "retiring_go")
+    try await f.driver().exportAll(to: temporary.fileURL)
+    #expect(f.savePresses == 1 && f.cancelPresses == 0)
+    #expect(f.builder.attributeValue(f.app, "returns") as? Int == 1)
+}
+
 @MainActor @Test func midiExportPanelUsesFolderThenBasenameAndSavesOnlyOnce() async throws {
     let temporary = try ExportTemporaryFiles.temporaryExportFile()
     defer { ExportTemporaryFiles.cleanupTemporaryExportFile(temporary) }
@@ -135,7 +152,7 @@ private struct MIDIExportPanelFixture {
     #expect(f.savePresses == 1)
 }
 
-@MainActor @Test(arguments: ["preexisting", "wrong_folder", "changed_document", "replaced_panel", "keyboard_refused", "unreadable_identifier", "unreadable_role", "deeper_selected", "other_focused_window", "replaced_go", "late_panel_replaced"])
+@MainActor @Test(arguments: ["preexisting", "wrong_folder", "changed_document", "replaced_panel", "keyboard_refused", "unreadable_identifier", "unreadable_role", "persistent_retiring_go", "deeper_selected", "other_focused_window", "replaced_go", "late_panel_replaced"])
 func midiExportPanelRefusesWrongOwnershipAndDestination(fault: String) async throws {
     let temporary = try ExportTemporaryFiles.temporaryExportFile()
     defer { ExportTemporaryFiles.cleanupTemporaryExportFile(temporary) }
@@ -150,6 +167,7 @@ func midiExportPanelRefusesWrongOwnershipAndDestination(fault: String) async thr
     }
     #expect(f.savePresses == 0)
     if fault == "replaced_go" { #expect(f.builder.attributeValue(f.app, "returns") == nil) }
+    if fault == "persistent_retiring_go" { #expect(f.builder.attributeValue(f.app, "returns") as? Int == 1) }
     if fault == "preexisting" || fault == "replaced_panel" { #expect(f.cancelPresses == 0) }
 }
 
