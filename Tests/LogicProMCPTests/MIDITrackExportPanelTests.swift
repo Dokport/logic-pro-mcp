@@ -76,6 +76,14 @@ private struct MIDIExportPanelFixture {
             if fault == "late_panel_replaced", CFEqual(element, save), attribute == kAXEnabledAttribute as String {
                 b.setAttribute(app, kAXWindowsAttribute as String, [window, b.element(25)])
             }
+            if fault == "late_folder", CFEqual(element, save), attribute == kAXEnabledAttribute as String {
+                b.setAttribute(app, "late_destination_changed", true)
+                b.setAttribute(folder, kAXURLAttribute as String, URL(fileURLWithPath: "/tmp", isDirectory: true) as NSURL)
+            }
+            if fault == "late_name", CFEqual(element, save), attribute == kAXEnabledAttribute as String {
+                b.setAttribute(app, "late_destination_changed", true)
+                b.setAttribute(name, kAXValueAttribute as String, "unowned.mid")
+            }
             return nil
         }, attributeValueResultHandler: { element, attribute in
             if (fault == "retiring_go" || fault == "persistent_retiring_go"), CFEqual(element, go), attribute == kAXRoleAttribute as String,
@@ -152,7 +160,7 @@ private struct MIDIExportPanelFixture {
     #expect(f.savePresses == 1)
 }
 
-@MainActor @Test(arguments: ["preexisting", "wrong_folder", "changed_document", "replaced_panel", "keyboard_refused", "unreadable_identifier", "unreadable_role", "persistent_retiring_go", "deeper_selected", "other_focused_window", "replaced_go", "late_panel_replaced"])
+@MainActor @Test(arguments: ["preexisting", "wrong_folder", "changed_document", "replaced_panel", "keyboard_refused", "unreadable_identifier", "unreadable_role", "persistent_retiring_go", "deeper_selected", "other_focused_window", "replaced_go", "late_panel_replaced", "late_folder", "late_name"])
 func midiExportPanelRefusesWrongOwnershipAndDestination(fault: String) async throws {
     let temporary = try ExportTemporaryFiles.temporaryExportFile()
     defer { ExportTemporaryFiles.cleanupTemporaryExportFile(temporary) }
@@ -166,6 +174,10 @@ func midiExportPanelRefusesWrongOwnershipAndDestination(fault: String) async thr
         }
     }
     #expect(f.savePresses == 0)
+    if fault == "late_folder" || fault == "late_name" {
+        let changed = try #require(f.builder.attributeValue(f.app, "late_destination_changed") as? Bool)
+        #expect(changed)
+    }
     if fault == "replaced_go" { #expect(f.builder.attributeValue(f.app, "returns") == nil) }
     if fault == "persistent_retiring_go" { #expect(f.builder.attributeValue(f.app, "returns") as? Int == 1) }
     if fault == "preexisting" || fault == "replaced_panel" { #expect(f.cancelPresses == 0) }

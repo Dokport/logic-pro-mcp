@@ -141,7 +141,20 @@ final class MIDITrackExportPanel {
                   !FileManager.default.fileExists(atPath: destination.path) else { throw Failure.unavailable("destination_changed") }
             let save = try required(identifier: "OKButton", role: kAXButtonRole as String, in: panel)
             try assertOwned(panel, app: app)
-            try act(save, action: kAXPressAction as String, panel: panel, app: app)
+            try act(save, action: kAXPressAction as String, panel: panel, app: app, beforeAction: {
+                // The Save capability read can outlive the earlier folder and
+                // filename proof. Renew the exact controls and destination
+                // after that read, not just the enclosing panel's identity.
+                guard let currentName = try self.unique(identifier: "saveAsNameTextField", role: kAXTextFieldRole as String, in: panel),
+                      let currentSave = try self.unique(identifier: "OKButton", role: kAXButtonRole as String, in: panel),
+                      CFEqual(currentName, name), CFEqual(currentSave, save),
+                      try self.directorySelected(directory, in: panel),
+                      try self.string(kAXValueAttribute as String, of: currentName)?.utf8.elementsEqual(destination.lastPathComponent.utf8) == true,
+                      !FileManager.default.fileExists(atPath: destination.path) else {
+                    throw Failure.unavailable("destination_changed")
+                }
+                try self.assertOwned(panel, app: app)
+            })
             stage = "save_panel_closed"
             _ = try await wait("save_panel_closed") {
                 let current = try self.windows(app)
@@ -338,13 +351,15 @@ final class MIDITrackExportPanel {
               value.utf8.elementsEqual(actual.utf8) else { throw Failure.unavailable("field_value_not_confirmed") }
     }
 
-    private func act(_ element: AXUIElement, action: String, panel: AXUIElement? = nil, app: AXUIElement? = nil) throws {
+    private func act(_ element: AXUIElement, action: String, panel: AXUIElement? = nil, app: AXUIElement? = nil,
+                     beforeAction: (@MainActor () throws -> Void)? = nil) throws {
         try Task.checkCancellation(); _ = try currentApp()
         let raw: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(element, kAXEnabledAttribute as String, runtime: runtime.ax)
         guard case .success(.some(let value)) = raw, CFGetTypeID(value) == CFBooleanGetTypeID(),
               (value as? Bool) == true else { throw Failure.unavailable("control_disabled_or_unreadable") }
         if let panel, let app { try assertOwned(panel, app: app) }
         else { _ = try currentApp() }
+        try beforeAction?()
         _ = AXHelpers.performAction(element, action, runtime: runtime.ax)
     }
 
