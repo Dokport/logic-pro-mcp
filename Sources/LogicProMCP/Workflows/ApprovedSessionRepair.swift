@@ -86,7 +86,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     /// Name protection observes the input's checked sink; this adds no output goal or writer.
     private var nameFootprintTask: OutputTask? {
         if let outputTask { return outputTask }
-        guard let input = inputTask, hasMatchingNameGoals else { return nil }
+        guard let input = inputTask, !changedNameGoals.isEmpty else { return nil }
         return .init(reference: input.reference, mixerRef: input.mixerRef, pair: input.pair,
             before: input.sink, desired: input.sink, capture: input.capture, handle: input.handle)
     }
@@ -165,10 +165,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   return source.channelStrips.filter { $0.physicalBinding?.matches(owner) == true }.count == 1
               }) else { return nil }
         if let name = names.first {
-            guard before != input.bus, !row.name.utf8.elementsEqual(name.name.utf8),
-                  ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
+            guard before != input.bus else { return nil }
+            if !row.name.utf8.elementsEqual(name.name.utf8) {
+                guard ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
                     targetReference: target.trackRef, expectedBefore: row.name, desiredAfter: name.name), capture: source)
-            else { return nil }
+                else { return nil }
+            }
         }
         return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair, control: control,
             before: before, desired: input.bus, sink: sink, capture: source, handle: target.handle)
@@ -178,11 +180,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         names: [ProjectSessionAudit.ApprovedName], source: SessionPopulationObservation.Capture,
         request: SessionPopulationObservation.Request) -> Value? {
         guard let task = capturedInput(policy: policy, names: names, source: source, request: request),
-              task.before != task.desired else { return nil }
+              task.before != task.desired,
+              let capturedName = source.tracks.first(where: { $0.physicalBinding?.matches(task.pair.track) == true })?.name
+        else { return nil }
         return .object(["id": .string("input_" + task.handle), "kind": .string("input_assignment"),
             "target_ref": .string(task.reference.rawValue), "mixer_ref": .string(task.mixerRef.rawValue),
             "before": assignmentValue(.bus(task.before)), "after": assignmentValue(.bus(task.desired)),
-            "dependencies": .array(names.map { .string("name_" + $0.target) }), "blocked_reasons": .array([]),
+            "dependencies": .array(names.filter { !$0.name.utf8.elementsEqual(capturedName.utf8) }
+                .map { .string("name_" + $0.target) }), "blocked_reasons": .array([]),
             "required_invariants": .array(["captured_track_strip_pair", "original_input_control",
                 "local_strip_footprint", "checked_input_readback", "conditional_owned_input_inverse"].map(Value.string))])
     }
@@ -720,11 +725,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     cacheProjectEpoch: source.capture.projectEpoch, inputTask: input,
                     registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
             }
-            guard unchanged.isEmpty,
-                  steps == [capturedInputStep(policy: policy, names: names, source: source.capture, request: source.request)] else { return nil }
+            guard steps == [capturedInputStep(policy: policy, names: names, source: source.capture, request: source.request)] else { return nil }
             let saga = SagaPlan(steps: [inputSagaStep(input, project: issued)],
                 idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
-            return .init(plan: saga, projectRef: issued, document: captured.document,
+            return .init(plan: saga, projectRef: issued, document: captured.document, nameGoals: goals,
                 cacheProjectEpoch: source.capture.projectEpoch, inputTask: input,
                 registryProjectEpoch: targetSnapshot.projectEpoch, cache: cache, registry: registry, journal: journal)
         }
@@ -1007,7 +1011,18 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     func inputNameHeld(at source: AccessibilityChannel.HeldSelectionAssociation.Pair) -> Bool {
-        !hasMatchingNameGoals || inputNameEffect(at: source) != nil
+        guard hasMatchingNameGoals else { return true }
+        if !changedNameGoals.isEmpty { return inputNameEffect(at: source) != nil }
+        // The input adapter still proves the original source/control and full
+        // captured footprint. An unchanged name is corroboration, not an effect
+        // receipt or permission to replace the name baseline.
+        guard nameGoals.count == 1, let goal = nameGoals.first, let task = inputTask,
+              goal.reference == task.reference, source.track.matches(goal.binding),
+              goal.before.utf8.elementsEqual(goal.name.utf8),
+              case .success(let name?) = AXValueExtractors.extractTrackNameResult(
+                from: source.track.header, runtime: source.track.runtime.ax),
+              name.utf8.elementsEqual(goal.name.utf8) else { return false }
+        return source.track.currentIndex() != nil && source.strip.currentIndex(runtime: source.track.runtime) != nil
     }
 
     /// Corroborate the owned name at the actual Send leaf, not just before

@@ -6376,6 +6376,13 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga("composed_name_preview", canonical: true)
     }
 
+    @Test(arguments: ["completed", "wrong_digest", "foreign_project", "changed_peer", "changed_name",
+                      "replaced_control", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_name",
+                      "owned_renewal", "owned_renewal_cancel", "cancel", "failure", "late_inverse_name"])
+    func matchingApprovedNameRemainsAnObservedGoalDuringInputChange(outcome: String) async throws {
+        try await assertRegisteredInputSaga("retained_name_" + outcome, canonical: true)
+    }
+
     @Test(arguments: ["composed_name_execution", "composed_name_execution_preflight_renewal",
                       "composed_name_execution_wrong_digest", "composed_name_execution_foreign_project",
                       "composed_name_execution_changed_peer", "composed_name_execution_changed_input",
@@ -6416,7 +6423,9 @@ struct Issue965HeldSelectionAssociationTests {
 
     private func assertCanonicalInputExecution(_ f: Fixture, dependencies: HandlerDependencies,
                                                snapshotID: String, capture: SessionPopulationObservation.Capture,
-                                               trackReference: TargetReference, key: String, outcome: String) async throws {
+                                               trackReference: TargetReference, key: String, outcome requestedOutcome: String) async throws {
+        let retainedName = requestedOutcome.hasPrefix("retained_name_")
+        let outcome = retainedName ? String(requestedOutcome.dropFirst("retained_name_".count)) : requestedOutcome
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             guard case .issued(let project)? = capture.projectIssuance else {
                 Issue.record("The captured input needs an issued project"); return
@@ -6444,12 +6453,22 @@ struct Issue965HeldSelectionAssociationTests {
             if outcome.hasPrefix("composed_name_") {
                 planning["names"] = .array([.object(["target": .string("source"), "name": .string("Approved Input Source")])])
             }
+            if retainedName {
+                let row = try #require(capture.tracks.first { $0.physicalBinding?.matches(pair.track) == true })
+                planning["names"] = .array([.object(["target": .string("source"), "name": .string(row.name)])])
+            }
             let planned = await planner(dependencies, planning)
             let preview = try #require(sharedJSONObject(sharedToolText(planned)))
             let executable = try #require(preview["executable"] as? Bool)
             #expect(executable, "The qualified singleton input must have an executable plan: \(preview)")
             #expect(f.routingDestinationPresses == 0)
             guard executable else { return }
+            if retainedName {
+                let steps = try #require(preview["steps"] as? [[String: Any]])
+                #expect(steps.compactMap { $0["kind"] as? String } == ["input_assignment"])
+                #expect(steps.first?["dependencies"] as? [String] == [])
+                #expect(preview["unchanged_tasks"] as? [String] == ["name_source"])
+            }
             if outcome.hasPrefix("composed_name_") {
                 let steps = try #require(preview["steps"] as? [[String: Any]])
                 #expect(steps.compactMap { $0["kind"] as? String } == ["name", "input_assignment"])
@@ -6549,6 +6568,9 @@ struct Issue965HeldSelectionAssociationTests {
             if outcome == "changed_peer" {
                 f.builder.setAttribute(f.builder.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
             }
+            if outcome == "changed_name" {
+                f.builder.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
+            }
             if outcome == "replaced_control" {
                 let replacement = f.builder.element(1_291_499)
                 f.builder.setButton(replacement, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
@@ -6579,7 +6601,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let result = await apply(dependencies, params)
             let body = try #require(sharedJSONObject(sharedToolText(result)))
-            let prewriteRefusal = ["wrong_digest", "replaced_control", "foreign_project", "changed_peer", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_focus", "late_proof_document"].contains(outcome)
+            let prewriteRefusal = ["wrong_digest", "replaced_control", "foreign_project", "changed_peer", "changed_name", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_focus", "dispatch_name", "late_proof_document"].contains(outcome)
             if prewriteRefusal {
                 #expect(body["state"] as? String == "C", "Actual input refusal: \(body)")
                 #expect(f.routingDestinationPresses == 0)
@@ -6598,10 +6620,23 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(body["saga_state"] as? String == "completed")
                 #expect(f.routingDestinationPresses == 1)
                 #expect(f.inputSetterDispatches == 1, "The same fixture observes actual changed-input dispatch")
+                if retainedName {
+                    let evidence = try #require(body["goal_evidence"] as? [[String: Any]])
+                    #expect(evidence.count == 1)
+                    let read = try #require(evidence.first?["read"] as? [String: Any])
+                    #expect(read["observed"] as? String == "Duplicate")
+                    #expect(read["read_source"] as? String == "ax_track_name")
+                }
             } else {
                 #expect(body["state"] as? String == "B", "Actual unverified input result: \(body)")
                 #expect(f.routingDestinationPresses == (outcome == "no_observer" ? 0 : 1))
                 if outcome.hasPrefix("late_inverse_") { #expect(f.routingLateScopeInjected) }
+            }
+            if retainedName {
+                #expect(f.routingNameWrites.isEmpty && f.routingNameConfirms == 0,
+                    "An unchanged approved name must never acquire a name writer")
+                let expectedName = ["changed_name", "dispatch_name", "late_inverse_name"].contains(outcome) ? "External Name" : "Duplicate"
+                #expect(f.builder.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == expectedName)
             }
             let presses = f.routingDestinationPresses
             let reads = f.inputMenuPresses
@@ -6734,7 +6769,9 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
     }
 
-    private func assertRegisteredInputSaga(_ outcome: String, canonical: Bool = false) async throws {
+    private func assertRegisteredInputSaga(_ requestedOutcome: String, canonical: Bool = false) async throws {
+        let retainedName = requestedOutcome.hasPrefix("retained_name_")
+        let outcome = retainedName ? String(requestedOutcome.dropFirst("retained_name_".count)) : requestedOutcome
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder, cache = StateCache(), registry = TargetRegistry()
             f.useBulkReads = outcome.contains("_final_")
@@ -6992,6 +7029,8 @@ struct Issue965HeldSelectionAssociationTests {
                 operation: "mixer.set_input_bus_verified", idempotencyKey: key, afterForward: {
                     f.inputSagaForwardVerified = true
                     switch outcome {
+                    case "late_inverse_name":
+                        b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
                     case "composed_name_execution_external_name":
                         b.setAttribute(b.element(1_971_400), kAXDescriptionAttribute as String, "External Name")
                         b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
@@ -7012,7 +7051,9 @@ struct Issue965HeldSelectionAssociationTests {
                     f.inputSetterDispatches += 1
                     guard canonical, outcome.hasPrefix("dispatch_") else { return }
                     f.routingLateScopeInjected = true
-                    if outcome == "dispatch_focus" {
+                    if outcome == "dispatch_name" {
+                        b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
+                    } else if outcome == "dispatch_focus" {
                         injectForeignInputEditor(f)
                     } else if outcome == "dispatch_peer" {
                         b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
@@ -7037,7 +7078,7 @@ struct Issue965HeldSelectionAssociationTests {
             let wrongTrackReference = try #require(capture.issued?.byRow.last ?? nil)
             if canonical {
                 try await assertCanonicalInputExecution(f, dependencies: dependencies, snapshotID: snapshotID,
-                    capture: capture, trackReference: trackReference, key: key, outcome: outcome)
+                    capture: capture, trackReference: trackReference, key: key, outcome: requestedOutcome)
                 return
             }
             let target = outcome == "wrong_target" ? try #require(capture.mixerReference(at: 0))
