@@ -6691,6 +6691,19 @@ struct Issue965HeldSelectionAssociationTests {
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
         let denied = await OperationTraceContext.$current.withValue(context) {
             #expect(gate.stillOwns(claim), "The read-only refusal is not caused by a missing gate")
+            if retainedName && outcome == "matching" {
+                let b = f.builder
+                b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "")
+                b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "✓")
+                #expect(!approval.verifiesMatchingNamesOnly,
+                    "An approved input goal cannot be completed by a names-only verifier")
+                let namesOnly = await approval.verifyMatchingNames()
+                let body = sharedJSONObject(namesOnly.body)
+                #expect(body?["state"] as? String == "C",
+                    "Checking names alone must not certify the unchecked changed input: \(namesOnly.body)")
+                b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "✓")
+                b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "")
+            }
             return await readOnly.run(readOnly.forward, router: dependencies.router,
                 cache: dependencies.cache, registry: dependencies.targetRegistry)
         }

@@ -1601,7 +1601,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return ""
     }
 
-    var verifiesMatchingNamesOnly: Bool { !nameGoals.isEmpty && mixerTask == nil && plan.steps.isEmpty }
+    var verifiesMatchingNamesOnly: Bool { !nameGoals.isEmpty && mixerTask == nil && inputTask == nil && plan.steps.isEmpty }
     var verifiesReceiverKeepsOnly: Bool { !receiverKeeps.isEmpty && nameGoals.isEmpty && mixerTask == nil && plan.steps.isEmpty }
     var verifiesMatchingSendOnly: Bool { sendTask.map { $0.desired == $0.before } == true && plan.steps.isEmpty }
     var verifiesMatchingInputOnly: Bool { inputTask.map { $0.desired == $0.before } == true && plan.steps.isEmpty }
