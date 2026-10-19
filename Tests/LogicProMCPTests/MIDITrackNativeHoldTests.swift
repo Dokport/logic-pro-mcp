@@ -18,6 +18,27 @@ private struct MIDIHoldFixture {
         headers.map { .init(window: window, header: $0, document: "file:///fixture.logicx/", runtime: runtime) }
     }
 
+    func capture(fault: String = "") -> SessionPopulationObservation.Capture {
+        let now = Date()
+        let project = ProjectInfo(name: "Fixture", filePath: "/fixture.logicx")
+        let tracks = observation.tracks.enumerated().map { index, row in
+            var state = TrackState(id: index, name: row.name, type: .softwareInstrument, isStackHeader: false)
+            state.physicalBinding = fault == "missing_binding" ? nil : bindings[index]
+            return state
+        }
+        let boundary = StateCache.CaptureBoundary(versions: [:], occlusionRevision: 0, hasDocument: true, axOccluded: false)
+        var fresh = SessionPopulationObservation.FreshPopulation(project: project, tracks: tracks, strips: nil,
+            fileTrackCount: 2, beganAt: now, endedAt: now, stable: true)
+        fresh.hiddenTracksShown = true; fresh.populationEndSource = "ax_all_shown_single_page"
+        return .init(before: boundary, after: boundary, projectEpoch: 1, project: project,
+            tracks: tracks, tracksFetchedAt: now, channelStrips: [], mixerFetchedAt: .distantPast,
+            fileTrackCount: 2, projectFileNotBound: false, requestedProjectMatches: fault != "wrong_project",
+            referencesEnabled: true, targetSnapshot: .init(projectEpoch: 1, topologyGeneration: 0),
+            issued: .init(byRow: observation.tracks.map { .init(rawValue: $0.reference!) }, byTrackIndex: [:], ambiguousTrackIndices: []),
+            projectIssuance: .issued(.init(rawValue: "prj_current")), beganAt: now, endedAt: now,
+            freshPopulation: fault == "cached" ? nil : fresh)
+    }
+
     init() {
         app = builder.element(0); window = builder.element(1); rail = builder.element(2)
         headers = [builder.element(3), builder.element(5)]
@@ -95,5 +116,42 @@ private struct MIDIHoldFixture {
     let refused = MIDITrackNativeHold(observation: fixture.observation, bindings: fixture.bindings,
         runtime: fixture.runtime, permittingRead: { true })
     #expect(refused == nil)
+    #expect(fixture.builder.actionCalls.isEmpty && fixture.builder.setCalls.isEmpty)
+}
+
+@MainActor @Test func midiExportProviderUsesTheRegisteredCaptureBindingsAndRetiresLostCustody() async throws {
+    let fixture = MIDIHoldFixture()
+    let runtime = MIDITrackExportProvider.makeRuntime(projectReference: "prj_current",
+        acquire: { _ in fixture.capture() }, nativeRuntime: fixture.runtime)
+    try await OperationTraceContext.$current.withValue(.init(mutationGateAcquired: true)) {
+        let observation = try await runtime.observe()
+        #expect(observation.coverage == .complete && observation.tracks.map(\.reference) == ["trk_target", "trk_peer"])
+        #expect(await runtime.stillCurrent(observation))
+        fixture.builder.setChildren(fixture.rail, [])
+        #expect(!(await runtime.stillCurrent(observation)))
+        fixture.builder.setChildren(fixture.rail, fixture.headers)
+        #expect(!(await runtime.stillCurrent(observation)))
+    }
+    #expect(fixture.builder.actionCalls.isEmpty && fixture.builder.setCalls.isEmpty)
+}
+
+@MainActor @Test(arguments: ["cached", "missing_binding", "wrong_project"])
+func midiExportProviderRefusesUnqualifiedCapturesWithoutUIActions(fault: String) async throws {
+    let fixture = MIDIHoldFixture()
+    let runtime = MIDITrackExportProvider.makeRuntime(projectReference: "prj_current",
+        acquire: { _ in fixture.capture(fault: fault) }, nativeRuntime: fixture.runtime)
+    await OperationTraceContext.$current.withValue(.init(mutationGateAcquired: true)) {
+        do { _ = try await runtime.observe(); Issue.record("Unqualified capture was admitted") } catch { }
+    }
+    #expect(fixture.builder.actionCalls.isEmpty && fixture.builder.setCalls.isEmpty)
+}
+
+@MainActor @Test func midiExportProviderChecksOperationOwnershipBeforeCallingTheProducer() async {
+    let fixture = MIDIHoldFixture()
+    var acquired = false
+    let runtime = MIDITrackExportProvider.makeRuntime(projectReference: "prj_current",
+        acquire: { _ in acquired = true; return fixture.capture() }, nativeRuntime: fixture.runtime)
+    do { _ = try await runtime.observe(); Issue.record("Unowned acquisition was admitted") } catch { }
+    #expect(!acquired)
     #expect(fixture.builder.actionCalls.isEmpty && fixture.builder.setCalls.isEmpty)
 }
