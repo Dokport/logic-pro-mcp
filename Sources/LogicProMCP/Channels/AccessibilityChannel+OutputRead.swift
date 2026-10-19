@@ -475,11 +475,13 @@ extension AccessibilityChannel {
     /// Typed input evidence from the same owned reader, never from a wire receipt.
     static func getInputBusObservation(runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming = .live,
+        requiringOriginalInputControl: AXMixerInputSlotBinding? = nil,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in }) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
             runtime: runtime, timing: timing, observingPopupFocus: observingPopupFocus,
-            observingRenewedFocus: observingRenewedFocus)
+            observingRenewedFocus: observingRenewedFocus,
+            requiringOriginalInputControl: requiringOriginalInputControl)
     }
 
     static func getCheckedInputObservation(runtime: AXLogicProElements.Runtime,
@@ -511,7 +513,8 @@ extension AccessibilityChannel {
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
         sendReplacement: SendReplacement? = nil, observingSendMode: Bool = false,
         requiringSendMode: Bool = true,
-        requiringOriginalSendControl: AXLogicProElements.AssignedSendMenuControl? = nil
+        requiringOriginalSendControl: AXLogicProElements.AssignedSendMenuControl? = nil,
+        requiringOriginalInputControl: AXMixerInputSlotBinding? = nil
     ) async -> CheckedOutputReading {
         let operation = sendReplacement?.modeChange != nil ? "mixer.set_send_mode_verified" : sendReplacement != nil ? "mixer.set_send_output_verified" :
             (inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified"))
@@ -589,6 +592,9 @@ extension AccessibilityChannel {
               let slot = selectedControl(),
               case .success(.some(let originalLabel)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError> else {
             return refuse(.readbackUnavailable, "A unique output slot and absence of existing popups must be observed; nothing was pressed.")
+        }
+        guard requiringOriginalInputControl.map({ $0.matches(.init(owner: physical, control: slot, source: originalLabel)) }) ?? true else {
+            return refuse(.staleTargetReference, "The previewed input control is no longer current; nothing was pressed.")
         }
         // Deciding reads may themselves observe a host transition. Recheck the
         // held physical membership, then the exact current main window/document

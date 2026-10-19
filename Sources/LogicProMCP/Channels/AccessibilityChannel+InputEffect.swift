@@ -18,6 +18,20 @@ extension AccessibilityChannel {
         let focus: AXUIElement
         let checkedAfter: CheckedOutputReading
         let sampledAt: String
+        let heldFocus: HeldSelectionAssociation?
+
+        /// Only the retained canonical adapter supplies this actual passive read
+        /// owner. A wire value or a matching focus caption cannot construct it.
+        private func heldFocusPermits(_ focus: AXUIElement) -> Bool {
+            guard let proof = heldFocus, CFEqual(proof.originalFocus, focus),
+                  CFEqual(proof.window, current.strip.window), CFEqual(proof.mixer, current.strip.mixer),
+                  proof.document.utf8.elementsEqual(current.strip.document.utf8),
+                  CFEqual(proof.headers[proof.originalIndex], current.track.header),
+                  proof.strips.count == population.count,
+                  zip(proof.strips, population).allSatisfy({ CFEqual($0, $1) }),
+                  proof.permitsRead() else { return false }
+            return true
+        }
 
         func permits() -> Bool {
             let runtime = current.track.runtime
@@ -41,7 +55,8 @@ extension AccessibilityChannel {
                   let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax),
                   CFEqual(main, current.strip.window), CFEqual(focusedWindow, current.strip.window),
                   let currentFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
-                  CFEqual(currentFocus, focus), renewal != nil || readLogicKeyboardFocus(of: focus, runtime: runtime) == .notTextEditing,
+                  CFEqual(currentFocus, focus), renewal != nil
+                    || readLogicKeyboardFocus(of: focus, runtime: runtime) == .notTextEditing || heldFocusPermits(focus),
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
                   AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
                   !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked,
@@ -83,7 +98,8 @@ extension AccessibilityChannel {
               let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) else { return false }
         let proof = ChangedInputObservation(original: original, current: current, renewal: renewal, control: control,
             population: population, sink: sink, before: before, after: after, creation: creation, focus: focus,
-            checkedAfter: checkedAfter, sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
+            checkedAfter: checkedAfter, sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()),
+            heldFocus: InputBusSagaAdapter.heldWriteFocus)
         guard proof.permits() else { return false }
         observer(proof)
         return true

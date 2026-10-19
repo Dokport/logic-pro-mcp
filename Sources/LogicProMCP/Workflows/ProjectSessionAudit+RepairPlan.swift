@@ -124,11 +124,13 @@ extension ProjectSessionAudit {
             source: capture, request: request)
         let matchingSendID = ApprovedSessionRepair.capturedMatchingSendID(policy: policy, names: names,
             source: capture, request: request)
-        let capturedLocalTask = localOutputStep != nil || localSendStep != nil || matchingSendID != nil
+        let localInputStep = ApprovedSessionRepair.capturedInputStep(policy: policy, names: names,
+            source: capture, request: request)
+        let capturedLocalTask = localOutputStep != nil || localSendStep != nil || matchingSendID != nil || localInputStep != nil
         let viewOnly = policy.mixerVisible != nil && policy.trackSort == nil && policy.targets.isEmpty && policy.roles.isEmpty
             && policy.outputs.isEmpty && policy.sends.isEmpty && policy.receivers.isEmpty && names.isEmpty && policy.protectedPaths.isEmpty
         var reasons = Set<String>()
-        if !policy.inputs.isEmpty { reasons.insert("input_goal_verification_unavailable") }
+        if !policy.inputs.isEmpty, localInputStep == nil { reasons.insert("input_goal_verification_unavailable") }
         reasons.formUnion(naming.reasons.values)
         if !snapshotCurrent { reasons.insert("snapshot_changed") }
         if !viewOnly && !capturedLocalTask && request.scope != .wholeProject { reasons.insert("whole_project_scope_required") }
@@ -311,6 +313,10 @@ extension ProjectSessionAudit {
         }
         var steps: [Value] = []
         for input in policy.inputs {
+            if let localInputStep {
+                steps.append(localInputStep)
+                continue
+            }
             let target = policy.targets.first { $0.handle == input.target }
             let observed = assessment.inputFindings?.first { $0.target.handle == input.target }?.observed
             steps.append(.object([
@@ -604,7 +610,7 @@ extension ProjectSessionAudit {
             "receiver_questions": .array(receiverQuestions.keys.sorted().compactMap { receiverQuestions[$0] }),
             "findings": .array(try (capturedLocalTask ? [] : assessment.findings).map { try repairPlanValue($0) }
                 + (localSendStep == nil && matchingSendID == nil ? assessment.sendFindings ?? [] : []).map { try repairPlanValue($0) }
-                + (assessment.inputFindings ?? []).map { try repairPlanValue($0) }),
+                + (localInputStep == nil ? assessment.inputFindings ?? [] : []).map { try repairPlanValue($0) }),
             "new_object_inventory": .array(inventory),
             "planning_options": options.wire,
             "executable": .bool(reasons.isEmpty),

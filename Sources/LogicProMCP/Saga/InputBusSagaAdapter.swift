@@ -1,9 +1,17 @@
+@preconcurrency import ApplicationServices
 import Foundation
 import MCP
 
 /// One confirmed Bus-to-Bus input change on the scalar writer's checked physical sink.
 final class InputBusSagaAdapter: @unchecked Sendable {
+    typealias WritePermission = @Sendable (AccessibilityChannel.HeldSelectionAssociation.Pair,
+        AccessibilityChannel.OriginalHeaderSourceRenewal?, AXMixerInputSlotBinding, AXUIElement?) -> Bool
+    @TaskLocal static var requiredInputControl: AXMixerInputSlotBinding?
+    @TaskLocal static var writePermission: WritePermission?
+    @TaskLocal static var heldWriteFocus: AccessibilityChannel.HeldSelectionAssociation?
     let forward: SagaStep
+    private let capture: SessionPopulationObservation.Capture?
+    private var footprintProof: AccessibilityChannel.HeldSelectionAssociation?
     private var pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var readControl: AXMixerInputSlotBinding?
     private var readRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
@@ -35,6 +43,13 @@ final class InputBusSagaAdapter: @unchecked Sendable {
     init?(plan: SagaPlan) {
         guard Self.accepts(plan), let forward = plan.steps.first else { return nil }
         self.forward = forward
+        capture = nil
+    }
+
+    init?(approved: ApprovedSessionRepair) {
+        guard approved.plan.steps.count == 1, let forward = approved.plan.steps.first,
+              let (pair, control, capture) = approved.inputCustody(for: forward) else { return nil }
+        self.forward = forward; self.pair = pair; readControl = control; self.capture = capture
     }
 
     func supports(_ step: SagaStep) -> Bool {
@@ -59,6 +74,93 @@ final class InputBusSagaAdapter: @unchecked Sendable {
         return readControl.matches(.init(owner: pair.strip, control: control, source: label))
     }
 
+    /// The capture is a protected baseline, never a new target lookup. Only the
+    /// original header's actual owned renewal can corroborate a redrawn census.
+    private func footprintHeld(_ pair: AccessibilityChannel.HeldSelectionAssociation.Pair,
+        renewal: AccessibilityChannel.OriginalHeaderSourceRenewal?, assignment: InputAssignment,
+        control: AXMixerInputSlotBinding,
+        popup: AXUIElement? = nil) -> Bool {
+        guard let capture else { return true }
+        let runtime = pair.track.runtime
+        guard let original = capture.freshPopulation?.selectionAssociations.first(where: { $0.track.matches(pair.track) }),
+              let index = capture.channelStrips.firstIndex(where: { $0.physicalBinding?.matches(original.strip) == true }),
+              assignment == Self.bus(forward.params["expected_current"]).map(InputAssignment.bus)
+                || assignment == Self.bus(forward.params["destination"]).map(InputAssignment.bus),
+              pair.track.matches(original.track), pair.track.currentIndex() != nil else { return false }
+        let proof: AccessibilityChannel.HeldSelectionAssociation
+        if let renewal {
+            guard renewal.pair.strip.matches(pair.strip), renewal.pair.track.matches(pair.track),
+                  renewal.permits(runtime: runtime, ownedPopup: popup) else { return false }
+            proof = renewal.observation
+        } else if popup != nil {
+            guard let held = footprintProof else { return false }
+            proof = held
+        } else {
+            guard pair.strip.matches(original.strip),
+                  let held = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
+                    logic: runtime, expectedProject: nil, requiresProjectReference: false,
+                    allowsSelectedChildRailEntry: true) else { return false }
+            proof = held
+        }
+        @Sendable func permitted() -> Bool {
+            (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+                && (popup.map { proof.permitsOwnedPopupRead($0) } ?? proof.permitsRead())
+        }
+        guard permitted(), proof.headers.count == capture.tracks.count,
+              zip(proof.headers, capture.tracks).allSatisfy({ header, row in
+                  row.physicalBinding.map { CFEqual($0.header, header) && $0.exposure?.hasEnded != true } == true
+              }) else { return false }
+        let stop: @Sendable () -> Bool = { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil }
+        let fields = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
+            let tracks = AccessibilityChannel.readTrackStates(from: proof.headers, in: pair.track.window,
+                runtime: runtime, readingTypeHelp: false, stoppingWhen: stop).states
+            let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer, runtime: runtime.ax)
+                .flatMap { AccessibilityChannel.readChannelStrips(from: $0.strips, runtime: runtime,
+                    window: pair.strip.window, mixer: pair.strip.mixer, readingScalarHelp: false, stoppingWhen: stop) }
+            return (tracks, strips)
+        }
+        guard let tracks = fields.0, let strips = fields.1, permitted(),
+              tracks.count == capture.tracks.count, strips.count == capture.channelStrips.count,
+              strips.indices.contains(index), strips[index].physicalBinding?.matches(pair.strip) == true,
+              strips[index].inputSlotBinding?.matches(control) == true,
+              strips[index].input?.utf8.elementsEqual(control.source.utf8) == true,
+              zip(tracks, capture.tracks).allSatisfy({ row, old in
+                  guard let owner = old.physicalBinding, let current = row.physicalBinding else { return false }
+                  return CFEqual(current.header, owner.header) && CFEqual(current.window, owner.window)
+                      && current.document.utf8.elementsEqual(owner.document.utf8) && owner.exposure?.hasEnded != true
+              }) else { return false }
+        for row in strips.indices {
+            guard strips[row].volumeReadback != nil, strips[row].panReadback != nil,
+                  strips[row].volumeReadback == capture.channelStrips[row].volumeReadback,
+                  strips[row].panReadback == capture.channelStrips[row].panReadback,
+                  strips[row].pluginsFullyObserved == true else { return false }
+            if let renewal {
+                guard renewal.observation.strips.count == strips.count,
+                      strips[row].physicalBinding?.matches(.init(window: pair.strip.window, mixer: pair.strip.mixer,
+                        strip: renewal.observation.strips[row], document: pair.strip.document)) == true else { return false }
+            } else {
+                guard let owner = capture.channelStrips[row].physicalBinding,
+                      strips[row].physicalBinding?.matches(owner) == true else { return false }
+            }
+        }
+        var expected = capture.channelStrips
+        expected[index].input = strips[index].input
+        expected[index].inputObservation = strips[index].inputObservation
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let input = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
+            AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
+        }
+        guard let a = try? encoder.encode(capture.tracks), let b = try? encoder.encode(tracks), a == b,
+              let c = try? encoder.encode(expected), let d = try? encoder.encode(strips), c == d,
+              case .source(let label) = input.reading, let currentControl = input.control,
+              control.matches(.init(owner: pair.strip, control: currentControl, source: label)),
+              permitted(), pair.strip.currentIndex(runtime: runtime) == index,
+              case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(pair.strip.window, runtime: runtime),
+              document.utf8.elementsEqual(pair.strip.document.utf8) else { return false }
+        footprintProof = proof
+        return true
+    }
+
     private func scope<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
         let parent = OperationTraceContext.current
         let limit = ContinuousClock.now.advanced(by: .seconds(
@@ -81,6 +183,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             if let proof {
                 guard !self.inverseConsumed || self.restored != nil,
                       let reading = proof.retainedCheckedRead(), case .bus(let actual)? = reading.assignment,
+                      self.footprintHeld(proof.current, renewal: proof.renewal, assignment: .bus(actual), control: proof.control),
                       await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
                         operation: "saga.input_bus") == nil else { return nil }
                 return .init(read: .init(readSource: .axInputMenuCheckmark, provenance: .liveIndependent,
@@ -117,7 +220,8 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             }
             let reading = await AXMixerStripBinding.$current.withValue(held.strip) {
                 await AXMixerStripBinding.$outputAssociation.withValue(held) {
-                    await AccessibilityChannel.getInputBusObservation(runtime: held.track.runtime)
+                    await AccessibilityChannel.getInputBusObservation(runtime: held.track.runtime,
+                        requiringOriginalInputControl: self.capture == nil ? nil : self.readControl)
                 }
             }
             let current = reading.inputRenewal?.pair ?? held
@@ -142,6 +246,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
             }
             self.pair = current; self.readControl = control
             self.readRenewal = reading.inputRenewal ?? self.readRenewal
+            guard self.footprintHeld(current, renewal: self.readRenewal, assignment: .bus(actual), control: control) else { return nil }
             return .init(read: .init(readSource: .axInputMenuCheckmark, provenance: .liveIndependent,
                 trackIndex: current.track.currentIndex(), field: "input_bus",
                 observed: .string("bus:\(actual)"),
@@ -150,6 +255,33 @@ final class InputBusSagaAdapter: @unchecked Sendable {
     }
 
     func run(_ step: SagaStep, router: ChannelRouter, cache: StateCache, registry: TargetRegistry) async -> StepResult {
+        let permission: WritePermission?
+        if capture == nil { permission = nil }
+        else { permission = { [self] pair, renewal, control, popup in
+            guard let held = effect?.current ?? self.pair,
+                  pair.track.matches(held.track), control.owner.matches(pair.strip) else { return false }
+            if !pair.strip.matches(held.strip) {
+                guard let renewal, renewal.original.matches(held.strip),
+                      renewal.originalTrack.matches(held.track), renewal.pair.strip.matches(pair.strip) else { return false }
+            } else {
+                guard let original = effect?.control ?? readControl, control.matches(original) else { return false }
+            }
+            let assignment = effect.map { InputAssignment.bus($0.after) }
+                ?? Self.bus(forward.params["expected_current"]).map(InputAssignment.bus)
+            guard let assignment else { return false }
+            return footprintHeld(pair, renewal: renewal ?? effect?.renewal ?? readRenewal,
+                assignment: assignment, control: control, popup: popup)
+        } }
+        return await Self.$requiredInputControl.withValue(capture == nil ? nil : readControl) {
+            await Self.$writePermission.withValue(permission) {
+                await Self.$heldWriteFocus.withValue(capture == nil ? nil : footprintProof) {
+                    await runWithCustody(step, router: router, cache: cache, registry: registry)
+                }
+            }
+        }
+    }
+
+    private func runWithCustody(_ step: SagaStep, router: ChannelRouter, cache: StateCache, registry: TargetRegistry) async -> StepResult {
         await scope {
             guard self.supports(step), FeatureFlags.adr002TargetRef,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
