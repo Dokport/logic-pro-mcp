@@ -3416,8 +3416,9 @@ extension AccessibilityChannel {
                     Log.info("Ordinary rename editor custody unavailable: \(component)", subsystem: "ax")
                     return false
                 }
-                guard runtime.logicProPID() == heldPID, runtime.focusedApplicationPID() == heldPID,
-                      processRuntime.logicIsFrontmost() else { return unavailable("process") }
+                guard runtime.logicProPID() == heldPID else { return unavailable("logic_process") }
+                guard runtime.focusedApplicationPID() == heldPID else { return unavailable("focused_process") }
+                guard processRuntime.logicIsFrontmost() else { return unavailable("keyboard_owner") }
                 guard let app = AXLogicProElements.appRoot(runtime: runtime), CFEqual(app, heldApp) else {
                     return unavailable("application")
                 }
