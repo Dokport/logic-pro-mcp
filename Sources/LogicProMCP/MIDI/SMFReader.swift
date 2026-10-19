@@ -17,6 +17,42 @@ enum SMFReaderError: Error, Equatable {
 }
 
 struct SMFReader {
+    /// File-timeline facts, not a project/region-origin or import-comparison proof.
+    /// Metadata retains observed file traversal order, including same-tick events;
+    /// no inferred default tempo or meter is added to these observations.
+    struct Document {
+        let format: Int
+        let trackCount: Int
+        let ticksPerQuarter: Int
+        let notes: [TickNote]
+        let tempoChanges: [TempoChange]
+        let timeSignatures: [TimeSignatureChange]
+        fileprivate let originalHeader: Data
+        fileprivate let fileTracks: [FileTrack]
+    }
+
+    enum TrackExtractionError: Error, Equatable {
+        case unsupportedFileLayout
+        case instrumentNotFound
+    }
+
+    fileprivate struct InstrumentName {
+        let tick: Int
+        let bytes: Data
+    }
+
+    fileprivate struct FileTrack {
+        let originalChunk: Data
+        let instrumentNames: [InstrumentName]
+        let hasNonMetaEvents: Bool
+        let hasUnownedEvents: Bool
+    }
+
+    struct TempoChange: Equatable {
+        let tick: Int
+        let microsecondsPerQuarter: Int
+    }
+
     struct Note: Equatable {
         let pitch: UInt8
         let velocity: UInt8
@@ -27,7 +63,14 @@ struct SMFReader {
     }
 
     static func parse(_ data: Data) throws -> [Note] {
-        var reader = ByteReader([UInt8](data))
+        let document = try parseDocument(data)
+        let map = try TimeMap(ticksPerQuarter: document.ticksPerQuarter, changes: document.timeSignatures)
+        return try document.notes.map { try map.note(from: $0) }
+    }
+
+    static func parseDocument(_ data: Data) throws -> Document {
+        let fileBytes = [UInt8](data)
+        var reader = ByteReader(fileBytes)
         try reader.expect([0x4D, 0x54, 0x68, 0x64])
         let headerLength = try reader.readUInt32()
         guard headerLength >= 6 else { throw SMFReaderError.malformedHeader }
@@ -42,27 +85,73 @@ struct SMFReader {
         let ticksPerQuarter = Int(divisionRaw)
         guard ticksPerQuarter > 0 else { throw SMFReaderError.unsupportedDivision(divisionRaw) }
         try reader.skip(Int(headerLength) - 6)
+        let originalHeader = Data(fileBytes.prefix(reader.index))
 
-        var notes: [RawNote] = []
+        var notes: [TickNote] = []
+        var tempoChanges: [TempoChange] = []
         var timeSignatures: [TimeSignatureChange] = []
+        var fileTracks: [FileTrack] = []
         for _ in 0..<trackCount {
+            let chunkStart = reader.index
             try reader.expect([0x4D, 0x54, 0x72, 0x6B])
             let length = Int(try reader.readUInt32())
             guard reader.remaining >= length else { throw SMFReaderError.invalidTrackLength }
             let trackBytes = try reader.readBytes(length)
             let track = try parseTrack(trackBytes)
             notes.append(contentsOf: track.notes)
+            tempoChanges.append(contentsOf: track.tempoChanges)
             timeSignatures.append(contentsOf: track.timeSignatures)
+            fileTracks.append(FileTrack(originalChunk: Data(fileBytes[chunkStart..<reader.index]),
+                instrumentNames: track.instrumentNames, hasNonMetaEvents: track.hasNonMetaEvents,
+                hasUnownedEvents: track.hasUnownedEvents))
         }
         guard reader.isAtEnd else { throw SMFReaderError.invalidTrackLength }
 
-        let map = try TimeMap(ticksPerQuarter: ticksPerQuarter, changes: timeSignatures)
-        return try notes.sorted().map { try map.note(from: $0) }
+        return Document(format: format, trackCount: trackCount, ticksPerQuarter: ticksPerQuarter,
+            notes: notes.sorted(), tempoChanges: tempoChanges, timeSignatures: timeSignatures,
+            originalHeader: originalHeader, fileTracks: fileTracks)
+    }
+
+    /// Exact file-metadata selection only, never a Logic target-identity proof.
+    /// The supported layout has one meta-only conductor followed by tracks with
+    /// one UTF-8 instrument-name event before any channel or SysEx event. The
+    /// initial region offset may precede its metadata. Original chunks (including
+    /// controllers, programs, SysEx and unknown metadata) are copied, not encoded
+    /// from the notes projection. A caller still needs independent host binding.
+    static func extractTracks(namedInstrument name: String, from data: Data) throws -> Data {
+        let document = try parseDocument(data)
+        guard !name.isEmpty, document.format == 1, document.fileTracks.count >= 2,
+              let conductor = document.fileTracks.first,
+              !conductor.hasNonMetaEvents, conductor.instrumentNames.isEmpty else {
+            throw TrackExtractionError.unsupportedFileLayout
+        }
+        let expected = Data(name.utf8)
+        var matching: [FileTrack] = []
+        for track in document.fileTracks.dropFirst() {
+            guard track.instrumentNames.count == 1, let observed = track.instrumentNames.first,
+                  !track.hasUnownedEvents, !observed.bytes.isEmpty,
+                  String(data: observed.bytes, encoding: .utf8) != nil else {
+                throw TrackExtractionError.unsupportedFileLayout
+            }
+            if observed.bytes == expected { matching.append(track) }
+        }
+        guard !matching.isEmpty else { throw TrackExtractionError.instrumentNotFound }
+        var result = document.originalHeader
+        let trackCount = matching.count + 1
+        result[10] = UInt8(truncatingIfNeeded: trackCount >> 8)
+        result[11] = UInt8(truncatingIfNeeded: trackCount)
+        result.append(conductor.originalChunk)
+        for track in matching { result.append(track.originalChunk) }
+        return result
     }
 
     private struct ParsedTrack {
-        let notes: [RawNote]
+        let notes: [TickNote]
+        let tempoChanges: [TempoChange]
         let timeSignatures: [TimeSignatureChange]
+        let instrumentNames: [InstrumentName]
+        let hasNonMetaEvents: Bool
+        let hasUnownedEvents: Bool
     }
 
     private struct NoteKey: Hashable {
@@ -75,14 +164,16 @@ struct SMFReader {
         let velocity: UInt8
     }
 
-    private struct RawNote: Comparable {
+    struct TickNote: Comparable {
         let pitch: UInt8
         let velocity: UInt8
         let startTick: Int
         let endTick: Int
         let channel: Int
 
-        static func < (lhs: RawNote, rhs: RawNote) -> Bool {
+        var durationTicks: Int { endTick - startTick }
+
+        static func < (lhs: TickNote, rhs: TickNote) -> Bool {
             if lhs.startTick != rhs.startTick { return lhs.startTick < rhs.startTick }
             if lhs.pitch != rhs.pitch { return lhs.pitch < rhs.pitch }
             return lhs.channel < rhs.channel
@@ -94,8 +185,12 @@ struct SMFReader {
         var tick = 0
         var runningStatus: UInt8?
         var active: [NoteKey: [ActiveNote]] = [:]
-        var notes: [RawNote] = []
+        var notes: [TickNote] = []
+        var tempoChanges: [TempoChange] = []
         var timeSignatures: [TimeSignatureChange] = []
+        var instrumentNames: [InstrumentName] = []
+        var hasNonMetaEvents = false
+        var hasUnownedEvents = false
         var sawEndOfTrack = false
 
         while !reader.isAtEnd {
@@ -104,15 +199,21 @@ struct SMFReader {
 
             if first == 0xFF {
                 runningStatus = nil
-                if try parseMetaEvent(tick: tick, reader: &reader, timeSignatures: &timeSignatures) {
+                if try parseMetaEvent(tick: tick, reader: &reader,
+                    tempoChanges: &tempoChanges, timeSignatures: &timeSignatures,
+                    instrumentNames: &instrumentNames) {
                     guard !sawEndOfTrack else { throw SMFReaderError.eventAfterEndOfTrack }
                     sawEndOfTrack = true
                     guard reader.isAtEnd else { throw SMFReaderError.eventAfterEndOfTrack }
                 }
             } else if first == 0xF0 || first == 0xF7 {
+                hasNonMetaEvents = true
+                hasUnownedEvents = hasUnownedEvents || instrumentNames.isEmpty
                 runningStatus = nil
                 try reader.skip(try reader.readVLQ())
             } else {
+                hasNonMetaEvents = true
+                hasUnownedEvents = hasUnownedEvents || instrumentNames.isEmpty
                 try parseChannelEvent(
                     firstByte: first,
                     tick: tick,
@@ -126,13 +227,17 @@ struct SMFReader {
 
         guard sawEndOfTrack else { throw SMFReaderError.missingEndOfTrack }
         guard active.values.allSatisfy(\.isEmpty) else { throw SMFReaderError.danglingNotes }
-        return ParsedTrack(notes: notes, timeSignatures: timeSignatures)
+        return ParsedTrack(notes: notes, tempoChanges: tempoChanges, timeSignatures: timeSignatures,
+            instrumentNames: instrumentNames, hasNonMetaEvents: hasNonMetaEvents,
+            hasUnownedEvents: hasUnownedEvents)
     }
 
     private static func parseMetaEvent(
         tick: Int,
         reader: inout ByteReader,
-        timeSignatures: inout [TimeSignatureChange]
+        tempoChanges: inout [TempoChange],
+        timeSignatures: inout [TimeSignatureChange],
+        instrumentNames: inout [InstrumentName]
     ) throws -> Bool {
         let type = try reader.readByte()
         let length = try reader.readVLQ()
@@ -145,8 +250,13 @@ struct SMFReader {
         let payload = try reader.readBytes(length)
 
         switch type {
+        case 0x04:
+            instrumentNames.append(InstrumentName(tick: tick, bytes: Data(payload)))
         case 0x51:
             guard length == 3 else { throw SMFReaderError.malformedEvent }
+            let tempo = Int(payload[0]) << 16 | Int(payload[1]) << 8 | Int(payload[2])
+            guard tempo > 0 else { throw SMFReaderError.malformedEvent }
+            tempoChanges.append(TempoChange(tick: tick, microsecondsPerQuarter: tempo))
         case 0x58:
             guard length == 4, payload[0] > 0, payload[1] < 8 else { throw SMFReaderError.malformedEvent }
             timeSignatures.append(TimeSignatureChange(
@@ -165,7 +275,7 @@ struct SMFReader {
         runningStatus: inout UInt8?,
         reader: inout ByteReader,
         active: inout [NoteKey: [ActiveNote]],
-        notes: inout [RawNote]
+        notes: inout [TickNote]
     ) throws {
         var dataBytes: [UInt8] = []
         let status: UInt8
@@ -210,7 +320,7 @@ struct SMFReader {
         // non-negative VLQs), so `tick < start.tick` cannot occur here today;
         // the guard stays as a defensive invariant on that ordering.
         guard tick >= start.tick else { throw SMFReaderError.malformedEvent }
-        notes.append(RawNote(
+        notes.append(TickNote(
             pitch: pitch,
             velocity: start.velocity,
             startTick: start.tick,
@@ -219,7 +329,7 @@ struct SMFReader {
         ))
     }
 
-    private struct TimeSignature: Equatable {
+    struct TimeSignature: Equatable {
         let numerator: Int
         let denominator: Int
 
@@ -231,7 +341,7 @@ struct SMFReader {
         }
     }
 
-    private struct TimeSignatureChange {
+    struct TimeSignatureChange: Equatable {
         let tick: Int
         let signature: TimeSignature
     }
@@ -275,7 +385,7 @@ struct SMFReader {
             segments = built
         }
 
-        func note(from raw: RawNote) throws -> Note {
+        func note(from raw: TickNote) throws -> Note {
             let location = try Self.location(of: raw.startTick, segments: segments, ticksPerQuarter: ticksPerQuarter)
             let durationBeats = try Self.durationBeats(
                 from: raw.startTick,

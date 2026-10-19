@@ -26,7 +26,7 @@ Every tool in `tools/list` advertises an `outputSchema`. Mixed command tools adv
 | `logic_tracks` | create, select, rename, delete, duplicate, arm/arm_only, mute, solo, automation, set instrument, library scans |
 | `logic_mixer` | volume, pan, master volume, mixer strip reads, guarded legacy plugin insertion, verified output assignment |
 | `logic_plugins` | verified stock-plugin inventory, exact-slot insertion, verified parameter write/readback |
-| `logic_midi` | send notes/CC/SysEx/MMC, import MIDI, step input, create/list virtual ports |
+| `logic_midi` | send notes/CC/SysEx/MMC, import/export track MIDI, read exported notes, step input, create/list virtual ports |
 | `logic_edit` | undo, redo, cut, copy, paste, quantize, split, join, bounce-in-place, normalize, duplicate |
 | `logic_navigate` | bars, markers, zoom, view toggles |
 | `logic_project` | new, open, save, save_as, close, bounce, launch/quit, is_running, regions, export plan/run/resume, audit, cleanup |
@@ -285,6 +285,12 @@ Minimal `set_param_verified` shape:
 
 Common commands: `send_note`, `send_chord`, `send_cc`, `send_program_change`, `send_pitch_bend`, `send_aftertouch`, `send_sysex`, `play_sequence`, `import_file`, `list_ports`, `create_virtual_port`, `step_input`, `mmc_play`, `mmc_stop`, `mmc_record`, `mmc_locate`.
 
+`export_track_midi` requires `{ project_ref, target_ref, path }`, where `path` is a new absolute `.mid` destination. `read_track_notes` requires `{ project_ref, target_ref }` and retains no caller file. Obtain current references from `logic_project.inspect_session` with `scope: "whole_project"` and `domains: ["tracks"]`; incomplete/hidden populations, duplicate names, stale bindings and unsupported MIDI layouts are refused. Neither command accepts selection, indices or `port` as a target.
+
+Both commands use Logic's native whole-project MIDI export, then retain the conductor and all chunks whose sole instrument-name event matches the target and precedes every channel/SysEx event. A region's initial offset can precede its metadata; those original tick deltas and other MIDI events are not rewritten. Responses report notes in exported-file ticks (`ppq`, `start_tick`, `end_tick`, `duration_ticks`), observed tempo/meter events and explicit `project_timeline_mapping: "unproven"` / `import_comparison: "not_performed"`. They do not prove authored-file import equivalence or original region edit semantics. The provider does not change selection or Cycle; the Save panel's last-used folder preference is not restored. UI/export failures report no verified result and may require checking panel cleanup before retrying. Existing destination files are never overwritten.
+
+The native export was observed to apply region transposition and quantization to the artifact while leaving the source region's parameters and underlying notes unchanged. It is not a raw, pre-parameter dump or a general playback-equivalence guarantee. Loop/alias expansion is not independently qualified: the provider never joins regions, expands loops, converts aliases or permanently applies parameters in the project. Inspect the exported artifact before relying on those representations. A track omitted by Logic's export returns `track_midi_not_exported`, not a fabricated verified-empty note list.
+
 Channels are 1-based (`1..16`) to match Logic's UI.
 
 `send_sysex` accepts `{ bytes: [Int] }` or `{ data: "F0 ... F7" }` and rejects payloads over 1024 bytes before routing to CoreMIDI.
@@ -311,7 +317,7 @@ Send-only success responses return an Honest Contract State B JSON envelope beca
 
 `create_virtual_port` reuses same-name/same-mode ports. Reusing a name across modes fails closed with State C `port_unavailable` and includes `port_name`, `existing_mode`, and `requested_mode`.
 
-No MIDI read-back command is shipped: `read_selection_notes` and `record_sequence verify_notes` remain deferred.
+Selection-note reading (`read_selection_notes`) and `record_sequence verify_notes` remain deferred; `read_track_notes` observes a bound track through the exported artifact instead.
 
 ### `logic_edit`
 

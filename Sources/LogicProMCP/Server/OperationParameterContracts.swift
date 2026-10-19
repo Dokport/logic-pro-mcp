@@ -328,6 +328,15 @@ extension OperationRegistry {
             ],
                                      required: [["bar", "time"]]),
             "midi.import_file": .init(params: ["path": .enforced(.string, .string("/tmp/lpm-957.mid"))], required: [["path"]]),
+            "midi.export_track_midi": .init(params: [
+                "project_ref": .enforced(.string, .string("prj_00000000-0000-0000-0000-000000000001")),
+                "target_ref": .enforced(.string, .string("trk_00000000-0000-0000-0000-000000000002")),
+                "path": .enforced(.string, .string("/tmp/lpm-track.mid")),
+            ], required: [["project_ref"], ["target_ref"], ["path"]]),
+            "midi.read_track_notes": .init(params: [
+                "project_ref": .enforced(.string, .string("prj_00000000-0000-0000-0000-000000000001")),
+                "target_ref": .enforced(.string, .string("trk_00000000-0000-0000-0000-000000000002")),
+            ], required: [["project_ref"], ["target_ref"]]),
             "midi.create_virtual_port": .init(params: ["name": .unconstrained("read as text with Virtual Port as the default")],
                                               required: []),
 

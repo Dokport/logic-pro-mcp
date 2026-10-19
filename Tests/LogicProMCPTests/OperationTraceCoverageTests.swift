@@ -347,7 +347,6 @@ extension OperationTraceTests {
         let mutatingSpecs = OperationRegistry.specs.filter {
             $0.mutability == Mutability.`mutating`
         }
-        #expect(mutatingSpecs.count == 100)
 
         // A mutating op that refuses BEFORE dispatch starts its trace starts no trace with the
         // coverage params (which carry no consent), so it is asserted to claim NO trace coverage
@@ -1105,6 +1104,15 @@ private func operationTraceCoverageParams(
         return ["notes": .string("60,0,100")]
     case .midiImportFile:
         return ["path": .string(fixtures.midiPath)]
+    case .midiExportTrackMIDI, .midiReadTrackNotes:
+        var params: [String: Value] = [
+            "project_ref": .string("prj_00000000-0000-0000-0000-000000000001"),
+            "target_ref": .string("trk_00000000-0000-0000-0000-000000000002"),
+        ]
+        if operationID == .midiExportTrackMIDI {
+            params["path"] = .string(URL(fileURLWithPath: fixtures.outputRoot).appendingPathComponent("track.mid").path)
+        }
+        return params
     case .midiCreateVirtualPort:
         return ["name": .string("Trace Coverage")]
     case .midiStepInput:

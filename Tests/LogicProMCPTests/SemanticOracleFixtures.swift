@@ -60,6 +60,8 @@ struct SemanticOracleFixture {
 }
 
 enum SemanticOracleFixtures {
+    // Contract fixture only, not native export or import-comparison evidence.
+    static let nativeTrackMIDI = SemanticOracleFixture(response: #"{"success":true,"verified":true,"state":"A","provider":"native_whole_project_smf_export","verification_scope":"export_artifact_and_track_binding","timing_origin":"smf_tick_zero","project_timeline_mapping":"unproven","import_comparison":"not_performed","smf_format":1,"ppq":480,"smf_track_count":2,"project_ref":"prj_fixture","target_ref":"trk_fixture","notes":[],"path":"/tmp/track.mid"}"#, readback: "{}")
     static let health = """
         {"logic_pro_running":true,"logic_pro_version":"11.2",\
         "logic_pro_bundle_id":"com.apple.logic10","logic_pro_variant":"desktop",\
@@ -1283,6 +1285,8 @@ enum SemanticOracleFixtures {
                 """,
             readback: "{}"
         ),
+        .midiExportTrackMIDI: nativeTrackMIDI,
+        .midiReadTrackNotes: nativeTrackMIDI,
         // defaultImportMIDIFile State A: track created (delta 1), imported region
         // read back (imported_region_count 1, imported_regions non-empty).
         .midiImportFile: SemanticOracleFixture(

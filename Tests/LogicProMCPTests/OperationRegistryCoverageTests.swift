@@ -90,19 +90,11 @@ struct OperationRegistryCoverageTests {
             .tracksArmOnly,
             .tracksSetAutomation,
             .tracksSetInstrument,
+            .midiExportTrackMIDI,
+            .midiReadTrackNotes,
         ]
 
-        #expect(mutating.count == 100)  // #291 adds physical-reference-only input and occupied-send writers;
-                                        // #971 applies an approved Mixer view;
-                                        // #448: sort_verified is a mutating structural verb;
-                                        // #301 added plugins.set_eq_band_verified, which is
-                                        // target-bearing, so `targetless` is unchanged;
-                                        // #884 added system.setup_control_surface, which bears no
-                                        // target — it configures the application, not a track;
-                                        // #862 added mixer.bank, which moves the MCU strip
-                                        // window and so bears no track target either;
-                                        // #291 R2 added mixer.set_output_verified, which is
-                                        // target-bearing, so `targetless` is unchanged
+        // Exact target membership below covers additions without a redundant global count.
         #expect(targetBearingIDs == expectedTargetBearingIDs)
         #expect(targetless.count == 79)   // #971 internally binds a retained project approval
         #expect(targetBearingIDs.count + targetless.count == mutating.count)

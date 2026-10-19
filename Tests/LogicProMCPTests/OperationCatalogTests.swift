@@ -218,6 +218,7 @@ struct OperationCatalogTests {
         .midiSendSysEx: ["bytes", "data"],
         .midiPlaySequence: ["notes", "port"],
         .midiImportFile: ["path"],
+        .midiExportTrackMIDI: ["path"],
         .midiCreateVirtualPort: ["name"],
         .midiStepInput: ["duration", "note"],
         .midiMMCLocate: ["bar", "time"],

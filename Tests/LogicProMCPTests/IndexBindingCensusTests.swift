@@ -66,12 +66,13 @@ struct IndexBindingCensusTests {
 
     // MARK: - (b) actual physical-reference-only production commands
 
-    @Test("census (b): refRequired exactly advertises the physical-reference-only Mixer writers")
+    @Test("census (b): refRequired exactly advertises physical-reference-only operations")
     func refRequiredIsPinned() throws {
         // Send ordinals address the source census, not a legacy track/index
         // fallback. No legacy operation is promoted or loses compatibility.
         let expected: Set<OperationID> = [
             .mixerSetInputBusVerified, .mixerSetSendOutputVerified, .mixerSetSendBypassVerified, .mixerSetSendLevelVerified, .mixerSetSendModeVerified,
+            .midiExportTrackMIDI, .midiReadTrackNotes,
         ]
         #expect(OperationRegistry.refRequiredOperationIDs == expected)
         #expect(Self.ids { $0.indexBinding == .refRequired } == expected)

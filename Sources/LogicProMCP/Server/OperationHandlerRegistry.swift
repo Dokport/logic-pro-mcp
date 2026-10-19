@@ -376,7 +376,15 @@ enum OperationHandlerRegistry {
                     command: command,
                     params: params,
                     router: dependencies.router,
-                    cache: dependencies.cache
+                    cache: dependencies.cache,
+                    trackFileExport: { project, track, path in
+                        let runtime = await MIDITrackExportProvider.makeRuntime(projectReference: project,
+                            acquire: { request in
+                                try await dependencies.poller.acquireSessionPopulation(request: request, targetRegistry: dependencies.targetRegistry)
+                            })
+                        return try await MIDITrackFileExport.run(projectReference: project, targetReference: track,
+                            destination: path, runtime: runtime)
+                    }
                 )
                 if command == "import_file",
                    FeatureFlags.adr002TargetRef,
