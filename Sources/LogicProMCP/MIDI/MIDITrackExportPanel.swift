@@ -78,6 +78,7 @@ final class MIDITrackExportPanel {
         }
         let originalWindows = try windows(app)
         var ownedPanel: AXUIElement?
+        var stage = "open_save_panel"
         do {
             guard let bar: AXUIElement = AXHelpers.getAttribute(app, "AXMenuBar", runtime: runtime.ax) else {
                 throw Failure.unavailable("menu_bar_unavailable")
@@ -101,12 +102,14 @@ final class MIDITrackExportPanel {
                 return panel
             }
             ownedPanel = panel
+            stage = "save_panel_ready"
             try assertOwned(panel, app: app)
             guard try descendants(panel).allSatisfy({ try string(kAXRoleAttribute as String, of: $0) != kAXSheetRole as String }) else {
                 throw Failure.unavailable("unexpected_sheet")
             }
             try assertKeyboardFocus(panel, app: app)
             guard keyboard.post(5, [.maskCommand, .maskShift]) else { throw Failure.unavailable("go_to_folder_key_refused") }
+            stage = "go_to_folder"
             let go = try await wait("go_to_folder") { try self.unique(identifier: "GoToWindow", role: kAXSheetRole as String, in: panel, optional: true) }
             try assertOwned(panel, app: app)
             let path = try required(identifier: "PathTextField", role: kAXTextFieldRole as String, in: go)
@@ -116,14 +119,17 @@ final class MIDITrackExportPanel {
                   CFEqual(currentGo, go) else { throw Failure.unavailable("owned_go_to_folder_lost") }
             try assertKeyboardFocus(panel, app: app, sheet: go)
             guard keyboard.post(36, []) else { throw Failure.unavailable("go_to_folder_return_refused") }
+            stage = "directory_navigation"
             _ = try await wait("directory_navigation") { () throws -> AXUIElement? in
                 try self.assertOwned(panel, app: app)
                 return try self.unique(identifier: "GoToWindow", role: kAXSheetRole as String, in: panel, optional: true) == nil ? panel : nil
             }
             try assertOwned(panel, app: app)
+            stage = "destination_selection"
             guard try directorySelected(directory, in: panel) else { throw Failure.unavailable("destination_directory_not_confirmed") }
             let name = try required(identifier: "saveAsNameTextField", role: kAXTextFieldRole as String, in: panel)
             try setValue(destination.lastPathComponent, on: name)
+            stage = "save"
             // Repeat the scope and folder checks after the final field write.
             try assertOwned(panel, app: app)
             guard try directorySelected(directory, in: panel),
@@ -131,6 +137,7 @@ final class MIDITrackExportPanel {
             let save = try required(identifier: "OKButton", role: kAXButtonRole as String, in: panel)
             try assertOwned(panel, app: app)
             try act(save, action: kAXPressAction as String, panel: panel, app: app)
+            stage = "save_panel_closed"
             _ = try await wait("save_panel_closed") {
                 let current = try self.windows(app)
                 return current.contains(where: { CFEqual($0, panel) }) ? nil : self.window
@@ -147,6 +154,9 @@ final class MIDITrackExportPanel {
                !nodes.contains(where: { AXHelpers.getRole($0, runtime: runtime.ax) == kAXSheetRole as String }),
                let cancel = try? required(identifier: "CancelButton", role: kAXButtonRole as String, in: panel) {
                 _ = AXHelpers.performAction(cancel, kAXPressAction as String, runtime: runtime.ax)
+            }
+            if case Failure.unavailable(let detail) = error {
+                throw Failure.unavailable("\(stage):\(detail)")
             }
             throw error
         }
@@ -301,7 +311,7 @@ final class MIDITrackExportPanel {
                 throw Failure.unavailable("malformed_panel_attribute:\(attribute)")
             }
             return result
-        case .failure: throw Failure.unavailable("panel_attribute_unreadable:\(attribute)")
+        case .failure(let error): throw Failure.unavailable("panel_attribute_unreadable:\(attribute):\(error.raw)")
         }
     }
 

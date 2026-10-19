@@ -27,7 +27,8 @@ func midiTrackCommandsWireExactReferencesAndReturnFileTimelineFacts(command: Str
             await recorder.record(project, track, path)
             return .init(document: try SMFReader.parseDocument(midiCommandSMF))
         })
-    #expect(result.isError != true)
+    let failed = try #require(result.isError)
+    #expect(!failed)
     let body = try #require(sharedJSONObject(sharedToolText(result)))
     #expect(body["timing_origin"] as? String == "smf_tick_zero")
     #expect(body["project_timeline_mapping"] as? String == "unproven")
@@ -42,7 +43,7 @@ func midiTrackCommandsWireExactReferencesAndReturnFileTimelineFacts(command: Str
 }
 
 @Test(arguments: ["missing_project", "wrong_kind", "malformed_track", "read_path", "export_missing_path", "relative_path", "port", "unknown"])
-func midiTrackCommandsRejectMalformedRequestsBeforeTheProvider(fault: String) async {
+func midiTrackCommandsRejectMalformedRequestsBeforeTheProvider(fault: String) async throws {
     let recorder = MIDIExportCallRecorder()
     var command = "read_track_notes"
     var params: [String: Value] = ["project_ref": .string(midiCommandProject), "target_ref": .string(midiCommandTrack)]
@@ -61,7 +62,8 @@ func midiTrackCommandsRejectMalformedRequestsBeforeTheProvider(fault: String) as
             await recorder.record(project, track, path)
             return .init(document: try SMFReader.parseDocument(midiCommandSMF))
         })
-    #expect(result.isError == true)
+    let failed = try #require(result.isError)
+    #expect(failed)
     #expect(await recorder.calls.isEmpty)
 }
 
@@ -71,10 +73,12 @@ func midiTrackCommandsRejectMalformedRequestsBeforeTheProvider(fault: String) as
         router: ChannelRouter(), cache: StateCache(), trackFileExport: { _, _, _ in
             throw MIDITrackFileExport.Failure.incompleteTrackPopulation
         })
-    #expect(result.isError == true)
+    let failed = try #require(result.isError)
+    #expect(failed)
     let body = try #require(sharedJSONObject(sharedToolText(result)))
     #expect(body["error"] as? String == "incomplete_track_population")
-    #expect(body["verified"] as? Bool != true)
+    let verified = try #require(body["verified"] as? Bool)
+    #expect(!verified)
 }
 
 @Test func midiTrackCommandsDeclareExclusiveRefRequiredNeverRetryOperations() throws {

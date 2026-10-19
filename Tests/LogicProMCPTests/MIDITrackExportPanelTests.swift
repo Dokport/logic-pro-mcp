@@ -47,7 +47,7 @@ private struct MIDIExportPanelFixture {
         for element in [file, export, leaf, save, cancel] { b.setAttribute(element, kAXEnabledAttribute as String, true) }
         b.setChildren(panel, [name, save, cancel, browser]); b.setChildren(browser, [list])
         b.setChildren(list, [group]); b.setChildren(group, [folder]); b.setChildren(go, [path])
-        if fault == "unreadable_identifier" {
+        if fault == "unreadable_identifier" || fault == "unreadable_role" {
             let unread = b.element(18)
             b.setRole(unread, "AXButton")
             b.setChildren(panel, [name, save, cancel, browser, unread])
@@ -78,6 +78,9 @@ private struct MIDIExportPanelFixture {
             }
             return nil
         }, attributeValueResultHandler: { element, attribute in
+            if fault == "unreadable_role", CFEqual(element, b.element(18)), attribute == kAXRoleAttribute as String {
+                return .failure(.init(raw: AXError.cannotComplete.rawValue))
+            }
             if fault == "unreadable_identifier", CFEqual(element, b.element(18)), attribute == kAXIdentifierAttribute as String {
                 return .failure(.init(raw: AXError.cannotComplete.rawValue))
             }
@@ -132,7 +135,7 @@ private struct MIDIExportPanelFixture {
     #expect(f.savePresses == 1)
 }
 
-@MainActor @Test(arguments: ["preexisting", "wrong_folder", "changed_document", "replaced_panel", "keyboard_refused", "unreadable_identifier", "deeper_selected", "other_focused_window", "replaced_go", "late_panel_replaced"])
+@MainActor @Test(arguments: ["preexisting", "wrong_folder", "changed_document", "replaced_panel", "keyboard_refused", "unreadable_identifier", "unreadable_role", "deeper_selected", "other_focused_window", "replaced_go", "late_panel_replaced"])
 func midiExportPanelRefusesWrongOwnershipAndDestination(fault: String) async throws {
     let temporary = try ExportTemporaryFiles.temporaryExportFile()
     defer { ExportTemporaryFiles.cleanupTemporaryExportFile(temporary) }
@@ -140,7 +143,11 @@ func midiExportPanelRefusesWrongOwnershipAndDestination(fault: String) async thr
     do {
         try await f.driver().exportAll(to: temporary.fileURL)
         Issue.record("An unqualified panel or folder was saved")
-    } catch { }
+    } catch {
+        if fault == "unreadable_role" {
+            #expect(error as? MIDITrackExportPanel.Failure == .unavailable("save_panel_ready:panel_attribute_unreadable:AXRole:\(AXError.cannotComplete.rawValue)"))
+        }
+    }
     #expect(f.savePresses == 0)
     if fault == "replaced_go" { #expect(f.builder.attributeValue(f.app, "returns") == nil) }
     if fault == "preexisting" || fault == "replaced_panel" { #expect(f.cancelPresses == 0) }
