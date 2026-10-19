@@ -352,6 +352,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                       names: [ProjectSessionAudit.ApprovedName],
                                       source: SessionPopulationObservation.Capture,
                                       request: SessionPopulationObservation.Request) -> CapturedGoals? {
+        guard originalPolicy.inputs.isEmpty else { return nil }
         let naming = ProjectSessionAudit.normalizedMixerNaming(policy: originalPolicy, names: names,
             capture: source, request: request)
         guard naming.reasons.isEmpty else { return nil }

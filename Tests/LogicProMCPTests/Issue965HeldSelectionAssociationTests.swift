@@ -5807,8 +5807,34 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    private func assertCapturedInputIntent(capture: SessionPopulationObservation.Capture, graph: RoutingGraph,
+                                          originalHeader: AXUIElement, number: Int, inputGoal: Int) throws {
+        guard case .issued(let project)? = capture.projectIssuance else {
+            Issue.record("The actual capture must issue its project reference"); return
+        }
+        let tracks = capture.tracks.filter { $0.physicalBinding.map { CFEqual($0.header, originalHeader) } == true }
+        #expect(tracks.count == 1)
+        let track = try #require(tracks.first)
+        let reference = try #require(capture.issued?.byTrackIndex[track.id])
+        let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+            "project_ref": .string(project.rawValue),
+            "targets": .array([.object(["handle": .string("source"), "track_ref": .string(reference.rawValue)])]),
+            "inputs": .array([.object(["target": .string("source"), "bus": .int(inputGoal)])])]
+        guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+            Issue.record("The explicit input intent must parse"); return
+        }
+        let assessment = ProjectSessionAudit.assessIntent(policy: policy, capture: capture, graph: graph)
+        let findings = try #require(assessment.inputFindings)
+        #expect(findings.count == 1)
+        let finding = try #require(findings.first)
+        #expect(finding.status == (inputGoal == number ? .compliant : .violation))
+        #expect(finding.observed?.objectValue?["kind"] == .string("bus"))
+        #expect(finding.observed?.objectValue?["number"] == .int(number))
+        #expect(finding.target.trackRef == reference.rawValue)
+    }
+
     private func assertInputBusRenewal(number: Int, condition: String, graph: Bool = false, keep: Bool = false,
-                                      readOutputAfterRenewal: Bool = false) async throws {
+                                      readOutputAfterRenewal: Bool = false, inputGoal: Int? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), registry = TargetRegistry()
             let captureNow = ContinuousClock.now
@@ -6059,6 +6085,14 @@ struct Issue965HeldSelectionAssociationTests {
                 } else { nil as SessionPopulationObservation.Capture? }
                 let routing = retained.map { SessionPopulationObservation.routingGraph(capture: $0) }
                 let edges = routing?.edges.filter { $0.kind == .inputAssignment } ?? []
+                if let inputGoal {
+                    let fresh = try #require(retained)
+                    let observedGraph = try #require(routing)
+                    try assertCapturedInputIntent(capture: fresh, graph: observedGraph,
+                        originalHeader: f.headers[0], number: number, inputGoal: inputGoal)
+                    #expect(f.routingDestinationPresses == 0 && !f.routingWrongSourcePressed)
+                    return
+                }
                 if keep {
                     let snapshot = try #require(body["snapshot_id"] as? String)
                     let project = try #require((body["project"] as? [String: Any])?["project_ref"] as? String)
@@ -6670,6 +6704,12 @@ struct Issue965HeldSelectionAssociationTests {
     @Test(arguments: [1, 256])
     func registeredRoutingCapturePublishesRenewedInputReceiver(number: Int) async throws {
         try await assertInputBusRenewal(number: number, condition: "paired", graph: true)
+    }
+
+    @Test("Input intent assessment reuses the renewed original pair and checked input, not its label",
+          arguments: [1, 256])
+    func canonicalInputAssessmentUsesItsActualCapturedPair(desired: Int) async throws {
+        try await assertInputBusRenewal(number: 256, condition: "paired", graph: true, inputGoal: desired)
     }
 
     @Test("An owned input renewal retains exact source authority for later checked output acquisition")
