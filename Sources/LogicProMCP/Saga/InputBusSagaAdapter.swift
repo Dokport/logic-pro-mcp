@@ -102,6 +102,12 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                     allowsSelectedChildRailEntry: true) else { return false }
             proof = held
         }
+        guard CFEqual(proof.window, pair.track.window), CFEqual(proof.window, pair.strip.window),
+              CFEqual(proof.mixer, pair.strip.mixer),
+              proof.document.utf8.elementsEqual(pair.track.document.utf8),
+              proof.document.utf8.elementsEqual(pair.strip.document.utf8),
+              CFEqual(proof.headers[proof.originalIndex], pair.track.header),
+              proof.strips.filter({ CFEqual($0, pair.strip.strip) }).count == 1 else { return false }
         @Sendable func permitted() -> Bool {
             (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
                 && (popup.map { proof.permitsOwnedPopupRead($0) } ?? proof.permitsRead())

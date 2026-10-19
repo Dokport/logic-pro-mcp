@@ -541,6 +541,8 @@ struct Issue965HeldSelectionAssociationTests {
         var footprintDocumentRestored = false
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
         var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
+        var routingWindowListRead: (@Sendable () -> Void)?
+        var inputForeignScopeHelpReads = 0
         var routingSelection: (@Sendable (Int) -> Void)?
         var sharedThirdStrip = false
         var thirdSharesOriginalStrip = false
@@ -1012,7 +1014,7 @@ struct Issue965HeldSelectionAssociationTests {
             } else { ax = base.ax }
             let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax,
                 executeAppleScript: { _ in Issue.record("no scripts"); return .error("forbidden") },
-                onScreenWindowList: { [] }, postPopupMenuEscape: { Issue.record("no Escape") },
+                onScreenWindowList: { [self] in routingWindowListRead?(); return [] }, postPopupMenuEscape: { Issue.record("no Escape") },
                 focusedApplicationPID: { 4242 })
             return logic
         }
@@ -6355,6 +6357,7 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("An approved singleton input repair reuses its checked capture, actual writer and journal",
           arguments: ["completed", "different_display", "owned_renewal", "owned_renewal_cancel", "owned_renewal_failure",
                       "cancel", "failure", "wrong_digest", "replaced_control", "foreign_project", "changed_peer", "foreign_focus",
+                      "late_proof_document",
                       "dispatch_control", "dispatch_peer", "dispatch_focus", "late_inverse_input", "late_inverse_control",
                       "late_inverse_project", "late_inverse_output", "late_inverse_source", "no_observer", "lost_observer"])
     func canonicalInputRepairExecutesItsExactApprovedGoal(outcome: String) async throws {
@@ -6434,13 +6437,37 @@ struct Issue965HeldSelectionAssociationTests {
                     CFEqual($0, original.control) ? replacement : $0
                 })
             }
+            if outcome == "late_proof_document" {
+                let readsBeforeApply = f.inputMenuPresses
+                f.routingWindowListRead = {
+                    // Reach fresh proof construction only after the independent
+                    // checked input has left its original binding scope. Earlier
+                    // original-pair checks have already succeeded at this point.
+                    guard f.inputMenuPresses > readsBeforeApply,
+                          AXMixerStripBinding.current == nil, !f.routingLateScopeInjected else { return }
+                    f.routingLateScopeInjected = true
+                    f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                }
+                let previous = f.routingRead
+                f.routingRead = { element, attribute in
+                    previous?(element, attribute)
+                    if f.routingLateScopeInjected, attribute == kAXHelpAttribute as String,
+                       f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String == "file:///tmp/Foreign.logicx" {
+                        f.inputForeignScopeHelpReads += 1
+                    }
+                }
+            }
             let result = await apply(dependencies, params)
             let body = try #require(sharedJSONObject(sharedToolText(result)))
-            let prewriteRefusal = ["wrong_digest", "replaced_control", "foreign_project", "changed_peer", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_focus"].contains(outcome)
+            let prewriteRefusal = ["wrong_digest", "replaced_control", "foreign_project", "changed_peer", "foreign_focus", "dispatch_control", "dispatch_peer", "dispatch_focus", "late_proof_document"].contains(outcome)
             if prewriteRefusal {
                 #expect(body["state"] as? String == "C", "Actual input refusal: \(body)")
                 #expect(f.routingDestinationPresses == 0)
                 if outcome.hasPrefix("dispatch_") { #expect(f.routingLateScopeInjected) }
+                if outcome == "late_proof_document" {
+                    #expect(f.routingLateScopeInjected, "Reach the late document transition during fresh proof construction")
+                    #expect(f.inputForeignScopeHelpReads == 0, "Refuse before any raw Help read under the foreign scope")
+                }
             } else if ["cancel", "failure", "owned_renewal_cancel", "owned_renewal_failure"].contains(outcome) {
                 #expect(body["saga_state"] as? String == "fullyCompensated", "Actual canonical compensation: \(body)")
                 #expect(body["state"] as? String != "A", "A restored input does not satisfy the requested Bus 2 goal")
