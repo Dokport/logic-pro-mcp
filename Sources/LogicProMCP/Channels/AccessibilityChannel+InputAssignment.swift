@@ -119,6 +119,12 @@ extension AccessibilityChannel {
         }
         let owner = before.inputRenewal?.pair.strip ?? original
         let pair = before.inputRenewal?.pair ?? AXMixerStripBinding.outputAssociation
+        // An inverse uses the already-owned retained read, not a new acquisition.
+        // Its historical renewal has already been consumed by the name owner.
+        if ownedInverse == nil, let source = before.inputRenewal, let observer = InputBusSagaAdapter.sourceRenewalObserver,
+           !(await observer(source)) {
+            return refusal(.staleTargetReference, "Owned name continuity ended during input acquisition; no destination was pressed.")
+        }
         if before.inputRenewal != nil {
             extras["reference_reread_required"] = true
             extras["source_renewal"] = before.inputRenewal?.pair.source
@@ -343,6 +349,9 @@ extension AccessibilityChannel {
             }
             afterOwner = source.pair.strip; afterPair = source.pair
             writerRenewal = source
+            if let observer = InputBusSagaAdapter.sourceRenewalObserver, !(await observer(source)) {
+                return uncertain(.readbackUnavailable, "Owned name continuity ended after input actuation; stop dependent writes.")
+            }
             extras["source_renewal"] = source.pair.source
             extras["reference_reread_required"] = true
         }
@@ -358,6 +367,10 @@ extension AccessibilityChannel {
         }
         recordRead(after, key: "after_acquisition")
         let finalOwner = after.inputRenewal?.pair.strip ?? afterOwner
+        if let source = after.inputRenewal, let observer = InputBusSagaAdapter.sourceRenewalObserver,
+           !(await observer(source)) {
+            return uncertain(.readbackUnavailable, "Owned name continuity ended during final input acquisition; stop dependent writes.")
+        }
         if after.inputRenewal != nil {
             extras["reference_reread_required"] = true
             extras["source_renewal"] = after.inputRenewal?.pair.source
