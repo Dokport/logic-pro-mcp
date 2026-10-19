@@ -14,6 +14,9 @@ import Testing
 ///   and again beside every other enforced parameter's sample;
 /// - a request missing one required group is refused;
 /// - a request with every required group filled from samples is accepted.
+// Dispatching the samples also records traces. Serialize with tests that
+// temporarily clear or count the process-wide trace store.
+extension OperationTraceTests {
 @Suite("#957 parameter contracts against the dispatchers")
 struct Issue957ParameterContractCensusTests {
     /// A temporary Logic project package, as `isValidExistingProjectPackage` reads one.
@@ -680,4 +683,5 @@ struct Issue957ParameterContractCensusTests {
         let held = problems.isEmpty
         #expect(held, "\(problems.joined(separator: "\n"))")
     }
+}
 }
