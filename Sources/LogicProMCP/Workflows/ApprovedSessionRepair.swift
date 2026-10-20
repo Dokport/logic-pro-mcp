@@ -1658,6 +1658,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         inputFocus: AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope
     ) async -> Bool {
         guard let task = outputTask, case .bus(let bus) = task.before else { return true }
+        var stage = "captured_source", accepted = false
+        defer {
+            if !accepted { Log.info("Canonical Bus prerequisite refused at \(stage)", subsystem: "saga") }
+        }
         let pair = outputPair ?? task.pair, runtime = pair.track.runtime
         guard let source = task.capture.channelStrips.first(where: {
             $0.physicalBinding?.matches(task.pair.strip) == true
@@ -1665,12 +1669,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         switch own.state {
         case .unreadable: return false
         case .noSlot:
+            stage = "source_absence"
             guard AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax).reading == .noSlot else { return false }
         case .observedSource:
+            stage = "source_checked_baseline"
             let held = task.capture.freshPopulation?.checkedInputs.filter { $0.receiver.matches(task.pair.strip) } ?? []
             guard held.count == 1, case .physical? = held.first?.assignment,
                   let expected = held.first?.assignment,
                   let original = source.inputSlotBinding else { return false }
+            stage = "source_native_slot"
             let slot = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
             guard let control = slot.control, case .source(let label) = slot.reading,
                   label.utf8.elementsEqual(original.source.utf8),
@@ -1682,14 +1689,20 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
                 }
             }
-            guard read.inputAssignment == expected else { return false }
+            stage = "source_checked_read"
+            guard read.inputAssignment == expected else {
+                Log.info("Canonical Bus input read: assignment_present=\(read.inputAssignment != nil),slot_present=\(read.inputSlot != nil),renewed=\(read.inputRenewal != nil)", subsystem: "saga")
+                return false
+            }
             if let renewal = read.inputRenewal {
+                stage = "source_input_renewal"
                 guard renewal.original.matches(pair.strip), renewal.originalTrack.matches(task.pair.track),
                       renewal.pair.track.matches(task.pair.track), renewal.permits(runtime: runtime),
                       let renewed = read.inputSlot, renewed.owner.matches(renewal.pair.strip),
                       renewed.source.utf8.elementsEqual(original.source.utf8) else { return false }
                 outputPair = renewal.pair; outputRenewal = renewal; outputProof = renewal.observation
             } else {
+                stage = "source_input_control"
                 guard read.inputSlot?.matches(current) == true else { return false }
             }
         }
@@ -1700,6 +1713,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   let slot = receiver.inputSlotBinding,
                   RoutingGraphPublication.classifyOutputLabel(slot.source).0 == .bus,
                   RoutingGraphPublication.classifyOutputLabel(slot.source).1 == bus else { continue }
+            stage = "receiver_owner"
             guard slot.owner.matches(owner), owner.currentIndex(runtime: runtime) != nil else { return false }
             let pairs = task.capture.freshPopulation?.selectionAssociations.filter { $0.strip.matches(owner) } ?? []
             let read = await AXMixerStripBinding.$current.withValue(owner) {
@@ -1708,22 +1722,37 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
                 }
             }
+            stage = "receiver_checked_read"
             guard read.assignment == .bus(bus), read.inputRenewal == nil,
-                  read.inputSlot?.matches(slot) == true, owner.currentIndex(runtime: runtime) != nil else { return false }
-            return await projectIsCurrent(allowPendingCancellation: true)
+                  read.inputSlot?.matches(slot) == true, owner.currentIndex(runtime: runtime) != nil else {
+                Log.info("Canonical Bus receiver read: assignment_present=\(read.assignment != nil),slot_present=\(read.inputSlot != nil),renewed=\(read.inputRenewal != nil)", subsystem: "saga")
+                return false
+            }
+            stage = "final_project"
+            accepted = await projectIsCurrent(allowPendingCancellation: true)
+            return accepted
         }
+        stage = "no_retained_receiver"
         return false
     }
 
     private func outputReading() async -> OutputAssignment? {
+        var stage = "initial_context", accepted = false
+        defer {
+            if !accepted, let task = outputTask, case .bus = task.before {
+                Log.info("Canonical Bus output reading refused at \(stage)", subsystem: "saga")
+            }
+        }
         guard let task = nameFootprintTask, await projectIsCurrent(allowPendingCancellation: true),
               let target = await registry.resolve(task.reference), target.kind == .track,
               target.physicalTrack?.matches(task.pair.track) == true else { return nil }
         var pair = outputPair ?? task.pair
         let runtime = pair.track.runtime
+        stage = "initial_native_proof"
         guard let proof = heldOutputProof(pair) else { return nil }
         outputProof = proof
         if let outputTask, case .bus = outputTask.before {
+            stage = "input_prerequisites"
             let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
             guard await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { [self] in
                 // The reader publishes only its exact owned search path and
@@ -1734,9 +1763,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             // The input reader may legitimately renew this original header's
             // source. Its receipt is not a replacement for fresh native proof.
             pair = outputPair ?? task.pair
+            stage = "native_proof_after_inputs"
             guard let renewedProof = heldOutputProof(pair) else { return nil }
             outputProof = renewedProof
         }
+        stage = "checked_output_and_footprint"
         let reading = await AXMixerStripBinding.$current.withValue(pair.strip) {
             await AccessibilityChannel.getOutputObservation(runtime: runtime)
         }
@@ -1744,6 +1775,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               assignment == task.before || (outputAttempted && assignment == task.desired),
               outputFootprintHeld(pair: pair, assignment: assignment),
               await projectIsCurrent(allowPendingCancellation: true) else { return nil }
+        accepted = true
         return assignment
     }
 
