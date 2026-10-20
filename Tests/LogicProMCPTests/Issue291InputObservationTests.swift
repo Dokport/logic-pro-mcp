@@ -317,13 +317,18 @@ struct Issue291InputObservationTests {
     }
 
     @Test(arguments: ["Input slot.", "Output slot.", "Send slot."])
-    func knownSlotHelpDoesNotUseGenericCaptionAsAuthority(help: String) {
+    func knownSlotHelpDoesNotUseGenericCaptionAsAuthority(help: String) throws {
         let fixture = Fixture("audio")
         fixture.builder.setAttribute(fixture.input, kAXHelpAttribute as String, help)
         fixture.builder.setAttribute(fixture.input, kAXTitleAttribute as String, "입력")
         let read = AXLogicProElements.inputSlotRead(in: fixture.strip, runtime: fixture.runtime.ax)
         #expect(read.reading == (help == "Input slot." ? .source("Input 1") : .noSlot))
-        #expect((read.control != nil) == (help == "Input slot."))
+        if help == "Input slot." {
+            let control = try #require(read.control)
+            #expect(CFEqual(control, fixture.input))
+        } else {
+            #expect(read.control == nil)
+        }
     }
 
     @Test func legacyCodableInputIsRetainedWithoutInventingObservation() async throws {
