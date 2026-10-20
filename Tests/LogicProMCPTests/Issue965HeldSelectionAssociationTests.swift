@@ -7548,7 +7548,8 @@ struct Issue965HeldSelectionAssociationTests {
                     let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: wire,
                         names: [], capture: capture, request: retained.request, snapshotCurrent: true)
                     let preview = try #require(sharedJSONObject(plan.json))
-                    #expect(preview["executable"] as? Bool == (outcome == "keep_capture_healthy"), "\(preview)")
+                    let executable = try #require(preview["executable"] as? Bool)
+                    #expect(executable == (outcome == "keep_capture_healthy"), "\(preview)")
                     if outcome == "keep_capture_healthy" {
                         let fresh = try #require(capture.freshPopulation)
                         #expect(fresh.presentationBinding != nil && fresh.stable && fresh.uiEffects.restoration == "restored")
