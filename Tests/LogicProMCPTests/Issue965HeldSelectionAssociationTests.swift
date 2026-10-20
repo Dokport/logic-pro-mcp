@@ -585,6 +585,7 @@ struct Issue965HeldSelectionAssociationTests {
         var associationStopReads = 0
         var associationStopReadsAtWrite = 0
         var routingLateScopeInjected = false
+        var routingHeaderPresentationRefreshed = false
         var routingModeInspectionReads = 0
         var lateAssociationFocusSampled = false
         var lateAssociationFocusLanded = false
@@ -7343,7 +7344,8 @@ struct Issue965HeldSelectionAssociationTests {
                       "composed_name_execution_external_name", "composed_name_execution_caption_cancel",
                       "composed_name_execution_caption_peer_cancel", "composed_name_execution_caption_peer_changed_cancel",
                       "composed_name_execution_caption_project_cancel", "composed_name_execution_caption_control_cancel",
-                      "composed_name_execution_caption_late_control_cancel", "composed_name_execution_caption_post_read_project_cancel"])
+                      "composed_name_execution_caption_late_control_cancel", "composed_name_execution_caption_post_read_project_cancel",
+                      "composed_name_execution_caption_header_refresh_cancel"])
     func canonicalInputAndApprovedNameExecuteBothActualWriters(outcome: String) async throws {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
@@ -7718,6 +7720,11 @@ struct Issue965HeldSelectionAssociationTests {
                         if outcome.hasPrefix("composed_name_execution_caption_") {
                             #expect(b.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String == "Duplicate",
                                 "Owned name/input compensation must refresh the original Mixer presentation, not leave its old name alias")
+                            if outcome == "composed_name_execution_caption_header_refresh_cancel" {
+                                #expect(f.routingHeaderPresentationRefreshed, "Reach the original-header presentation refresh")
+                                #expect(b.makeAXRuntime().children(f.strips[1]).contains { CFEqual($0, b.element(1_291_200)) },
+                                    "An unnecessary popup must not retire the already-verified original input control")
+                            }
                             if outcome == "composed_name_execution_caption_peer_cancel" {
                                 #expect(f.inputReadReplacementPeer != nil,
                                     "Reach the actual peer retirement during the presentation popup")
@@ -8057,6 +8064,15 @@ struct Issue965HeldSelectionAssociationTests {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
+                    if outcome == "composed_name_execution_caption_header_refresh_cancel", index == 0,
+                       f.routingNameConfirms == 2, f.routingDestinationPresses == 2,
+                       AXMixerStripBinding.current == nil,
+                       Thread.callStackSymbols.contains(where: { $0.contains("renewSourceThroughOriginalHeader") }) {
+                        // A header excursion can refresh the stale presentation
+                        // without opening another input popup or replacing its control.
+                        b.setAttribute(f.strips[1], kAXDescriptionAttribute as String, "Duplicate")
+                        f.routingHeaderPresentationRefreshed = true
+                    }
                     if outcome == "composed_name_execution_caption_late_control_cancel", index == 1,
                        f.routingNameConfirms == 2, AXMixerStripBinding.current == nil, !f.routingLateScopeInjected,
                        b.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String == "Duplicate" {
@@ -8287,7 +8303,8 @@ struct Issue965HeldSelectionAssociationTests {
                         if outcome == "composed_name_execution_caption_project_cancel" {
                             b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                             f.routingLateScopeInjected = true
-                        } else if outcome == "composed_name_execution_caption_control_cancel" {
+                        } else if outcome == "composed_name_execution_caption_control_cancel"
+                            || outcome == "composed_name_execution_caption_header_refresh_cancel" {
                             b.setButton(replacementInput, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
                             b.setChildren(replacementInput, []); b.setActionNames(replacementInput, [kAXPressAction as String])
                             b.setChildren(current, b.makeAXRuntime().children(current).map { CFEqual($0, input) ? replacementInput : $0 })

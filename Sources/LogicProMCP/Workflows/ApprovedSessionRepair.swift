@@ -2226,6 +2226,37 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 // stale alias; redundant popup cycles can retire unrelated peers.
                 if !effect.stripName.utf8.elementsEqual(goal.name.utf8),
                    aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }) {
+                    // The inverse input was already independently checked. Try
+                    // the existing original-header presentation excursion first:
+                    // another input popup can retire that verified native control.
+                    let initial = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair,
+                        original: pair.strip, runtime: runtime, sourceDisposition: .survivingOriginal)
+                    guard let current = initial.source, current.pair.strip.matches(pair.strip),
+                          current.originalTrack.matches(pair.track), current.permits(runtime: runtime),
+                          let currentProof = await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: current)
+                    else { return unavailable("initial_header_observation") }
+                    nameExecutions[goal.reference, default: .init()].restored = currentProof
+                    outputPair = current.pair; outputRenewal = current; outputProof = current.observation
+                    guard outputFootprintHeld(pair: current.pair, assignment: task.sink),
+                          case .success(let trackName?) = AXValueExtractors.extractTrackNameResult(
+                            from: pair.track.header, runtime: runtime.ax),
+                          trackName.utf8.elementsEqual(goal.before.utf8),
+                          case .success(let stripName?) = AXPluginInstanceIdentity.stripNameResult(pair.strip.strip, runtime: runtime.ax),
+                          stripName.utf8.elementsEqual(effect.stripName.utf8)
+                    else { return unavailable("initial_header_footprint") }
+                    let currentAliases = aliases()
+                    let retainedInput = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
+                    guard case .source(let retainedLabel) = retainedInput.reading, let retainedControl = retainedInput.control,
+                          owned.control.matches(.init(owner: pair.strip, control: retainedControl, source: retainedLabel)),
+                          await projectIsCurrent(allowPendingCancellation: true), current.permits(runtime: runtime)
+                    else { return unavailable("initial_header_input_control") }
+                    if currentAliases.contains(where: { $0.utf8.elementsEqual(effect.stripName.utf8) }),
+                       !currentAliases.contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }) {
+                        nameExecutions[goal.reference, default: .init()].restoredInputControl = owned.control
+                        return receipt.result
+                    }
+                    guard currentAliases.contains(where: { $0.utf8.elementsEqual(goal.name.utf8) })
+                    else { return unavailable("initial_header_alias") }
                     let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
                         await AXMixerStripBinding.$outputAssociation.withValue(pair) {
                             await AccessibilityChannel.getInputBusObservation(runtime: runtime,
@@ -2250,7 +2281,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         original: pair.strip, runtime: runtime, sourceDisposition: .survivingOriginal)
                     guard let source = observed.source, source.pair.strip.matches(pair.strip),
                           source.originalTrack.matches(pair.track), source.permits(runtime: runtime),
-                          let renewed = await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source)
+                          let renewed = await ExactTrackNameAdapter.renewingOwnedCoupledName(currentProof, through: source)
                     else { return unavailable("original_header_observation") }
                     nameExecutions[goal.reference, default: .init()].restored = renewed
                     outputPair = source.pair; outputRenewal = source; outputProof = source.observation
