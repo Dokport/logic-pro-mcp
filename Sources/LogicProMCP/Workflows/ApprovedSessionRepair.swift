@@ -2197,10 +2197,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
                 liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) }, preservingFootprint: preserving,
                 afterVerifiedWrite: afterVerifiedWrite)
+            Log.info("Restored-name inverse receipt: status=\(receipt.status),proof_present=\(receipt.inverse != nil)", subsystem: "saga")
             nameExecutions[goal.reference, default: .init()].restored = receipt.inverse
             if receipt.status == .applied, let task = inputTask, let owned = restoredInput,
                goal.reference == task.reference {
-                func unavailable() -> CallTool.Result {
+                func unavailable(_ stage: String) -> CallTool.Result {
+                    Log.info("Restored-name presentation refused at \(stage)", subsystem: "saga")
                     // A later scalar name read must not turn failed native
                     // presentation/protection verification into full compensation.
                     nameExecutions[goal.reference, default: .init()].restored = nil
@@ -2213,7 +2215,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 guard let proof = receipt.inverse,
                       let effect = ExactTrackNameAdapter.recordedNameEffect(proof), effect.matches(pair),
                       pair.track.matches(goal.binding), owned.after == task.before, owned.permits(),
-                      await projectIsCurrent(allowPendingCancellation: true) else { return unavailable() }
+                      await projectIsCurrent(allowPendingCancellation: true) else { return unavailable("receipt_scope") }
                 func aliases() -> [String] {
                     [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute in
                         AXHelpers.getAttribute(pair.strip.strip, attribute as String, runtime: runtime.ax) as String?
@@ -2236,7 +2238,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           message["popup_menu_state"] as? String == "closed",
                           message["focus_restoration"] as? String == "restored",
                           pair.strip.currentIndex(runtime: runtime) != nil,
-                          await projectIsCurrent(allowPendingCancellation: true) else { return unavailable() }
+                          await projectIsCurrent(allowPendingCancellation: true) else { return unavailable("input_popup") }
                     // The exact source/control survived, but this owned popup can
                     // retire a peer in the name receipt's census. Continue through
                     // the existing original-header observer, never revive that
@@ -2246,7 +2248,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     guard let source = observed.source, source.pair.strip.matches(pair.strip),
                           source.originalTrack.matches(pair.track), source.permits(runtime: runtime),
                           let renewed = await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source)
-                    else { return unavailable() }
+                    else { return unavailable("original_header_observation") }
                     nameExecutions[goal.reference, default: .init()].restored = renewed
                     outputPair = source.pair; outputRenewal = source; outputProof = source.observation
                     guard outputFootprintHeld(pair: source.pair, assignment: task.sink),
@@ -2258,12 +2260,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           aliases().contains(where: { $0.utf8.elementsEqual(effect.stripName.utf8) }),
                           !aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }),
                           await projectIsCurrent(allowPendingCancellation: true), source.permits(runtime: runtime)
-                    else { return unavailable() }
+                    else { return unavailable("restored_footprint") }
                     let currentInput = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
                     guard case .source(let label) = currentInput.reading, let control = currentInput.control,
                           owned.control.matches(.init(owner: pair.strip, control: control, source: label)),
                           await projectIsCurrent(allowPendingCancellation: true), source.permits(runtime: runtime)
-                    else { return unavailable() }
+                    else { return unavailable("retained_input_control") }
                     nameExecutions[goal.reference, default: .init()].restoredInputControl = owned.control
                 }
             }
