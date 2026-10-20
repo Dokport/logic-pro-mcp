@@ -7342,7 +7342,8 @@ struct Issue965HeldSelectionAssociationTests {
                       "composed_name_execution_preflight_renewal_project", "composed_name_execution_preflight_renewal_header",
                       "composed_name_execution_external_name", "composed_name_execution_caption_cancel",
                       "composed_name_execution_caption_peer_cancel", "composed_name_execution_caption_peer_changed_cancel",
-                      "composed_name_execution_caption_project_cancel", "composed_name_execution_caption_control_cancel"])
+                      "composed_name_execution_caption_project_cancel", "composed_name_execution_caption_control_cancel",
+                      "composed_name_execution_caption_late_control_cancel"])
     func canonicalInputAndApprovedNameExecuteBothActualWriters(outcome: String) async throws {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
@@ -7679,7 +7680,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let compensated = outcome.hasSuffix("_cancel") || outcome.hasSuffix("_failure")
                     if compensated {
                         if ["composed_name_execution_caption_peer_changed_cancel", "composed_name_execution_caption_project_cancel",
-                            "composed_name_execution_caption_control_cancel"].contains(outcome) {
+                            "composed_name_execution_caption_control_cancel", "composed_name_execution_caption_late_control_cancel"].contains(outcome) {
                             #expect(f.routingLateScopeInjected, "Reach the actual presentation cleanup fault")
                             #expect(body["state"] as? String == "B")
                             #expect(body["saga_state"] as? String == "rollbackUncertain")
@@ -8041,6 +8042,17 @@ struct Issue965HeldSelectionAssociationTests {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
+                    if outcome == "composed_name_execution_caption_late_control_cancel", index == 1,
+                       f.routingNameConfirms == 2, AXMixerStripBinding.current == nil, !f.routingLateScopeInjected,
+                       b.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String == "Duplicate" {
+                        // The checked read and its Cancel already finished. Replace
+                        // only the input control during the new all-header observer.
+                        let replacement = b.element(1_291_215), original = b.element(1_291_200)
+                        b.setButton(replacement, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+                        b.setChildren(replacement, []); b.setActionNames(replacement, [kAXPressAction as String])
+                        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).map { CFEqual($0, original) ? replacement : $0 })
+                        f.routingLateScopeInjected = true
+                    }
                 }
             }
             let input = b.element(1_291_200), output = b.element(1_291_201)

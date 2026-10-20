@@ -737,6 +737,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         var capturedRead: ExactTrackNameAdapter.CapturedCoupledRead?
         var inverse: ExactTrackNameAdapter.OwnedInverse?
         var restored: ExactTrackNameAdapter.OwnedInverse?
+        var restoredInputControl: AXMixerInputSlotBinding?
     }
     private var nameExecutions: [TargetReference: NameExecution] = [:]
     private let document: String
@@ -1480,6 +1481,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             guard let name = observed,
                   let index = goal.binding.currentIndex(),
                   await projectIsCurrent(allowPendingCancellation: true), originalSelectionHeld() else { return nil }
+            if step.params["name"] == .string(goal.before), let original = execution?.restoredInputControl {
+                guard original.owner.currentIndex(runtime: goal.binding.runtime) != nil else { return nil }
+                // The deciding name read can itself redraw native controls.
+                // Corroborate the actual retained input after that final read.
+                let input = AXLogicProElements.inputSlotRead(in: original.owner.strip, runtime: goal.binding.runtime.ax)
+                guard case .source(let label) = input.reading, let control = input.control,
+                      original.matches(.init(owner: original.owner, control: control, source: label)) else { return nil }
+            }
             let evidence = SagaReadEvidence(readSource: .axTrackName, provenance: .liveIndependent,
                 trackIndex: index, projectReference: projectRef.rawValue, field: "name",
                 observed: .string(name), sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
@@ -2175,6 +2184,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let receipt: ExactTrackNameAdapter.Receipt
         if restoring, let proof = execution?.inverse {
             nameExecutions[goal.reference, default: .init()].inverse = nil
+            nameExecutions[goal.reference, default: .init()].restoredInputControl = nil
             receipt = await ExactTrackNameAdapter.inverse(proof, router: router,
                 liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
                 liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) }, preservingFootprint: preserving,
@@ -2186,6 +2196,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     // A later scalar name read must not turn failed native
                     // presentation/protection verification into full compensation.
                     nameExecutions[goal.reference, default: .init()].restored = nil
+                    nameExecutions[goal.reference, default: .init()].restoredInputControl = nil
                     return toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable,
                         extras: ["write_attempted": true,
                             "hint": "The restored name's original input presentation could not be independently refreshed."]), isError: true)
@@ -2240,6 +2251,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           !aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }),
                           await projectIsCurrent(allowPendingCancellation: true), source.permits(runtime: runtime)
                     else { return unavailable() }
+                    let currentInput = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
+                    guard case .source(let label) = currentInput.reading, let control = currentInput.control,
+                          owned.control.matches(.init(owner: pair.strip, control: control, source: label)),
+                          await projectIsCurrent(allowPendingCancellation: true), source.permits(runtime: runtime)
+                    else { return unavailable() }
+                    nameExecutions[goal.reference, default: .init()].restoredInputControl = owned.control
                 }
             }
         } else {
