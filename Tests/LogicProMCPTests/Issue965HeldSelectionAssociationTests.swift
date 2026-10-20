@@ -1176,7 +1176,7 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("Bus departure reuses the exact source, protected footprint and conditional Bus inverse",
-          arguments: ["forward", "stereo", "cancel", "late_peer", "late_project", "post_write_loss", "ack_only", "newer", "retired", "physical_input", "physical_cancel", "changed_source_input", "changed_receiver_input", "misleading_receiver"])
+          arguments: ["forward", "stereo", "cancel", "late_peer", "late_project", "post_write_loss", "ack_only", "newer", "retired", "physical_input", "physical_cancel", "changed_source_input", "changed_receiver_input", "misleading_receiver", "popup_source", "popup_receiver"])
     func canonicalBusDepartureExecutesOnlyItsCapturedOutput(outcome: String) async throws {
         try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_" + outcome)
     }
@@ -1439,12 +1439,13 @@ struct Issue965HeldSelectionAssociationTests {
             : !noOutput ? profile : profile == "canonical_no_output" ? "forward"
             : String(profile.dropFirst("canonical_no_output_".count))
         let prerequisiteFault = executingBusDeparture && outputMode.hasPrefix("prereq_")
+        let inputPopupFocus = executingBusDeparture && outputMode.hasPrefix("popup_")
         let physicalBusInput = busDeparture == "physical_input" || (executingBusDeparture
             && (["physical_input", "physical_cancel", "changed_source_input"].contains(outputMode)
-                || outputMode == "prereq_physical_editor"))
+                || outputMode == "prereq_physical_editor" || outputMode == "popup_source"))
         let changedBusInput = executingBusDeparture && ["changed_source_input", "changed_receiver_input"].contains(outputMode)
         let misleadingReceiver = executingBusDeparture && outputMode == "misleading_receiver"
-        let mode = physicalBusInput || changedBusInput ? (outputMode == "physical_input" ? "forward" : "cancel")
+        let mode = inputPopupFocus ? "forward" : physicalBusInput || changedBusInput ? (outputMode == "physical_input" ? "forward" : "cancel")
             : outputMode.hasPrefix("return_late_") ? String(outputMode.dropFirst("return_".count)) : outputMode
         let destinationLeafLabel = noOutput ? "No Output" : "Output 3-4"
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
@@ -1624,6 +1625,13 @@ struct Issue965HeldSelectionAssociationTests {
                 let sourceBusInput = f.builder.element(1_973_314)
                 let inputParent = f.builder.element(1_973_315), inputMenu = f.builder.element(1_973_316)
                 let physicalInput = f.builder.element(1_973_317)
+                let inputSearch = f.builder.element(1_973_320)
+                if inputPopupFocus {
+                    f.builder.setRole(inputSearch, kAXTextFieldRole as String)
+                    f.builder.setAttribute(inputSearch, kAXValueAttribute as String, "")
+                    f.builder.setAttribute(inputSearch, kAXWindowAttribute as String, f.window)
+                    f.builder.setChildren(inputSearch, [])
+                }
                 f.builder.setRole(echo, kAXMenuItemRole as String)
                 f.builder.setAttribute(echo, "AXMenuItemMarkChar", "✓")
                 f.builder.setChildren(echo, [])
@@ -1879,6 +1887,10 @@ struct Issue965HeldSelectionAssociationTests {
                         f.builder.setAttribute(busTwo, "AXMenuItemMarkChar", wrongBus ? "" : "✓")
                         f.builder.setAttribute(f.builder.element(1_973_318), "AXMenuItemMarkChar", wrongBus ? "✓" : "")
                         f.builder.setChildren(root, [echo, busParent])
+                        if outputMode == "popup_receiver" {
+                            f.builder.setChildren(root, [inputSearch, echo, busParent])
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, inputSearch)
+                        }
                         f.builder.setChildren(f.mixer, [f.strips[0], f.routingReplacement ?? f.strips[1], root])
                         f.inputMenuPresses += 1
                         return true
@@ -1893,6 +1905,10 @@ struct Issue965HeldSelectionAssociationTests {
                         f.builder.setAttribute(physicalInput, "AXMenuItemMarkChar", physical ? "✓" : "")
                         f.builder.setAttribute(f.builder.element(1_973_318), "AXMenuItemMarkChar", "")
                         f.builder.setChildren(root, [echo] + (physicalBusInput ? [inputParent] : [parent]) + [busParent])
+                        if outputMode == "popup_source" {
+                            f.builder.setChildren(root, [inputSearch, echo, inputParent, busParent])
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, inputSearch)
+                        }
                         f.builder.setChildren(f.mixer, [f.strips[0], f.strips[1], root])
                         f.inputMenuPresses += 1
                         return true
@@ -1948,6 +1964,9 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
                         f.routingNativePopupFrame = nil
+                        if inputPopupFocus {
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
+                        }
                         if nativeApplicationFocus {
                             f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
                         }

@@ -1654,7 +1654,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     /// Bus restoration needs current checked prerequisites, not capture-time
     /// captions. These read-only menus run before forward/inverse ownership is
     /// established; neither an input write nor receiver creation is authorized.
-    private func busDepartureInputsCurrent() async -> Bool {
+    private func busDepartureInputsCurrent(
+        inputFocus: AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope
+    ) async -> Bool {
         guard let task = outputTask, case .bus(let bus) = task.before else { return true }
         let pair = outputPair ?? task.pair, runtime = pair.track.runtime
         guard let source = task.capture.channelStrips.first(where: {
@@ -1676,7 +1678,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             let current = AXMixerInputSlotBinding(owner: pair.strip, control: control, source: label)
             let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
                 await AXMixerStripBinding.$outputAssociation.withValue(pair) {
-                    await AccessibilityChannel.getCheckedInputObservation(runtime: runtime)
+                    await AccessibilityChannel.getCheckedInputObservation(runtime: runtime,
+                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
                 }
             }
             guard read.inputAssignment == expected else { return false }
@@ -1701,7 +1704,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             let pairs = task.capture.freshPopulation?.selectionAssociations.filter { $0.strip.matches(owner) } ?? []
             let read = await AXMixerStripBinding.$current.withValue(owner) {
                 await AXMixerStripBinding.$outputAssociation.withValue(pairs.count == 1 ? pairs.first : nil) {
-                    await AccessibilityChannel.getInputBusObservation(runtime: runtime, requiringOriginalInputControl: slot)
+                    await AccessibilityChannel.getInputBusObservation(runtime: runtime, requiringOriginalInputControl: slot,
+                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
                 }
             }
             guard read.assignment == .bus(bus), read.inputRenewal == nil,
@@ -1720,9 +1724,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard let proof = heldOutputProof(pair) else { return nil }
         outputProof = proof
         if let outputTask, case .bus = outputTask.before {
+            let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
             guard await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { [self] in
-                outputProof?.permitsRead() != true
-            }), operation: { [self] in await busDepartureInputsCurrent() }) else { return nil }
+                // The reader publishes only its exact owned search path and
+                // clears it on exit. Check that temporary custody before an
+                // original-focus proof that irreversibly records focus loss.
+                !inputFocus.permits() && outputProof?.permitsRead() != true
+            }), operation: { [self] in await busDepartureInputsCurrent(inputFocus: inputFocus) }) else { return nil }
             // The input reader may legitimately renew this original header's
             // source. Its receipt is not a replacement for fresh native proof.
             pair = outputPair ?? task.pair
