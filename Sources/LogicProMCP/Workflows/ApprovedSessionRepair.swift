@@ -716,9 +716,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private var outputPair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var outputRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
     private var outputProof: AccessibilityChannel.HeldSelectionAssociation?
+    private var outputOriginalMixerGeometry: AccessibilityChannel.HeldSelectionAssociation.MixerViewportGeometry?
+    private var outputGeometrySampled = false
     private var outputAttempted = false
     private var outputApplied = false
     private var outputInverseConsumed = false
+    private var outputPeerReadbackUnavailable = false
     private var sortSnapshot: TargetRegistrySnapshot?
     private var sortProject: TargetReference?
     private var sortApplied = false
@@ -1507,6 +1510,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                      ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil,
                                      ownedStripNamePreview: [String]? = nil,
                                      verifiedNameEffect: ExactTrackNameAdapter.VerifiedNameEffect? = nil) -> Bool {
+        outputPeerReadbackUnavailable = false
         var stage = "retained_task", accepted = false
         defer {
             if !accepted, popup != nil {
@@ -1646,16 +1650,39 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             // Compare already-sampled schema fields only; no extra host reads
             // or value/name disclosure, and no acceptance change.
             var changed: [String] = []
+            var onlyMissingPeerRouting = expectedTracks == currentTracks
+            var missingPeerRouting = false
             for (domain, oldData, newData) in [("tracks", expectedTracks, currentTracks), ("strips", expectedStrips, currentStrips)] {
                 guard let old = try? JSONSerialization.jsonObject(with: oldData) as? [[String: Any]],
-                      let new = try? JSONSerialization.jsonObject(with: newData) as? [[String: Any]] else { continue }
-                for (row, pair) in zip(old, new).enumerated() where changed.count < 4 {
+                      let new = try? JSONSerialization.jsonObject(with: newData) as? [[String: Any]] else {
+                    onlyMissingPeerRouting = false; continue
+                }
+                for (row, pair) in zip(old, new).enumerated() {
                     let keys = Set(pair.0.keys).union(pair.1.keys).filter {
                         (pair.0[$0] as? NSObject)?.isEqual(pair.1[$0]) != true
                     }.sorted()
-                    if !keys.isEmpty { changed.append("\(domain)[\(row)]:\(keys.joined(separator: ","))") }
+                    if !keys.isEmpty {
+                        if changed.count < 4 { changed.append("\(domain)[\(row)]:\(keys.joined(separator: ","))") }
+                        missingPeerRouting = true
+                        guard domain == "strips", row != index else { onlyMissingPeerRouting = false; continue }
+                        for key in keys {
+                            switch key {
+                            case "output":
+                                if expected[row].output.flatMap(OutputAssignment.observed(slotLabel:)) == nil
+                                    || strips[row].output.flatMap(OutputAssignment.observed(slotLabel:)) != nil {
+                                    onlyMissingPeerRouting = false
+                                }
+                            case "input", "input_observation":
+                                if expected[row].input == nil || strips[row].input != nil { onlyMissingPeerRouting = false }
+                            default: onlyMissingPeerRouting = false
+                            }
+                        }
+                    }
                 }
             }
+            // This permits only another owned UI observation, never acceptance
+            // of unknown fields. Every captured value must match on the reread.
+            outputPeerReadbackUnavailable = missingPeerRouting && onlyMissingPeerRouting
             Log.info("Canonical output footprint fields changed: \(changed.joined(separator: ";"))", subsystem: "saga")
             return false
         }
@@ -1810,6 +1837,18 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         stage = "initial_native_proof"
         guard let proof = heldOutputProof(pair) else { return nil }
         outputProof = proof
+        if !outputGeometrySampled, outputTask?.prerequisiteBuses.isEmpty == false, changedNameGoals.isEmpty {
+            // Earlier owned input excursions may move the custom Mixer canvas.
+            // Its first native geometry remains the restoration duty, never a
+            // peer identity or a later replacement baseline. An unread first
+            // sample stays unavailable rather than being retried after a move.
+            outputGeometrySampled = true
+            outputOriginalMixerGeometry = proof.observedMixerViewportGeometry()
+            if let first = outputOriginalMixerGeometry?.frames.first {
+                Log.info("Canonical output restoration baseline retained: first_x=\(first.minX)", subsystem: "saga")
+            }
+        }
+        let originalMixerGeometry = outputOriginalMixerGeometry
         if let outputTask, !outputTask.prerequisiteBuses.isEmpty {
             stage = "input_prerequisites"
             let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
@@ -1831,8 +1870,30 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             await AccessibilityChannel.getOutputObservation(runtime: runtime)
         }
         guard let assignment = reading.assignment,
-              assignment == task.before || (outputAttempted && assignment == task.desired),
-              outputFootprintHeld(pair: pair, assignment: assignment),
+              assignment == task.before || (outputAttempted && assignment == task.desired) else { return nil }
+        if !outputFootprintHeld(pair: pair, assignment: assignment) {
+            stage = "unavailable_peer_recovery"
+            guard outputPeerReadbackUnavailable, changedNameGoals.isEmpty,
+                  let originalMixerGeometry, let currentProof = outputProof,
+                  await currentProof.recoverMixerReadability(restoring: originalMixerGeometry,
+                    referenceIsCurrent: { [self] in
+                        guard await projectIsCurrent(allowPendingCancellation: true),
+                              let target = await registry.resolve(task.reference), target.kind == .track,
+                              target.physicalTrack?.matches(task.pair.track) == true else { return false }
+                        return true
+                    }, stoppingWhen: {
+                        (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil
+                    }) else { return nil }
+            // Recovery is another causal UI excursion. Its refreshed captions
+            // cannot authenticate the checkmark sampled before that excursion.
+            stage = "checked_output_after_recovery"
+            let recoveredReading = await AXMixerStripBinding.$current.withValue(pair.strip) {
+                await AccessibilityChannel.getOutputObservation(runtime: runtime)
+            }
+            guard recoveredReading.assignment == assignment,
+                  outputFootprintHeld(pair: pair, assignment: assignment) else { return nil }
+        }
+        guard
               await projectIsCurrent(allowPendingCancellation: true) else { return nil }
         accepted = true
         return assignment

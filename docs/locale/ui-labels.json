@@ -3900,6 +3900,61 @@
     "zh-TW": "derived"
    }
   },
+  "mixerScrollToMenuItem": {
+   "canonical": "Scroll To",
+   "variants": [
+    "다음으로 스크롤",
+    "スクロール",
+    "Scrollen zu",
+    "Desplazar vista a",
+    "Glisser vers",
+    "Scorri fino a",
+    "Rolar para",
+    "滚动到",
+    "捲動到"
+   ],
+   "rationale": "The Scroll To submenu under the retained Mixer's own View button; it grants viewport navigation, not channel or routing authority.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "derived",
+    "ko-KR": "derived",
+    "ja-JP": "derived",
+    "de-DE": "derived",
+    "es-ES": "derived",
+    "fr-FR": "derived",
+    "it-IT": "derived",
+    "pt-BR": "derived",
+    "zh-CN": "derived",
+    "zh-TW": "derived"
+   }
+  },
+  "mixerScrollToOutputsMenuItem": {
+   "canonical": "Outputs",
+   "variants": [
+    "출력",
+    "出力",
+    "Salidas",
+    "Sorties",
+    "Uscite",
+    "Saídas",
+    "输出",
+    "輸出"
+   ],
+   "rationale": "The Outputs leaf under the retained Mixer's own Scroll To submenu, distinct from the singular Output type filter.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "derived",
+    "ko-KR": "derived",
+    "ja-JP": "derived",
+    "de-DE": "derived",
+    "es-ES": "derived",
+    "fr-FR": "derived",
+    "it-IT": "derived",
+    "pt-BR": "derived",
+    "zh-CN": "derived",
+    "zh-TW": "derived"
+   }
+  },
   "mixerStripNameField": {
    "canonical": "Name",
    "variants": [

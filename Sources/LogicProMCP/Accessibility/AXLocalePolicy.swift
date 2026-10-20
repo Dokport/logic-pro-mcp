@@ -2415,6 +2415,18 @@ enum AXLocalePolicy {
         rationale: "Mixer-own type-filter checkbox description, not an input or instrument slot.",
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Audio#value"
     )
+    static let mixerScrollToMenuItem = LabelSet(
+        canonical: "Scroll To",
+        variants: ["다음으로 스크롤", "スクロール", "Scrollen zu", "Desplazar vista a", "Glisser vers", "Scorri fino a", "Rolar para", "滚动到", "捲動到"],
+        rationale: "The Scroll To submenu under the retained Mixer's own View button; it grants viewport navigation, not channel or routing authority.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Scroll%20To#value"
+    )
+    static let mixerScrollToOutputsMenuItem = LabelSet(
+        canonical: "Outputs",
+        variants: ["출력", "出力", "Salidas", "Sorties", "Uscite", "Saídas", "输出", "輸出"],
+        rationale: "The Outputs leaf under the retained Mixer's own Scroll To submenu, distinct from the singular Output type filter.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Outputs#value"
+    )
     static let mixerTypeFilterInstrument = LabelSet(
         canonical: "Inst", variants: ["악기", "Inst.", "Instr", "Strum.", "Instrumento", "乐器", "樂器"],
         rationale: "Mixer-own instrument type-filter checkbox description.",
@@ -3748,7 +3760,7 @@ enum AXLocalePolicy {
         mixerInspectorContext,
         mixerNamedElement,
         controlBarMixerToggle, mixerCreateAuxiliaryChannelStrip, mixerAppendTracksForSelectedStrips, mixerChannelModeControl, mixerGainReductionMeterControl,
-        mixerPresentationSingle, mixerPresentationTracks, mixerPresentationAll,
+        mixerPresentationSingle, mixerPresentationTracks, mixerPresentationAll, mixerScrollToMenuItem, mixerScrollToOutputsMenuItem,
         mixerTypeFilterAudio, mixerTypeFilterInstrument, mixerTypeFilterAux, mixerTypeFilterBus,
         mixerTypeFilterInput, mixerTypeFilterOutput, mixerTypeFilterMasterVCA, mixerTypeFilterMIDI,
         sliderSendHint,

@@ -515,6 +515,9 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDocumentReadsAtFirstNameWrite: Int?
         var routingDocumentReadsAtFirstNameConfirm: Int?
         var routingDestinationPresses = 0
+        var scrollToChangedOutput = false
+        var scrollToViewportDriftEnabled = false
+        var scrollToViewportShifted = false
         var routingModePresses = 0
         var routingBypassPresses = 0
         var routingBypassMenuOpens = 0
@@ -1244,6 +1247,194 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_" + outcome)
     }
 
+    @Test("A post-write input Cancel must recover retained offscreen observations before final verification")
+    func canonicalBusReplacementRecoversOffscreenReadback() async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer")
+    }
+
+    @Test("Scroll To recovery cannot reuse a checked output sampled before its navigation")
+    func canonicalBusRecoveryRenewsTheCheckedOutput() async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer_checked_change")
+    }
+
+    @Test("Recovery restores the first viewport, not a later owned input-menu displacement")
+    func canonicalBusRecoveryRetainsItsFirstViewport() async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer_intermediate_viewport")
+    }
+
+    @Test("Explicitly scoped native Mixer Scroll To preserves its original physical viewport",
+          .enabled(if: ProcessInfo.processInfo.environment["LOGIC_MCP_NATIVE_MIXER_RECOVERY_PROJECT"] != nil))
+    func nativeMixerScrollToRetainsItsObservedOwners() async throws {
+        let expectedPath = try #require(ProcessInfo.processInfo.environment["LOGIC_MCP_NATIVE_MIXER_RECOVERY_PROJECT"])
+        try #require(!expectedPath.isEmpty && AXIsProcessTrusted(), "Native AX permission and an explicit project are required")
+        let runtime = AXLogicProElements.Runtime.production
+        let app = try #require(AXLogicProElements.appRoot(runtime: runtime))
+        let window: AXUIElement = try #require(AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: runtime.ax))
+        let observedDocument = try #require(AXHelpers.getAttribute(window, kAXDocumentAttribute as String, runtime: runtime.ax) as String?)
+        let observedURL = try #require(URL(string: observedDocument))
+        try #require(observedURL.isFileURL && observedURL.standardizedFileURL.path == URL(fileURLWithPath: expectedPath).standardizedFileURL.path,
+                     "Refuse a different project before any navigation")
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "native-owned-mixer-scroll"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+            deadline: ContinuousClock.now.advanced(by: .seconds(45)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let geometry = try #require(held.observedMixerViewportGeometry())
+            let recovered = await held.recoverMixerReadability(restoring: geometry,
+                referenceIsCurrent: { true }, stoppingWhen: { !gate.stillOwns(claim) })
+            #expect(recovered)
+            #expect(held.effects.restoration == "restored")
+            #expect(held.effects.changed == ["mixer_scroll_to_output", "mixer_scroll_to_audio"])
+            #expect(held.permitsRead())
+        }
+    }
+
+    @Test("Scroll To actions renew native scope after deciding reads and clean up a failed opening",
+          arguments: ["late_open", "late_leaf", "failed_open", "delayed_root", "native_container_parent",
+                      "foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "late_competing_root",
+                      "native_english_outputs", "native_korean_outputs", "native_japanese_outputs", "singular_filter_output"])
+    func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
+        final class Probe: @unchecked Sendable {
+            var viewParentReads = 0
+            var viewChildrenReads = 0
+            var firstOpenParentRead: Int?
+            var firstLeafChildrenRead: Int?
+            var injected = false
+            var foreignActions = 0
+            var cancels = 0
+            var leafPresses = 0
+            var rootAvailableAt: ContinuousClock.Instant?
+        }
+        func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false) async throws -> Probe {
+            let f = try Fixture(), gate = LogicMutationGate(), probe = Probe()
+            defer { try? FileManager.default.removeItem(at: f.bundle) }
+            for (index, strip) in f.strips.enumerated() {
+                f.builder.setFrame(strip, x: CGFloat(index) * 100, y: 100, width: 100, height: 300)
+            }
+            let view = f.builder.element(1_975_500), root = f.builder.element(1_975_501)
+            let scroll = f.builder.element(1_975_502), submenu = f.builder.element(1_975_503)
+            let output = f.builder.element(1_975_504), audio = f.builder.element(1_975_505)
+            let controls = f.builder.element(1_975_506), toolbar = f.builder.element(1_975_507)
+            let foreignControls = f.builder.element(1_975_508), competingRoot = f.builder.element(1_975_509)
+            f.builder.setRole(controls, kAXGroupRole as String); f.builder.setRole(toolbar, kAXGroupRole as String)
+            f.builder.setRole(foreignControls, kAXGroupRole as String); f.builder.setChildren(foreignControls, [])
+            f.builder.setRole(competingRoot, kAXMenuRole as String); f.builder.setChildren(competingRoot, [])
+            for (element, role, title) in [
+                (view, kAXMenuButtonRole, AXLocalePolicy.viewMenuBar.canonical),
+                (root, kAXMenuRole, ""),
+                (scroll, kAXMenuItemRole, AXLocalePolicy.mixerScrollToMenuItem.canonical),
+                (submenu, kAXMenuRole, ""),
+                (output, kAXMenuItemRole, fault == "native_english_outputs" ? "Outputs"
+                    : fault == "native_korean_outputs" ? "출력"
+                    : fault == "native_japanese_outputs" ? "出力"
+                    : fault == "singular_filter_output" ? "Output" : AXLocalePolicy.mixerScrollToOutputsMenuItem.canonical),
+                (audio, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterAudio.canonical)
+            ] {
+                f.builder.setRole(element, role as String)
+                f.builder.setAttribute(element, kAXTitleAttribute as String, title)
+                f.builder.setAttribute(element, kAXEnabledAttribute as String, true)
+                f.builder.setAttribute(element, kAXWindowAttribute as String, f.window)
+                f.builder.setActionNames(element, [kAXPressAction as String, kAXCancelAction as String])
+            }
+            f.builder.setChildren(output, []); f.builder.setChildren(audio, [])
+            f.builder.setChildren(submenu, [output, audio]); f.builder.setChildren(scroll, [submenu])
+            f.builder.setChildren(root, [scroll]); f.builder.setChildren(view, [])
+            f.builder.setChildren(toolbar, [view]); f.builder.setChildren(controls, [toolbar])
+            f.builder.setChildren(f.window, f.builder.makeAXRuntime().children(f.window) + [controls, foreignControls])
+            let claim = try #require(gate.tryAcquire(operation: "scroll-to-readback"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            try await OperationTraceContext.$current.withValue(context) {
+                let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                    logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+                let geometry = try #require(held.observedMixerViewportGeometry())
+                f.routingReadResult = { element, attribute in
+                    if fault == "unread_parent", CFEqual(element, root), attribute == kAXParentAttribute as String {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                    return nil
+                }
+                f.routingRead = { element, attribute in
+                    if CFEqual(element, view), attribute == kAXParentAttribute as String {
+                        probe.viewParentReads += 1
+                        if probe.viewParentReads == parentFault {
+                            probe.injected = true
+                            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                    }
+                }
+                f.routingChildrenRead = { element in
+                    if CFEqual(element, view) {
+                        if let ready = probe.rootAvailableAt, ContinuousClock.now >= ready {
+                            probe.rootAvailableAt = nil
+                            f.builder.setChildren(view, [root])
+                        }
+                        probe.viewChildrenReads += 1
+                        if probe.viewChildrenReads == childrenFault {
+                            probe.injected = true
+                            if fault == "late_competing_root" {
+                                f.builder.setChildren(view, [root, competingRoot])
+                            } else {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
+                        }
+                    }
+                }
+                f.routingAction = { element, action in
+                    if f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String == "file:///tmp/Foreign.logicx" {
+                        probe.foreignActions += 1
+                    }
+                    if CFEqual(element, view), action == kAXPressAction as String {
+                        if probe.firstOpenParentRead == nil { probe.firstOpenParentRead = probe.viewParentReads }
+                        if fault == "delayed_root" {
+                            probe.rootAvailableAt = ContinuousClock.now.advanced(by: .milliseconds(160))
+                            f.builder.setChildren(view, []); return true
+                        }
+                        f.builder.setChildren(view, [root])
+                        if fault == "native_container_parent" { f.builder.setAttribute(root, kAXParentAttribute as String, controls) }
+                        if fault == "foreign_container_parent" { f.builder.setAttribute(root, kAXParentAttribute as String, foreignControls) }
+                        if fault == "wrong_depth_parent" { f.builder.setAttribute(root, kAXParentAttribute as String, toolbar) }
+                        if fault == "missing_parent" { f.builder.removeAttribute(root, kAXParentAttribute as String) }
+                        return !failedOpen
+                    }
+                    if CFEqual(element, root), action == kAXCancelAction as String {
+                        probe.cancels += 1; f.builder.setChildren(view, []); return true
+                    }
+                    if CFEqual(element, output) || CFEqual(element, audio), action == kAXPressAction as String {
+                        probe.leafPresses += 1
+                        if probe.firstLeafChildrenRead == nil { probe.firstLeafChildrenRead = probe.viewChildrenReads }
+                        f.builder.setChildren(view, []); return true
+                    }
+                    return false
+                }
+                let recovered = await held.recoverMixerReadability(restoring: geometry,
+                    referenceIsCurrent: { true }, stoppingWhen: { false })
+                if parentFault != nil || childrenFault != nil {
+                    #expect(probe.injected, "Reach the actual last deciding native path/menu read")
+                    #expect(probe.foreignActions == 0, "No opening, leaf or cleanup action in a foreign document")
+                    #expect(!recovered)
+                    if fault == "late_competing_root" { #expect(probe.leafPresses == 0) }
+                } else if ["foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "singular_filter_output"].contains(fault) {
+                    #expect(!recovered)
+                    #expect(probe.leafPresses == 0)
+                } else if failedOpen {
+                    #expect(!recovered)
+                    #expect(probe.cancels == 1)
+                    #expect(f.builder.makeAXRuntime().children(view).isEmpty)
+                } else { #expect(recovered) }
+            }
+            return probe
+        }
+        let calibration = try await run()
+        if fault == "late_open" { _ = try await run(parentFault: try #require(calibration.firstOpenParentRead)) }
+        if fault == "late_leaf" { _ = try await run(childrenFault: try #require(calibration.firstLeafChildrenRead)) }
+        if fault == "late_competing_root" { _ = try await run(childrenFault: try #require(calibration.firstLeafChildrenRead)) }
+        if fault == "failed_open" { _ = try await run(failedOpen: true) }
+    }
+
     @Test("An existing Bus output goal uses the current checked receiver and owns only its conditional inverse",
           arguments: ["forward", "physical_before", "cancel", "physical_input", "physical_cancel", "popup_both_retired", "late_peer", "late_project", "external_peer"])
     func canonicalObservedExistingBusExecutes(_ outcome: String) async throws {
@@ -1714,6 +1905,33 @@ struct Issue965HeldSelectionAssociationTests {
                     return nil
                 }
                 let outputs = f.strips.indices.map { f.builder.element(1_973_100 + $0) }
+                let scrollView = f.builder.element(1_975_400), scrollRoot = f.builder.element(1_975_401)
+                let scrollTo = f.builder.element(1_975_402), scrollSubmenu = f.builder.element(1_975_403)
+                let scrollOutput = f.builder.element(1_975_404), scrollAudio = f.builder.element(1_975_405)
+                if mode.hasPrefix("offscreen_peer") {
+                    for (index, strip) in f.strips.enumerated() {
+                        f.builder.setFrame(strip, x: CGFloat(index) * 100, y: 100, width: 100, height: 300)
+                    }
+                    for (element, role, title) in [
+                        (scrollView, kAXMenuButtonRole, AXLocalePolicy.viewMenuBar.canonical),
+                        (scrollRoot, kAXMenuRole, ""),
+                        (scrollTo, kAXMenuItemRole, AXLocalePolicy.mixerScrollToMenuItem.canonical),
+                        (scrollSubmenu, kAXMenuRole, ""),
+                        (scrollOutput, kAXMenuItemRole, AXLocalePolicy.mixerScrollToOutputsMenuItem.canonical),
+                        (scrollAudio, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterAudio.canonical)
+                    ] {
+                        f.builder.setRole(element, role as String)
+                        f.builder.setAttribute(element, kAXTitleAttribute as String, title)
+                        f.builder.setAttribute(element, kAXEnabledAttribute as String, true)
+                        f.builder.setAttribute(element, kAXWindowAttribute as String, f.window)
+                        f.builder.setActionNames(element, [kAXPressAction as String, kAXCancelAction as String])
+                    }
+                    f.builder.setChildren(scrollSubmenu, [scrollOutput, scrollAudio])
+                    f.builder.setChildren(scrollTo, [scrollSubmenu])
+                    f.builder.setChildren(scrollRoot, [scrollTo])
+                    f.builder.setChildren(scrollView, [])
+                    f.builder.setChildren(outer, f.builder.makeAXRuntime().children(outer) + [scrollView])
+                }
                 let root = f.builder.element(1_973_110), parent = f.builder.element(1_973_111)
                 let submenu = f.builder.element(1_973_112), stereo = f.builder.element(1_973_113)
                 let physical = f.builder.element(1_973_114)
@@ -1940,6 +2158,26 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 f.routingAction = { element, action in
+                    if mode.hasPrefix("offscreen_peer"), action == kAXPressAction as String {
+                        if CFEqual(element, scrollView) {
+                            f.builder.setChildren(scrollView, [scrollRoot])
+                            return true
+                        }
+                        if CFEqual(element, scrollOutput) || CFEqual(element, scrollAudio) {
+                            // Scroll exposes the unchanged host value; this is
+                            // not a destination leaf or another audio write.
+                            f.builder.setAttribute(outputs[3], kAXDescriptionAttribute as String, "Stereo Output")
+                            if mode == "offscreen_peer_checked_change", CFEqual(element, scrollAudio) {
+                                f.scrollToChangedOutput = true
+                            }
+                            let offset: CGFloat = CFEqual(element, scrollOutput) ? -100 : 0
+                            for (index, strip) in f.strips.enumerated() {
+                                f.builder.setFrame(strip, x: CGFloat(index) * 100 + offset, y: 100, width: 100, height: 300)
+                            }
+                            f.builder.setChildren(scrollView, [])
+                            return true
+                        }
+                    }
                     if menuOverlay, CFEqual(element, rename), action == kAXPressAction as String {
                         f.routingMenuNameOpens += 1
                         f.builder.setAttribute(menuEditor, kAXValueAttribute as String,
@@ -2059,8 +2297,9 @@ struct Issue965HeldSelectionAssociationTests {
                         f.builder.setAttribute(stereo, "AXMenuItemMarkChar", label == "Stereo Output" ? "✓" : "")
                         f.builder.setAttribute(physical, "AXMenuItemMarkChar", label == destinationLeafLabel ? "✓" : "")
                         if busDeparture != nil {
-                            f.builder.setAttribute(busTwo, "AXMenuItemMarkChar", label == "Bus 2" ? "✓" : "")
-                            f.builder.setAttribute(f.builder.element(1_973_318), "AXMenuItemMarkChar", label == "Bus 3" ? "✓" : "")
+                            let checked = index == 1 && f.scrollToChangedOutput ? "Bus 3" : label
+                            f.builder.setAttribute(busTwo, "AXMenuItemMarkChar", checked == "Bus 2" ? "✓" : "")
+                            f.builder.setAttribute(f.builder.element(1_973_318), "AXMenuItemMarkChar", checked == "Bus 3" ? "✓" : "")
                         }
                         if noOutput, label == "No Output" {
                             // Model the qualified host's neutral popup: it is
@@ -2085,6 +2324,24 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
                         f.routingNativePopupFrame = nil
+                        if mode == "offscreen_peer_intermediate_viewport", f.scrollToViewportDriftEnabled,
+                           f.routingDestinationPresses == 0,
+                           f.routingOpenedOutputIndex == nil {
+                            // A native input excursion can shift the viewport
+                            // before a later source read needs peer recovery.
+                            for (index, strip) in f.strips.enumerated() {
+                                f.builder.setFrame(strip, x: CGFloat(index) * 100 - 100, y: 100, width: 100, height: 300)
+                            }
+                            f.scrollToViewportShifted = true
+                        }
+                        if mode.hasPrefix("offscreen_peer"), f.routingDestinationPresses == 1,
+                           f.routingOpenedOutputIndex == nil {
+                            // Native counterexample: input-popup Cancel retires
+                            // the old presentation and an offscreen peer loses
+                            // its rendered slot value, without an audio write.
+                            f.routingLateScopeInjected = true
+                            f.builder.setAttribute(outputs[3], kAXDescriptionAttribute as String, "Output")
+                        }
                         if ["popup_source_retired", "popup_both_retired"].contains(outputMode), f.inputMenuPresses > 2, f.routingReplacement == nil {
                             let replacement = f.builder.element(1_973_140)
                             f.builder.setRole(replacement, kAXLayoutItemRole as String)
@@ -2175,6 +2432,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let id = try #require(inspected["snapshot_id"] as? String)
                 let retained = try #require(await cache.retainedInspection(id: id))
                 let capture = retained.capture
+                if mode == "offscreen_peer_intermediate_viewport" { f.scrollToViewportDriftEnabled = true }
                 let stable = try #require(capture.freshPopulation?.stable)
                 #expect(stable)
                 if ["known_plugin", "unread_plugin", "unread_plugin_bypass"].contains(mode) {
@@ -2579,6 +2837,25 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if mode.hasPrefix("coupled_menu_overlay_census"), ["census", "census_second_failure"].contains(censusMode) {
                     #expect(f.routingOutputChannelStates.first == "A", "Reach the verified real channel before judging the owned-name continuation")
+                }
+                if mode.hasPrefix("offscreen_peer") {
+                    #expect(f.routingLateScopeInjected, "Reach the actual post-write input Cancel before judging recovery")
+                    #expect(f.routingDestinationPresses == 1, "An unreadable peer does not authorize a guessed inverse")
+                    if mode == "offscreen_peer_intermediate_viewport" {
+                        #expect(f.scrollToViewportShifted, "Reach the owned input displacement after the capture")
+                        let position = try #require(AXHelpers.getPosition(f.strips[0], runtime: f.logic().ax))
+                        #expect(position.x == 0, "Restoration belongs to the first viewport, not the later displacement")
+                    }
+                    let verified = try #require(result["verified"] as? Bool)
+                    if mode == "offscreen_peer_checked_change" {
+                        #expect(f.scrollToChangedOutput)
+                        #expect(result["saga_state"] as? String != "completed", "Do not publish the old pre-navigation checkmark")
+                        #expect(!verified)
+                    } else {
+                        #expect(result["saga_state"] as? String == "completed", "The retained peer needs owned re-exposure and fresh final readback")
+                        #expect(verified)
+                    }
+                    return
                 }
                 if composed {
                     if ["census_scalar", "census_input", "census_send", "census_plugin", "census_header", "census_project"].contains(censusMode) {
