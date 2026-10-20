@@ -2819,13 +2819,14 @@ struct Issue965HeldSelectionAssociationTests {
                 if mode.hasPrefix("offscreen_peer") {
                     #expect(f.routingLateScopeInjected, "Reach the actual post-write input Cancel before judging recovery")
                     #expect(f.routingDestinationPresses == 1, "An unreadable peer does not authorize a guessed inverse")
+                    let verified = try #require(result["verified"] as? Bool)
                     if mode == "offscreen_peer_checked_change" {
                         #expect(f.scrollToChangedOutput)
                         #expect(result["saga_state"] as? String != "completed", "Do not publish the old pre-navigation checkmark")
-                        #expect(result["verified"] as? Bool == false)
+                        #expect(!verified)
                     } else {
                         #expect(result["saga_state"] as? String == "completed", "The retained peer needs owned re-exposure and fresh final readback")
-                        #expect(result["verified"] as? Bool == true)
+                        #expect(verified)
                     }
                     return
                 }
