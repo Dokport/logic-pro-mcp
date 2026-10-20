@@ -716,6 +716,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private var outputPair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var outputRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
     private var outputProof: AccessibilityChannel.HeldSelectionAssociation?
+    private var outputOriginalMixerGeometry: AccessibilityChannel.HeldSelectionAssociation.MixerViewportGeometry?
+    private var outputGeometrySampled = false
     private var outputAttempted = false
     private var outputApplied = false
     private var outputInverseConsumed = false
@@ -1835,8 +1837,18 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         stage = "initial_native_proof"
         guard let proof = heldOutputProof(pair) else { return nil }
         outputProof = proof
-        let originalMixerGeometry = outputTask?.prerequisiteBuses.isEmpty == false && changedNameGoals.isEmpty
-            ? proof.observedMixerViewportGeometry() : nil
+        if !outputGeometrySampled, outputTask?.prerequisiteBuses.isEmpty == false, changedNameGoals.isEmpty {
+            // Earlier owned input excursions may move the custom Mixer canvas.
+            // Its first native geometry remains the restoration duty, never a
+            // peer identity or a later replacement baseline. An unread first
+            // sample stays unavailable rather than being retried after a move.
+            outputGeometrySampled = true
+            outputOriginalMixerGeometry = proof.observedMixerViewportGeometry()
+            if let first = outputOriginalMixerGeometry?.frames.first {
+                Log.info("Canonical output restoration baseline retained: first_x=\(first.minX)", subsystem: "saga")
+            }
+        }
+        let originalMixerGeometry = outputOriginalMixerGeometry
         if let outputTask, !outputTask.prerequisiteBuses.isEmpty {
             stage = "input_prerequisites"
             let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()

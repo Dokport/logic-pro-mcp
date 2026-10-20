@@ -516,6 +516,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDocumentReadsAtFirstNameConfirm: Int?
         var routingDestinationPresses = 0
         var scrollToChangedOutput = false
+        var scrollToViewportDriftEnabled = false
+        var scrollToViewportShifted = false
         var routingModePresses = 0
         var routingBypassPresses = 0
         var routingBypassMenuOpens = 0
@@ -1253,6 +1255,11 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("Scroll To recovery cannot reuse a checked output sampled before its navigation")
     func canonicalBusRecoveryRenewsTheCheckedOutput() async throws {
         try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer_checked_change")
+    }
+
+    @Test("Recovery restores the first viewport, not a later owned input-menu displacement")
+    func canonicalBusRecoveryRetainsItsFirstViewport() async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer_intermediate_viewport")
     }
 
     @Test("Explicitly scoped native Mixer Scroll To preserves its original physical viewport",
@@ -2317,6 +2324,16 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
                         f.routingNativePopupFrame = nil
+                        if mode == "offscreen_peer_intermediate_viewport", f.scrollToViewportDriftEnabled,
+                           f.routingDestinationPresses == 0,
+                           f.routingOpenedOutputIndex == nil {
+                            // A native input excursion can shift the viewport
+                            // before a later source read needs peer recovery.
+                            for (index, strip) in f.strips.enumerated() {
+                                f.builder.setFrame(strip, x: CGFloat(index) * 100 - 100, y: 100, width: 100, height: 300)
+                            }
+                            f.scrollToViewportShifted = true
+                        }
                         if mode.hasPrefix("offscreen_peer"), f.routingDestinationPresses == 1,
                            f.routingOpenedOutputIndex == nil {
                             // Native counterexample: input-popup Cancel retires
@@ -2415,6 +2432,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let id = try #require(inspected["snapshot_id"] as? String)
                 let retained = try #require(await cache.retainedInspection(id: id))
                 let capture = retained.capture
+                if mode == "offscreen_peer_intermediate_viewport" { f.scrollToViewportDriftEnabled = true }
                 let stable = try #require(capture.freshPopulation?.stable)
                 #expect(stable)
                 if ["known_plugin", "unread_plugin", "unread_plugin_bypass"].contains(mode) {
@@ -2823,6 +2841,11 @@ struct Issue965HeldSelectionAssociationTests {
                 if mode.hasPrefix("offscreen_peer") {
                     #expect(f.routingLateScopeInjected, "Reach the actual post-write input Cancel before judging recovery")
                     #expect(f.routingDestinationPresses == 1, "An unreadable peer does not authorize a guessed inverse")
+                    if mode == "offscreen_peer_intermediate_viewport" {
+                        #expect(f.scrollToViewportShifted, "Reach the owned input displacement after the capture")
+                        let position = try #require(AXHelpers.getPosition(f.strips[0], runtime: f.logic().ax))
+                        #expect(position.x == 0, "Restoration belongs to the first viewport, not the later displacement")
+                    }
                     let verified = try #require(result["verified"] as? Bool)
                     if mode == "offscreen_peer_checked_change" {
                         #expect(f.scrollToChangedOutput)

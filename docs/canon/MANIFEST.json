@@ -113,7 +113,7 @@
     "index/strings.values.tsv": "38d6d4d79b22e359d2af139961cbd1bcd214044d448107e03a32c70ee5303b77",
     "index/stringsdict.tsv": "538081502dfdd84fb916e331a08b1682b64807cdbc2adbfe6faf9c70a983a511",
     "index/stringsdict.values.tsv": "81c2945e23ef803ec6c80a4b3b1dab6f4d4d7f16554dc07956accb89e667190f",
-    "ledger/casefold.tsv": "78b2168bfd384b720d3ba9f23de04e74365817a2828c4d150c79cef4043b7069",
+    "ledger/casefold.tsv": "cf95f857930fdaacdae34e79d6c7d807d4592ff6d845adeb5fc84fb581037c9a",
     "ledger/presence.tsv": "b641162e32be742f0fc5a615e1f3eea02b94d6d0ea2c0c84b690b39145884a95"
   },
   "extractor_version": 3,
@@ -148,16 +148,16 @@
     },
     "strings": {
       "-": 2,
-      "de": 211,
-      "en": 211,
-      "es": 216,
-      "fr": 202,
-      "it": 206,
-      "ja": 215,
-      "ko": 212,
-      "pt": 218,
-      "zh_CN": 201,
-      "zh_TW": 189
+      "de": 213,
+      "en": 213,
+      "es": 218,
+      "fr": 204,
+      "it": 208,
+      "ja": 216,
+      "ko": 213,
+      "pt": 220,
+      "zh_CN": 202,
+      "zh_TW": 190
     }
   },
   "ledger_presence_entries": {
