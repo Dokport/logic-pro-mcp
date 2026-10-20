@@ -174,6 +174,10 @@ final class InputBusSagaAdapter: @unchecked Sendable {
         }
         expected[index].input = strips[index].input
         expected[index].inputObservation = strips[index].inputObservation
+        if matchingOnly, let output = approved?.verifiedMatchingInputOutput(at: pair) {
+            guard strips[index].output.flatMap(OutputAssignment.observed(slotLabel:)) == output else { return false }
+            expected[index].output = strips[index].output
+        }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let input = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
             AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
@@ -206,6 +210,22 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   await TargetRefResolver.validateProjectReference(self.forward.params, targetRegistry: registry,
                     operation: "saga.input_bus") == nil else { return nil }
+            if self.matchingOnly, let renewal = self.approved?.verifiedMatchingInputOutputRenewal() {
+                guard let prior = self.pair, let priorControl = self.readControl,
+                      renewal.originalTrack.matches(prior.track), renewal.pair.track.matches(prior.track),
+                      renewal.original.matches(prior.strip) || renewal.pair.strip.matches(prior.strip) else { return nil }
+                let input = AXHelpers.HelpReadGuard.$current.withValue(
+                    .init(allowHelpReads: true, stop: { !renewal.observation.permitsRead() })) {
+                        AXLogicProElements.inputSlotRead(in: renewal.pair.strip.strip, runtime: prior.track.runtime.ax)
+                    }
+                guard case .source(let label) = input.reading, let current = input.control,
+                      label.utf8.elementsEqual(priorControl.source.utf8),
+                      renewal.permits(runtime: prior.track.runtime) else { return nil }
+                let control = AXMixerInputSlotBinding(owner: renewal.pair.strip, control: current, source: label)
+                // A surviving source does not authorize replacing its input control.
+                guard !renewal.pair.strip.matches(prior.strip) || priorControl.matches(control) else { return nil }
+                self.pair = renewal.pair; self.readControl = control; self.readRenewal = renewal
+            }
             let held: AccessibilityChannel.HeldSelectionAssociation.Pair
             let proof = self.restored ?? self.effect
             if let proof {
@@ -260,7 +280,7 @@ final class InputBusSagaAdapter: @unchecked Sendable {
                 }
             }
             let current = reading.inputRenewal?.pair ?? held
-            if let approved = self.approved, approved.hasMatchingNameGoals, let source = reading.inputRenewal,
+            if let approved = self.approved, approved.hasMatchingNameGoals || self.matchingOnly, let source = reading.inputRenewal,
                !(await approved.renewNameAfterInput(source)) { return nil }
             let receipt = decodedJSONObject(reading.result.message)
             if self.matchingOnly { self.matchingReadReceipt = reading.result.message }

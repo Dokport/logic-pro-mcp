@@ -124,7 +124,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         request: SessionPopulationObservation.Request) -> InputTask? {
         guard FeatureFlags.adr002TargetRef, FeatureFlags.adr004MutationSaga,
               names.count <= 1, policy.targets.count == 1, policy.inputs.count == 1,
-              policy.outputs.isEmpty, policy.sends.isEmpty, policy.roles.isEmpty,
+              policy.outputs.count <= 1, policy.sends.isEmpty, policy.roles.isEmpty,
               policy.receivers.isEmpty, policy.protectedPaths.isEmpty,
               policy.trackSort == nil, policy.mixerVisible == nil,
               let target = policy.targets.first, target.mixerRef == nil,
@@ -160,10 +160,34 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   guard let owner = strip.physicalBinding, strip.name != nil, strip.nameReadError == nil,
                         strip.volumeReadback != nil, strip.panReadback != nil,
                         strip.pluginsSource == "ax", strip.pluginsReadError == nil, strip.pluginsFullyObserved == true,
-                        let input = strip.inputObservation, input.state != .unreadable,
-                        let sends = strip.sendSlots, sends.allSatisfy({ $0.state == .observedEmpty }) else { return false }
+                        let observedInput = strip.inputObservation, observedInput.state != .unreadable,
+                        let sends = strip.sendSlots else { return false }
+                  // Only a zero-write matching goal may preserve an occupied peer.
+                  // Raw display/level/bypass observations are a protected baseline,
+                  // never a Send destination, routing edge or writer capability.
+                  let matchingReadOnlyPeer = before == input.bus && policy.outputs.isEmpty
+                      && names.allSatisfy({ $0.name.utf8.elementsEqual(row.name.utf8) })
+                      && !owner.matches(pair.strip)
+                  guard sends.allSatisfy({ slot in
+                      if slot.state == .observedEmpty { return true }
+                      guard matchingReadOnlyPeer, slot.state == .occupiedUnknownDestination,
+                            let display = slot.destinationDisplay, !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            let raw = slot.levelRaw, raw.isFinite,
+                            let description = slot.levelDescription, !description.isEmpty,
+                            slot.bypassed != nil else { return false }
+                      return true
+                  }) else { return false }
                   return source.channelStrips.filter { $0.physicalBinding?.matches(owner) == true }.count == 1
               }) else { return nil }
+        if !policy.outputs.isEmpty {
+            // A matching input remains a read-only goal beside one actual direct-output
+            // change. Both tasks come from this capture's exact same native pair.
+            guard names.isEmpty, before == input.bus,
+                  let output = capturedOutput(policy: policy, names: names, source: source, request: request),
+                  output.before != output.desired, output.before == sink,
+                  output.reference == target.trackRef, output.mixerRef == mixerRef,
+                  output.pair.track.matches(pair.track), output.pair.strip.matches(pair.strip) else { return nil }
+        }
         if let name = names.first {
             if !row.name.utf8.elementsEqual(name.name.utf8) {
                 guard ExactTrackNameAdapter.hasCapturedCoupledFootprint(.init(projectReference: project,
@@ -456,6 +480,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                       request: SessionPopulationObservation.Request) -> CapturedGoals? {
         let input = capturedInput(policy: originalPolicy, names: names, source: source, request: request)
         guard originalPolicy.inputs.isEmpty || input != nil else { return nil }
+        if let input, !originalPolicy.outputs.isEmpty {
+            guard names.isEmpty,
+                  let output = capturedOutput(policy: originalPolicy, names: names, source: source, request: request),
+                  input.before == input.desired,
+                  output.reference == input.reference, output.mixerRef == input.mixerRef,
+                  output.pair.track.matches(input.pair.track), output.pair.strip.matches(input.pair.strip),
+                  case .issued(let project)? = source.projectIssuance else { return nil }
+            return .init(projectRef: project, document: input.pair.track.document, mixer: nil,
+                names: [], renameCapture: nil, output: output, input: input)
+        }
         if let input, names.isEmpty {
             guard case .issued(let project)? = source.projectIssuance else { return nil }
             return .init(projectRef: project, document: input.pair.track.document, mixer: nil,
@@ -712,7 +746,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   current.physicalTrack?.matches(goal.binding) == true else { return nil }
         }
         let changed = goals.filter { !$0.before.utf8.elementsEqual($0.name.utf8) }
-        if let input = captured.input, changed.isEmpty {
+        if let input = captured.input, changed.isEmpty, captured.output == nil {
             guard let current = await registry.resolve(input.reference), current.kind == .track,
                   current.physicalTrack?.matches(input.pair.track) == true,
                   let mixer = await registry.resolve(input.mixerRef), mixer.kind == .mixerStrip,
@@ -766,7 +800,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 expectedInverse: .init(operationID: .mixerSetOutputVerified, valueParameter: "destination"))],
                 idempotencyKey: key, canonicalPlanID: id, canonicalDigest: digest)
             return .init(plan: saga, projectRef: issued, document: captured.document, nameGoals: goals,
-                cacheProjectEpoch: source.capture.projectEpoch, outputTask: output, registryProjectEpoch: targetSnapshot.projectEpoch,
+                cacheProjectEpoch: source.capture.projectEpoch, outputTask: output, inputTask: captured.input,
+                registryProjectEpoch: targetSnapshot.projectEpoch,
                 cache: cache, registry: registry, journal: journal)
         }
         if let sort = captured.sort {
@@ -954,6 +989,28 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 "project_ref": .string(projectRef.rawValue)],
             expectedInverse: .init(operationID: .mixerSetInputBusVerified, valueParameter: "destination"))
         return (selector, task.pair, task.control, task.capture)
+    }
+
+    /// A matching input may observe only this same pair's independently verified output effect.
+    /// This is not an input write/inverse capsule, and an output acknowledgement is insufficient.
+    func verifiedMatchingInputOutput(at pair: AccessibilityChannel.HeldSelectionAssociation.Pair) -> OutputAssignment? {
+        guard hasMatchingInputGoal, nameGoals.isEmpty, let input = inputTask, let output = outputTask,
+              outputAttempted, outputApplied, !outputInverseConsumed,
+              plan.steps.count == 1, plan.steps.first?.operationID == .mixerSetOutputVerified,
+              input.reference == output.reference, input.mixerRef == output.mixerRef,
+              input.pair.track.matches(pair.track),
+              (outputPair ?? output.pair).track.matches(pair.track),
+              (outputPair ?? output.pair).strip.matches(pair.strip) else { return nil }
+        return output.desired
+    }
+
+    /// Read continuity only, after the output's mandatory independent verification.
+    /// The reader must still establish the current input control and checked Bus.
+    func verifiedMatchingInputOutputRenewal() -> AccessibilityChannel.OriginalHeaderSourceRenewal? {
+        guard let source = outputRenewal,
+              verifiedMatchingInputOutput(at: source.pair) != nil,
+              source.permits(runtime: source.pair.track.runtime) else { return nil }
+        return source
     }
 
     func sendRemovalCustody(for step: SagaStep) -> (AccessibilityChannel.HeldSelectionAssociation.Pair,
@@ -1818,7 +1875,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             hint: "The approved input's original native control, protected footprint or checked Bus no longer agrees.", extras: extras))
     }
 
-    /// Reuse the same actual reader across an owned name step. This returns
+    /// Reuse the same actual reader across an owned name or verified output step. This returns
     /// observations, never a completed execution or a setter capability.
     func matchingInputGoalEvidence(using reader: InputBusSagaAdapter, afterExecution: Bool = false) async -> [[String: Any]]? {
         guard hasMatchingInputGoal, let task = inputTask else { return nil }
@@ -1834,6 +1891,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         if hasMatchingNameGoals {
             guard await nameGoalEvidence(afterExecution: afterExecution) != nil else { return nil }
         }
+        var outputRead: SagaReadEvidence?
+        if afterExecution, let output = outputTask {
+            guard outputApplied, let step = plan.steps.first, plan.steps.count == 1,
+                  let checked = await readOutputState(step), checked.value == .string(output.desired.token),
+                  let read = checked.read else { return nil }
+            outputRead = read
+        }
         guard await current(), var observed = await reader.readMatchingGoal(cache: cache, registry: registry),
               observed.value == .string("bus:\(task.before)") else { return nil }
         var names: [[String: Any]] = []
@@ -1846,13 +1910,28 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             // turn an unchanged goal into a writer or an inverse capsule.
             names = evidence; observed = afterNames
         }
+        if outputRead != nil, let output = outputTask {
+            // The output's actual checked menu bookends the independent input read.
+            // Never turn an old display label or attempted leaf into final goal evidence.
+            guard let step = plan.steps.first,
+                  let checked = await readOutputState(step), checked.value == .string(output.desired.token),
+                  let read = checked.read else { return nil }
+            outputRead = read
+        }
         guard observed.value == .string("bus:\(task.before)"),
               let evidence = observed.read, evidence.readSource == .axInputMenuCheckmark,
               evidence.provenance == .liveIndependent,
               let data = try? JSONEncoder().encode(evidence),
               let read = try? JSONSerialization.jsonObject(with: data),
               await current() else { return nil }
-        return [["target_ref": task.reference.rawValue, "mixer_ref": task.mixerRef.rawValue, "read": read]] + names
+        var goalEvidence: [[String: Any]] = [["target_ref": task.reference.rawValue, "mixer_ref": task.mixerRef.rawValue, "read": read]] + names
+        if let outputRead, let output = outputTask {
+            guard let encoded = try? JSONEncoder().encode(outputRead),
+                  let outputEvidence = try? JSONSerialization.jsonObject(with: encoded) else { return nil }
+            goalEvidence.append(["target_ref": output.reference.rawValue, "mixer_ref": output.mixerRef.rawValue,
+                                 "read": outputEvidence])
+        }
+        return goalEvidence
     }
 
     /// Only an empty plan can turn these read-only observations into completion.
