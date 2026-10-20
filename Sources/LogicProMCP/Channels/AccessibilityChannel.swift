@@ -560,8 +560,7 @@ actor AccessibilityChannel: Channel {
                         || AXLocalePolicy.unassignedInputSlotLabel.matches(label, mode: .exact) {
                         candidates.append((true, nil, RoutingGraphPublication.classifyOutputLabel(label).0 != .bus))
                     }
-                    if let label = strip.output, let assignment = OutputAssignment.observed(slotLabel: label),
-                       assignment != .noOutput {
+                    if let label = strip.output, OutputAssignment.observed(slotLabel: label) != nil {
                         candidates.append((false, nil, false))
                     }
                     let slots = strip.sendSlots ?? []
@@ -591,6 +590,11 @@ actor AccessibilityChannel: Channel {
                         // an unpaired input still cannot renew through a header.
                         if request.domains.contains(.associations), pair == nil,
                            request.scope == .selection || candidate.input { continue }
+                        // Neutral output acquisition is limited to this capture's
+                        // actual unique header/source pair, including whole-project
+                        // requests. A No Output caption grants no recovery custody.
+                        if !candidate.input, candidate.ordinal == nil, pair == nil,
+                           strip.output.flatMap(OutputAssignment.observed(slotLabel:)) == .noOutput { continue }
                         let read = await AXMixerStripBinding.$current.withValue(owner) {
                             if candidate.input {
                                 return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
@@ -604,10 +608,12 @@ actor AccessibilityChannel: Channel {
                                         observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
                                 }
                             }
-                            return await Self.getOutputObservation(runtime: runtime.logicRuntime, sendOrdinal: candidate.ordinal,
-                                observingSendMode: candidate.ordinal != nil,
-                                requiringSendMode: false,
-                                observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) })
+                            return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                                await Self.getOutputObservation(runtime: runtime.logicRuntime, sendOrdinal: candidate.ordinal,
+                                    observingSendMode: candidate.ordinal != nil,
+                                    requiringSendMode: false,
+                                    observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) })
+                            }
                         }
                         let receipt = read.result.message.data(using: .utf8).flatMap {
                             try? JSONSerialization.jsonObject(with: $0) as? [String: Any]

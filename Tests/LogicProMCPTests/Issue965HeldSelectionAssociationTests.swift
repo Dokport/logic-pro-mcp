@@ -546,6 +546,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingRead: (@Sendable (AXUIElement, String) -> Void)?
         var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingWindowListRead: (@Sendable () -> Void)?
+        var routingNativePopupFrame: CGRect?
         var inputForeignScopeHelpReads = 0
         var inputSetterDispatches = 0
         var inputReadAfterOutput = false
@@ -1023,7 +1024,13 @@ struct Issue965HeldSelectionAssociationTests {
             } else { ax = base.ax }
             let logic = AXLogicProElements.Runtime(logicProPID: { 4242 }, ax: ax,
                 executeAppleScript: { _ in Issue.record("no scripts"); return .error("forbidden") },
-                onScreenWindowList: { [self] in routingWindowListRead?(); return [] }, postPopupMenuEscape: { Issue.record("no Escape") },
+                onScreenWindowList: { [self] in
+                    routingWindowListRead?()
+                    guard let frame = routingNativePopupFrame else { return [] }
+                    return [[kCGWindowOwnerPID as String: 4242, kCGWindowNumber as String: 1_973_119,
+                        kCGWindowLayer as String: LogicOnScreenWindows.popupMenuLevel,
+                        kCGWindowBounds as String: frame.dictionaryRepresentation]]
+                }, postPopupMenuEscape: { Issue.record("no Escape") },
                 focusedApplicationPID: { 4242 })
             return logic
         }
@@ -1160,6 +1167,29 @@ struct Issue965HeldSelectionAssociationTests {
           arguments: ["forward", "cancel", "late_peer", "unread_scalar", "unread_range", "boolean_scalar", "stereo", "no_op", "ack_only", "newer", "retired", "late_project", "absent_pan", "occupied_peer", "late_peer_send", "known_plugin", "unread_plugin", "unread_plugin_bypass", "post_write_loss", "unassigned_physical", "unoffered_physical", "census_redraw", "census_foreign", "census_scalar", "census_input", "census_send", "census_plugin", "census_header", "census_project", "coupled", "coupled_cancel", "coupled_second_failure", "coupled_newer_name", "coupled_late_peer", "coupled_project", "coupled_retired", "coupled_same", "coupled_name_leaf_peer", "coupled_editor", "coupled_foreign_editor", "coupled_retired_editor"])
     func canonicalPhysicalOutputUsesTheCapturedPair(mode: String) async throws {
         try await assertCanonicalPhysicalOutput(mode: mode)
+    }
+
+    @Test("An explicit No Output policy retains the checked source in its existing canonical output task")
+    func canonicalNoOutputPreviewUsesTheCapturedPair() async throws {
+        try await assertCanonicalPhysicalOutput(mode: "preview_no_output")
+    }
+
+    @Test("Canonical No Output and a fresh Stereo return use the retained source and public apply contract",
+          arguments: ["canonical_no_output", "canonical_no_output_return"])
+    func canonicalNoOutputExecutesOnlyItsCapturedSource(mode: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: mode)
+    }
+
+    @Test("Canonical No Output retains its existing fault and verified compensation boundaries",
+          arguments: ["cancel", "late_peer", "late_project", "return_late_peer", "return_late_project", "ack_only", "newer", "retired", "post_write_loss"])
+    func canonicalNoOutputRejectsLostCustodyAndCompensatesOnlyItsEffect(mode: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "canonical_no_output_" + mode)
+    }
+
+    @Test("No Output admission does not grant mixed goals or physical-output transitions",
+          arguments: ["mixed_input", "mixed_name", "physical_before", "return_physical"])
+    func canonicalNoOutputDoesNotExpandOtherContracts(mode: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "canonical_no_output_" + mode)
     }
 
     @Test("Canonical output cancellation retains independent Saga reads without duplicate adapter popup reads")
@@ -1346,7 +1376,13 @@ struct Issue965HeldSelectionAssociationTests {
                                                foreignFocusAtDocumentRead: Int? = nil,
                                                refusingSampledTrackOwnership: Bool = false) async throws {
         let survivingSource = requestedMode.hasPrefix("surviving_")
-        let mode = survivingSource ? String(requestedMode.dropFirst("surviving_".count)) : requestedMode
+        let profile = survivingSource ? String(requestedMode.dropFirst("surviving_".count)) : requestedMode
+        let noOutput = profile.hasPrefix("canonical_no_output")
+        let noOutputReturn = profile.hasPrefix("canonical_no_output_return")
+        let outputMode = !noOutput ? profile : profile == "canonical_no_output" ? "forward"
+            : String(profile.dropFirst("canonical_no_output_".count))
+        let mode = outputMode.hasPrefix("return_late_") ? String(outputMode.dropFirst("return_".count)) : outputMode
+        let destinationLeafLabel = noOutput ? "No Output" : "Output 3-4"
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let f = try fixture ?? Fixture(), cache = StateCache(), registry = TargetRegistry()
@@ -1540,12 +1576,12 @@ struct Issue965HeldSelectionAssociationTests {
                     if outputs.contains(where: { CFEqual($0, element) }), attribute == kAXHelpAttribute as String {
                         f.routingClassifierHelpReads += 1
                     }
-                    if mode == "late_peer", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
+                    if mode == "late_peer", CFEqual(element, noOutputReturn ? stereo : physical), attribute == kAXEnabledAttribute as String,
                        f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.builder.element(1_973_121), kAXValueAttribute as String, NSNumber(value: 0.4))
                     }
-                    if mode == "late_project", CFEqual(element, physical), attribute == kAXEnabledAttribute as String,
+                    if mode == "late_project", CFEqual(element, noOutputReturn ? stereo : physical), attribute == kAXEnabledAttribute as String,
                        f.routingOpenedOutputIndex == 1, f.inputMenuPresses > 1, !f.routingLateScopeInjected {
                         f.routingLateScopeInjected = true
                         f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
@@ -1630,12 +1666,38 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.builder.setAttribute(parent, kAXTitleAttribute as String, "Output")
                 f.builder.setAttribute(stereo, kAXTitleAttribute as String, "Stereo Output")
-                f.builder.setAttribute(physical, kAXTitleAttribute as String, "Output 3-4")
+                if noOutputReturn {
+                    f.builder.setAttribute(outputs[1], kAXDescriptionAttribute as String, "No Output")
+                } else if noOutput && mode == "physical_before" {
+                    f.builder.setAttribute(outputs[1], kAXDescriptionAttribute as String, "Output 3-4")
+                }
+                f.builder.setAttribute(physical, kAXTitleAttribute as String, destinationLeafLabel)
                 f.builder.setAttribute(stereo, kAXEnabledAttribute as String, true)
                 f.builder.setAttribute(physical, kAXEnabledAttribute as String, true)
                 f.builder.setChildren(stereo, []); f.builder.setChildren(physical, [])
-                f.builder.setChildren(submenu, mode == "unoffered_physical" ? [stereo] : [stereo, physical]); f.builder.setChildren(parent, [submenu])
-                f.builder.setChildren(root, [echo, parent]); f.builder.setActionNames(root, [kAXCancelAction as String])
+                f.builder.setChildren(submenu, mode == "unoffered_physical" || noOutput ? [stereo] : [stereo, physical]); f.builder.setChildren(parent, [submenu])
+                if noOutput && mode == "physical_before" {
+                    let checkedPhysical = f.builder.element(1_973_118)
+                    f.builder.setRole(checkedPhysical, kAXMenuItemRole as String)
+                    f.builder.setAttribute(checkedPhysical, kAXTitleAttribute as String, "Output 3-4")
+                    f.builder.setAttribute(checkedPhysical, "AXMenuItemMarkChar", "✓")
+                    f.builder.setChildren(checkedPhysical, [])
+                    f.builder.setChildren(submenu, [stereo, checkedPhysical])
+                }
+                f.builder.setChildren(root, noOutput ? [echo, physical, parent] : [echo, parent]); f.builder.setActionNames(root, [kAXCancelAction as String])
+                let nativeWrapper = f.builder.element(1_973_119)
+                let nativeFrame = CGRect(x: 20, y: 100, width: 230, height: 175)
+                if noOutput {
+                    f.builder.setRole(nativeWrapper, kAXPopUpButtonRole as String)
+                    f.builder.setAttribute(nativeWrapper, kAXParentAttribute as String, f.mixer)
+                    f.builder.setAttribute(nativeWrapper, kAXWindowAttribute as String, f.window)
+                    f.builder.setFrame(root, x: 20, y: 100, width: 230, height: 175)
+                    f.routingFocusHit = { app, point in
+                        #expect(CFEqual(app, f.app))
+                        #expect(point == CGPoint(x: nativeFrame.midX, y: nativeFrame.midY))
+                        return .success(f.routingNativePopupFrame == nil ? nil : physical)
+                    }
+                }
                 f.routingAction = { element, action in
                     if menuOverlay, CFEqual(element, rename), action == kAXPressAction as String {
                         f.routingMenuNameOpens += 1
@@ -1691,6 +1753,11 @@ struct Issue965HeldSelectionAssociationTests {
                        let index = outputs.firstIndex(where: { CFEqual($0, element) }) {
                         let label = f.builder.attributeValue(outputs[index], kAXDescriptionAttribute as String) as? String
                         f.builder.setAttribute(echo, kAXTitleAttribute as String, label)
+                        if noOutput {
+                            // A neutral menu has one checked root leaf, not both
+                            // a checked title echo and a second checked No Output.
+                            f.builder.setChildren(root, label == "No Output" ? [physical, parent] : [echo, physical, parent])
+                        }
                         f.routingOpenedOutputIndex = index
                         if newerUncoupled, !f.routingLateScopeInjected,
                            f.routingNameWrites.count == 1, f.routingNameConfirms == 1 {
@@ -1704,12 +1771,22 @@ struct Issue965HeldSelectionAssociationTests {
                             }
                         }
                         f.builder.setAttribute(stereo, "AXMenuItemMarkChar", label == "Stereo Output" ? "✓" : "")
-                        f.builder.setAttribute(physical, "AXMenuItemMarkChar", label == "Output 3-4" ? "✓" : "")
-                        f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1], root])
+                        f.builder.setAttribute(physical, "AXMenuItemMarkChar", label == destinationLeafLabel ? "✓" : "")
+                        if noOutput, label == "No Output" {
+                            // Model the qualified host's neutral popup: it is
+                            // a native window, not a Mixer AXChildren menu.
+                            f.builder.setChildren(nativeWrapper, [root])
+                            f.routingNativePopupFrame = nativeFrame
+                            f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
+                        } else {
+                            f.routingNativePopupFrame = nil
+                            f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1], root])
+                        }
                         f.inputMenuPresses += 1
                         return true
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
+                        f.routingNativePopupFrame = nil
                         f.routingOpenedOutputIndex = nil
                         f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
                         f.inputMenuCancels += 1; return true
@@ -1719,9 +1796,10 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingDestinationPresses += 1
                         if mode != "ack_only" {
                             f.builder.setAttribute(outputs[index], kAXDescriptionAttribute as String,
-                                CFEqual(element, physical) ? "Output 3-4" : "Stereo Output")
+                                CFEqual(element, physical) ? destinationLeafLabel : "Stereo Output")
                         }
                         f.routingOpenedOutputIndex = nil
+                        f.routingNativePopupFrame = nil
                         if !survivingSource,
                            mode == "retired" || mode.hasPrefix("coupled_retired") || redrawsCensus, f.routingReplacement == nil {
                             let replacement = f.builder.element(1_973_140)
@@ -1787,7 +1865,7 @@ struct Issue965HeldSelectionAssociationTests {
                 })
                 #expect(CFEqual(pair.strip.strip, f.strips[1]), "The captured pair is not an ordinal join")
                 #expect(capture.freshPopulation?.checkedOutputs.filter {
-                    $0.source.matches(pair.strip) && $0.assignment == (mode == "stereo" ? .physical(3, 4) : .stereoOutput) && $0.sendOrdinal == nil
+                    $0.source.matches(pair.strip) && $0.assignment == (noOutputReturn ? .noOutput : mode == "stereo" || mode == "physical_before" ? .physical(3, 4) : .stereoOutput) && $0.sendOrdinal == nil
                 }.count == 1, "Actual outputs=\(capture.channelStrips.map(\.output)), Help reads=\(f.routingClassifierHelpReads), presses=\(f.inputMenuPresses), stable=\(capture.freshPopulation?.stable)")
                 #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1 && f.routingDestinationPresses == 0)
                 let target = try #require(capture.issued?.byRow[0])
@@ -1798,10 +1876,29 @@ struct Issue965HeldSelectionAssociationTests {
                     "project_ref": .string(project.rawValue),
                     "targets": .array([.object(["handle": .string("source"), "track_ref": .string(target.rawValue)])]),
                     "outputs": .array([.object(["target": .string("source"),
-                        "output": mode == "stereo" || mode == "no_op" ? .object(["kind": .string("stereo_output")])
+                        "output": mode == "return_physical" ? .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
+                            : mode == "preview_no_output" || (noOutput && !noOutputReturn) ? .string("no_output")
+                            : noOutputReturn || mode == "stereo" || mode == "no_op" ? .object(["kind": .string("stereo_output")])
                             : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])])])]
                 guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
                     Issue.record("The explicit typed physical output must parse"); return
+                }
+                if noOutput && ["mixed_name", "physical_before", "return_physical"].contains(mode) {
+                    let rejectedNames: [ProjectSessionAudit.ApprovedName] = mode == "mixed_name"
+                        ? [.init(target: "source", name: "Selected Canonical")] : []
+                    let blocked = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy,
+                        policyValue: .object(raw), names: rejectedNames, capture: capture,
+                        request: retained.request, snapshotCurrent: true)
+                    let preview = try #require(sharedJSONObject(blocked.json))
+                    let executable = try #require(preview["executable"] as? Bool)
+                    #expect(!executable)
+                    #expect(!ApprovedSessionRepair.canVerifyCapturedGoals(policy: policy, policyValue: .object(raw),
+                        names: rejectedNames, source: capture, request: retained.request))
+                    #expect(await cache.retainRepairPlan(blocked, snapshotID: id))
+                    #expect(await ApprovedSessionRepair.retained(id: blocked.id, digest: blocked.digest,
+                        key: "blocked-no-output-" + mode, cache: cache, registry: registry, journal: SagaJournal()) == nil)
+                    #expect(f.routingDestinationPresses == 0 && f.routingNameWrites.isEmpty)
+                    return
                 }
                 if mode == "mixed_input" {
                     #expect(ApprovedSessionRepair.canVerifyCapturedGoals(policy: policy, policyValue: .object(raw),
@@ -1851,6 +1948,20 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 let body = try #require(sharedJSONObject(plan.json))
                 let executable = try #require(body["executable"] as? Bool)
+                if mode == "preview_no_output" {
+                    #expect(executable, "The already-checked singleton must support an explicit No Output preview")
+                    let steps = try #require(body["steps"] as? [[String: Any]])
+                    #expect(steps.count == 1)
+                    let step = try #require(steps.first)
+                    #expect(step["kind"] as? String == "local_output")
+                    #expect(step["target_ref"] as? String == target.rawValue)
+                    #expect((step["before"] as? [String: Any])?["kind"] as? String == "stereo_output")
+                    #expect((step["after"] as? [String: Any])?["kind"] as? String == "no_output")
+                    #expect(ApprovedSessionRepair.canVerifyCapturedGoals(policy: policy, policyValue: .object(raw),
+                        names: [], source: capture, request: retained.request))
+                    #expect(f.routingDestinationPresses == 0, "No Output preview must not disconnect the source")
+                    return
+                }
                 if ["unread_scalar", "unread_range", "boolean_scalar", "unread_plugin", "unread_plugin_bypass"].contains(mode) {
                     if mode == "unread_scalar" || mode == "boolean_scalar" { #expect(capture.channelStrips[0].pan == 0, "The legacy fallback is not an observed protected baseline") }
                     #expect(!executable)
@@ -1868,8 +1979,8 @@ struct Issue965HeldSelectionAssociationTests {
                 if ["absent_pan", "occupied_peer", "late_peer_send"].contains(mode), body["executable"] as? Bool != true { return }
                 let steps = try #require(body["steps"] as? [[String: Any]])
                 #expect(steps.count == (composed && mode != "coupled_same" ? 2 : 1) && steps[0]["target_ref"] as? String == target.rawValue)
-                #expect((steps.last?["before"] as? [String: Any])?["kind"] as? String == (mode == "stereo" ? "physical" : "stereo_output"))
-                #expect((steps.last?["after"] as? [String: Any])?["kind"] as? String == (mode == "stereo" || mode == "no_op" ? "stereo_output" : "physical"))
+                #expect((steps.last?["before"] as? [String: Any])?["kind"] as? String == (noOutputReturn ? "no_output" : mode == "stereo" ? "physical" : "stereo_output"))
+                #expect((steps.last?["after"] as? [String: Any])?["kind"] as? String == (noOutput && !noOutputReturn ? "no_output" : noOutputReturn || mode == "stereo" || mode == "no_op" ? "stereo_output" : "physical"))
                 #expect(await cache.retainRepairPlan(plan, snapshotID: id))
                 let journal = SagaJournal(), key = "captured-physical-output-" + mode
                 let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
@@ -1907,6 +2018,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }))
                 } else if mode == "coupled_second_failure" || mode == "coupled_menu_overlay_second_failure" {
                     await router.register(SelectedOutputSagaResultBoundary(f.channel()))
+                } else if noOutput {
+                    await router.register(SelectedOutputSagaResultBoundary(f.channel(), shouldFail: false, observed: { response in
+                        f.routingOutputChannelStates.append(response.message)
+                    }))
                 } else { await router.register(f.channel()) }
                 let applyDependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
                     poller: StatePoller(axChannel: f.channel(), cache: cache, runtime: .init(hasVisibleWindow: { false })),
@@ -1915,7 +2030,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let applyHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let approvedParams: [String: Value] = ["plan_id": .string(plan.id), "digest": .string(plan.digest),
                     "confirmed": .bool(true), "idempotency_key": .string(key)]
-                if composed {
+                if composed || noOutput {
                     for (field, value) in [("confirmed", Value.bool(false)), ("digest", Value.string(String(repeating: "0", count: 64)))] {
                         var rejectedParams = approvedParams
                         rejectedParams[field] = value
@@ -1925,7 +2040,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 func run() async -> CallTool.Result {
-                    if mode == "coupled" || mode == "coupled_same" || menuOverlay {
+                    if (noOutput && (mode == "forward" || noOutputReturn)) || mode == "coupled" || mode == "coupled_same" || menuOverlay {
                         return await applyHandler(applyDependencies, approvedParams)
                     }
                     return await SystemDispatcher.handle(command: "saga_execute", params: [:], router: router,
@@ -2073,7 +2188,7 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(!verified, "A scalar State A cannot replace the lost independent whole-footprint proof")
                     }
                 } else {
-                    #expect(result["saga_state"] as? String == (mode == "cancel" ? "fullyCompensated" : "completed"))
+                    #expect(result["saga_state"] as? String == (mode == "cancel" ? "fullyCompensated" : "completed"), "\(result); output responses: \(f.routingOutputChannelStates)")
                     let verified = try #require(result["verified"] as? Bool)
                     if mode == "cancel" { #expect(!verified) } else { #expect(verified) }
                     if mode != "cancel" {
@@ -2086,8 +2201,12 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     #expect(f.routingDestinationPresses == (mode == "cancel" ? 2 : mode == "no_op" ? 0 : 1))
                 }
-                #expect(f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String
-                    == (mode == "newer" ? "Output 5-6" : composed || redrawsCensus || ["forward", "retired", "absent_pan", "occupied_peer", "known_plugin", "post_write_loss", "unassigned_physical"].contains(mode) ? "Output 3-4" : "Stereo Output"))
+                let expectedOutputLabel = noOutput
+                    ? (mode == "newer" ? "Output 5-6" : noOutputReturn
+                        ? (["late_peer", "late_project"].contains(mode) ? "No Output" : "Stereo Output")
+                        : ["cancel", "late_peer", "late_project", "ack_only"].contains(mode) ? "Stereo Output" : "No Output")
+                    : mode == "newer" ? "Output 5-6" : composed || redrawsCensus || ["forward", "retired", "absent_pan", "occupied_peer", "known_plugin", "post_write_loss", "unassigned_physical"].contains(mode) ? "Output 3-4" : "Stereo Output"
+                #expect(f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String == expectedOutputLabel)
                 if composed {
                     #expect(f.routingNameWrites == ["Selected Canonical"])
                     #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == "Selected Canonical")

@@ -178,12 +178,17 @@ extension AccessibilityChannel {
         }
         let noOutputChange = before == .noOutput || destination == .noOutput
         if noOutputChange {
+            let noncanonical = ApprovedSessionRepair.current == nil && ApprovedSessionRepair.outputLeafPermission == nil
+            let canonical = outputAssociation.map { pair in
+                ApprovedSessionRepair.current?.ownsCanonicalNoOutputChange(
+                    before: before, destination: destination, pair: pair) == true
+            } ?? false
             guard physical != nil, expected == before,
-                  ApprovedSessionRepair.current == nil, ApprovedSessionRepair.outputLeafPermission == nil,
+                  noncanonical || canonical,
                   (before == .noOutput && destination == .stereoOutput)
                     || (before == .stereoOutput && destination == .noOutput) else {
                 return refusal(.unsupportedState, "No Output changes require the current physical source, "
-                    + "explicit matching expected_current and a noncanonical Stereo Output/No Output change; nothing was pressed.")
+                    + "explicit matching expected_current and an owned Stereo Output/No Output change; nothing was pressed.")
             }
         }
         if before == destination {
@@ -580,10 +585,12 @@ extension AccessibilityChannel {
         }
 
         /// Renew after the caller's deciding slot read; the pair itself is not permission.
-        func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil) -> Bool {
+        func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil,
+                     nativeOutputPopup: Bool = false) -> Bool {
             guard pair.strip.currentIndex(runtime: runtime) == index,
                   originalTrack.currentIndex() != nil,
-                  ownedPopup.map({ observation.permitsOwnedPopupRead($0) }) ?? observation.permitsRead(),
+                  ownedPopup.map({ observation.permitsOwnedPopupRead($0,
+                    nativeSource: nativeOutputPopup ? pair.strip : nil) }) ?? observation.permitsRead(),
                   case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
                   CFEqual(window, original.window),
                   case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(original.window, runtime: runtime),
