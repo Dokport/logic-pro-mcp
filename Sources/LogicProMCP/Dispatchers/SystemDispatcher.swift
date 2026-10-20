@@ -1218,6 +1218,22 @@ struct SystemDispatcher: OperationTraceDispatching {
                                 }
                                 approvedNameBefore = evidence
                             }
+                            var matchingInputReader: InputBusSagaAdapter?
+                            if let approval = approvedSessionRepair, approval.hasMatchingInputGoal {
+                                let reader = InputBusSagaAdapter(matchingInput: approval)
+                                guard let reader,
+                                      let evidence = await approval.matchingInputGoalEvidence(using: reader) else {
+                                    let (winner, _) = await sagaJournal.finalizeReturningWinner(journalClaim,
+                                        proposed: approval.matchingInputGoalRefusal(reader: reader), verifiedIfCancelled: true)
+                                    lease?.release()
+                                    let didWin = race.resume(continuation,
+                                        returning: toolTextResult(winner.body, isError: winner.isError))
+                                    if didWin { timeoutHandle.cancel() }
+                                    return
+                                }
+                                matchingInputReader = reader
+                                approvedNameBefore = evidence
+                            }
                             // Availability includes synchronous AX reads. It belongs to
                             // the same lifecycle race as execution, not before its timer.
                             let preflight = await saga.preflight(plan)
@@ -1280,9 +1296,14 @@ struct SystemDispatcher: OperationTraceDispatching {
                             var finalNameEvidence: [[String: Any]]?
                             var nameGoalFailed = false
                             if finalOutcome.state == .completed,
-                               let approval = approvedSessionRepair, approval.hasMatchingNameGoals {
-                                finalNameEvidence = await approval.nameGoalEvidence(
-                                    requiringMixerGoal: approval.hasMixerGoal, afterExecution: true)
+                               let approval = approvedSessionRepair,
+                               approval.hasMatchingNameGoals || matchingInputReader != nil {
+                                if let reader = matchingInputReader {
+                                    finalNameEvidence = await approval.matchingInputGoalEvidence(using: reader, afterExecution: true)
+                                } else {
+                                    finalNameEvidence = await approval.nameGoalEvidence(
+                                        requiringMixerGoal: approval.hasMixerGoal, afterExecution: true)
+                                }
                                 if finalNameEvidence == nil {
                                     nameGoalFailed = true
                                     // Compensate only the owned effect. The adapter refuses
@@ -1303,7 +1324,8 @@ struct SystemDispatcher: OperationTraceDispatching {
                                 body["goal_evidence"] = finalNameEvidence
                                 proposed = .init(body: HonestContract.jsonString(body), isError: proposed.isError)
                             } else if nameGoalFailed, var body = decodedJSONObject(proposed.body) {
-                                body["goal_verification_failure"] = "approved_name_or_mixer_goal_unverified"
+                                body["goal_verification_failure"] = matchingInputReader == nil
+                                    ? "approved_name_or_mixer_goal_unverified" : "approved_name_or_matching_input_goal_unverified"
                                 body["goal_before_evidence"] = approvedNameBefore
                                 proposed = .init(body: HonestContract.jsonString(body), isError: proposed.isError)
                             }
