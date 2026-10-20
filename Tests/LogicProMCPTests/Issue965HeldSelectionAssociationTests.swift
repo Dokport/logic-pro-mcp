@@ -1256,7 +1256,7 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("Scroll To actions renew native scope after deciding reads and clean up a failed opening",
-          arguments: ["late_open", "late_leaf", "failed_open"])
+          arguments: ["late_open", "late_leaf", "failed_open", "delayed_root"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1266,6 +1266,7 @@ struct Issue965HeldSelectionAssociationTests {
             var injected = false
             var foreignActions = 0
             var cancels = 0
+            var rootAvailableAt: ContinuousClock.Instant?
         }
         func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false) async throws -> Probe {
             let f = try Fixture(), gate = LogicMutationGate(), probe = Probe()
@@ -1312,6 +1313,10 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.routingChildrenRead = { element in
                     if CFEqual(element, view) {
+                        if let ready = probe.rootAvailableAt, ContinuousClock.now >= ready {
+                            probe.rootAvailableAt = nil
+                            f.builder.setChildren(view, [root])
+                        }
                         probe.viewChildrenReads += 1
                         if probe.viewChildrenReads == childrenFault {
                             probe.injected = true
@@ -1325,6 +1330,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, view), action == kAXPressAction as String {
                         if probe.firstOpenParentRead == nil { probe.firstOpenParentRead = probe.viewParentReads }
+                        if fault == "delayed_root" {
+                            probe.rootAvailableAt = ContinuousClock.now.advanced(by: .milliseconds(160))
+                            f.builder.setChildren(view, []); return true
+                        }
                         f.builder.setChildren(view, [root]); return !failedOpen
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {

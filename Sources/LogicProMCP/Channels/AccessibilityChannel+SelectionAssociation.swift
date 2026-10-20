@@ -820,18 +820,25 @@ extension AccessibilityChannel {
                 return permitsRead()
             }
             func childMenus(_ owner: AXUIElement) -> [AXUIElement]? {
-                guard case .success(let children) = AXHelpers.childrenResult(owner, runtime: logic.ax) else { return nil }
+                guard case .success(let children) = AXHelpers.childrenResult(owner, runtime: logic.ax) else {
+                    Log.info("Owned Mixer menu children unreadable", subsystem: "ax"); return nil
+                }
                 var menus: [AXUIElement] = []
                 for child in children {
-                    guard let role = AXHelpers.getRole(child, runtime: logic.ax) else { return nil }
+                    guard let role = AXHelpers.getRole(child, runtime: logic.ax) else {
+                        Log.info("Owned Mixer menu child role unreadable", subsystem: "ax"); return nil
+                    }
                     if role == kAXMenuRole as String {
                         guard let reciprocal: AXUIElement = AXHelpers.getAttribute(child, kAXParentAttribute as String, runtime: logic.ax),
-                              CFEqual(reciprocal, owner) else { return nil }
+                              CFEqual(reciprocal, owner) else {
+                            Log.info("Owned Mixer menu reciprocal parent unavailable", subsystem: "ax"); return nil
+                        }
                         menus.append(child)
                     }
                 }
                 return menus
             }
+            let timing = AccessibilityChannel.OutputAssignmentTiming.live
             func uniqueItem(in menu: AXUIElement, matching labels: AXLocalePolicy.LabelSet) -> AXUIElement? {
                 guard case .success(let children) = AXHelpers.childrenResult(menu, runtime: logic.ax) else { return nil }
                 var matches: [AXUIElement] = []
@@ -871,13 +878,15 @@ extension AccessibilityChannel {
                 let opened = AXHelpers.performAction(view, kAXPressAction as String, runtime: logic.ax)
                 recoveryStage = name + "_owned_root"
                 var roots: [AXUIElement]?
-                for attempt in 0..<4 {
-                    guard scopeHeld() else { return false }
+                let openDeadline = ContinuousClock.now.advanced(by: .milliseconds(timing.popupOpenTimeoutMs))
+                repeat {
+                    guard scopeHeld() else { recoveryStage = name + "_root_scope"; return false }
                     roots = childMenus(view)
                     if roots?.count == 1 { break }
-                    guard roots?.isEmpty == true, attempt < 3 else { return false }
-                    do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
-                }
+                    guard roots?.isEmpty == true else { recoveryStage = name + "_root_ownership"; return false }
+                    guard ContinuousClock.now < openDeadline else { recoveryStage = name + "_root_timeout"; return false }
+                    do { try await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) } catch { return false }
+                } while true
                 guard let roots, roots.count == 1, let root = roots.first else { return false }
                 // A failed AX acknowledgement does not prove no effect. Only
                 // this original View's uniquely owned reciprocal root may close.
@@ -898,12 +907,13 @@ extension AccessibilityChannel {
                     await cancelOwnedRoot(root); return false
                 }
                 recoveryStage = name + "_closed_root"
-                for attempt in 0..<4 {
+                let closeDeadline = ContinuousClock.now.advanced(by: .milliseconds(timing.popupCloseTimeoutMs))
+                repeat {
                     guard scopeHeld() else { return false }
                     if childMenus(view)?.isEmpty == true { break }
-                    guard attempt < 3 else { await cancelOwnedRoot(root); return false }
-                    do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
-                }
+                    guard ContinuousClock.now < closeDeadline else { await cancelOwnedRoot(root); return false }
+                    do { try await Task.sleep(for: .milliseconds(timing.pollIntervalMs)) } catch { return false }
+                } while true
                 guard childMenus(view)?.isEmpty == true, scopeHeld() else { return false }
                 effects.changed.append("mixer_scroll_to_" + name)
             }
