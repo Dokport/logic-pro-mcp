@@ -2232,9 +2232,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                 requiringOriginalInputControl: owned.control)
                         }
                     }
+                    let message = decodedJSONObject(read.result.message)
+                    Log.info("Restored-name input popup receipt: success=\(read.result.isSuccess),assignment_matches=\(read.assignment == .bus(task.before)),control_matches=\(read.inputSlot.map(owned.control.matches) == true),popup=\(message?["popup_menu_state"] as? String ?? "unknown"),focus=\(message?["focus_restoration"] as? String ?? "unknown"),error=\(message?["error"] as? String ?? "none")", subsystem: "saga")
+                    Log.info("Restored-name input popup detail: pressed=\(message?["popup_press_succeeded"] as? Bool ?? false),cancelled=\(message?["popup_cancel_succeeded"] as? Bool ?? false),hint=\(message?["hint"] as? String ?? "none")", subsystem: "saga")
                     guard read.result.isSuccess, read.assignment == .bus(task.before),
                           read.inputSlot.map(owned.control.matches) == true,
-                          let message = decodedJSONObject(read.result.message),
+                          let message,
                           message["popup_menu_state"] as? String == "closed",
                           message["focus_restoration"] as? String == "restored",
                           pair.strip.currentIndex(runtime: runtime) != nil,
