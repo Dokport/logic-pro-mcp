@@ -2183,7 +2183,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             if receipt.status == .applied, let task = inputTask, let owned = restoredInput,
                goal.reference == task.reference {
                 func unavailable() -> CallTool.Result {
-                    toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable,
+                    // A later scalar name read must not turn failed native
+                    // presentation/protection verification into full compensation.
+                    nameExecutions[goal.reference, default: .init()].restored = nil
+                    return toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable,
                         extras: ["write_attempted": true,
                             "hint": "The restored name's original input presentation could not be independently refreshed."]), isError: true)
                 }
@@ -2209,10 +2212,25 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         }
                     }
                     guard read.result.isSuccess, read.assignment == .bus(task.before),
-                          read.inputSlot.map(owned.control.matches) == true, owned.permits(),
+                          read.inputSlot.map(owned.control.matches) == true,
                           let message = decodedJSONObject(read.result.message),
                           message["popup_menu_state"] as? String == "closed",
                           message["focus_restoration"] as? String == "restored",
+                          pair.strip.currentIndex(runtime: runtime) != nil,
+                          await projectIsCurrent(allowPendingCancellation: true) else { return unavailable() }
+                    // The exact source/control survived, but this owned popup can
+                    // retire a peer in the name receipt's census. Continue through
+                    // the existing original-header observer, never revive that
+                    // old census or adopt a replacement source by its name.
+                    let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair,
+                        original: pair.strip, runtime: runtime, sourceDisposition: .survivingOriginal)
+                    guard let source = observed.source, source.pair.strip.matches(pair.strip),
+                          source.originalTrack.matches(pair.track), source.permits(runtime: runtime),
+                          let renewed = await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source)
+                    else { return unavailable() }
+                    nameExecutions[goal.reference, default: .init()].restored = renewed
+                    outputPair = source.pair; outputRenewal = source; outputProof = source.observation
+                    guard outputFootprintHeld(pair: source.pair, assignment: task.sink),
                           case .success(let trackName?) = AXValueExtractors.extractTrackNameResult(
                             from: pair.track.header, runtime: runtime.ax),
                           trackName.utf8.elementsEqual(goal.before.utf8),
@@ -2220,7 +2238,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           stripName.utf8.elementsEqual(effect.stripName.utf8),
                           aliases().contains(where: { $0.utf8.elementsEqual(effect.stripName.utf8) }),
                           !aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }),
-                          await projectIsCurrent(allowPendingCancellation: true), owned.permits() else { return unavailable() }
+                          await projectIsCurrent(allowPendingCancellation: true), source.permits(runtime: runtime)
+                    else { return unavailable() }
                 }
             }
         } else {

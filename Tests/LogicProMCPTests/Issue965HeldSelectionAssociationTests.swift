@@ -7340,7 +7340,9 @@ struct Issue965HeldSelectionAssociationTests {
                       "composed_name_execution_failure", "composed_name_execution_preflight_renewal_cancel",
                       "composed_name_execution_preflight_renewal_failure", "composed_name_execution_preflight_renewal_peer",
                       "composed_name_execution_preflight_renewal_project", "composed_name_execution_preflight_renewal_header",
-                      "composed_name_execution_external_name", "composed_name_execution_caption_cancel"])
+                      "composed_name_execution_external_name", "composed_name_execution_caption_cancel",
+                      "composed_name_execution_caption_peer_cancel", "composed_name_execution_caption_peer_changed_cancel",
+                      "composed_name_execution_caption_project_cancel", "composed_name_execution_caption_control_cancel"])
     func canonicalInputAndApprovedNameExecuteBothActualWriters(outcome: String) async throws {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
@@ -7676,6 +7678,20 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     let compensated = outcome.hasSuffix("_cancel") || outcome.hasSuffix("_failure")
                     if compensated {
+                        if ["composed_name_execution_caption_peer_changed_cancel", "composed_name_execution_caption_project_cancel",
+                            "composed_name_execution_caption_control_cancel"].contains(outcome) {
+                            #expect(f.routingLateScopeInjected, "Reach the actual presentation cleanup fault")
+                            #expect(body["state"] as? String == "B")
+                            #expect(body["saga_state"] as? String == "rollbackUncertain")
+                            #expect(f.routingNameWrites == ["Approved Input Source", "Duplicate"])
+                            #expect(f.inputSetterDispatches == 1 && f.routingDestinationPresses == 2,
+                                "Lost cleanup custody cannot dispatch another setter or inverse")
+                            if outcome == "composed_name_execution_caption_peer_changed_cancel" {
+                                let value = try #require(b.attributeValue(b.element(1_291_401), kAXValueAttribute as String) as? NSNumber)
+                                #expect(value.doubleValue == 0.4, "The intervening peer edit remains intact")
+                            }
+                            return
+                        }
                         #expect(body["state"] as? String == "C", "Composed compensation: \(body)")
                         #expect(body["saga_state"] as? String == "fullyCompensated")
                         #expect(f.routingNameWrites == ["Approved Input Source", "Duplicate"])
@@ -7683,9 +7699,13 @@ struct Issue965HeldSelectionAssociationTests {
                             "The owned inverse uses its actual native capsule, not a second public dispatch")
                         #expect(b.attributeValue(b.element(1_291_206), "AXMenuItemMarkChar") as? String == "✓")
                         #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Duplicate")
-                        if outcome == "composed_name_execution_caption_cancel" {
+                        if outcome.hasPrefix("composed_name_execution_caption_") {
                             #expect(b.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String == "Duplicate",
                                 "Owned name/input compensation must refresh the original Mixer presentation, not leave its old name alias")
+                            if outcome == "composed_name_execution_caption_peer_cancel" {
+                                #expect(f.inputReadReplacementPeer != nil,
+                                    "Reach the actual peer retirement during the presentation popup")
+                            }
                         }
                     } else {
                         #expect(body["state"] as? String == "A", "Actual composed name/input: \(body)")
@@ -8016,7 +8036,8 @@ struct Issue965HeldSelectionAssociationTests {
             let captureKeep = canonical && outcome.hasPrefix("keep_capture_")
             let composedRenewal = canonical && composedNameExecution && outcome.contains("_preflight_renewal")
             if retiring || canonicalRenewal || matchingRenewal || composedRenewal || captureKeep
-                || outcome == "matching_output_source_renewal" || outcome == "matching_output_peer_renewal" {
+                || outcome == "matching_output_source_renewal" || outcome == "matching_output_peer_renewal"
+                || outcome.hasPrefix("composed_name_execution_caption_") {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
@@ -8092,7 +8113,7 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(outputMenu, [outputLeaf, physicalOutput])
             }
             let nameField = b.element(1_971_400)
-            if outcome == "composed_name_execution_caption_cancel" {
+            if outcome.hasPrefix("composed_name_execution_caption_") {
                 b.setAttribute(f.strips[1], kAXDescriptionAttribute as String, "Duplicate")
             }
             if composedNameExecution {
@@ -8127,7 +8148,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if action == kAXConfirmAction as String {
                         f.routingNameConfirms += 1
-                        if outcome == "composed_name_execution_caption_cancel", f.routingNameConfirms == 1 {
+                        if outcome.hasPrefix("composed_name_execution_caption_"), f.routingNameConfirms == 1 {
                             // The host keeps this alias after the inverse name commit;
                             // only a later native input-menu lifecycle refreshes it.
                             b.setAttribute(source, kAXDescriptionAttribute as String, "Approved Input Source")
@@ -8140,7 +8161,7 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, replacementInput) || CFEqual(element, output) {
                     let inputPressed = !CFEqual(element, output)
                     if inputPressed { f.inputMenuPresses += 1 }
-                    if outcome == "composed_name_execution_caption_cancel", inputPressed, f.routingNameConfirms == 2 {
+                    if outcome.hasPrefix("composed_name_execution_caption_"), inputPressed, f.routingNameConfirms == 2 {
                         b.setAttribute(source, kAXDescriptionAttribute as String, "Duplicate")
                     }
                     if matchingOutput, inputPressed, f.routingDestinationPresses == 1 { f.inputReadAfterOutput = true }
@@ -8219,6 +8240,33 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingReplacement = replacement
                     }
                     let current = f.routingReplacement ?? f.strips[1]
+                    if outcome.hasPrefix("composed_name_execution_caption_peer_"), f.routingNameConfirms == 2,
+                       CFEqual(element, root) {
+                        // Native presentation cleanup can retain the exact source
+                        // and input control while retiring an unrelated peer.
+                        b.setRole(replacementPeer, kAXLayoutItemRole as String)
+                        b.setAttribute(replacementPeer, kAXNumberOfCharactersAttribute as String, 0)
+                        b.setAttribute(replacementPeer, kAXInsertionPointLineNumberAttribute as String, 0)
+                        b.setChildren(replacementPeer, b.makeAXRuntime().children(peer))
+                        f.inputReadReplacementPeer = replacementPeer
+                        f.routingOtherReplacement = replacementPeer
+                        if outcome == "composed_name_execution_caption_peer_changed_cancel" {
+                            b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
+                            f.routingLateScopeInjected = true
+                        }
+                    }
+                    if outcome.hasPrefix("composed_name_execution_caption_"), f.routingNameConfirms == 2,
+                       CFEqual(element, root) {
+                        if outcome == "composed_name_execution_caption_project_cancel" {
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            f.routingLateScopeInjected = true
+                        } else if outcome == "composed_name_execution_caption_control_cancel" {
+                            b.setButton(replacementInput, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+                            b.setChildren(replacementInput, []); b.setActionNames(replacementInput, [kAXPressAction as String])
+                            b.setChildren(current, b.makeAXRuntime().children(current).map { CFEqual($0, input) ? replacementInput : $0 })
+                            f.routingLateScopeInjected = true
+                        }
+                    }
                     if outcome.hasPrefix("retired_track_peer_"), f.inputSagaForwardVerified,
                        f.routingDestinationPresses == 1, CFEqual(element, root) {
                         b.setRole(replacementPeer, kAXLayoutItemRole as String)
