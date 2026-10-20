@@ -155,6 +155,22 @@ enum SessionPopulationObservation {
         }
 
         func matches(_ other: PresentationBinding) -> Bool {
+            matches(other, matchingFocus: false)
+        }
+
+        /// Only the existing original-header selection/inverse proof may renew a
+        /// retired source focus. Every other presentation control stays identical.
+        func matches(_ other: PresentationBinding,
+            renewedThrough renewal: AccessibilityChannel.OriginalHeaderSourceRenewal,
+            originalAssociation: AccessibilityChannel.HeldSelectionAssociation) -> Bool {
+            guard let focus, let current = other.focus,
+                  CFEqual(focus, renewal.original.strip), CFEqual(current, renewal.pair.strip.strip),
+                  renewal.restoresOriginalFocus(of: originalAssociation, source: renewal.original,
+                    runtime: other.runtime) else { return false }
+            return matches(other, matchingFocus: true)
+        }
+
+        private func matches(_ other: PresentationBinding, matchingFocus: Bool) -> Bool {
             func same(_ lhs: AXUIElement?, _ rhs: AXUIElement?) -> Bool {
                 switch (lhs, rhs) {
                 case (nil, nil): return true
@@ -164,7 +180,7 @@ enum SessionPopulationObservation {
             }
             guard CFEqual(window, other.window), title.utf8.elementsEqual(other.title.utf8),
                   document.utf8.elementsEqual(other.document.utf8), pid == other.pid,
-                  same(app, other.app), same(focus, other.focus), same(mixer, other.mixer),
+                  same(app, other.app), (matchingFocus || same(focus, other.focus)), same(mixer, other.mixer),
                   mixerOwners.count == other.mixerOwners.count,
                   zip(mixerOwners, other.mixerOwners).allSatisfy({ CFEqual($0, $1) }) else { return false }
             switch (transport, other.transport) {

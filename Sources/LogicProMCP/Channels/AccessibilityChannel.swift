@@ -340,6 +340,7 @@ actor AccessibilityChannel: Channel {
         var stackNavigation: OwnedTrackStackObservationNavigation?
         var originalPresentation: SessionPopulationObservation.FreshPopulation?
         var reusesAssociationPresentation = false
+        var routingPresentationRenewal: OriginalHeaderSourceRenewal?
         var association: HeldSelectionAssociation?
         var routingEffects = SessionPopulationObservation.UIEffects()
         var exposedMixerEndEffects = SessionPopulationObservation.UIEffects()
@@ -739,6 +740,7 @@ actor AccessibilityChannel: Channel {
                                 ? candidate : nil
                         }
                         restored.associationReadbackBoundary = boundary
+                        routingPresentationRenewal = survivingRenewals.count == 1 ? survivingRenewals.first : nil
                         population = restored
                     } else {
                         // Structural diagnostics only: no extra host read, value/name
@@ -885,17 +887,25 @@ actor AccessibilityChannel: Channel {
                 // original observation after restoration, without restoring an approved write.
                 let restored = reusesAssociationPresentation
                     ? population : try? readPresentationBaseline(stoppingWhen: stopBeforeAXRead ?? stop)
+                let matchingPresentation: SessionPopulationObservation.PresentationBinding? = {
+                    guard let original = originalPresentation?.presentationBinding,
+                          let current = restored?.presentationBinding else { return nil }
+                    if original.matches(current) { return original }
+                    guard reusesAssociationPresentation, let association, let renewal = routingPresentationRenewal,
+                          original.matches(current, renewedThrough: renewal, originalAssociation: association)
+                    else { return nil }
+                    // Retain the freshly qualified owner, never the retired focus.
+                    return current
+                }()
                 if let originalPresentation, let restored,
                    let observed = originalPresentation.presentationObservation,
                    let restoredObservation = restored.presentationObservation,
                    observed.matchesViewTransport(restoredObservation),
-                   let original = originalPresentation.presentationBinding,
-                   let current = restored.presentationBinding,
-                   original.matches(current) {
+                   let matchingPresentation {
                     population.presentationObservation = .init(mixerVisible: observed.mixerVisible,
                         isPlaying: observed.isPlaying, isRecording: observed.isRecording,
                         uiLocale: observed.uiLocale == restoredObservation.uiLocale ? observed.uiLocale : nil)
-                    population.presentationBinding = original
+                    population.presentationBinding = matchingPresentation
                 } else {
                     population.presentationObservation = .init(mixerVisible: nil, isPlaying: nil, isRecording: nil)
                     population.presentationBinding = nil

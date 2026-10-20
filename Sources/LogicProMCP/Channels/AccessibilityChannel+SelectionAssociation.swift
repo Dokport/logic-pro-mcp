@@ -368,10 +368,16 @@ extension AccessibilityChannel {
                 Log.info("Held association ownership refused: window/dialog (main=\(CFEqual(main, window)), focused=\(focusedWindowMatches), reading=\(focusedReading))", subsystem: "ax")
                 lost = true; return false
             }
-            guard railMatches(),
-                  let currentPath = Self.path(mixer, to: window, ax: logic.ax), Self.same(path, currentPath),
-                  stripCustodyMatches() else {
-                Log.info("Held association ownership refused: original rail/Mixer census", subsystem: "ax")
+            guard railMatches() else {
+                Log.info("Held association ownership refused: original rail census", subsystem: "ax")
+                lost = true; return false
+            }
+            guard let currentPath = Self.path(mixer, to: window, ax: logic.ax), Self.same(path, currentPath) else {
+                Log.info("Held association ownership refused: original Mixer path", subsystem: "ax")
+                lost = true; return false
+            }
+            guard stripCustodyMatches() else {
+                Log.info("Held association ownership refused: original Mixer strip census", subsystem: "ax")
                 lost = true; return false
             }
             guard !checkingStoppedTransport || stoppedTransportPathsMatch() else {

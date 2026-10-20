@@ -128,8 +128,12 @@ extension ProjectSessionAudit {
             source: capture, request: request)
         let matchingInputID = ApprovedSessionRepair.capturedMatchingInputID(policy: policy, names: names,
             source: capture, request: request)
+        // A positively checked observed-receiver KEEP is a read-only local goal,
+        // not complete receiver/population evidence or allocation permission.
+        let keptObservations = names.isEmpty
+            ? ApprovedSessionRepair.capturedReceiverKeepObservations(policy: policy, source: capture, request: request) : nil
         let capturedLocalTask = localOutputStep != nil || localSendStep != nil || matchingSendID != nil
-            || localInputStep != nil || matchingInputID != nil
+            || localInputStep != nil || matchingInputID != nil || keptObservations != nil
         let viewOnly = policy.mixerVisible != nil && policy.trackSort == nil && policy.targets.isEmpty && policy.roles.isEmpty
             && policy.outputs.isEmpty && policy.sends.isEmpty && policy.receivers.isEmpty && names.isEmpty && policy.protectedPaths.isEmpty
         var reasons = Set<String>()
@@ -208,8 +212,6 @@ extension ProjectSessionAudit {
         // was observed. Each offers only answers that settle it on a rebuild (#1090 supplementary
         // review S002): an absence is answered with `new` or `none`, a present receiver with `keep`.
         var receiverQuestions: [Int: Value] = [:]
-        let keptObservations = names.isEmpty
-            ? ApprovedSessionRepair.capturedReceiverKeepObservations(policy: policy, source: capture, request: request) : nil
         func receiverQuestion(_ bus: Int, observed: ReceivingAux) {
             let answers: [String] = observed == .present ? ["keep"] : ["new", "none"]
             receiverQuestions[bus] = .object([
