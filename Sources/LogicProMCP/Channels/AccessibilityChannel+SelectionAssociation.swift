@@ -297,7 +297,8 @@ extension AccessibilityChannel {
         }
 
         private func owned(checkingAssociation: Bool = true, ownedPopup: AXUIElement? = nil,
-                           checkingStoppedTransport: Bool = true) -> Bool {
+                           checkingStoppedTransport: Bool = true,
+                           nativeOutputSource: AXMixerStripBinding.Binding? = nil) -> Bool {
             func railMatches() -> Bool {
                 guard checkingAssociation else { return true }
                 guard let currentRailPath = Self.path(rail, to: window, ax: logic.ax), Self.same(railPath, currentRailPath),
@@ -341,13 +342,30 @@ extension AccessibilityChannel {
             }
             let windows = AXHelpers.decodeChildrenArray(windowValues)
             let main = unsafeBitCast(mainValue, to: AXUIElement.self)
-            let focusedWindowMatches = AccessibilityChannel.routingFocusedWindowMatches(application[3],
-                window: window, ownedPopup: ownedPopup, mixer: mixer, runtime: logic.ax)
+            let focusedWindowMatches: Bool
+            if AccessibilityChannel.routingFocusedWindowMatches(application[3],
+                window: window, ownedPopup: ownedPopup, mixer: mixer, runtime: logic.ax) {
+                focusedWindowMatches = true
+            } else if case .failure(let error) = application[3], error.raw == AXError.noValue.rawValue,
+                      let root = ownedPopup, let source = nativeOutputSource {
+                // Like the ordinary menu's measured AXNoValue, this exact
+                // response needs a fresh reciprocal native popup/source proof.
+                // Missing, unreadable and foreign windows gain no exception.
+                focusedWindowMatches = nativeOutputPopupMatches(root, source: source)
+            } else {
+                focusedWindowMatches = false
+            }
             guard
                   windows.filter({ CFEqual($0, window) }).count == 1,
                   CFEqual(main, window), focusedWindowMatches,
                   currentWindowScopeMatches(), !AXLogicProElements.dialogPresent(runtime: logic) else {
-                Log.info("Held association ownership refused: window/dialog (main=\(CFEqual(main, window)), focused=\(focusedWindowMatches))", subsystem: "ax")
+                let focusedReading: String
+                switch application[3] {
+                case .failure(let error): focusedReading = "AX:\(error.raw)"
+                case .success(.none): focusedReading = "absent"
+                case .success(.some(let value)): focusedReading = "type:\(CFGetTypeID(value))"
+                }
+                Log.info("Held association ownership refused: window/dialog (main=\(CFEqual(main, window)), focused=\(focusedWindowMatches), reading=\(focusedReading))", subsystem: "ax")
                 lost = true; return false
             }
             guard railMatches(),
@@ -452,7 +470,34 @@ extension AccessibilityChannel {
             return true
         }
 
-        func permitsOwnedPopupRead(_ root: AXUIElement) -> Bool {
+        private func nativeOutputPopupMatches(_ root: AXUIElement, source: AXMixerStripBinding.Binding) -> Bool {
+            guard AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax)?.isEmpty == true,
+                  CFEqual(source.window, window), CFEqual(source.mixer, mixer),
+                  source.document.utf8.elementsEqual(document.utf8),
+                  strips.filter({ CFEqual($0, source.strip) }).count == 1,
+                  AccessibilityChannel.currentOutputMenuAssignment(in: root, runtime: logic.ax) == .noOutput,
+                  let popup = AccessibilityChannel.NativeOutputReadPopup.read(
+                    physical: source, app: app, pid: pid, runtime: logic),
+                  CFEqual(popup.root, root) else { return false }
+            return true
+        }
+
+        func permitsOwnedPopupRead(_ root: AXUIElement, nativeSource: AXMixerStripBinding.Binding? = nil) -> Bool {
+            var stage = "original_selection_root_focus", accepted = false
+            defer {
+                if nativeSource != nil, !accepted {
+                    Log.info("Native output popup read refused at \(stage)", subsystem: "ax")
+                }
+            }
+            func popupMatches() -> Bool {
+                guard let menus = AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax) else { return false }
+                if menus.count == 1 { return CFEqual(menus[0], root) }
+                // The neutral output's native popup is not a Mixer AX child.
+                // An explicit held source, its checked No Output and the existing
+                // native window/hit/reciprocal-wrapper reader must all agree.
+                guard menus.isEmpty, let source = nativeSource else { return false }
+                return nativeOutputPopupMatches(root, source: source)
+            }
             func heldRailChildMatches() -> Bool {
                 guard originalRailFocus != nil else { return true }
                 guard let expectedSelectedChild, case .observed(let child) = selectedChildRead(),
@@ -462,16 +507,17 @@ extension AccessibilityChannel {
             }
             // This is not a general editor exemption or a new association. Keep
             // the original complete census and exclusive selection; only allow
-            // focus on the search field reciprocally owned by this exact popup.
+            // its reciprocal search field or the original app of a checked
+            // native neutral popup, in addition to the original passive strip.
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
-                  let menus = AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax),
-                  menus.count == 1, CFEqual(menus[0], root),
+                  popupMatches(),
                   let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax)
             else {
                 Log.info("Input popup ownership refused: original selection/root/focus", subsystem: "ax")
                 lost = true; return false
             }
+            stage = "original_passive_metadata"
             guard passiveAssociationFocusMatches(expectedFocus), heldRailChildMatches() else {
                 Log.info("Input popup ownership refused: original passive association metadata", subsystem: "ax")
                 return false
@@ -480,41 +526,59 @@ extension AccessibilityChannel {
             // existing full witness also handles native zero insertion metadata;
             // do not classify that qualified strip as an arbitrary editor.
             if CFEqual(focus, expectedFocus) {
-                guard passiveFocusMatches(), owned(ownedPopup: root),
+                stage = "passive_focus_ownership"
+                guard passiveFocusMatches(), owned(ownedPopup: root, nativeOutputSource: nativeSource),
                       Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                       let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                       CFEqual(final, expectedFocus), heldRailChildMatches(), passiveAssociationFocusMatches(expectedFocus),
                       let afterChild: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
-                      CFEqual(afterChild, expectedFocus) else { lost = true; return false }
+                      CFEqual(afterChild, expectedFocus),
+                      nativeSource == nil || popupMatches() else { lost = true; return false }
+                accepted = true
                 return true
             }
-            guard
-                  AXHelpers.getRole(focus, runtime: logic.ax) == kAXTextFieldRole as String,
-                  case .success(let rows) = AXHelpers.childrenResult(root, runtime: logic.ax),
-                  let parent: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
-            else { lost = true; return false }
-            if CFEqual(parent, root) {
-                guard rows.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+            let focusRole = AXHelpers.getRole(focus, runtime: logic.ax)
+            stage = "search_field_role_\(focusRole ?? "unread")"
+            if nativeSource != nil, focusRole == kAXApplicationRole as String, CFEqual(focus, app) {
+                // The native neutral popup can report its original application
+                // as focused instead of an AX search field. Only this existing
+                // checked native window/root/source proof qualifies that exact CF;
+                // an arbitrary application or ordinary menu gains no exemption.
+                stage = "native_application_focus"
+                guard AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax)?.isEmpty == true,
+                      popupMatches() else { lost = true; return false }
             } else {
-                guard rows.filter({ CFEqual($0, parent) }).count == 1,
-                      let role = AXHelpers.getRole(parent, runtime: logic.ax),
-                      role == kAXGroupRole as String || role == "AXMenuItem",
-                      let parentRoot: AXUIElement = AXHelpers.getAttribute(parent, kAXParentAttribute as String, runtime: logic.ax),
-                      CFEqual(parentRoot, root),
-                      case .success(let children) = AXHelpers.childrenResult(parent, runtime: logic.ax),
-                      children.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+                guard focusRole == kAXTextFieldRole as String,
+                      case .success(let rows) = AXHelpers.childrenResult(root, runtime: logic.ax),
+                      let parent: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
+                else { lost = true; return false }
+                if CFEqual(parent, root) {
+                    stage = "direct_search_field_membership"
+                    guard rows.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+                } else {
+                    stage = "nested_search_field_membership"
+                    guard rows.filter({ CFEqual($0, parent) }).count == 1,
+                          let role = AXHelpers.getRole(parent, runtime: logic.ax),
+                          role == kAXGroupRole as String || role == "AXMenuItem",
+                          let parentRoot: AXUIElement = AXHelpers.getAttribute(parent, kAXParentAttribute as String, runtime: logic.ax),
+                          CFEqual(parentRoot, root),
+                          case .success(let children) = AXHelpers.childrenResult(parent, runtime: logic.ax),
+                          children.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+                }
             }
-            guard let current = AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax),
-                  current.count == 1, CFEqual(current[0], root),
+            stage = "search_field_popup_bookend"
+            guard popupMatches(),
                   let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(final, focus) else {
                 Log.info("Input popup ownership refused: reciprocal focus/root", subsystem: "ax")
                 lost = true; return false
             }
-            guard owned(ownedPopup: root) else {
+            stage = "complete_native_ownership"
+            guard owned(ownedPopup: root, nativeOutputSource: nativeSource) else {
                 Log.info("Input popup ownership refused: full association custody", subsystem: "ax")
                 return false
             }
+            stage = "final_native_focus"
             guard
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   heldRailChildMatches(), passiveAssociationFocusMatches(expectedFocus),
@@ -523,6 +587,7 @@ extension AccessibilityChannel {
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   let afterChild: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(afterChild, focus) else { lost = true; return false }
+            accepted = true
             return true
         }
 

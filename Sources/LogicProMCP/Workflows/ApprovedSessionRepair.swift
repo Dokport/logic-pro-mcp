@@ -288,6 +288,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         switch destination {
         case .physical(let first, let second): return .physical(first, second)
         case .stereoOutput: return .stereoOutput
+        case .noOutput: return .noOutput
         default: return nil
         }
     }
@@ -335,7 +336,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == nil }
         guard strips.count == 1, let stripIndex = strips.first, let mixerRef = source.mixerReference(at: stripIndex),
               checked.count == 1, let before = checked.first?.assignment,
-              localAssignmentForBefore(before) != nil,
+              localAssignmentForBefore(before) != nil || before == .noOutput,
+              // No Output is initially one output-only task. In particular,
+              // it does not expand the shared physical/stereo input-sink
+              // contract or admit a preliminary name write in a mixed plan.
+              (before != .noOutput && desired != .noOutput)
+                || (names.isEmpty && policy.inputs.isEmpty
+                    && ((before == .stereoOutput && desired == .noOutput)
+                        || (before == .noOutput && desired == .stereoOutput))),
               source.channelStrips.allSatisfy({ strip in
                   guard let binding = strip.physicalBinding, strip.name != nil, strip.nameReadError == nil,
                         strip.volumeReadback != nil, strip.panReadback != nil,
@@ -991,6 +999,30 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return (selector, task.pair, task.control, task.capture)
     }
 
+    /// The retained approval, not discovery or a caller token, owns this one
+    /// output-only Stereo/No Output step and its already-verified inverse.
+    /// The scalar still checks the live source and protected footprint at its leaf.
+    func ownsCanonicalNoOutputChange(before: OutputAssignment, destination: OutputAssignment,
+                                    pair: AccessibilityChannel.HeldSelectionAssociation.Pair) -> Bool {
+        guard Self.current === self, Self.outputLeafPermission != nil,
+              nameGoals.isEmpty, inputTask == nil, sendTask == nil,
+              let task = outputTask, plan.canonicalPlanID != nil, plan.canonicalDigest != nil,
+              plan.steps.count == 1, let step = plan.steps.first, supports(step),
+              (task.before == .stereoOutput && task.desired == .noOutput)
+                || (task.before == .noOutput && task.desired == .stereoOutput) else { return false }
+        let held = outputPair ?? task.pair
+        guard held.track.matches(pair.track), held.strip.matches(pair.strip),
+              pair.track.document.utf8.elementsEqual(document.utf8),
+              pair.strip.document.utf8.elementsEqual(document.utf8) else { return false }
+        if outputAttempted {
+            // performOutput consumes the single inverse before entering the
+            // scalar; an acknowledgement without independent verification is not enough.
+            return outputApplied && outputInverseConsumed
+                && before == task.desired && destination == task.before
+        }
+        return !outputInverseConsumed && before == task.before && destination == task.desired
+    }
+
     /// A matching input may observe only this same pair's independently verified output effect.
     /// This is not an input write/inverse capsule, and an output acknowledgement is insufficient.
     func verifiedMatchingInputOutput(at pair: AccessibilityChannel.HeldSelectionAssociation.Pair) -> OutputAssignment? {
@@ -1406,6 +1438,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                      ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil,
                                      ownedStripNamePreview: [String]? = nil,
                                      verifiedNameEffect: ExactTrackNameAdapter.VerifiedNameEffect? = nil) -> Bool {
+        var stage = "retained_task", accepted = false
+        defer {
+            if !accepted, popup != nil {
+                Log.info("Canonical output footprint refused at \(stage)", subsystem: "saga")
+            }
+        }
         guard let task = nameFootprintTask, let proof = outputProof else { return false }
         let runtime = pair.track.runtime
         @Sendable func permitted() -> Bool {
@@ -1415,12 +1453,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     && ExactTrackNameAdapter.permitsCoupledEditorRead(editor, pair: pair, names: names, transportProof: proof)
             }
             return (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
-                && (popup.map { proof.permitsOwnedPopupRead($0) } ?? proof.permitsRead())
+                && (popup.map { proof.permitsOwnedPopupRead($0,
+                    nativeSource: assignment == .noOutput ? pair.strip : nil) } ?? proof.permitsRead())
         }
+        stage = "initial_custody"
         guard permitted(), pair.track.matches(task.pair.track),
               outputRenewal.map { renewal in
                   renewal.pair.strip.matches(pair.strip) && renewal.pair.track.matches(task.pair.track)
-                      && (ownedNameEditor != nil || renewal.permits(runtime: runtime, ownedPopup: popup))
+                      && (ownedNameEditor != nil || renewal.permits(runtime: runtime, ownedPopup: popup,
+                        nativeOutputPopup: assignment == .noOutput))
               } ?? true,
               proof.headers.count == task.capture.tracks.count,
               zip(proof.headers, task.capture.tracks).allSatisfy({ header, row in
@@ -1441,6 +1482,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     stoppingWhen: metadataStopped) }
             return (tracks, strips)
         }
+        stage = "sampled_owners_counts_output"
         guard let tracks = fields.0, let strips = fields.1, permitted(),
               tracks.count == task.capture.tracks.count,
               zip(tracks, task.capture.tracks).allSatisfy({ current, original in
@@ -1458,6 +1500,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               strips[index].physicalBinding?.matches(pair.strip) == true,
               strips[index].output.flatMap(OutputAssignment.observed(slotLabel:)) == assignment else { return false }
         if let renewal = outputRenewal {
+            stage = "renewed_census"
             // This owned original-header receipt holds the entire new census.
             // It corroborates aggregate preserved values; it neither rebinds
             // retired peer references nor grants any peer mutation authority.
@@ -1468,6 +1511,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   }) else { return false }
         }
         for row in strips.indices {
+            stage = "protected_scalars_plugins_\(row)"
             if outputRenewal == nil, row != index,
                strips[row].physicalBinding?.matches(task.capture.channelStrips[row].physicalBinding ?? pair.strip) != true { return false }
             guard strips[row].volumeReadback == task.capture.channelStrips[row].volumeReadback,
@@ -1525,17 +1569,39 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             }
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        stage = "encoded_values"
         guard let expectedTracks = try? encoder.encode(expectedTrackRows),
-              let currentTracks = try? encoder.encode(tracks), expectedTracks == currentTracks,
-              let expectedStrips = try? encoder.encode(expected), let currentStrips = try? encoder.encode(strips),
-              expectedStrips == currentStrips, permitted(),
-              ownedNameEditor != nil || (outputRenewal.map { $0.permits(runtime: runtime, ownedPopup: popup) } ?? true),
+              let currentTracks = try? encoder.encode(tracks),
+              let expectedStrips = try? encoder.encode(expected), let currentStrips = try? encoder.encode(strips) else { return false }
+        if expectedTracks != currentTracks || expectedStrips != currentStrips {
+            // Compare already-sampled schema fields only; no extra host reads
+            // or value/name disclosure, and no acceptance change.
+            var changed: [String] = []
+            for (domain, oldData, newData) in [("tracks", expectedTracks, currentTracks), ("strips", expectedStrips, currentStrips)] {
+                guard let old = try? JSONSerialization.jsonObject(with: oldData) as? [[String: Any]],
+                      let new = try? JSONSerialization.jsonObject(with: newData) as? [[String: Any]] else { continue }
+                for (row, pair) in zip(old, new).enumerated() where changed.count < 4 {
+                    let keys = Set(pair.0.keys).union(pair.1.keys).filter {
+                        (pair.0[$0] as? NSObject)?.isEqual(pair.1[$0]) != true
+                    }.sorted()
+                    if !keys.isEmpty { changed.append("\(domain)[\(row)]:\(keys.joined(separator: ","))") }
+                }
+            }
+            Log.info("Canonical output footprint fields changed: \(changed.joined(separator: ";"))", subsystem: "saga")
+            return false
+        }
+        stage = "final_custody"
+        guard permitted(),
+              ownedNameEditor != nil || (outputRenewal.map { $0.permits(runtime: runtime, ownedPopup: popup,
+                nativeOutputPopup: assignment == .noOutput) } ?? true),
               pair.strip.currentIndex(runtime: runtime) == index,
               case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(pair.strip.window, runtime: runtime),
               finalDocument.utf8.elementsEqual(document.utf8) else { return false }
         if let editor = ownedNameEditor {
-            return ExactTrackNameAdapter.coupledWriteFocusMatches(editor, runtime: runtime)
+            accepted = ExactTrackNameAdapter.coupledWriteFocusMatches(editor, runtime: runtime)
+            return accepted
         }
+        accepted = true
         return true
     }
 
@@ -1583,6 +1649,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             // independently checks expected_current and the full protected
             // footprint at its final leaf boundary; do not repeat that scan.
             guard outputProof?.permitsRead() == true else {
+                Log.info("Canonical output refused: retained before-read custody expired", subsystem: "saga")
                 return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
             }
         } else {
@@ -1591,19 +1658,25 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             }
         }
         guard await projectIsCurrent(allowPendingCancellation: inverse) else {
+            Log.info("Canonical output refused: project or operation custody changed before routing", subsystem: "saga")
             return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
         }
         let pair = outputPair ?? task.pair, runtime = pair.track.runtime
-        guard let index = pair.strip.currentIndex(runtime: runtime) else { return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false]) }
+        guard let index = pair.strip.currentIndex(runtime: runtime) else {
+            Log.info("Canonical output refused: retained source is no longer uniquely current", subsystem: "saga")
+            return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+        }
         if inverse { outputInverseConsumed = true }
         let response = await Self.$outputLeafPermission.withValue({ [self] popup in
             outputFootprintHeld(pair: pair, assignment: expected, popup: popup)
         }) {
             await AXMixerStripBinding.$current.withValue(pair.strip) {
                 await AXMixerStripBinding.$outputAssociation.withValue(pair) {
-                    await OperationTraceWriteBoundaryArm.armed(OperationTraceContext.current?.traceID) {
-                        await routedTextResult(router, operation: "mixer.set_output_verified",
-                            params: ["index": String(index), "destination": desired.token, "expected_current": expected.token])
+                    await Self.$current.withValue(self) {
+                        await OperationTraceWriteBoundaryArm.armed(OperationTraceContext.current?.traceID) {
+                            await routedTextResult(router, operation: "mixer.set_output_verified",
+                                params: ["index": String(index), "destination": desired.token, "expected_current": expected.token])
+                        }
                     }
                 }
             }
