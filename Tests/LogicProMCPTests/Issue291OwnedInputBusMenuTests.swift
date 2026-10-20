@@ -263,10 +263,15 @@ struct Issue291OwnedInputBusMenuTests {
         #expect(f.mutations.isEmpty)
     }
 
-    @Test(arguments: ["healthy", "two_same_name", "no_type", "no_checked_input", "ambiguous_input", "changed_input",
+    @Test(arguments: ["healthy", "selected", "selected_no_type", "selected_no_checked_input", "selected_changed_input",
+        "selected_wrong_project", "selected_unread_checked_input", "selected_not_restored",
+        "two_same_name", "no_type", "no_checked_input", "ambiguous_input", "changed_input",
         "changed_input_control", "changed_label_control", "changed_label", "changed_source", "wrong_project", "wrong_registry",
         "foreign_editor", "unread_checked_input", "not_restored"])
-    func registeredKeepRechecksTheCapturedAuxWithoutChangingRouting(fault: String) async throws {
+    func registeredKeepRechecksTheCapturedAuxWithoutChangingRouting(fault requestedFault: String) async throws {
+        let selectedScope = requestedFault == "selected" || requestedFault.hasPrefix("selected_")
+        let fault = requestedFault == "selected" ? "healthy"
+            : selectedScope ? String(requestedFault.dropFirst("selected_".count)) : requestedFault
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 let p = try prepare(), f = p.f, b = f.b
@@ -321,7 +326,12 @@ struct Issue291OwnedInputBusMenuTests {
                     }
                     return try #require(sharedJSONObject(sharedToolText(response)))
                 }
+                if selectedScope {
+                    b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[0]])
+                    b.setAttribute(f.strips[0], kAXSelectedAttribute as String, true)
+                }
                 let inspected = try await call("inspect_session", ["domains": .array([.string("strips"), .string("routing")]),
+                    "scope": .string(selectedScope ? "selection" : "whole_project"),
                     "allow_ui_navigation": .bool(fault != "no_checked_input")])
                 let project = try #require((inspected["project"] as? [String: Any])?["project_ref"] as? String)
                 let snapshot = try #require(inspected["snapshot_id"] as? String)
