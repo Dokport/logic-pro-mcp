@@ -2108,7 +2108,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return evidence
     }
 
-    func performName(_ step: SagaStep, router: ChannelRouter) async -> CallTool.Result {
+    func performName(_ step: SagaStep, router: ChannelRouter,
+        restoredInput: AccessibilityChannel.ChangedInputObservation? = nil) async -> CallTool.Result {
         guard supports(step), let goal = changedNameGoals.first(where: { $0.reference == step.targetRef }),
               let capture = renameCapture else {
             return toolStateCResult(.unsupportedState, extras: ["write_attempted": false])
@@ -2179,6 +2180,49 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) }, preservingFootprint: preserving,
                 afterVerifiedWrite: afterVerifiedWrite)
             nameExecutions[goal.reference, default: .init()].restored = receipt.inverse
+            if receipt.status == .applied, let task = inputTask, let owned = restoredInput,
+               goal.reference == task.reference {
+                func unavailable() -> CallTool.Result {
+                    toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable,
+                        extras: ["write_attempted": true,
+                            "hint": "The restored name's original input presentation could not be independently refreshed."]), isError: true)
+                }
+                let pair = owned.current
+                guard let proof = receipt.inverse,
+                      let effect = ExactTrackNameAdapter.recordedNameEffect(proof), effect.matches(pair),
+                      pair.track.matches(goal.binding), owned.after == task.before, owned.permits(),
+                      await projectIsCurrent(allowPendingCancellation: true) else { return unavailable() }
+                func aliases() -> [String] {
+                    [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute in
+                        AXHelpers.getAttribute(pair.strip.strip, attribute as String, runtime: runtime.ax) as String?
+                    }
+                }
+                // Logic can retain the forward name on the physical group/focus
+                // after the inverse editor commit. Refresh only this observed
+                // stale alias; redundant popup cycles can retire unrelated peers.
+                if !effect.stripName.utf8.elementsEqual(goal.name.utf8),
+                   aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }) {
+                    let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
+                        await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                            await AccessibilityChannel.getInputBusObservation(runtime: runtime,
+                                requiringOriginalInputControl: owned.control)
+                        }
+                    }
+                    guard read.result.isSuccess, read.assignment == .bus(task.before),
+                          read.inputSlot.map(owned.control.matches) == true, owned.permits(),
+                          let message = decodedJSONObject(read.result.message),
+                          message["popup_menu_state"] as? String == "closed",
+                          message["focus_restoration"] as? String == "restored",
+                          case .success(let trackName?) = AXValueExtractors.extractTrackNameResult(
+                            from: pair.track.header, runtime: runtime.ax),
+                          trackName.utf8.elementsEqual(goal.before.utf8),
+                          case .success(let stripName?) = AXPluginInstanceIdentity.stripNameResult(pair.strip.strip, runtime: runtime.ax),
+                          stripName.utf8.elementsEqual(effect.stripName.utf8),
+                          aliases().contains(where: { $0.utf8.elementsEqual(effect.stripName.utf8) }),
+                          !aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }),
+                          await projectIsCurrent(allowPendingCancellation: true), owned.permits() else { return unavailable() }
+                }
+            }
         } else {
             guard execution?.ran != true, step.params["name"] == .string(goal.name) else {
                 return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])

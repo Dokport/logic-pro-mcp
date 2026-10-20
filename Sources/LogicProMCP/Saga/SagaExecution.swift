@@ -693,7 +693,8 @@ struct ProductionSagaStepExecutor: SagaStepExecutor {
                 await NavigateDispatcher.handle(command: "toggle_view", params: params, router: router, cache: cache)
             }
         case .tracksRename where approvedSessionRepair?.supports(step) == true:
-            response = await approvedSessionRepair!.performName(step, router: router)
+            response = await approvedSessionRepair!.performName(step, router: router,
+                restoredInput: inputBus?.restoredInputForNamePresentation())
         case .tracksSortVerified where approvedSessionRepair?.supports(step) == true:
             response = await approvedSessionRepair!.performSort(step, router: router)
         case .mixerSetOutputVerified where approvedSessionRepair?.supports(step) == true:

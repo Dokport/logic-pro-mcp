@@ -7340,7 +7340,7 @@ struct Issue965HeldSelectionAssociationTests {
                       "composed_name_execution_failure", "composed_name_execution_preflight_renewal_cancel",
                       "composed_name_execution_preflight_renewal_failure", "composed_name_execution_preflight_renewal_peer",
                       "composed_name_execution_preflight_renewal_project", "composed_name_execution_preflight_renewal_header",
-                      "composed_name_execution_external_name"])
+                      "composed_name_execution_external_name", "composed_name_execution_caption_cancel"])
     func canonicalInputAndApprovedNameExecuteBothActualWriters(outcome: String) async throws {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
@@ -7683,6 +7683,10 @@ struct Issue965HeldSelectionAssociationTests {
                             "The owned inverse uses its actual native capsule, not a second public dispatch")
                         #expect(b.attributeValue(b.element(1_291_206), "AXMenuItemMarkChar") as? String == "✓")
                         #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Duplicate")
+                        if outcome == "composed_name_execution_caption_cancel" {
+                            #expect(b.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String == "Duplicate",
+                                "Owned name/input compensation must refresh the original Mixer presentation, not leave its old name alias")
+                        }
                     } else {
                         #expect(body["state"] as? String == "A", "Actual composed name/input: \(body)")
                         #expect(body["saga_state"] as? String == "completed")
@@ -8088,6 +8092,9 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(outputMenu, [outputLeaf, physicalOutput])
             }
             let nameField = b.element(1_971_400)
+            if outcome == "composed_name_execution_caption_cancel" {
+                b.setAttribute(f.strips[1], kAXDescriptionAttribute as String, "Duplicate")
+            }
             if composedNameExecution {
                 // The real name writer receives only this fixture's native AX editor.
                 // Any fallback remains inside the fake channel, never the desktop.
@@ -8120,6 +8127,11 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if action == kAXConfirmAction as String {
                         f.routingNameConfirms += 1
+                        if outcome == "composed_name_execution_caption_cancel", f.routingNameConfirms == 1 {
+                            // The host keeps this alias after the inverse name commit;
+                            // only a later native input-menu lifecycle refreshes it.
+                            b.setAttribute(source, kAXDescriptionAttribute as String, "Approved Input Source")
+                        }
                         b.setAttribute(b.element(1_965_711), kAXValueAttribute as String,
                             b.attributeValue(nameField, kAXDescriptionAttribute as String))
                         b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, source); return true
@@ -8128,6 +8140,9 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, replacementInput) || CFEqual(element, output) {
                     let inputPressed = !CFEqual(element, output)
                     if inputPressed { f.inputMenuPresses += 1 }
+                    if outcome == "composed_name_execution_caption_cancel", inputPressed, f.routingNameConfirms == 2 {
+                        b.setAttribute(source, kAXDescriptionAttribute as String, "Duplicate")
+                    }
                     if matchingOutput, inputPressed, f.routingDestinationPresses == 1 { f.inputReadAfterOutput = true }
                     if outcome == "checked_inverse_input", inputPressed, f.inputSagaForwardVerified,
                        AccessibilityChannel.inputChangeObserver != nil, f.routingDestinationPresses == 1 {
