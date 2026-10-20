@@ -6544,6 +6544,12 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
 
+    @Test("Selected receiver KEEP retains presentation only through the actual original-header input renewal",
+          arguments: ["healthy", "no_type", "foreign_focus", "foreign_project"])
+    func selectedReceiverKeepCaptureRenewsItsOriginalFocus(fault: String) async throws {
+        try await assertRegisteredInputSaga("keep_capture_" + fault, canonical: true)
+    }
+
     @Test func canonicalInputAndApprovedNameRetainOneOrderedPlan() async throws {
         try await assertRegisteredInputSaga("composed_name_preview", canonical: true)
     }
@@ -7265,8 +7271,9 @@ struct Issue965HeldSelectionAssociationTests {
             let retiring = outcome.hasPrefix("retired_track_")
             let canonicalRenewal = canonical && outcome.hasPrefix("owned_renewal")
             let matchingRenewal = canonical && (outcome.hasPrefix("matching_renewal") || outcome == "matching_output_preflight_renewal")
+            let captureKeep = canonical && outcome.hasPrefix("keep_capture_")
             let composedRenewal = canonical && composedNameExecution && outcome.contains("_preflight_renewal")
-            if retiring || canonicalRenewal || matchingRenewal || composedRenewal
+            if retiring || canonicalRenewal || matchingRenewal || composedRenewal || captureKeep
                 || outcome == "matching_output_source_renewal" || outcome == "matching_output_peer_renewal" {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
@@ -7292,6 +7299,14 @@ struct Issue965HeldSelectionAssociationTests {
             b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output destination.", x: 0, y: 30, width: 60, height: 20)
             for control in [input, output] { b.setChildren(control, []); b.setActionNames(control, [kAXPressAction as String]) }
             b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [input, output])
+            if captureKeep, outcome != "keep_capture_no_type" {
+                let label = b.element(1_967_901)
+                b.setRole(label, kAXStaticTextRole as String)
+                b.setAttribute(label, kAXDescriptionAttribute as String, "label")
+                b.setAttribute(label, kAXValueAttribute as String, "Aux 7")
+                b.setChildren(label, [])
+                b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [label])
+            }
             if canonical {
                 for index in f.strips.indices {
                     let volume = b.element(1_291_400 + index * 2), pan = b.element(1_291_401 + index * 2)
@@ -7441,6 +7456,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let willRetire = retiring || (canonicalRenewal && InputBusSagaAdapter.writePermission != nil)
                         || (matchingRenewal && f.inputMenuCancels > 1)
                         || (composedRenewal && f.inputMenuCancels > 1)
+                        || (captureKeep && f.inputMenuCancels == 1)
                     if willRetire, CFEqual(element, root) {
                         let replacement = b.element(1_291_300 + f.inputMenuCancels)
                         b.setRole(replacement, kAXLayoutItemRole as String)
@@ -7461,6 +7477,12 @@ struct Issue965HeldSelectionAssociationTests {
                     if !canonical || willRetire {
                         b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
                             outcome == "matching_renewal_rail" && willRetire ? f.rail : willRetire ? current : f.window)
+                    }
+                    if captureKeep, willRetire {
+                        if outcome == "keep_capture_foreign_focus" { injectForeignInputEditor(f) }
+                        if outcome == "keep_capture_foreign_project" {
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
                     }
                     if composedRenewal, willRetire, !f.routingLateScopeInjected {
                         if outcome.hasSuffix("_peer") {
@@ -7500,8 +7522,42 @@ struct Issue965HeldSelectionAssociationTests {
             let captured = try await inspect(f, cache: cache, registry: registry,
                 domains: canonical ? ["tracks", "strips", "associations", "routing"] : ["associations"],
                 scope: canonical ? "selection" : "whole_project")
+            if captureKeep, ["keep_capture_foreign_focus", "keep_capture_foreign_project"].contains(outcome) {
+                #expect(f.inputMenuPresses > 0 && f.routingReplacement != nil)
+                #expect(captured["snapshot_id"] == nil && captured["error"] != nil,
+                    "Foreign custody cannot publish a successful retained snapshot")
+                #expect(f.routingDestinationPresses == 0 && f.inputSetterDispatches == 0)
+                return
+            }
             let snapshotID = try #require(captured["snapshot_id"] as? String, "Actual input capture: \(captured)")
             let capture = try #require(await cache.retainedInspection(id: snapshotID)).capture
+            if captureKeep {
+                #expect(f.inputMenuPresses > 0 && f.routingReplacement != nil,
+                    "Reach the actual owned popup and native source retirement during capture")
+                #expect(f.routingDestinationPresses == 0 && f.inputSetterDispatches == 0)
+                guard case .issued(let project)? = capture.projectIssuance else {
+                    #expect(outcome == "keep_capture_foreign_project"); return
+                }
+                let wire: Value = .object(["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                    "project_ref": .string(project.rawValue), "targets": .array([]),
+                    "receivers": .array([.object(["bus": .int(1), "aux": .string("keep")])])])
+                guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(try #require(wire.objectValue))
+                else { Issue.record("The receiver KEEP policy must parse"); return }
+                let retained = try #require(await cache.retainedInspection(id: snapshotID))
+                try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                    let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: wire,
+                        names: [], capture: capture, request: retained.request, snapshotCurrent: true)
+                    let preview = try #require(sharedJSONObject(plan.json))
+                    #expect(preview["executable"] as? Bool == (outcome == "keep_capture_healthy"), "\(preview)")
+                    if outcome == "keep_capture_healthy" {
+                        let fresh = try #require(capture.freshPopulation)
+                        #expect(fresh.presentationBinding != nil && fresh.stable && fresh.uiEffects.restoration == "restored")
+                        let focus = try #require(fresh.presentationBinding?.focus)
+                        #expect(CFEqual(focus, try #require(f.routingReplacement)))
+                    }
+                }
+                return
+            }
             let row = try #require(capture.channelStrips.indices.first { capture.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, f.strips[1]) } == true })
             let reference = try #require(capture.mixerReference(at: row))
             if !canonical {

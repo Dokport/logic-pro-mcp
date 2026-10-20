@@ -340,6 +340,7 @@ actor AccessibilityChannel: Channel {
         var stackNavigation: OwnedTrackStackObservationNavigation?
         var originalPresentation: SessionPopulationObservation.FreshPopulation?
         var reusesAssociationPresentation = false
+        var routingPresentationRenewal: OriginalHeaderSourceRenewal?
         var association: HeldSelectionAssociation?
         var routingEffects = SessionPopulationObservation.UIEffects()
         var exposedMixerEndEffects = SessionPopulationObservation.UIEffects()
@@ -739,6 +740,7 @@ actor AccessibilityChannel: Channel {
                                 ? candidate : nil
                         }
                         restored.associationReadbackBoundary = boundary
+                        routingPresentationRenewal = survivingRenewals.count == 1 ? survivingRenewals.first : nil
                         population = restored
                     } else {
                         // Structural diagnostics only: no extra host read, value/name
@@ -885,30 +887,26 @@ actor AccessibilityChannel: Channel {
                 // original observation after restoration, without restoring an approved write.
                 let restored = reusesAssociationPresentation
                     ? population : try? readPresentationBaseline(stoppingWhen: stopBeforeAXRead ?? stop)
+                let matchingPresentation: SessionPopulationObservation.PresentationBinding? = {
+                    guard let original = originalPresentation?.presentationBinding,
+                          let current = restored?.presentationBinding else { return nil }
+                    if original.matches(current) { return original }
+                    guard reusesAssociationPresentation, let association, let renewal = routingPresentationRenewal,
+                          original.matches(current, renewedThrough: renewal, originalAssociation: association)
+                    else { return nil }
+                    // Retain the freshly qualified owner, never the retired focus.
+                    return current
+                }()
                 if let originalPresentation, let restored,
                    let observed = originalPresentation.presentationObservation,
                    let restoredObservation = restored.presentationObservation,
                    observed.matchesViewTransport(restoredObservation),
-                   let original = originalPresentation.presentationBinding,
-                   let current = restored.presentationBinding,
-                   original.matches(current) {
+                   let matchingPresentation {
                     population.presentationObservation = .init(mixerVisible: observed.mixerVisible,
                         isPlaying: observed.isPlaying, isRecording: observed.isRecording,
                         uiLocale: observed.uiLocale == restoredObservation.uiLocale ? observed.uiLocale : nil)
-                    population.presentationBinding = original
+                    population.presentationBinding = matchingPresentation
                 } else {
-                    // Structural diagnostics from already-held witnesses only.
-                    let original = originalPresentation?.presentationBinding
-                    let current = restored?.presentationBinding
-                    func same(_ lhs: AXUIElement?, _ rhs: AXUIElement?) -> Bool {
-                        switch (lhs, rhs) {
-                        case (nil, nil): return true
-                        case (.some(let a), .some(let b)): return CFEqual(a, b)
-                        default: return false
-                        }
-                    }
-                    Log.info("Presentation restoration withheld: original=\(original != nil),current=\(current != nil),view=\(originalPresentation?.presentationObservation.flatMap { before in restored?.presentationObservation.map { before.matchesViewTransport($0) } } == true),window=\(same(original?.window, current?.window)),app=\(same(original?.app, current?.app)),focus=\(same(original?.focus, current?.focus)),mixer=\(same(original?.mixer, current?.mixer)),owners=\(original?.mixerOwners.count ?? -1)/\(current?.mixerOwners.count ?? -1),ownerIdentity=\(zip(original?.mixerOwners ?? [], current?.mixerOwners ?? []).allSatisfy { CFEqual($0, $1) }),transport=\(same(original?.transport?.controlBar, current?.transport?.controlBar))/\(same(original?.transport?.play, current?.transport?.play))/\(same(original?.transport?.record, current?.transport?.record))", subsystem: "ax")
-                    Log.info("Presentation focus witnesses: originalAssociation=\(same(original?.focus, association?.originalFocus)),currentAssociation=\(same(current?.focus, association?.originalFocus)),originalApp=\(same(original?.focus, original?.app)),currentApp=\(same(current?.focus, current?.app)),originalStrip=\(originalPresentation?.strips?.filter { same(original?.focus, $0.physicalBinding?.strip) }.count ?? -1),currentStrip=\(restored?.strips?.filter { same(current?.focus, $0.physicalBinding?.strip) }.count ?? -1),originalHeader=\(originalPresentation?.tracks?.filter { same(original?.focus, $0.physicalBinding?.header) }.count ?? -1),currentHeader=\(restored?.tracks?.filter { same(current?.focus, $0.physicalBinding?.header) }.count ?? -1)", subsystem: "ax")
                     population.presentationObservation = .init(mixerVisible: nil, isPlaying: nil, isRecording: nil)
                     population.presentationBinding = nil
                 }
