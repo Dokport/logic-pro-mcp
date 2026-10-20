@@ -601,12 +601,23 @@ extension AccessibilityChannel {
         /// population custody still authorize every association action, inverse
         /// and publication. Passive Help never acquires that authority.
         func permitsPassiveFocusRead() -> Bool {
-            guard passiveFocusMatches(), owned(checkingAssociation: false),
-                  let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
+            guard passiveFocusMatches(), owned(checkingAssociation: false) else { lost = true; return false }
+            // Fresh final values from this original app, not owned()'s earlier
+            // sample. Help still asks the complete proof before every real read.
+            let finalApp = AXHelpers.getNonHelpAttributes(app,
+                [kAXFocusedUIElementAttribute, kAXMainWindowAttribute, kAXFocusedWindowAttribute] as [String],
+                runtime: logic.ax, permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+            guard case .success(.some(let rawFocus)) = finalApp[0], CFGetTypeID(rawFocus) == AXUIElementGetTypeID(),
+                  case .success(.some(let rawMain)) = finalApp[1], CFGetTypeID(rawMain) == AXUIElementGetTypeID(),
+                  case .success(.some(let rawWindow)) = finalApp[2], CFGetTypeID(rawWindow) == AXUIElementGetTypeID() else {
+                lost = true; return false
+            }
+            let final = unsafeBitCast(rawFocus, to: AXUIElement.self)
+            let main = unsafeBitCast(rawMain, to: AXUIElement.self)
+            let focusedWindow = unsafeBitCast(rawWindow, to: AXUIElement.self)
+            guard
                   CFEqual(final, expectedFocus),
-                  let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
                   CFEqual(main, window),
-                  let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
                   CFEqual(focusedWindow, window),
                   case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                   document.utf8.elementsEqual(finalDocument.utf8), logic.logicProPID() == pid,
