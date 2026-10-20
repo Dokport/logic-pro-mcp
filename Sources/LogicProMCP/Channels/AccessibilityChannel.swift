@@ -735,6 +735,23 @@ actor AccessibilityChannel: Channel {
                         restored.associationReadbackBoundary = boundary
                         population = restored
                     } else {
+                        // Structural diagnostics only: no extra host read, value/name
+                        // disclosure, replacement authority or acceptance relaxation.
+                        var changedFields: [String] = []
+                        if !valuesAgree {
+                            for (index, pair) in zip(population.strips ?? [], rows).enumerated() {
+                                guard changedFields.count < 4,
+                                      let oldData = try? encoder.encode(pair.0), let newData = try? encoder.encode(pair.1),
+                                      oldData != newData,
+                                      let old = try? JSONSerialization.jsonObject(with: oldData) as? [String: Any],
+                                      let new = try? JSONSerialization.jsonObject(with: newData) as? [String: Any] else { continue }
+                                let keys = Set(old.keys).union(new.keys).filter {
+                                    (old[$0] as? NSObject)?.isEqual(new[$0]) != true
+                                }.sorted()
+                                changedFields.append("\(index):\(keys.joined(separator: ","))")
+                            }
+                        }
+                        Log.info("Routing population refused: stable=\(current.stable),values=\(valuesAgree),owners=\(ownersAgree),slots=\(slotsAgree),rows=\(population.strips?.count ?? -1)/\(rows.count),renewals=\(renewals.count)/\(survivingRenewals.count),fields=\(changedFields.joined(separator: ";"))", subsystem: "ax")
                         population.stable = false
                         population.uiEffects.reason = "routing_population_moved"
                     }
