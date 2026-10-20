@@ -451,8 +451,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               policy.roles.isEmpty, policy.outputs.isEmpty, policy.receivers.isEmpty,
               policy.protectedPaths.isEmpty, policy.trackSort == nil, policy.mixerVisible == nil,
               let target = policy.targets.first, target.mixerRef == nil,
-              let intent = policy.sends.first, intent.target == target.handle, intent.bus == nil,
-              intent.isRemoval || intent.localOutput != nil,
+              let intent = policy.sends.first, intent.target == target.handle,
+              intent.isRemoval || intent.localOutput != nil || intent.bus != nil,
               let ordinal = intent.observedOrdinal, ordinal >= 0,
               request.allowUINavigation,
               Set([SessionPopulationObservation.Domain.tracks, .strips, .associations, .routing]).isSubset(of: request.domains),
@@ -472,9 +472,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               pair.track.document.utf8.elementsEqual(pair.strip.document.utf8) else { return nil }
         let rows = source.channelStrips.indices.filter { source.channelStrips[$0].physicalBinding?.matches(pair.strip) == true }
         let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == ordinal }
+        let desired = intent.localOutput ?? intent.bus.map(OutputAssignment.bus)
         guard rows.count == 1, let row = rows.first, let mixerRef = source.mixerReference(at: row),
               checked.count == 1, let reading = checked.first,
-              intent.localOutput.map({ reading.assignment == $0 || AccessibilityChannel.supportsOccupiedSendChange(before: reading.assignment, after: $0) })
+              // A Bus intent enters only the existing read-only matching-goal path.
+              // No Bus mutation, allocation, mixed input or preliminary naming is admitted.
+              intent.bus == nil || (names.isEmpty && policy.inputs.isEmpty && reading.assignment == desired),
+              desired.map({ reading.assignment == $0 || AccessibilityChannel.supportsOccupiedSendChange(before: reading.assignment, after: $0) })
                 ?? (intent.isRemoval && reading.assignment == .stereoOutput),
               reading.sendNonRoutingChecks == ["Post Fader"] || reading.sendNonRoutingChecks == ["포스트 페이더"],
               let control = reading.sendControl, control.ordinal == ordinal,
@@ -492,7 +496,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     capture: source) else { return nil }
         }
         return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair,
-            control: control, ordinal: ordinal, before: reading.assignment, desired: intent.localOutput,
+            control: control, ordinal: ordinal, before: reading.assignment, desired: desired,
             footprint: slots, goalID: "send.target.\(intent.target).\(intent.selectorID)", handle: target.handle)
     }
 

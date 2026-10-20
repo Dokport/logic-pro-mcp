@@ -4302,6 +4302,35 @@ struct Issue965HeldSelectionAssociationTests {
         else { Issue.record("The old Send control, not the original strip, must actually retire") }
     }
 
+    @Test("An already-correct Bus Send is freshly verified without a routing write")
+    func canonicalMatchingBusSendUsesCheckedReadback() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "matching", canonicalBus: true,
+                canonicalMatching: true)
+        }
+    }
+
+    @Test("Matching Bus Send verification retains approval and exact native custody",
+          arguments: ["wrong_digest", "unconfirmed", "wrong_project", "replacement", "late_replacement",
+                      "destination", "level", "bypass", "mode", "unread_mark", "source_retired", "cleanup_focus"])
+    func canonicalMatchingBusSendRefusesChangedEvidence(_ fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "matching", canonicalBus: true,
+                canonicalMatching: true, matchingFault: fault)
+        }
+    }
+
+    @Test("A different Bus Send goal does not gain write authority from matching-goal support")
+    func canonicalMatchingBusSendCannotAdmitAnotherBus() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "nonmatching_bus", canonicalBus: true,
+                canonicalMatching: true)
+        }
+    }
+
     private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
@@ -4320,6 +4349,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                creationSaga: String? = nil,
                                                canonicalSend: String? = nil,
                                                canonicalPhysical: Bool = false,
+                                               canonicalBus: Bool = false,
                                                canonicalName: Bool = false,
                                                stableDestinationControls: Bool = false,
                                                stableDestinationBulkReads: Bool = false,
@@ -5048,6 +5078,15 @@ struct Issue965HeldSelectionAssociationTests {
                 CFEqual($0.strip.strip, f.strips[1])
             })
             #expect(CFEqual(originalPair.track.header, f.headers[0]))
+            if canonicalBus {
+                let checked = capture.freshPopulation?.checkedOutputs.filter {
+                    $0.source.matches(originalPair.strip) && $0.sendOrdinal == 1
+                } ?? []
+                try #require(checked.count == 1, "The matching Bus case must begin with an actual captured checked Send")
+                #expect(checked.first?.assignment == .bus(1))
+                #expect(checked.first?.sendNonRoutingChecks == ["Post Fader"])
+                #expect(checked.first?.sendControl != nil)
+            }
             if let canonicalSend {
                 let router = ChannelRouter(), gate = LogicMutationGate()
                 guard case .issued(let project)? = capture.projectIssuance else {
@@ -5079,7 +5118,9 @@ struct Issue965HeldSelectionAssociationTests {
                 let planHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
                 var sendIntent: [String: Value] = ["target": .string("source"),
                     canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1)]
-                if canonicalPhysical {
+                if canonicalBus {
+                    sendIntent["bus"] = .int(canonicalSend == "nonmatching_bus" ? 2 : 1)
+                } else if canonicalPhysical {
                     sendIntent["output"] = (canonicalMatching ? !freshPhysicalReturn : freshPhysicalReturn && canonicalSend != "unsupported_pair") ? .object(["kind": .string("stereo_output")])
                         : .object(["kind": .string("physical"), "ports": .array(canonicalSend == "unsupported_pair" ? [.int(1), .int(2)] : [.int(3), .int(4)])])
                 } else { sendIntent["remove"] = .bool(true) }
@@ -5132,7 +5173,7 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 let plannedText = sharedToolText(await planHandler(dependencies, planArguments))
                 let planned = try #require(sharedJSONObject(plannedText))
-                if ["physical_slot", "mixed", "unsupported_pair", "physical_removal"].contains(canonicalSend) {
+                if ["physical_slot", "mixed", "unsupported_pair", "physical_removal", "nonmatching_bus"].contains(canonicalSend) {
                     let executable = try #require(planned["executable"] as? Bool)
                     #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
@@ -5308,7 +5349,9 @@ struct Issue965HeldSelectionAssociationTests {
                     let read = try #require(evidence.first?["read"] as? [String: Any])
                     #expect(read["read_source"] as? String == "ax_send_menu_checkmark")
                     #expect(read["provenance"] as? String == "live_independent")
-                    #expect(read["observed"] as? String == (freshPhysicalReturn ? OutputAssignment.physical(3, 4) : .stereoOutput).token)
+                    let expected = canonicalBus ? OutputAssignment.bus(1)
+                        : freshPhysicalReturn ? .physical(3, 4) : .stereoOutput
+                    #expect(read["observed"] as? String == expected.token)
                     let readsBeforeReplay = f.routingBypassMenuOpens
                     _ = await apply(dependencies, arguments)
                     #expect(f.routingDestinationPresses == 0)
