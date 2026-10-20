@@ -1686,7 +1686,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
                 await AXMixerStripBinding.$outputAssociation.withValue(pair) {
                     await AccessibilityChannel.getCheckedInputObservation(runtime: runtime,
-                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
+                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
+                        observingRenewedFocus: { inputFocus.retainAssociation($0) })
                 }
             }
             stage = "source_checked_read"
