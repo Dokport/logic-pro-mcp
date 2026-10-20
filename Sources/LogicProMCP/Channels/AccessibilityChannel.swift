@@ -897,6 +897,17 @@ actor AccessibilityChannel: Channel {
                         uiLocale: observed.uiLocale == restoredObservation.uiLocale ? observed.uiLocale : nil)
                     population.presentationBinding = original
                 } else {
+                    // Structural diagnostics from already-held witnesses only.
+                    let original = originalPresentation?.presentationBinding
+                    let current = restored?.presentationBinding
+                    func same(_ lhs: AXUIElement?, _ rhs: AXUIElement?) -> Bool {
+                        switch (lhs, rhs) {
+                        case (nil, nil): return true
+                        case (.some(let a), .some(let b)): return CFEqual(a, b)
+                        default: return false
+                        }
+                    }
+                    Log.info("Presentation restoration withheld: original=\(original != nil),current=\(current != nil),view=\(originalPresentation?.presentationObservation.flatMap { before in restored?.presentationObservation.map { before.matchesViewTransport($0) } } == true),window=\(same(original?.window, current?.window)),app=\(same(original?.app, current?.app)),focus=\(same(original?.focus, current?.focus)),mixer=\(same(original?.mixer, current?.mixer)),owners=\(original?.mixerOwners.count ?? -1)/\(current?.mixerOwners.count ?? -1),ownerIdentity=\(zip(original?.mixerOwners ?? [], current?.mixerOwners ?? []).allSatisfy { CFEqual($0, $1) }),transport=\(same(original?.transport?.controlBar, current?.transport?.controlBar))/\(same(original?.transport?.play, current?.transport?.play))/\(same(original?.transport?.record, current?.transport?.record))", subsystem: "ax")
                     population.presentationObservation = .init(mixerVisible: nil, isPlaying: nil, isRecording: nil)
                     population.presentationBinding = nil
                 }
