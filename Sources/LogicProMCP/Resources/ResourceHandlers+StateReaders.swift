@@ -468,6 +468,20 @@ extension ResourceHandlers {
         )
     }
 
+    private static func sameProjectBundle(_ cachedPath: String, _ observed: URL) -> Bool {
+        let cached = URL(fileURLWithPath: cachedPath).resolvingSymlinksInPath()
+        let current = observed.resolvingSymlinksInPath()
+        if cached.path == current.path { return true }
+        guard let left = try? FileManager.default.attributesOfItem(atPath: cached.path),
+              let right = try? FileManager.default.attributesOfItem(atPath: current.path),
+              left[.type] as? FileAttributeType == .typeDirectory,
+              right[.type] as? FileAttributeType == .typeDirectory,
+              let leftDevice = left[.systemNumber] as? NSNumber, let rightDevice = right[.systemNumber] as? NSNumber,
+              let leftInode = left[.systemFileNumber] as? NSNumber, let rightInode = right[.systemFileNumber] as? NSNumber
+        else { return false }
+        return leftDevice == rightDevice && leftInode == rightInode
+    }
+
     /// v3.1.8 (Issue #7) — tier-merged project info read.
     ///
     /// Tier order:
@@ -527,6 +541,13 @@ extension ResourceHandlers {
         // on-disk document path: clients use this path as their write boundary.
         let identityFetchedAt = Date()
         let metadata = await LogicProjectFileReader.read(runtime: fileReader)
+        if let metadata,
+           let path = cached.filePath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty,
+           !sameProjectBundle(path, metadata.bundlePath) {
+            // Positive current-document evidence contradicts this cached owner.
+            // Do not mix projects, retarget the cache or issue its old reference.
+            throw MCPError.internalError(staleProjectIssuanceMessage)
+        }
 
         var info = cacheFresh ? cached : ProjectInfo()
 
