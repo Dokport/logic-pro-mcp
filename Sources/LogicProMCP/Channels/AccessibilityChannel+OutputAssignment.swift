@@ -575,6 +575,25 @@ extension AccessibilityChannel {
         let original: AXMixerStripBinding.Binding
         let originalTrack: AXTrackBinding.Binding
         let observation: HeldSelectionAssociation
+        /// The actual partial header/strip pairs observed by this owned read.
+        /// Empty in older/manual witnesses; never inferred from labels or rows.
+        var observedPairs: [HeldSelectionAssociation.Pair] = []
+
+        func sourceForOriginalHeader(_ prior: HeldSelectionAssociation.Pair,
+            runtime: AXLogicProElements.Runtime) -> Self? {
+            guard permits(runtime: runtime), observation.effects.restoration == "restored",
+                  prior.track.currentIndex() != nil, CFEqual(prior.strip.window, original.window),
+                  CFEqual(prior.strip.mixer, pair.strip.mixer),
+                  prior.strip.document.utf8.elementsEqual(observation.document.utf8),
+                  observation.headers.filter({ CFEqual($0, prior.track.header) }).count == 1 else { return nil }
+            let candidates = observedPairs.filter { $0.track.matches(prior.track) }
+            guard candidates.count == 1, let current = candidates.first,
+                  observedPairs.filter({ $0.strip.matches(current.strip) }).count == 1,
+                  observation.strips.filter({ CFEqual($0, current.strip.strip) }).count == 1,
+                  let index = current.strip.currentIndex(runtime: runtime), permits(runtime: runtime) else { return nil }
+            return .init(pair: current, index: index, original: prior.strip, originalTrack: prior.track,
+                observation: observation, observedPairs: observedPairs)
+        }
 
         /// A retired original focus can be restored only through its actual selected header.
         func restoresOriginalFocus(of prior: HeldSelectionAssociation, source: AXMixerStripBinding.Binding,
@@ -646,7 +665,7 @@ extension AccessibilityChannel {
               sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex() != nil,
               let index = pair.strip.currentIndex(runtime: runtime) else { return (nil, observation.effects) }
         return (.init(pair: pair, index: index, original: original, originalTrack: originalPair.track,
-            observation: observation), observation.effects)
+            observation: observation, observedPairs: pairs), observation.effects)
     }
 
     /// Picks the popup entry for `destination` by structure: the parent submenu that owns it, then

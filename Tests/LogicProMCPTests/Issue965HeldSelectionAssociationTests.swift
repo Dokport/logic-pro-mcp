@@ -1169,6 +1169,24 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: mode)
     }
 
+    @Test("An existing checked Bus output may depart only through a singleton local output goal",
+          arguments: ["physical", "stereo", "physical_input", "misleading_input", "mixed_name", "mixed_input", "no_output", "no_receiver", "own_bus_input"])
+    func canonicalBusDeparturePreviewRetainsItsNarrowContract(destination: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_" + destination)
+    }
+
+    @Test("Bus departure reuses the exact source, protected footprint and conditional Bus inverse",
+          arguments: ["forward", "stereo", "cancel", "late_peer", "late_project", "post_write_loss", "ack_only", "newer", "retired", "physical_input", "physical_cancel", "changed_source_input", "changed_receiver_input", "misleading_receiver", "popup_source", "popup_receiver", "popup_source_retired", "popup_both_retired", "external_peer"])
+    func canonicalBusDepartureExecutesOnlyItsCapturedOutput(outcome: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_" + outcome)
+    }
+
+    @Test("Bus prerequisite reads refuse lost native custody before physical Help",
+          arguments: ["source_document", "source_editor", "physical_editor", "receiver_document"])
+    func canonicalBusDeparturePrerequisitesGuardPhysicalHelp(fault: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_prereq_" + fault)
+    }
+
     @Test("An explicit No Output policy retains the checked source in its existing canonical output task")
     func canonicalNoOutputPreviewUsesTheCapturedPair() async throws {
         try await assertCanonicalPhysicalOutput(mode: "preview_no_output")
@@ -1378,11 +1396,35 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.routingFocusClickEvents == (["ack_only", "release"].contains(fault) ? [.leftMouseDown, .leftMouseUp] : []))
     }
 
+    private static func finalOutputLabel(mode: String, busDeparture: Bool, noOutput: Bool, noOutputReturn: Bool) -> String {
+        if busDeparture {
+            switch mode {
+            case "cancel", "late_peer", "late_project", "ack_only": return "Bus 2"
+            default: break
+            }
+        }
+        if noOutput {
+            if mode == "newer" { return "Output 5-6" }
+            if noOutputReturn {
+                return ["late_peer", "late_project"].contains(mode) ? "No Output" : "Stereo Output"
+            }
+            return ["cancel", "late_peer", "late_project", "ack_only"].contains(mode) ? "Stereo Output" : "No Output"
+        }
+        switch mode {
+        case "newer": return "Output 5-6"
+        case "cancel", "late_peer", "stereo", "no_op", "ack_only", "late_project", "late_peer_send", "unoffered_physical":
+            return "Stereo Output"
+        default: return "Output 3-4"
+        }
+    }
+
     private func assertCanonicalPhysicalOutput(mode requestedMode: String, fixture: Fixture? = nil,
                                                foreignFocusAtDocumentRead: Int? = nil,
                                                refusingSampledTrackOwnership: Bool = false) async throws {
         let survivingSource = requestedMode.hasPrefix("surviving_")
         let profile = survivingSource ? String(requestedMode.dropFirst("surviving_".count)) : requestedMode
+        let busDeparture = profile.hasPrefix("bus_departure_")
+            ? String(profile.dropFirst("bus_departure_".count)) : nil
         let noOutput = profile.hasPrefix("canonical_no_output")
         let noOutputReturn = profile.hasPrefix("canonical_no_output_return")
         let nativeApplicationFocus = noOutput && profile.hasSuffix("_app_focus")
@@ -1392,9 +1434,20 @@ struct Issue965HeldSelectionAssociationTests {
         let nativeAbsentWindow = profile.hasSuffix("_absent_window_app_focus")
         let nativeForeignWindow = profile.hasSuffix("_foreign_window_app_focus")
         let nativeRefusingWindow = nativeUnreadWindow || nativeAbsentWindow || nativeForeignWindow
-        let outputMode = !noOutput ? profile : profile == "canonical_no_output" ? "forward"
+        let executingBusDeparture = busDeparture?.hasPrefix("execute_") == true
+        let outputMode = executingBusDeparture ? String(busDeparture!.dropFirst("execute_".count))
+            : !noOutput ? profile : profile == "canonical_no_output" ? "forward"
             : String(profile.dropFirst("canonical_no_output_".count))
-        let mode = outputMode.hasPrefix("return_late_") ? String(outputMode.dropFirst("return_".count)) : outputMode
+        let prerequisiteFault = executingBusDeparture && outputMode.hasPrefix("prereq_")
+        let inputPopupFocus = executingBusDeparture && outputMode.hasPrefix("popup_")
+        let sourceInputPopup = executingBusDeparture && (outputMode.hasPrefix("popup_source") || outputMode == "popup_both_retired")
+        let physicalBusInput = busDeparture == "physical_input" || (executingBusDeparture
+            && (["physical_input", "physical_cancel", "changed_source_input"].contains(outputMode)
+                || outputMode == "prereq_physical_editor" || sourceInputPopup))
+        let changedBusInput = executingBusDeparture && ["changed_source_input", "changed_receiver_input"].contains(outputMode)
+        let misleadingReceiver = executingBusDeparture && outputMode == "misleading_receiver"
+        let mode = inputPopupFocus ? "forward" : physicalBusInput || changedBusInput ? (outputMode == "physical_input" ? "forward" : "cancel")
+            : outputMode.hasPrefix("return_late_") ? String(outputMode.dropFirst("return_".count)) : outputMode
         let destinationLeafLabel = noOutput ? "No Output" : "Output 3-4"
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -1568,6 +1621,18 @@ struct Issue965HeldSelectionAssociationTests {
                 let submenu = f.builder.element(1_973_112), stereo = f.builder.element(1_973_113)
                 let physical = f.builder.element(1_973_114)
                 let echo = f.builder.element(1_973_115)
+                let busParent = f.builder.element(1_973_310), busMenu = f.builder.element(1_973_311)
+                let busTwo = f.builder.element(1_973_312)
+                let sourceBusInput = f.builder.element(1_973_314)
+                let inputParent = f.builder.element(1_973_315), inputMenu = f.builder.element(1_973_316)
+                let physicalInput = f.builder.element(1_973_317)
+                let inputSearch = f.builder.element(1_973_320)
+                if inputPopupFocus {
+                    f.builder.setRole(inputSearch, kAXTextFieldRole as String)
+                    f.builder.setAttribute(inputSearch, kAXValueAttribute as String, "")
+                    f.builder.setAttribute(inputSearch, kAXWindowAttribute as String, f.window)
+                    f.builder.setChildren(inputSearch, [])
+                }
                 f.builder.setRole(echo, kAXMenuItemRole as String)
                 f.builder.setAttribute(echo, "AXMenuItemMarkChar", "✓")
                 f.builder.setChildren(echo, [])
@@ -1688,6 +1753,49 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.builder.setAttribute(parent, kAXTitleAttribute as String, "Output")
                 f.builder.setAttribute(stereo, kAXTitleAttribute as String, "Stereo Output")
+                if busDeparture != nil {
+                    f.builder.setAttribute(outputs[1], kAXDescriptionAttribute as String, "Bus 2")
+                    let receiverInput = f.builder.element(1_973_313)
+                    f.builder.setButton(receiverInput, description: "Bus 2",
+                        help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 1, height: 1)
+                    f.builder.setChildren(receiverInput, [])
+                    f.builder.setActionNames(receiverInput, [kAXPressAction as String])
+                    if busDeparture != "no_receiver" {
+                        f.builder.setChildren(f.strips[0], f.builder.makeAXRuntime().children(f.strips[0]) + [receiverInput])
+                    }
+                    if physicalBusInput || ["own_bus_input", "misleading_input"].contains(busDeparture) {
+                        f.builder.setButton(sourceBusInput, description: busDeparture == "own_bus_input" ? "Bus 2" : "Input 1",
+                            help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 1, height: 1)
+                        f.builder.setActionNames(sourceBusInput, [kAXPressAction as String])
+                        f.builder.setChildren(sourceBusInput, [])
+                        f.builder.setChildren(f.strips[1], f.builder.makeAXRuntime().children(f.strips[1]) + [sourceBusInput])
+                    }
+                    if physicalBusInput {
+                        for (element, role) in [(inputParent, kAXMenuItemRole), (inputMenu, kAXMenuRole),
+                                                (physicalInput, kAXMenuItemRole)] {
+                            f.builder.setRole(element, role as String)
+                        }
+                        f.builder.setAttribute(inputParent, kAXTitleAttribute as String, "Input")
+                        f.builder.setAttribute(physicalInput, kAXTitleAttribute as String, "Input 1")
+                        f.builder.setAttribute(physicalInput, "AXMenuItemMarkChar", "✓")
+                        f.builder.setChildren(physicalInput, [])
+                        f.builder.setChildren(inputMenu, [physicalInput]); f.builder.setChildren(inputParent, [inputMenu])
+                    }
+                    f.builder.setRole(busParent, kAXMenuItemRole as String)
+                    f.builder.setAttribute(busParent, kAXTitleAttribute as String, "Bus")
+                    f.builder.setRole(busMenu, kAXMenuRole as String)
+                    f.builder.setRole(busTwo, kAXMenuItemRole as String)
+                    f.builder.setAttribute(busTwo, kAXTitleAttribute as String, "Bus 2")
+                    f.builder.setAttribute(busTwo, kAXEnabledAttribute as String, true)
+                    f.builder.setChildren(busTwo, [])
+                    f.builder.setChildren(busMenu, [busTwo]); f.builder.setChildren(busParent, [busMenu])
+                    let busThree = f.builder.element(1_973_318)
+                    f.builder.setRole(busThree, kAXMenuItemRole as String)
+                    f.builder.setAttribute(busThree, kAXTitleAttribute as String, "Bus 3")
+                    f.builder.setAttribute(busThree, kAXEnabledAttribute as String, true)
+                    f.builder.setChildren(busThree, [])
+                    f.builder.setChildren(busMenu, [busTwo, busThree])
+                }
                 if noOutputReturn {
                     f.builder.setAttribute(outputs[1], kAXDescriptionAttribute as String, "No Output")
                 } else if noOutput && mode == "physical_before" {
@@ -1707,6 +1815,7 @@ struct Issue965HeldSelectionAssociationTests {
                     f.builder.setChildren(submenu, [stereo, checkedPhysical])
                 }
                 f.builder.setChildren(root, noOutput ? [echo, physical, parent] : [echo, parent]); f.builder.setActionNames(root, [kAXCancelAction as String])
+                if busDeparture != nil { f.builder.setChildren(root, [echo, parent, busParent]) }
                 let nativeWrapper = f.builder.element(1_973_119)
                 let nativeFrame = CGRect(x: 20, y: 100, width: 230, height: 175)
                 if noOutput {
@@ -1772,10 +1881,44 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         return [kAXPressAction as String, kAXConfirmAction as String].contains(action)
                     }
+                    if action == kAXPressAction as String, busDeparture != nil,
+                       CFEqual(element, f.builder.element(1_973_313)) {
+                        let wrongBus = misleadingReceiver || (outputMode == "changed_receiver_input" && f.routingLateScopeInjected)
+                        f.builder.setAttribute(echo, kAXTitleAttribute as String, "Bus 2")
+                        f.builder.setAttribute(busTwo, "AXMenuItemMarkChar", wrongBus ? "" : "✓")
+                        f.builder.setAttribute(f.builder.element(1_973_318), "AXMenuItemMarkChar", wrongBus ? "✓" : "")
+                        f.builder.setChildren(root, [echo, busParent])
+                        if outputMode == "popup_receiver" || outputMode == "popup_both_retired" {
+                            f.builder.setChildren(root, [inputSearch, echo, busParent])
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, inputSearch)
+                        }
+                        f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1], root])
+                        f.inputMenuPresses += 1
+                        return true
+                    }
+                    if action == kAXPressAction as String,
+                       physicalBusInput || ["own_bus_input", "misleading_input"].contains(busDeparture), CFEqual(element, sourceBusInput) {
+                        let physical = physicalBusInput && !(outputMode == "changed_source_input" && f.routingLateScopeInjected)
+                        f.builder.setAttribute(echo, kAXTitleAttribute as String, physical ? "Input 1" : "Bus 2")
+                        f.builder.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        f.builder.setAttribute(f.builder.element(1_973_114), "AXMenuItemMarkChar", "")
+                        f.builder.setAttribute(busTwo, "AXMenuItemMarkChar", physical ? "" : "✓")
+                        f.builder.setAttribute(physicalInput, "AXMenuItemMarkChar", physical ? "✓" : "")
+                        f.builder.setAttribute(f.builder.element(1_973_318), "AXMenuItemMarkChar", "")
+                        f.builder.setChildren(root, [echo] + (physicalBusInput ? [inputParent] : [parent]) + [busParent])
+                        if sourceInputPopup {
+                            f.builder.setChildren(root, [inputSearch, echo, inputParent, busParent])
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, inputSearch)
+                        }
+                        f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1], root])
+                        f.inputMenuPresses += 1
+                        return true
+                    }
                     if action == kAXPressAction as String,
                        let index = outputs.firstIndex(where: { CFEqual($0, element) }) {
                         let label = f.builder.attributeValue(outputs[index], kAXDescriptionAttribute as String) as? String
                         f.builder.setAttribute(echo, kAXTitleAttribute as String, label)
+                        if busDeparture != nil { f.builder.setChildren(root, [echo, parent, busParent]) }
                         if noOutput {
                             // A neutral menu has one checked root leaf, not both
                             // a checked title echo and a second checked No Output.
@@ -1795,6 +1938,10 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         f.builder.setAttribute(stereo, "AXMenuItemMarkChar", label == "Stereo Output" ? "✓" : "")
                         f.builder.setAttribute(physical, "AXMenuItemMarkChar", label == destinationLeafLabel ? "✓" : "")
+                        if busDeparture != nil {
+                            f.builder.setAttribute(busTwo, "AXMenuItemMarkChar", label == "Bus 2" ? "✓" : "")
+                            f.builder.setAttribute(f.builder.element(1_973_318), "AXMenuItemMarkChar", "")
+                        }
                         if noOutput, label == "No Output" {
                             // Model the qualified host's neutral popup: it is
                             // a native window, not a Mixer AXChildren menu.
@@ -1818,6 +1965,38 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
                         f.routingNativePopupFrame = nil
+                        if ["popup_source_retired", "popup_both_retired"].contains(outputMode), f.inputMenuPresses > 2, f.routingReplacement == nil {
+                            let replacement = f.builder.element(1_973_140)
+                            f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                            f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                            f.builder.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                            f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[1]))
+                            f.routingReplacement = replacement
+                            if outputMode == "popup_both_retired" {
+                                let peer = f.builder.element(1_973_141)
+                                f.builder.setRole(peer, kAXLayoutItemRole as String)
+                                f.builder.setAttribute(peer, kAXNumberOfCharactersAttribute as String, 0)
+                                f.builder.setAttribute(peer, kAXInsertionPointLineNumberAttribute as String, 0)
+                                f.builder.setChildren(peer, f.builder.makeAXRuntime().children(f.strips[0]))
+                                f.routingOtherReplacement = peer
+                            }
+                        }
+                        if outputMode == "popup_both_retired", f.routingOtherReplacement != nil,
+                           f.builder.attributeValue(echo, kAXTitleAttribute as String) as? String == "Bus 2",
+                           f.routingOpenedOutputIndex == nil, !f.routingLateScopeInjected {
+                            f.routingLateScopeInjected = true
+                            let source = f.builder.element(1_973_142), peer = f.builder.element(1_973_143)
+                            for (replacement, prior) in [(source, f.routingReplacement!), (peer, f.routingOtherReplacement!)] {
+                                f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                                f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                                f.builder.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                                f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(prior))
+                            }
+                            f.routingReplacement = source; f.routingOtherReplacement = peer
+                        }
+                        if inputPopupFocus {
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
+                        }
                         if nativeApplicationFocus {
                             f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
                         }
@@ -1825,12 +2004,13 @@ struct Issue965HeldSelectionAssociationTests {
                         f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
                         f.inputMenuCancels += 1; return true
                     }
-                    if action == kAXPressAction as String, CFEqual(element, physical) || CFEqual(element, stereo),
+                    if action == kAXPressAction as String,
+                       CFEqual(element, physical) || CFEqual(element, stereo) || (executingBusDeparture && CFEqual(element, busTwo)),
                        let index = f.routingOpenedOutputIndex {
                         f.routingDestinationPresses += 1
                         if mode != "ack_only" {
                             f.builder.setAttribute(outputs[index], kAXDescriptionAttribute as String,
-                                CFEqual(element, physical) ? destinationLeafLabel : "Stereo Output")
+                                CFEqual(element, physical) ? destinationLeafLabel : CFEqual(element, busTwo) ? "Bus 2" : "Stereo Output")
                         }
                         f.routingOpenedOutputIndex = nil
                         f.routingNativePopupFrame = nil
@@ -1902,23 +2082,51 @@ struct Issue965HeldSelectionAssociationTests {
                 })
                 #expect(CFEqual(pair.strip.strip, f.strips[1]), "The captured pair is not an ordinal join")
                 #expect(capture.freshPopulation?.checkedOutputs.filter {
-                    $0.source.matches(pair.strip) && $0.assignment == (noOutputReturn ? .noOutput : mode == "stereo" || mode == "physical_before" ? .physical(3, 4) : .stereoOutput) && $0.sendOrdinal == nil
+                    $0.source.matches(pair.strip) && $0.assignment == (busDeparture != nil ? .bus(2) : noOutputReturn ? .noOutput : mode == "stereo" || mode == "physical_before" ? .physical(3, 4) : .stereoOutput) && $0.sendOrdinal == nil
                 }.count == 1, "Actual outputs=\(capture.channelStrips.map(\.output)), Help reads=\(f.routingClassifierHelpReads), presses=\(f.inputMenuPresses), stable=\(capture.freshPopulation?.stable)")
-                #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1 && f.routingDestinationPresses == 0)
+                let expectedAcquisitionMenus = physicalBusInput || ["own_bus_input", "misleading_input"].contains(busDeparture) ? 2 : 1
+                #expect(f.inputMenuPresses == expectedAcquisitionMenus && f.inputMenuCancels == expectedAcquisitionMenus && f.routingDestinationPresses == 0)
                 let target = try #require(capture.issued?.byRow[0])
                 guard case .issued(let project)? = capture.projectIssuance else {
                     Issue.record("Actual capture must issue the project"); return
                 }
-                let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                var raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
                     "project_ref": .string(project.rawValue),
                     "targets": .array([.object(["handle": .string("source"), "track_ref": .string(target.rawValue)])]),
                     "outputs": .array([.object(["target": .string("source"),
                         "output": mode == "return_physical" ? .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
-                            : mode == "preview_no_output" || (noOutput && !noOutputReturn) ? .string("no_output")
-                            : noOutputReturn || mode == "stereo" || mode == "no_op" ? .object(["kind": .string("stereo_output")])
+                            : busDeparture == "no_output" || mode == "preview_no_output" || (noOutput && !noOutputReturn) ? .string("no_output")
+                            : busDeparture == "stereo" || noOutputReturn || mode == "stereo" || mode == "no_op" ? .object(["kind": .string("stereo_output")])
                             : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])])])]
+                if busDeparture == "mixed_input" {
+                    raw["inputs"] = .array([.object(["target": .string("source"), "bus": .int(2)])])
+                }
                 guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
                     Issue.record("The explicit typed physical output must parse"); return
+                }
+                if let busDeparture, !executingBusDeparture {
+                    let names: [ProjectSessionAudit.ApprovedName] = busDeparture == "mixed_name"
+                        ? [.init(target: "source", name: "Selected Canonical")] : []
+                    let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                        names: names, capture: capture, request: retained.request, snapshotCurrent: true)
+                    let preview = try #require(sharedJSONObject(plan.json))
+                    let executable = try #require(preview["executable"] as? Bool)
+                    let supported = ["physical", "stereo", "physical_input"].contains(busDeparture)
+                    if supported { #expect(executable) } else { #expect(!executable) }
+                    let verifiable = ApprovedSessionRepair.canVerifyCapturedGoals(policy: policy,
+                        policyValue: .object(raw), names: names, source: capture, request: retained.request)
+                    if supported { #expect(verifiable) } else { #expect(!verifiable) }
+                    #expect(await cache.retainRepairPlan(plan, snapshotID: id))
+                    let approval = await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
+                        key: "bus-departure-preview-" + busDeparture, cache: cache, registry: registry, journal: SagaJournal())
+                    if supported {
+                        let step = try #require((preview["steps"] as? [[String: Any]])?.first)
+                        #expect(step["kind"] as? String == "local_output")
+                        #expect((step["before"] as? [String: Any])?["number"] as? Int == 2)
+                        #expect(approval != nil)
+                    } else { #expect(approval == nil) }
+                    #expect(f.routingDestinationPresses == 0 && f.routingNameWrites.isEmpty)
+                    return
                 }
                 if noOutput && ["mixed_name", "physical_before", "return_physical"].contains(mode) {
                     let rejectedNames: [ProjectSessionAudit.ApprovedName] = mode == "mixed_name"
@@ -2016,12 +2224,43 @@ struct Issue965HeldSelectionAssociationTests {
                 if ["absent_pan", "occupied_peer", "late_peer_send"].contains(mode), body["executable"] as? Bool != true { return }
                 let steps = try #require(body["steps"] as? [[String: Any]])
                 #expect(steps.count == (composed && mode != "coupled_same" ? 2 : 1) && steps[0]["target_ref"] as? String == target.rawValue)
-                #expect((steps.last?["before"] as? [String: Any])?["kind"] as? String == (noOutputReturn ? "no_output" : mode == "stereo" ? "physical" : "stereo_output"))
+                #expect((steps.last?["before"] as? [String: Any])?["kind"] as? String == (executingBusDeparture ? "bus" : noOutputReturn ? "no_output" : mode == "stereo" ? "physical" : "stereo_output"))
                 #expect((steps.last?["after"] as? [String: Any])?["kind"] as? String == (noOutput && !noOutputReturn ? "no_output" : noOutputReturn || mode == "stereo" || mode == "no_op" ? "stereo_output" : "physical"))
                 #expect(await cache.retainRepairPlan(plan, snapshotID: id))
                 let journal = SagaJournal(), key = "captured-physical-output-" + mode
                 let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
                     key: key, cache: cache, registry: registry, journal: journal))
+                let busPreExecutionReads = f.inputMenuPresses
+                if executingBusDeparture, outputMode == "external_peer" {
+                    let replacement = f.builder.element(1_973_141)
+                    f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                    f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                    f.builder.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                    f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[0]))
+                    f.routingOtherReplacement = replacement
+                    f.builder.setChildren(f.mixer, [replacement, f.strips[1]])
+                }
+                if prerequisiteFault {
+                    let previous = f.routingRead
+                    f.routingRead = { element, attribute in
+                        previous?(element, attribute)
+                        let button = outputMode == "prereq_receiver_document" ? outputs[0] : outputs[1]
+                        if !f.routingLateScopeInjected, CFEqual(element, button), attribute == kAXRoleAttribute as String {
+                            f.routingLateScopeInjected = true
+                            if outputMode.hasSuffix("document") {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            } else {
+                                let editor = f.builder.element(1_973_319)
+                                f.builder.setRole(editor, kAXTextFieldRole as String)
+                                f.builder.setAttribute(editor, kAXValueAttribute as String, "Uncommitted")
+                                f.builder.setAttribute(editor, kAXWindowAttribute as String, f.window)
+                                f.builder.setChildren(editor, [])
+                                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                            }
+                        }
+                        if f.routingLateScopeInjected, attribute == kAXHelpAttribute as String { f.inputForeignScopeHelpReads += 1 }
+                    }
+                }
                 #expect(approval.plan.steps.count == (composed && mode != "coupled_same" ? 2 : 1) && approval.plan.steps.last?.operationID == .mixerSetOutputVerified)
                 #expect(approval.plan.steps[0].targetRef == target)
                 let router = ChannelRouter()
@@ -2055,7 +2294,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }))
                 } else if mode == "coupled_second_failure" || mode == "coupled_menu_overlay_second_failure" {
                     await router.register(SelectedOutputSagaResultBoundary(f.channel()))
-                } else if noOutput {
+                } else if noOutput || executingBusDeparture {
                     await router.register(SelectedOutputSagaResultBoundary(f.channel(), shouldFail: false, observed: { response in
                         f.routingOutputChannelStates.append(response.message)
                     }))
@@ -2111,10 +2350,53 @@ struct Issue965HeldSelectionAssociationTests {
                             if mode == "newer" {
                                 f.builder.setAttribute(outputs[1], kAXDescriptionAttribute as String, "Output 5-6")
                             }
+                            if changedBusInput, f.routingDestinationPresses == 1 { f.routingLateScopeInjected = true }
                             if ["cancel", "newer", "ack_only"].contains(mode) { _ = await journal.cancel(idempotencyKey: key) }
                         }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let result = try #require(sharedJSONObject(sharedToolText(await run())))
+                if executingBusDeparture, outputMode == "external_peer" {
+                    #expect(f.routingOtherReplacement != nil && pair.strip.currentIndex(runtime: f.logic()) != nil)
+                    #expect(f.routingDestinationPresses == 0 && f.inputMenuPresses == busPreExecutionReads,
+                        "An externally replaced peer must refuse before owned observation can establish a new census")
+                    #expect(result["saga_state"] as? String != "completed")
+                    return
+                }
+                if outputMode == "popup_source_retired" {
+                    #expect(f.routingReplacement != nil && pair.strip.currentIndex(runtime: f.logic()) == nil,
+                        "The actual input Cancel must retire the original native source after capture")
+                }
+                if outputMode == "popup_both_retired" {
+                    #expect(f.routingReplacement != nil && f.routingOtherReplacement != nil)
+                    #expect(f.routingLateScopeInjected, "The receiver's own Cancel must also retire the current native census")
+                    #expect(capture.channelStrips[0].physicalBinding?.currentIndex(runtime: f.logic()) == nil)
+                }
+                if prerequisiteFault {
+                    #expect(f.routingLateScopeInjected, "Reach actual initial source/receiver traversal custody loss")
+                    #expect(f.inputForeignScopeHelpReads == 0, "No physical Help may reach the host after native custody is lost")
+                    #expect(f.routingDestinationPresses == 0)
+                    #expect(result["saga_state"] as? String != "completed")
+                    return
+                }
+                if changedBusInput || misleadingReceiver {
+                    if changedBusInput { #expect(f.routingLateScopeInjected, "Change the actual input assignment only after the forward write") }
+                    #expect(f.routingDestinationPresses == (misleadingReceiver ? 0 : 1),
+                        "A contradictory checked input must not permit a Bus inverse or any initial output write")
+                    #expect(result["saga_state"] as? String != "completed" && result["saga_state"] as? String != "fullyCompensated")
+                    #expect(f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String
+                        == (misleadingReceiver ? "Bus 2" : "Output 3-4"))
+                    return
+                }
+                if executingBusDeparture, ["forward", "cancel", "retired"].contains(mode) {
+                    let step = try #require((result["steps"] as? [[String: Any]])?.first)
+                    let evidence = try #require(step["evidence"] as? [String: Any])
+                    #expect((evidence["before_state"] as? [String: Any])?["observed"] as? String == "bus:2")
+                    if mode == "cancel" {
+                        let inverse = try #require(step["compensation"] as? [String: Any])
+                        #expect(inverse["disposition"] as? String == "verified")
+                        #expect((inverse["readback"] as? [String: Any])?["observed"] as? String == "bus:2")
+                    }
+                }
                 if nativeForeignApplication || nativeRefusingWindow {
                     #expect(f.routingLateScopeInjected, "Reach foreign focus or unread/absent/foreign window at the actual owned scalar popup")
                     let verified = try #require(result["verified"] as? Bool)
@@ -2246,12 +2528,12 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     #expect(f.routingDestinationPresses == (mode == "cancel" ? 2 : mode == "no_op" ? 0 : 1))
                 }
-                let expectedOutputLabel = noOutput
-                    ? (mode == "newer" ? "Output 5-6" : noOutputReturn
-                        ? (["late_peer", "late_project"].contains(mode) ? "No Output" : "Stereo Output")
-                        : ["cancel", "late_peer", "late_project", "ack_only"].contains(mode) ? "Stereo Output" : "No Output")
-                    : mode == "newer" ? "Output 5-6" : composed || redrawsCensus || ["forward", "retired", "absent_pan", "occupied_peer", "known_plugin", "post_write_loss", "unassigned_physical"].contains(mode) ? "Output 3-4" : "Stereo Output"
-                #expect(f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String == expectedOutputLabel)
+                let expectedOutputLabel = Self.finalOutputLabel(mode: mode, busDeparture: executingBusDeparture,
+                    noOutput: noOutput, noOutputReturn: noOutputReturn)
+                let actualOutputLabel = f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String
+                let outputLabelMatches = actualOutputLabel == expectedOutputLabel
+                #expect(outputLabelMatches,
+                    "actual=\(actualOutputLabel ?? "nil"), expected=\(expectedOutputLabel), profile=\(profile), mode=\(mode), composed=\(composed), census=\(redrawsCensus), neutral=\(noOutput), bus=\(executingBusDeparture)")
                 if composed {
                     #expect(f.routingNameWrites == ["Selected Canonical"])
                     #expect(f.builder.attributeValue(f.builder.element(1_965_711), kAXValueAttribute as String) as? String == "Selected Canonical")

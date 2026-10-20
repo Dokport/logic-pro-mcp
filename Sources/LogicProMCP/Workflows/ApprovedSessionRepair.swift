@@ -335,8 +335,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let strips = source.channelStrips.indices.filter { source.channelStrips[$0].physicalBinding?.matches(pair.strip) == true }
         let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == nil }
         guard strips.count == 1, let stripIndex = strips.first, let mixerRef = source.mixerReference(at: stripIndex),
-              checked.count == 1, let before = checked.first?.assignment,
-              localAssignmentForBefore(before) != nil || before == .noOutput,
+              checked.count == 1, let before = checked.first?.assignment else { return nil }
+        // Leaving an existing Bus is one output-only task. This does not admit
+        // Bus destinations or expand the shared input/name sink contract.
+        let busDeparture: Bool
+        if case .bus(let number) = before {
+            busDeparture = OutputAssignment.busNumbers.contains(number) && names.isEmpty && policy.inputs.isEmpty
+                && localAssignmentForBefore(desired) != nil
+                && capturedBusInverseAvailable(number, source: source, sourceIndex: stripIndex)
+        } else { busDeparture = false }
+        guard localAssignmentForBefore(before) != nil || before == .noOutput || busDeparture,
               // No Output is initially one output-only task. In particular,
               // it does not expand the shared physical/stereo input-sink
               // contract or admit a preliminary name write in a mixed plan.
@@ -370,6 +378,44 @@ final class ApprovedSessionRepair: @unchecked Sendable {
 
     private static func localAssignmentForBefore(_ assignment: OutputAssignment) -> OutputAssignment? {
         switch assignment { case .physical, .stereoOutput: return assignment; default: return nil }
+    }
+
+    private static func capturedBusInverseAvailable(_ bus: Int, source: SessionPopulationObservation.Capture,
+                                                    sourceIndex: Int) -> Bool {
+        func input(_ strip: ChannelStripState) -> AXLogicProElements.InputSlotReading {
+            guard let observation = strip.inputObservation else { return .unreadable }
+            switch observation.state {
+            case .unreadable: return .unreadable
+            case .noSlot:
+                return observation.source == nil && strip.inputSlotBinding == nil ? .noSlot : .unreadable
+            case .observedSource:
+                guard let label = observation.source, let owner = strip.physicalBinding,
+                      let binding = strip.inputSlotBinding, binding.owner.matches(owner),
+                      binding.source.utf8.elementsEqual(label.utf8) else { return .unreadable }
+                return .source(label)
+            }
+        }
+        let own = input(source.channelStrips[sourceIndex])
+        guard own != .unreadable else { return false }
+        // Use the scalar loop check's non-Bus-input case only with a positive
+        // physical-input menu fact. An unclassified display is not that proof.
+        if case .source(let label) = own {
+            guard RoutingGraphPublication.classifyOutputLabel(label).0 != .bus,
+                  SessionPopulationObservation.reportedCheckedInput(of: source.channelStrips[sourceIndex],
+                      capture: source, qualified: true)?.kind == "physical" else { return false }
+        }
+        return source.channelStrips.enumerated().contains { index, strip in
+            guard index != sourceIndex, case .source(let label) = input(strip) else { return false }
+            let (kind, number) = RoutingGraphPublication.classifyOutputLabel(label)
+            guard kind == .bus && number == bus else { return false }
+            // A captured checked contradiction cannot be overridden by its
+            // caption. Unpaired peers are checked before the first write below.
+            guard source.freshPopulation?.checkedInputs.contains(where: {
+                strip.physicalBinding?.matches($0.receiver) == true
+            }) == true else { return true }
+            let checked = SessionPopulationObservation.reportedCheckedInput(of: strip, capture: source, qualified: true)
+            return checked?.kind == "bus" && checked?.number == bus
+        }
     }
 
     /// Removal and typed local output endpoints need no receiver allocation. The ordinal
@@ -1605,13 +1651,152 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return true
     }
 
+    /// Bus restoration needs current checked prerequisites, not capture-time
+    /// captions. These read-only menus run before forward/inverse ownership is
+    /// established; neither an input write nor receiver creation is authorized.
+    private func busDepartureInputsCurrent(
+        inputFocus: AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope
+    ) async -> Bool {
+        guard let task = outputTask, case .bus(let bus) = task.before else { return true }
+        var stage = "captured_source", accepted = false
+        defer {
+            if !accepted { Log.info("Canonical Bus prerequisite refused at \(stage)", subsystem: "saga") }
+        }
+        let pair = outputPair ?? task.pair, runtime = pair.track.runtime
+        stage = "entry_footprint"
+        guard let label = AXLogicProElements.outputSlotDestination(in: pair.strip.strip, runtime: runtime.ax),
+              let assignment = OutputAssignment.observed(slotLabel: label),
+              assignment == task.before || (outputAttempted && assignment == task.desired),
+              outputFootprintHeld(pair: pair, assignment: assignment) else { return false }
+        guard let source = task.capture.channelStrips.first(where: {
+            $0.physicalBinding?.matches(task.pair.strip) == true
+        }), let own = source.inputObservation else { return false }
+        switch own.state {
+        case .unreadable: return false
+        case .noSlot:
+            stage = "source_absence"
+            guard AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax).reading == .noSlot else { return false }
+        case .observedSource:
+            stage = "source_checked_baseline"
+            let held = task.capture.freshPopulation?.checkedInputs.filter { $0.receiver.matches(task.pair.strip) } ?? []
+            guard held.count == 1, case .physical? = held.first?.assignment,
+                  let expected = held.first?.assignment,
+                  let original = source.inputSlotBinding else { return false }
+            stage = "source_native_slot"
+            let slot = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
+            guard let control = slot.control, case .source(let label) = slot.reading,
+                  label.utf8.elementsEqual(original.source.utf8),
+                  !pair.strip.matches(task.pair.strip) || CFEqual(control, original.control) else { return false }
+            let current = AXMixerInputSlotBinding(owner: pair.strip, control: control, source: label)
+            let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
+                await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                    await AccessibilityChannel.getCheckedInputObservation(runtime: runtime,
+                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
+                        observingRenewedFocus: { inputFocus.retainAssociation($0) })
+                }
+            }
+            stage = "source_checked_read"
+            guard read.inputAssignment == expected else {
+                Log.info("Canonical Bus input read: assignment_present=\(read.inputAssignment != nil),slot_present=\(read.inputSlot != nil),renewed=\(read.inputRenewal != nil)", subsystem: "saga")
+                return false
+            }
+            if let renewal = read.inputRenewal {
+                stage = "source_input_renewal"
+                guard renewal.original.matches(pair.strip), renewal.originalTrack.matches(task.pair.track),
+                      renewal.pair.track.matches(task.pair.track), renewal.permits(runtime: runtime),
+                      let renewed = read.inputSlot, renewed.owner.matches(renewal.pair.strip),
+                      renewed.source.utf8.elementsEqual(original.source.utf8) else { return false }
+                outputPair = renewal.pair; outputRenewal = renewal; outputProof = renewal.observation
+            } else {
+                stage = "source_input_control"
+                guard read.inputSlot?.matches(current) == true else { return false }
+            }
+        }
+        // Observe current positive receivers through the owned original-header
+        // census. A menu can retire all strips, not just its own source. These
+        // native pairs supply read custody only; no cached reference is rebound.
+        if outputRenewal?.observedPairs.isEmpty != false {
+            stage = "receiver_header_observation"
+            let current = outputPair ?? task.pair
+            let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(current, original: current.strip,
+                runtime: runtime, sourceDisposition: .survivingOriginal,
+                observingReadFocus: { inputFocus.retainAssociation($0) })
+            guard let renewal = observed.source, renewal.permits(runtime: runtime) else { return false }
+            outputPair = renewal.pair; outputRenewal = renewal; outputProof = renewal.observation
+        }
+        guard let roster = outputRenewal, roster.permits(runtime: runtime) else { return false }
+        for receiver in roster.observedPairs {
+            let owner = receiver.strip
+            guard !receiver.track.matches(task.pair.track),
+                  roster.observedPairs.filter({ $0.strip.matches(owner) }).count == 1 else { continue }
+            stage = "receiver_owner"
+            guard owner.currentIndex(runtime: runtime) != nil else { return false }
+            let current = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
+            guard case .source(let label) = current.reading, let control = current.control,
+                  RoutingGraphPublication.classifyOutputLabel(label).0 == .bus,
+                  RoutingGraphPublication.classifyOutputLabel(label).1 == bus else { continue }
+            let slot = AXMixerInputSlotBinding(owner: owner, control: control, source: label)
+            let read = await AXMixerStripBinding.$current.withValue(owner) {
+                await AXMixerStripBinding.$outputAssociation.withValue(receiver) {
+                    await AccessibilityChannel.getInputBusObservation(runtime: runtime, requiringOriginalInputControl: slot,
+                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
+                        observingRenewedFocus: { inputFocus.retainAssociation($0) })
+                }
+            }
+            stage = "receiver_checked_read"
+            guard read.assignment == .bus(bus) else {
+                Log.info("Canonical Bus receiver read: assignment_present=\(read.assignment != nil),slot_present=\(read.inputSlot != nil),renewed=\(read.inputRenewal != nil)", subsystem: "saga")
+                return false
+            }
+            if let renewal = read.inputRenewal {
+                stage = "receiver_original_header_renewal"
+                guard renewal.original.matches(owner), renewal.originalTrack.matches(receiver.track),
+                      read.inputSlot?.owner.matches(renewal.pair.strip) == true,
+                      let primary = renewal.sourceForOriginalHeader(task.pair, runtime: runtime) else { return false }
+                outputPair = primary.pair; outputRenewal = primary; outputProof = primary.observation
+            } else {
+                guard read.inputSlot?.matches(slot) == true, owner.currentIndex(runtime: runtime) != nil else { return false }
+            }
+            stage = "final_project"
+            accepted = await projectIsCurrent(allowPendingCancellation: true)
+            return accepted
+        }
+        stage = "no_retained_receiver"
+        return false
+    }
+
     private func outputReading() async -> OutputAssignment? {
+        var stage = "initial_context", accepted = false
+        defer {
+            if !accepted, let task = outputTask, case .bus = task.before {
+                Log.info("Canonical Bus output reading refused at \(stage)", subsystem: "saga")
+            }
+        }
         guard let task = nameFootprintTask, await projectIsCurrent(allowPendingCancellation: true),
               let target = await registry.resolve(task.reference), target.kind == .track,
               target.physicalTrack?.matches(task.pair.track) == true else { return nil }
-        let pair = outputPair ?? task.pair, runtime = pair.track.runtime
+        var pair = outputPair ?? task.pair
+        let runtime = pair.track.runtime
+        stage = "initial_native_proof"
         guard let proof = heldOutputProof(pair) else { return nil }
         outputProof = proof
+        if let outputTask, case .bus = outputTask.before {
+            stage = "input_prerequisites"
+            let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+            guard await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { [self] in
+                // The reader publishes only its exact owned search path and
+                // clears it on exit. Check that temporary custody before an
+                // original-focus proof that irreversibly records focus loss.
+                !inputFocus.permits() && outputProof?.permitsRead() != true
+            }), operation: { [self] in await busDepartureInputsCurrent(inputFocus: inputFocus) }) else { return nil }
+            // The input reader may legitimately renew this original header's
+            // source. Its receipt is not a replacement for fresh native proof.
+            pair = outputPair ?? task.pair
+            stage = "native_proof_after_inputs"
+            guard let renewedProof = heldOutputProof(pair) else { return nil }
+            outputProof = renewedProof
+        }
+        stage = "checked_output_and_footprint"
         let reading = await AXMixerStripBinding.$current.withValue(pair.strip) {
             await AccessibilityChannel.getOutputObservation(runtime: runtime)
         }
@@ -1619,6 +1804,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               assignment == task.before || (outputAttempted && assignment == task.desired),
               outputFootprintHeld(pair: pair, assignment: assignment),
               await projectIsCurrent(allowPendingCancellation: true) else { return nil }
+        accepted = true
         return assignment
     }
 
