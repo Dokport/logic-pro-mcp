@@ -7549,8 +7549,8 @@ struct Issue965HeldSelectionAssociationTests {
                         names: [], capture: capture, request: retained.request, snapshotCurrent: true)
                     let preview = try #require(sharedJSONObject(plan.json))
                     let executable = try #require(preview["executable"] as? Bool)
-                    let expectedExecutable = outcome == "keep_capture_healthy"
-                    #expect(executable == expectedExecutable, "\(preview)")
+                    if outcome == "keep_capture_healthy" { #expect(executable, "\(preview)") }
+                    else { #expect(!executable, "\(preview)") }
                     if outcome == "keep_capture_healthy" {
                         let fresh = try #require(capture.freshPopulation)
                         #expect(fresh.presentationBinding != nil && fresh.stable && fresh.uiEffects.restoration == "restored")
