@@ -748,6 +748,174 @@ extension AccessibilityChannel {
             return true
         }
 
+        /// Layout is a restoration duty, never a replacement peer identity.
+        struct MixerViewportGeometry: @unchecked Sendable {
+            let window: AXUIElement
+            let mixer: AXUIElement
+            let headers: [AXUIElement]
+            let document: String
+            let frames: [CGRect]
+        }
+
+        func observedMixerViewportGeometry() -> MixerViewportGeometry? {
+            guard permitsRead() else { return nil }
+            var frames: [CGRect] = []
+            for strip in strips {
+                guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                      let point = AXHelpers.getPosition(strip, runtime: logic.ax),
+                      let size = AXHelpers.getSize(strip, runtime: logic.ax),
+                      point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
+                      size.width > 0, size.height > 0 else { return nil }
+                frames.append(CGRect(origin: point, size: size))
+            }
+            guard permitsRead() else { return nil }
+            return .init(window: window, mixer: mixer, headers: headers, document: document, frames: frames)
+        }
+
+        /// The installed Scroll To menu exposes existing physical rows without
+        /// selecting a channel, synthesizing keys or changing a routing value.
+        /// Success still requires the exact original layout and native census.
+        func recoverMixerReadability(
+            restoring original: MixerViewportGeometry,
+            referenceIsCurrent: @Sendable () async -> Bool,
+            stoppingWhen stop: @Sendable () -> Bool
+        ) async -> Bool {
+            var recoveryStage = "original_geometry", recovered = false
+            defer {
+                if !recovered { Log.info("Owned Mixer Scroll To recovery refused at \(recoveryStage)", subsystem: "ax") }
+            }
+            guard CFEqual(original.window, window), CFEqual(original.mixer, mixer),
+                  original.document.utf8.elementsEqual(document.utf8),
+                  Self.same(original.headers, headers), original.frames.count == strips.count,
+                  !stop(), await referenceIsCurrent(), permitsRead() else { return false }
+            recoveryStage = "owned_view_discovery"
+            guard let parent: AXUIElement = AXHelpers.getAttribute(mixer, kAXParentAttribute as String, runtime: logic.ax),
+                  let parentPath = Self.path(parent, to: window, ax: logic.ax),
+                  case .success(let buttons) = AXHelpers.censusDescendantResult(of: parent,
+                    role: kAXMenuButtonRole as String, maxDepth: 32, runtime: logic.ax,
+                    requiresCompleteTraversal: true,
+                    permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
+            else { return false }
+            var views: [AXUIElement] = []
+            for button in buttons.matches {
+                switch AXLocalePolicy.elementMatchesResult(button, AXLocalePolicy.viewMenuBar, runtime: logic.ax) {
+                case .success(true): views.append(button)
+                case .success(false): break
+                case .failure: return false
+                }
+            }
+            guard views.count == 1, let view = views.first,
+                  let viewPath = Self.path(view, to: window, ax: logic.ax),
+                  viewPath.contains(where: { CFEqual($0, parent) }), permitsRead() else { return false }
+            func scopeHeld() -> Bool {
+                guard !stop(), permitsRead(),
+                      let currentParent: AXUIElement = AXHelpers.getAttribute(mixer, kAXParentAttribute as String, runtime: logic.ax),
+                      CFEqual(currentParent, parent),
+                      let currentParentPath = Self.path(parent, to: window, ax: logic.ax),
+                      Self.same(currentParentPath, parentPath),
+                      let currentViewPath = Self.path(view, to: window, ax: logic.ax),
+                      Self.same(currentViewPath, viewPath) else { return false }
+                // Path reads can themselves coincide with scope loss. Renew
+                // native custody after those deciding reads, not before them.
+                return permitsRead()
+            }
+            func childMenus(_ owner: AXUIElement) -> [AXUIElement]? {
+                guard case .success(let children) = AXHelpers.childrenResult(owner, runtime: logic.ax) else { return nil }
+                var menus: [AXUIElement] = []
+                for child in children {
+                    guard let role = AXHelpers.getRole(child, runtime: logic.ax) else { return nil }
+                    if role == kAXMenuRole as String {
+                        guard let reciprocal: AXUIElement = AXHelpers.getAttribute(child, kAXParentAttribute as String, runtime: logic.ax),
+                              CFEqual(reciprocal, owner) else { return nil }
+                        menus.append(child)
+                    }
+                }
+                return menus
+            }
+            func uniqueItem(in menu: AXUIElement, matching labels: AXLocalePolicy.LabelSet) -> AXUIElement? {
+                guard case .success(let children) = AXHelpers.childrenResult(menu, runtime: logic.ax) else { return nil }
+                var matches: [AXUIElement] = []
+                for child in children {
+                    guard AXHelpers.getRole(child, runtime: logic.ax) == kAXMenuItemRole as String,
+                          let owner: AXUIElement = AXHelpers.getAttribute(child, kAXParentAttribute as String, runtime: logic.ax),
+                          CFEqual(owner, menu) else { return nil }
+                    switch AXLocalePolicy.elementMatchesResult(child, labels, runtime: logic.ax) {
+                    case .success(true): matches.append(child)
+                    case .success(false): break
+                    case .failure: return nil
+                    }
+                }
+                return matches.count == 1 ? matches.first : nil
+            }
+            func cancelOwnedRoot(_ root: AXUIElement) async {
+                guard scopeHeld(), let roots = childMenus(view), roots.count == 1,
+                      roots.first.map({ CFEqual($0, root) }) == true,
+                      logic.ax.actionNames(root).contains(kAXCancelAction as String), scopeHeld(),
+                      await referenceIsCurrent(), !stop(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return }
+                _ = AXHelpers.performAction(root, kAXCancelAction as String, runtime: logic.ax)
+                if childMenus(view)?.isEmpty == true, scopeHeld(),
+                   let final = observedMixerViewportGeometry(), final.frames == original.frames,
+                   let current = currentViewport(), Self.sameViewport(current, viewport),
+                   await referenceIsCurrent() { effects.restoration = "restored" }
+            }
+            for (name, labels) in [("output", AXLocalePolicy.mixerTypeFilterOutput), ("audio", AXLocalePolicy.mixerTypeFilterAudio)] {
+                recoveryStage = name + "_view_action"
+                guard childMenus(view)?.isEmpty == true,
+                      AXHelpers.getAttribute(view, kAXEnabledAttribute as String, runtime: logic.ax) as Bool? == true,
+                      logic.ax.actionNames(view).contains(kAXPressAction as String), scopeHeld(),
+                      await referenceIsCurrent(), !stop(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                effects.navigationPerformed = true; effects.restoration = "not_restored"
+                effects.attempted.append("mixer_scroll_to_" + name)
+                let opened = AXHelpers.performAction(view, kAXPressAction as String, runtime: logic.ax)
+                recoveryStage = name + "_owned_root"
+                var roots: [AXUIElement]?
+                for attempt in 0..<4 {
+                    guard scopeHeld() else { return false }
+                    roots = childMenus(view)
+                    if roots?.count == 1 { break }
+                    guard roots?.isEmpty == true, attempt < 3 else { return false }
+                    do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
+                }
+                guard let roots, roots.count == 1, let root = roots.first else { return false }
+                // A failed AX acknowledgement does not prove no effect. Only
+                // this original View's uniquely owned reciprocal root may close.
+                guard opened else { await cancelOwnedRoot(root); return false }
+                recoveryStage = name + "_scoped_leaf"
+                guard let scrollTo = uniqueItem(in: root, matching: AXLocalePolicy.mixerScrollToMenuItem),
+                      let submenus = childMenus(scrollTo), submenus.count == 1, let submenu = submenus.first,
+                      let leaf = uniqueItem(in: submenu, matching: labels),
+                      AXHelpers.getAttribute(leaf, kAXEnabledAttribute as String, runtime: logic.ax) as Bool? == true,
+                      logic.ax.actionNames(leaf).contains(kAXPressAction as String),
+                      childMenus(view)?.first.map({ CFEqual($0, root) }) == true,
+                      scopeHeld(),
+                      await referenceIsCurrent(), !stop(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                    await cancelOwnedRoot(root); return false
+                }
+                guard AXHelpers.performAction(leaf, kAXPressAction as String, runtime: logic.ax) else {
+                    await cancelOwnedRoot(root); return false
+                }
+                recoveryStage = name + "_closed_root"
+                for attempt in 0..<4 {
+                    guard scopeHeld() else { return false }
+                    if childMenus(view)?.isEmpty == true { break }
+                    guard attempt < 3 else { await cancelOwnedRoot(root); return false }
+                    do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
+                }
+                guard childMenus(view)?.isEmpty == true, scopeHeld() else { return false }
+                effects.changed.append("mixer_scroll_to_" + name)
+            }
+            recoveryStage = "final_layout_and_custody"
+            guard let final = observedMixerViewportGeometry(), final.frames == original.frames,
+                  let current = currentViewport(), Self.sameViewport(current, expectedViewport),
+                  Self.sameViewport(current, viewport), await referenceIsCurrent(), permitsRead() else { return false }
+            effects.restoration = "restored"
+            recovered = true
+            return true
+        }
+
         private func select(_ index: Int, referenceIsCurrent: @Sendable () async -> Bool,
                             stoppingWhen stop: @Sendable () -> Bool,
                             requiresNonStackHeader: Bool = false) async -> Bool {
