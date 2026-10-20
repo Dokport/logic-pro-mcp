@@ -1180,6 +1180,12 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: mode)
     }
 
+    @Test("Only the original application focus of its owned native neutral popup permits return",
+          arguments: ["app_focus", "foreign_app_focus"])
+    func canonicalNoOutputNativeApplicationFocusRemainsOwned(mode: String) async throws {
+        try await assertCanonicalPhysicalOutput(mode: "canonical_no_output_return_" + mode)
+    }
+
     @Test("Canonical No Output retains its existing fault and verified compensation boundaries",
           arguments: ["cancel", "late_peer", "late_project", "return_late_peer", "return_late_project", "ack_only", "newer", "retired", "post_write_loss"])
     func canonicalNoOutputRejectsLostCustodyAndCompensatesOnlyItsEffect(mode: String) async throws {
@@ -1379,6 +1385,8 @@ struct Issue965HeldSelectionAssociationTests {
         let profile = survivingSource ? String(requestedMode.dropFirst("surviving_".count)) : requestedMode
         let noOutput = profile.hasPrefix("canonical_no_output")
         let noOutputReturn = profile.hasPrefix("canonical_no_output_return")
+        let nativeApplicationFocus = noOutput && profile.hasSuffix("_app_focus")
+        let nativeForeignApplication = profile.hasSuffix("_foreign_app_focus")
         let outputMode = !noOutput ? profile : profile == "canonical_no_output" ? "forward"
             : String(profile.dropFirst("canonical_no_output_".count))
         let mode = outputMode.hasPrefix("return_late_") ? String(outputMode.dropFirst("return_".count)) : outputMode
@@ -1688,6 +1696,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let nativeWrapper = f.builder.element(1_973_119)
                 let nativeFrame = CGRect(x: 20, y: 100, width: 230, height: 175)
                 if noOutput {
+                    if nativeApplicationFocus { f.builder.setRole(f.app, kAXApplicationRole as String) }
                     f.builder.setRole(nativeWrapper, kAXPopUpButtonRole as String)
                     f.builder.setAttribute(nativeWrapper, kAXParentAttribute as String, f.mixer)
                     f.builder.setAttribute(nativeWrapper, kAXWindowAttribute as String, f.window)
@@ -1777,6 +1786,14 @@ struct Issue965HeldSelectionAssociationTests {
                             // a native window, not a Mixer AXChildren menu.
                             f.builder.setChildren(nativeWrapper, [root])
                             f.routingNativePopupFrame = nativeFrame
+                            if nativeApplicationFocus {
+                                let foreign = f.builder.element(1_973_199)
+                                f.builder.setRole(foreign, kAXApplicationRole as String)
+                                let injectingForeign = nativeForeignApplication && ApprovedSessionRepair.outputLeafPermission != nil
+                                if injectingForeign { f.routingLateScopeInjected = true }
+                                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                                    injectingForeign ? foreign : f.app)
+                            }
                             f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
                         } else {
                             f.routingNativePopupFrame = nil
@@ -1787,6 +1804,9 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
                         f.routingNativePopupFrame = nil
+                        if nativeApplicationFocus {
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
+                        }
                         f.routingOpenedOutputIndex = nil
                         f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], f.routingReplacement ?? f.strips[1]])
                         f.inputMenuCancels += 1; return true
@@ -1800,6 +1820,9 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         f.routingOpenedOutputIndex = nil
                         f.routingNativePopupFrame = nil
+                        if nativeApplicationFocus {
+                            f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.routingReplacement ?? f.strips[1])
+                        }
                         if !survivingSource,
                            mode == "retired" || mode.hasPrefix("coupled_retired") || redrawsCensus, f.routingReplacement == nil {
                             let replacement = f.builder.element(1_973_140)
@@ -2078,6 +2101,14 @@ struct Issue965HeldSelectionAssociationTests {
                         }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let result = try #require(sharedJSONObject(sharedToolText(await run())))
+                if nativeForeignApplication {
+                    #expect(f.routingLateScopeInjected, "Reach foreign application focus at the actual owned scalar popup")
+                    let verified = try #require(result["verified"] as? Bool)
+                    #expect(!verified && result["saga_state"] as? String != "completed")
+                    #expect(f.routingDestinationPresses == 0)
+                    #expect(f.builder.attributeValue(outputs[1], kAXDescriptionAttribute as String) as? String == "No Output")
+                    return
+                }
                 if refusingSampledTrackOwnership {
                     #expect(f.footprintDocumentInjected && f.footprintDocumentRestored,
                         "Reach the initial Track-document sample and keep its contradiction until actual name extraction")

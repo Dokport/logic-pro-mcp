@@ -484,7 +484,8 @@ extension AccessibilityChannel {
             }
             // This is not a general editor exemption or a new association. Keep
             // the original complete census and exclusive selection; only allow
-            // focus on the search field reciprocally owned by this exact popup.
+            // its reciprocal search field or the original app of a checked
+            // native neutral popup, in addition to the original passive strip.
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   popupMatches(),
@@ -515,23 +516,32 @@ extension AccessibilityChannel {
             }
             let focusRole = AXHelpers.getRole(focus, runtime: logic.ax)
             stage = "search_field_role_\(focusRole ?? "unread")"
-            guard
-                  focusRole == kAXTextFieldRole as String,
-                  case .success(let rows) = AXHelpers.childrenResult(root, runtime: logic.ax),
-                  let parent: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
-            else { lost = true; return false }
-            if CFEqual(parent, root) {
-                stage = "direct_search_field_membership"
-                guard rows.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+            if nativeSource != nil, focusRole == kAXApplicationRole as String, CFEqual(focus, app) {
+                // The native neutral popup can report its original application
+                // as focused instead of an AX search field. Only this existing
+                // checked native window/root/source proof qualifies that exact CF;
+                // an arbitrary application or ordinary menu gains no exemption.
+                stage = "native_application_focus"
+                guard AccessibilityChannel.checkedOutputPopupMenus(in: mixer, runtime: logic.ax)?.isEmpty == true,
+                      popupMatches() else { lost = true; return false }
             } else {
-                stage = "nested_search_field_membership"
-                guard rows.filter({ CFEqual($0, parent) }).count == 1,
-                      let role = AXHelpers.getRole(parent, runtime: logic.ax),
-                      role == kAXGroupRole as String || role == "AXMenuItem",
-                      let parentRoot: AXUIElement = AXHelpers.getAttribute(parent, kAXParentAttribute as String, runtime: logic.ax),
-                      CFEqual(parentRoot, root),
-                      case .success(let children) = AXHelpers.childrenResult(parent, runtime: logic.ax),
-                      children.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+                guard focusRole == kAXTextFieldRole as String,
+                      case .success(let rows) = AXHelpers.childrenResult(root, runtime: logic.ax),
+                      let parent: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
+                else { lost = true; return false }
+                if CFEqual(parent, root) {
+                    stage = "direct_search_field_membership"
+                    guard rows.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+                } else {
+                    stage = "nested_search_field_membership"
+                    guard rows.filter({ CFEqual($0, parent) }).count == 1,
+                          let role = AXHelpers.getRole(parent, runtime: logic.ax),
+                          role == kAXGroupRole as String || role == "AXMenuItem",
+                          let parentRoot: AXUIElement = AXHelpers.getAttribute(parent, kAXParentAttribute as String, runtime: logic.ax),
+                          CFEqual(parentRoot, root),
+                          case .success(let children) = AXHelpers.childrenResult(parent, runtime: logic.ax),
+                          children.filter({ CFEqual($0, focus) }).count == 1 else { lost = true; return false }
+                }
             }
             stage = "search_field_popup_bookend"
             guard popupMatches(),
