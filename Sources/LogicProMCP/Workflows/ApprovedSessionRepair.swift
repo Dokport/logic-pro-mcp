@@ -1479,15 +1479,23 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     ownedPeerEffects: step.params["name"] == .string(goal.before) ? [] : ownedNameEffects)
             }
             guard let name = observed,
-                  let index = goal.binding.currentIndex(),
+                  let initialIndex = goal.binding.currentIndex(),
                   await projectIsCurrent(allowPendingCancellation: true), originalSelectionHeld() else { return nil }
+            var index = initialIndex
             if step.params["name"] == .string(goal.before), let original = execution?.restoredInputControl {
                 guard original.owner.currentIndex(runtime: goal.binding.runtime) != nil else { return nil }
                 // The deciding name read can itself redraw native controls.
                 // Corroborate the actual retained input after that final read.
                 let input = AXLogicProElements.inputSlotRead(in: original.owner.strip, runtime: goal.binding.runtime.ax)
                 guard case .source(let label) = input.reading, let control = input.control,
-                      original.matches(.init(owner: original.owner, control: control, source: label)) else { return nil }
+                      original.matches(.init(owner: original.owner, control: control, source: label)),
+                      original.owner.currentIndex(runtime: goal.binding.runtime) != nil,
+                      let currentIndex = goal.binding.currentIndex(),
+                      await projectIsCurrent(allowPendingCancellation: true), originalSelectionHeld(),
+                      case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(
+                        original.owner.window, runtime: goal.binding.runtime),
+                      currentDocument.utf8.elementsEqual(document.utf8) else { return nil }
+                index = currentIndex
             }
             let evidence = SagaReadEvidence(readSource: .axTrackName, provenance: .liveIndependent,
                 trackIndex: index, projectReference: projectRef.rawValue, field: "name",

@@ -7343,7 +7343,7 @@ struct Issue965HeldSelectionAssociationTests {
                       "composed_name_execution_external_name", "composed_name_execution_caption_cancel",
                       "composed_name_execution_caption_peer_cancel", "composed_name_execution_caption_peer_changed_cancel",
                       "composed_name_execution_caption_project_cancel", "composed_name_execution_caption_control_cancel",
-                      "composed_name_execution_caption_late_control_cancel"])
+                      "composed_name_execution_caption_late_control_cancel", "composed_name_execution_caption_post_read_project_cancel"])
     func canonicalInputAndApprovedNameExecuteBothActualWriters(outcome: String) async throws {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
@@ -7659,6 +7659,20 @@ struct Issue965HeldSelectionAssociationTests {
                             CFEqual($0, b.element(1_291_200)) ? replacement : $0
                         })
                     }
+                    if outcome == "composed_name_execution_caption_post_read_project_cancel" {
+                        let previous = f.routingRead
+                        f.routingRead = { element, attribute in
+                            previous?(element, attribute)
+                            guard !f.routingLateScopeInjected, f.routingNameConfirms == 2, f.routingDestinationPresses == 2,
+                                  CFEqual(element, b.element(1_291_200)), attribute == kAXDescriptionAttribute as String else { return }
+                            let stack = Thread.callStackSymbols
+                            guard stack.contains(where: { $0.contains("ApprovedSessionRepair") && $0.contains("readState") }),
+                                  stack.contains(where: { $0.contains("inputSlotRead") }),
+                                  !stack.contains(where: { $0.contains("readOwnedCoupledName") || $0.contains("readCapturedCoupledName") }) else { return }
+                            f.routingLateScopeInjected = true
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                    }
                     let result = await apply(dependencies, params)
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
                     if refusal {
@@ -7680,7 +7694,8 @@ struct Issue965HeldSelectionAssociationTests {
                     let compensated = outcome.hasSuffix("_cancel") || outcome.hasSuffix("_failure")
                     if compensated {
                         if ["composed_name_execution_caption_peer_changed_cancel", "composed_name_execution_caption_project_cancel",
-                            "composed_name_execution_caption_control_cancel", "composed_name_execution_caption_late_control_cancel"].contains(outcome) {
+                            "composed_name_execution_caption_control_cancel", "composed_name_execution_caption_late_control_cancel",
+                            "composed_name_execution_caption_post_read_project_cancel"].contains(outcome) {
                             #expect(f.routingLateScopeInjected, "Reach the actual presentation cleanup fault")
                             #expect(body["state"] as? String == "B")
                             #expect(body["saga_state"] as? String == "rollbackUncertain")
