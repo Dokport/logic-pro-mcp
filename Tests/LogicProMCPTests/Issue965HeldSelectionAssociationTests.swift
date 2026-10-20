@@ -1255,8 +1255,39 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer_checked_change")
     }
 
+    @Test("Explicitly scoped native Mixer Scroll To preserves its original physical viewport",
+          .enabled(if: ProcessInfo.processInfo.environment["LOGIC_MCP_NATIVE_MIXER_RECOVERY_PROJECT"] != nil))
+    func nativeMixerScrollToRetainsItsObservedOwners() async throws {
+        let expectedPath = try #require(ProcessInfo.processInfo.environment["LOGIC_MCP_NATIVE_MIXER_RECOVERY_PROJECT"])
+        try #require(!expectedPath.isEmpty && AXIsProcessTrusted(), "Native AX permission and an explicit project are required")
+        let runtime = AXLogicProElements.Runtime.production
+        let app = try #require(AXLogicProElements.appRoot(runtime: runtime))
+        let window: AXUIElement = try #require(AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: runtime.ax))
+        let observedDocument = try #require(AXHelpers.getAttribute(window, kAXDocumentAttribute as String, runtime: runtime.ax) as String?)
+        let observedURL = try #require(URL(string: observedDocument))
+        try #require(observedURL.isFileURL && observedURL.standardizedFileURL.path == URL(fileURLWithPath: expectedPath).standardizedFileURL.path,
+                     "Refuse a different project before any navigation")
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "native-owned-mixer-scroll"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+            deadline: ContinuousClock.now.advanced(by: .seconds(45)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let geometry = try #require(held.observedMixerViewportGeometry())
+            let recovered = await held.recoverMixerReadability(restoring: geometry,
+                referenceIsCurrent: { true }, stoppingWhen: { !gate.stillOwns(claim) })
+            #expect(recovered)
+            #expect(held.effects.restoration == "restored")
+            #expect(held.effects.changed == ["mixer_scroll_to_output", "mixer_scroll_to_audio"])
+            #expect(held.permitsRead())
+        }
+    }
+
     @Test("Scroll To actions renew native scope after deciding reads and clean up a failed opening",
-          arguments: ["late_open", "late_leaf", "failed_open", "delayed_root"])
+          arguments: ["late_open", "late_leaf", "failed_open", "delayed_root", "native_container_parent",
+                      "foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "late_competing_root"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1266,6 +1297,7 @@ struct Issue965HeldSelectionAssociationTests {
             var injected = false
             var foreignActions = 0
             var cancels = 0
+            var leafPresses = 0
             var rootAvailableAt: ContinuousClock.Instant?
         }
         func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false) async throws -> Probe {
@@ -1277,6 +1309,11 @@ struct Issue965HeldSelectionAssociationTests {
             let view = f.builder.element(1_975_500), root = f.builder.element(1_975_501)
             let scroll = f.builder.element(1_975_502), submenu = f.builder.element(1_975_503)
             let output = f.builder.element(1_975_504), audio = f.builder.element(1_975_505)
+            let controls = f.builder.element(1_975_506), toolbar = f.builder.element(1_975_507)
+            let foreignControls = f.builder.element(1_975_508), competingRoot = f.builder.element(1_975_509)
+            f.builder.setRole(controls, kAXGroupRole as String); f.builder.setRole(toolbar, kAXGroupRole as String)
+            f.builder.setRole(foreignControls, kAXGroupRole as String); f.builder.setChildren(foreignControls, [])
+            f.builder.setRole(competingRoot, kAXMenuRole as String); f.builder.setChildren(competingRoot, [])
             for (element, role, title) in [
                 (view, kAXMenuButtonRole, AXLocalePolicy.viewMenuBar.canonical),
                 (root, kAXMenuRole, ""),
@@ -1294,7 +1331,8 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setChildren(output, []); f.builder.setChildren(audio, [])
             f.builder.setChildren(submenu, [output, audio]); f.builder.setChildren(scroll, [submenu])
             f.builder.setChildren(root, [scroll]); f.builder.setChildren(view, [])
-            f.builder.setChildren(f.window, f.builder.makeAXRuntime().children(f.window) + [view])
+            f.builder.setChildren(toolbar, [view]); f.builder.setChildren(controls, [toolbar])
+            f.builder.setChildren(f.window, f.builder.makeAXRuntime().children(f.window) + [controls, foreignControls])
             let claim = try #require(gate.tryAcquire(operation: "scroll-to-readback"))
             defer { gate.release(claim) }
             let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
@@ -1302,6 +1340,12 @@ struct Issue965HeldSelectionAssociationTests {
                 let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
                     logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
                 let geometry = try #require(held.observedMixerViewportGeometry())
+                f.routingReadResult = { element, attribute in
+                    if fault == "unread_parent", CFEqual(element, root), attribute == kAXParentAttribute as String {
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                    return nil
+                }
                 f.routingRead = { element, attribute in
                     if CFEqual(element, view), attribute == kAXParentAttribute as String {
                         probe.viewParentReads += 1
@@ -1320,7 +1364,11 @@ struct Issue965HeldSelectionAssociationTests {
                         probe.viewChildrenReads += 1
                         if probe.viewChildrenReads == childrenFault {
                             probe.injected = true
-                            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            if fault == "late_competing_root" {
+                                f.builder.setChildren(view, [root, competingRoot])
+                            } else {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
                         }
                     }
                 }
@@ -1334,12 +1382,18 @@ struct Issue965HeldSelectionAssociationTests {
                             probe.rootAvailableAt = ContinuousClock.now.advanced(by: .milliseconds(160))
                             f.builder.setChildren(view, []); return true
                         }
-                        f.builder.setChildren(view, [root]); return !failedOpen
+                        f.builder.setChildren(view, [root])
+                        if fault == "native_container_parent" { f.builder.setAttribute(root, kAXParentAttribute as String, controls) }
+                        if fault == "foreign_container_parent" { f.builder.setAttribute(root, kAXParentAttribute as String, foreignControls) }
+                        if fault == "wrong_depth_parent" { f.builder.setAttribute(root, kAXParentAttribute as String, toolbar) }
+                        if fault == "missing_parent" { f.builder.removeAttribute(root, kAXParentAttribute as String) }
+                        return !failedOpen
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
                         probe.cancels += 1; f.builder.setChildren(view, []); return true
                     }
                     if CFEqual(element, output) || CFEqual(element, audio), action == kAXPressAction as String {
+                        probe.leafPresses += 1
                         if probe.firstLeafChildrenRead == nil { probe.firstLeafChildrenRead = probe.viewChildrenReads }
                         f.builder.setChildren(view, []); return true
                     }
@@ -1351,6 +1405,10 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(probe.injected, "Reach the actual last deciding native path/menu read")
                     #expect(probe.foreignActions == 0, "No opening, leaf or cleanup action in a foreign document")
                     #expect(!recovered)
+                    if fault == "late_competing_root" { #expect(probe.leafPresses == 0) }
+                } else if ["foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent"].contains(fault) {
+                    #expect(!recovered)
+                    #expect(probe.leafPresses == 0)
                 } else if failedOpen {
                     #expect(!recovered)
                     #expect(probe.cancels == 1)
@@ -1362,6 +1420,7 @@ struct Issue965HeldSelectionAssociationTests {
         let calibration = try await run()
         if fault == "late_open" { _ = try await run(parentFault: try #require(calibration.firstOpenParentRead)) }
         if fault == "late_leaf" { _ = try await run(childrenFault: try #require(calibration.firstLeafChildrenRead)) }
+        if fault == "late_competing_root" { _ = try await run(childrenFault: try #require(calibration.firstLeafChildrenRead)) }
         if fault == "failed_open" { _ = try await run(failedOpen: true) }
     }
 

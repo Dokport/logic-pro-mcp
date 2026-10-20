@@ -829,9 +829,28 @@ extension AccessibilityChannel {
                         Log.info("Owned Mixer menu child role unreadable", subsystem: "ax"); return nil
                     }
                     if role == kAXMenuRole as String {
-                        guard let reciprocal: AXUIElement = AXHelpers.getAttribute(child, kAXParentAttribute as String, runtime: logic.ax),
-                              CFEqual(reciprocal, owner) else {
-                            Log.info("Owned Mixer menu reciprocal parent unavailable", subsystem: "ax"); return nil
+                        let parentRead: Result<AXUIElement?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                            child, kAXParentAttribute as String, runtime: logic.ax)
+                        // Logic's Mixer View root is exposed in View's children,
+                        // but its native parent is the exact original controls
+                        // group two edges above View. Only this measured root
+                        // shape qualifies; submenus retain their direct parent.
+                        let retainedViewContainer: Bool
+                        if case .success(.some(let reciprocal)) = parentRead,
+                           CFEqual(owner, view), viewPath.count > 3,
+                           CFEqual(reciprocal, viewPath[2]),
+                           AXHelpers.getRole(reciprocal, runtime: logic.ax) == kAXGroupRole as String {
+                            retainedViewContainer = true
+                        } else { retainedViewContainer = false }
+                        guard case .success(.some(let reciprocal)) = parentRead,
+                              CFEqual(reciprocal, owner) || retainedViewContainer else {
+                            switch parentRead {
+                            case .success(.some(let actual)):
+                                Log.info("Owned Mixer menu parent differs: role=\(AXHelpers.getRole(actual, runtime: logic.ax) ?? "unread"), original_app=\(CFEqual(actual, app)), mixer_parent=\(CFEqual(actual, parent)), view_ancestor_depth=\(viewPath.firstIndex(where: { CFEqual($0, actual) }) ?? -1)", subsystem: "ax")
+                            case .success(.none): Log.info("Owned Mixer menu parent absent", subsystem: "ax")
+                            case .failure(let error): Log.info("Owned Mixer menu parent failed AX:\(error.raw)", subsystem: "ax")
+                            }
+                            return nil
                         }
                         menus.append(child)
                     }
@@ -897,7 +916,8 @@ extension AccessibilityChannel {
                       let leaf = uniqueItem(in: submenu, matching: labels),
                       AXHelpers.getAttribute(leaf, kAXEnabledAttribute as String, runtime: logic.ax) as Bool? == true,
                       logic.ax.actionNames(leaf).contains(kAXPressAction as String),
-                      childMenus(view)?.first.map({ CFEqual($0, root) }) == true,
+                      let currentRoots = childMenus(view), currentRoots.count == 1,
+                      currentRoots.first.map({ CFEqual($0, root) }) == true,
                       scopeHeld(),
                       await referenceIsCurrent(), !stop(),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
