@@ -59,6 +59,53 @@ private func parseEnvelope(_ contents: ReadResource.Result) throws -> [String: A
     return try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
 }
 
+@Test(arguments: [false, true])
+func projectInfoRefusesConflictingLiveDocumentBeforeIssuingReference(references: Bool) async throws {
+    try await FeatureFlags.withAdr002TargetRefForTests(references) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("project-info-conflict-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let old = ensureFixtureBundle(at: directory.appendingPathComponent("old/Same.logicx", isDirectory: true))
+        let current = ensureFixtureBundle(at: directory.appendingPathComponent("current/Same.logicx", isDirectory: true))
+        #expect(FileManager.default.contentsEqual(atPath: old.path, andPath: current.path))
+        let cache = StateCache(), registry = TargetRegistry()
+        let original = ProjectInfo(name: "Same", tempo: 95, filePath: old.path, lastUpdated: Date())
+        await cache.updateProject(original)
+        await #expect(throws: MCPError.internalError("project target snapshot became stale during resource emission")) {
+            _ = try await ResourceHandlers.read(uri: "logic://project/info", cache: cache, router: ChannelRouter(),
+                targetRegistry: registry, fileReader: makeFileReaderRuntime(bundlePath: current))
+        }
+        #expect(await registry.currentProjectIdentity == nil)
+        let after = await cache.getProject()
+        #expect(after.name == original.name && after.filePath == original.filePath && after.lastUpdated == original.lastUpdated)
+    }
+}
+
+@Test(arguments: [false, true])
+func projectInfoRetainsTheSamePhysicalBundleThroughAnAlias(references: Bool) async throws {
+    try await FeatureFlags.withAdr002TargetRefForTests(references) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("project-info-alias-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let current = ensureFixtureBundle(at: directory.appendingPathComponent("Current.logicx", isDirectory: true))
+        let alias = directory.appendingPathComponent("Alias.logicx", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: current)
+        #expect(alias.path != current.path)
+        #expect(alias.resolvingSymlinksInPath().path == current.resolvingSymlinksInPath().path)
+        let cache = StateCache(), registry = TargetRegistry()
+        await cache.updateProject(ProjectInfo(name: "Current", tempo: 95, filePath: alias.path, lastUpdated: Date()))
+        let result = try await ResourceHandlers.read(uri: "logic://project/info", cache: cache, router: ChannelRouter(),
+            targetRegistry: registry, fileReader: makeFileReaderRuntime(bundlePath: current))
+        let envelope = try parseEnvelope(result)
+        let data = try #require(envelope["data"] as? [String: Any])
+        #expect(data["filePath"] as? String == alias.path)
+        #expect(data["name"] as? String == "Current")
+        if references { #expect(data["project_ref"] != nil) }
+        else { #expect(data["project_ref"] == nil) }
+        #expect(await cache.getProject().filePath == alias.path)
+    }
+}
+
 @Test
 func cacheLive_filePresent_cachePreferred_sourceAxLive() async throws {
     let cache = StateCache()
