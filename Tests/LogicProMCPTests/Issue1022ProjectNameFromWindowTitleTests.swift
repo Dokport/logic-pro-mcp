@@ -1,4 +1,4 @@
-import ApplicationServices
+@preconcurrency import ApplicationServices
 import Foundation
 import Testing
 
@@ -139,5 +139,61 @@ struct Issue1022ProjectNameFromWindowTitleTests {
             try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
         )
         #expect(object["name"] as? String == "\(Self.project) - Something Else")
+    }
+
+    @Test("A file panel cannot become a fresh project name",
+          arguments: ["enumerated", "fallback", "unreadable_windows", "unreadable_subrole"],
+          [kAXDialogSubrole as String, kAXSystemDialogSubrole as String])
+    func getProjectInfoRefusesDialogName(discovery: String, subrole: String) {
+        let builder = FakeAXRuntimeBuilder()
+        let app = builder.element(1), window = builder.element(2)
+        builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+        if discovery != "fallback" { builder.setAttribute(app, kAXWindowsAttribute as String, [window]) }
+        builder.setRole(window, kAXWindowRole as String)
+        builder.setAttribute(window, kAXSubroleAttribute as String, subrole)
+        builder.setAttribute(window, kAXTitleAttribute as String, "Open")
+        builder.setAttribute(window, kAXModalAttribute as String, false)
+        let runtime = builder.makeLogicRuntime(appElement: app,
+            attributeValueResultHandler: { element, attribute in
+                if discovery == "unreadable_windows", CFEqual(element, app), attribute == kAXWindowsAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                if discovery == "unreadable_subrole", CFEqual(element, window), attribute == kAXSubroleAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return nil
+            }, setAttributeHandler: { _, _, _ in Issue.record("Project info must not write"); return false },
+            performActionHandler: { _, _ in Issue.record("Project info must not navigate"); return false })
+        let result = AccessibilityChannel.defaultGetProjectInfo(runtime: runtime)
+        guard case .error = result else {
+            Issue.record("A dialog title must not be published as a timestamped project: \(result.message)")
+            return
+        }
+    }
+
+    @Test("A failed or empty title read cannot invent a timestamped project name",
+          arguments: ["absent", "unreadable", "empty", "unreadable_subrole"])
+    func getProjectInfoRefusesUnobservedName(fault: String) {
+        let builder = FakeAXRuntimeBuilder()
+        let app = builder.element(1), window = builder.element(2)
+        builder.setAttribute(app, kAXMainWindowAttribute as String, window)
+        if fault != "absent" {
+            builder.setAttribute(window, kAXTitleAttribute as String, fault == "empty" ? "  " : "Project - Tracks")
+        }
+        let runtime = builder.makeLogicRuntime(appElement: app,
+            attributeValueResultHandler: { element, attribute in
+                if fault == "unreadable", CFEqual(element, window), attribute == kAXTitleAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                if fault == "unreadable_subrole", CFEqual(element, window), attribute == kAXSubroleAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return nil
+            }, setAttributeHandler: nil, performActionHandler: nil)
+        let result = AccessibilityChannel.defaultGetProjectInfo(runtime: runtime)
+        guard case .error = result else {
+            Issue.record("An unobserved title must not be published as a timestamped project: \(result.message)")
+            return
+        }
     }
 }

@@ -1585,10 +1585,26 @@ extension AccessibilityChannel {
     // MARK: - Project
 
     static func defaultGetProjectInfo(runtime: AXLogicProElements.Runtime = .production) -> ChannelResult {
-        guard let window = AXLogicProElements.mainWindow(runtime: runtime) else {
+        guard case .found(let window) = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime) else {
             return .error("Cannot locate Logic Pro main window")
         }
-        let title = AXHelpers.getTitle(window, runtime: runtime.ax) ?? "Unknown"
+        // Best-effort mainWindow may return the sole Open/Save dialog. Its
+        // title is not project metadata, including through the direct fallback.
+        let subroleRead: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+            window, kAXSubroleAttribute as String, runtime: runtime.ax)
+        if case .failure(let status) = subroleRead, !status.isDefinitiveAbsence {
+            return .error("Cannot read Logic Pro window classification")
+        }
+        if case .success(.some(let subrole)) = subroleRead,
+           subrole == (kAXDialogSubrole as String) || subrole == (kAXSystemDialogSubrole as String) {
+            return .error("Cannot read project information from a dialog window")
+        }
+        let titleRead: Result<String?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+            window, kAXTitleAttribute as String, runtime: runtime.ax)
+        guard case .success(.some(let title)) = titleRead,
+              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .error("Cannot read Logic Pro project title")
+        }
         var info = ProjectInfo()
         // #1022: the title is `<project> - <view>` with the view in Logic's UI language, and this
         // record is the name every consumer sees — the audit, the health snapshot, and the `prj_`
