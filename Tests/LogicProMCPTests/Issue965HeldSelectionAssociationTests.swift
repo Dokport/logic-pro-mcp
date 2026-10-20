@@ -1181,7 +1181,7 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("Only the original application focus of its owned native neutral popup permits return",
-          arguments: ["app_focus", "foreign_app_focus"])
+          arguments: ["app_focus", "foreign_app_focus", "no_value_app_focus", "unread_window_app_focus", "absent_window_app_focus", "foreign_window_app_focus"])
     func canonicalNoOutputNativeApplicationFocusRemainsOwned(mode: String) async throws {
         try await assertCanonicalPhysicalOutput(mode: "canonical_no_output_return_" + mode)
     }
@@ -1387,6 +1387,11 @@ struct Issue965HeldSelectionAssociationTests {
         let noOutputReturn = profile.hasPrefix("canonical_no_output_return")
         let nativeApplicationFocus = noOutput && profile.hasSuffix("_app_focus")
         let nativeForeignApplication = profile.hasSuffix("_foreign_app_focus")
+        let nativeNoWindow = profile.hasSuffix("_no_value_app_focus")
+        let nativeUnreadWindow = profile.hasSuffix("_unread_window_app_focus")
+        let nativeAbsentWindow = profile.hasSuffix("_absent_window_app_focus")
+        let nativeForeignWindow = profile.hasSuffix("_foreign_window_app_focus")
+        let nativeRefusingWindow = nativeUnreadWindow || nativeAbsentWindow || nativeForeignWindow
         let outputMode = !noOutput ? profile : profile == "canonical_no_output" ? "forward"
             : String(profile.dropFirst("canonical_no_output_".count))
         let mode = outputMode.hasPrefix("return_late_") ? String(outputMode.dropFirst("return_".count)) : outputMode
@@ -1531,6 +1536,15 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setChildren(outer, [f.mixer])
                 f.builder.setChildren(f.window, [f.rail, outer, f.builder.element(1_965_720)])
                 f.routingReadResult = { element, attribute in
+                    if nativeApplicationFocus, f.routingNativePopupFrame != nil,
+                       ApprovedSessionRepair.outputLeafPermission != nil,
+                       CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
+                        if nativeNoWindow || nativeRefusingWindow { f.routingLateScopeInjected = true }
+                        if nativeNoWindow { return .failure(.init(raw: AXError.noValue.rawValue)) }
+                        if nativeUnreadWindow { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                        if nativeAbsentWindow { return .success(nil) }
+                        if nativeForeignWindow { return .success(f.builder.element(1_973_198)) }
+                    }
                     if menuOverlay, CFEqual(element, f.rail),
                        [kAXValueAttribute, kAXSelectedTextAttribute, kAXNumberOfCharactersAttribute,
                         kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
@@ -2101,8 +2115,8 @@ struct Issue965HeldSelectionAssociationTests {
                         }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let result = try #require(sharedJSONObject(sharedToolText(await run())))
-                if nativeForeignApplication {
-                    #expect(f.routingLateScopeInjected, "Reach foreign application focus at the actual owned scalar popup")
+                if nativeForeignApplication || nativeRefusingWindow {
+                    #expect(f.routingLateScopeInjected, "Reach foreign focus or unread/absent/foreign window at the actual owned scalar popup")
                     let verified = try #require(result["verified"] as? Bool)
                     #expect(!verified && result["saga_state"] as? String != "completed")
                     #expect(f.routingDestinationPresses == 0)
