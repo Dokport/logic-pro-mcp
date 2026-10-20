@@ -237,6 +237,95 @@ struct Issue291InputObservationTests {
         #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
     }
 
+    @Test(arguments: ["Input", "입력", "入力", "Eingang", "Entrada", "Entrée", "Ingresso", "输入", "輸入"],
+          [kAXDescriptionAttribute as String, kAXTitleAttribute as String])
+    func localizedInputCaptionCannotEstablishAbsence(caption: String, attribute: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(false) {
+            let fixture = Fixture("placeholder")
+            fixture.builder.removeAttribute(fixture.input, kAXDescriptionAttribute as String)
+            fixture.builder.setAttribute(fixture.input, attribute, caption)
+            let read = AXLogicProElements.inputSlotRead(in: fixture.strip, runtime: fixture.runtime.ax)
+            #expect(read.reading == .unreadable)
+            #expect(read.control == nil)
+            for single in [false, true] {
+                let row = try #require(ordinaryRows(fixture, single: single).first)
+                #expect(row["input"] == nil)
+                #expect((row["input_observation"] as? [String: Any])?["state"] as? String == "unreadable")
+            }
+            let body = try await inspect(fixture)
+            let row = try #require(((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])?.first)
+            #expect(row["input_status"] as? String == "unreadable")
+            #expect(AccessibilityChannel.busLoop(into: 2, from: 0, strips: [fixture.strip], inputs: [:],
+                                               runtime: fixture.runtime.ax) == .unknown(ordinal: 0, part: "input"))
+            #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+        }
+    }
+
+    @Test(arguments: [kAXDescriptionAttribute as String, kAXTitleAttribute as String], [false, true])
+    func localizedPlaceholderCannotBeIgnoredBesideObservedSource(attribute: String, placeholderFirst: Bool) {
+        let fixture = Fixture("placeholder")
+        fixture.builder.removeAttribute(fixture.input, kAXDescriptionAttribute as String)
+        fixture.builder.setAttribute(fixture.input, attribute, "입력")
+        fixture.builder.setAttribute(fixture.input, kAXHelpAttribute as String, "Unrecognized selector help.")
+        fixture.builder.setButton(fixture.later, description: "Input 2",
+                                  help: "Input slot. Choose the channel strip input source.",
+                                  x: 0, y: 0, width: 1, height: 1)
+        fixture.builder.setChildren(fixture.later, [])
+        fixture.builder.setChildren(fixture.strip, placeholderFirst
+                                    ? [fixture.input, fixture.later] : [fixture.later, fixture.input])
+        let read = AXLogicProElements.inputSlotRead(in: fixture.strip, runtime: fixture.runtime.ax)
+        #expect(read.reading == .unreadable)
+        #expect(read.control == nil)
+        #expect(AccessibilityChannel.busLoop(into: 2, from: 0, strips: [fixture.strip], inputs: [:],
+                                           runtime: fixture.runtime.ax) == .unknown(ordinal: 0, part: "input"))
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test(arguments: [AXError.cannotComplete.rawValue, AXError.invalidUIElement.rawValue,
+                      AXError.attributeUnsupported.rawValue, AXError.noValue.rawValue])
+    func undecidingButtonTitlePreservesReadStatus(raw: Int32) {
+        let fixture = Fixture("placeholder")
+        fixture.builder.setAttribute(fixture.input, kAXDescriptionAttribute as String, "monitoring")
+        let input = fixture.input
+        let ax = fixture.builder.makeAXRuntime(attributeValueResultHandler: { element, attribute in
+            CFEqual(element, input) && attribute == kAXTitleAttribute as String
+                ? .failure(.init(raw: raw)) : nil
+        }, setAttributeHandler: nil, performActionHandler: nil)
+        let expected: AXLogicProElements.InputSlotReading =
+            [AXError.attributeUnsupported.rawValue, AXError.noValue.rawValue].contains(raw) ? .noSlot : .unreadable
+        let read = AXLogicProElements.inputSlotRead(in: fixture.strip, runtime: ax)
+        #expect(read.reading == expected)
+        #expect(read.control == nil)
+        #expect(fixture.builder.setCalls.isEmpty && fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test func malformedUndecidingButtonTitleCannotEstablishAbsence() {
+        let fixture = Fixture("placeholder")
+        fixture.builder.setAttribute(fixture.input, kAXDescriptionAttribute as String, "monitoring")
+        fixture.builder.setAttribute(fixture.input, kAXTitleAttribute as String, NSNumber(value: 42))
+        let read = AXLogicProElements.inputSlotRead(in: fixture.strip, runtime: fixture.runtime.ax)
+        #expect(read.reading == .unreadable)
+        #expect(read.control == nil)
+    }
+
+    @Test(arguments: ["Input Monitoring", "Input Settings", "instrument"])
+    func nonPlaceholderCaptionDoesNotInventAnInputSlot(caption: String) {
+        let fixture = Fixture("placeholder")
+        fixture.builder.setAttribute(fixture.input, kAXDescriptionAttribute as String, caption)
+        fixture.builder.setAttribute(fixture.input, kAXTitleAttribute as String, caption)
+        #expect(AXLogicProElements.inputSlotReading(in: fixture.strip, runtime: fixture.runtime.ax) == .noSlot)
+    }
+
+    @Test(arguments: ["Input slot.", "Output slot.", "Send slot."])
+    func knownSlotHelpDoesNotUseGenericCaptionAsAuthority(help: String) {
+        let fixture = Fixture("audio")
+        fixture.builder.setAttribute(fixture.input, kAXHelpAttribute as String, help)
+        fixture.builder.setAttribute(fixture.input, kAXTitleAttribute as String, "입력")
+        let read = AXLogicProElements.inputSlotRead(in: fixture.strip, runtime: fixture.runtime.ax)
+        #expect(read.reading == (help == "Input slot." ? .source("Input 1") : .noSlot))
+        #expect((read.control != nil) == (help == "Input slot."))
+    }
+
     @Test func legacyCodableInputIsRetainedWithoutInventingObservation() async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(false) {
             let data = Data(#"{"trackIndex":0,"input":"Input 3","volume":0,"pan":0,"eqEnabled":false,"plugins":[]}"#.utf8)
