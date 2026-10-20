@@ -59,10 +59,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let capture: SessionPopulationObservation.Capture
         let handle: String
 
-        var prerequisiteBus: Int? {
-            if case .bus(let number) = before { return number }
-            if case .bus(let number) = desired { return number }
-            return nil
+        var prerequisiteBuses: [Int] {
+            var numbers: [Int] = []
+            for assignment in [before, desired] {
+                if case .bus(let number) = assignment, !numbers.contains(number) { numbers.append(number) }
+            }
+            return numbers
         }
     }
     private struct SendTask: Sendable {
@@ -342,7 +344,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == nil }
         guard strips.count == 1, let stripIndex = strips.first, let mixerRef = source.mixerReference(at: stripIndex),
               checked.count == 1, let before = checked.first?.assignment else { return nil }
-        // Both Bus directions are singleton output-only tasks. A positive
+        // Bus routes remain singleton output-only tasks. A positive
         // existing receiver is required; this grants no allocation/lifecycle
         // or shared input/name sink authority.
         let busDeparture: Bool
@@ -357,8 +359,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 && localAssignmentForBefore(before) != nil
                 && capturedExistingBusPrerequisites(number, source: source, sourceIndex: stripIndex)
         } else { busArrival = false }
-        guard localAssignmentForBefore(before) != nil || before == .noOutput || busDeparture,
-              localAssignmentForBefore(desired) != nil || desired == .noOutput || busArrival,
+        let busReplacement: Bool
+        if case .bus(let old) = before, case .bus(let new) = desired {
+            busReplacement = old != new && OutputAssignment.busNumbers.contains(old)
+                && OutputAssignment.busNumbers.contains(new) && names.isEmpty && policy.inputs.isEmpty
+                && capturedExistingBusPrerequisites(old, source: source, sourceIndex: stripIndex)
+                && capturedExistingBusPrerequisites(new, source: source, sourceIndex: stripIndex)
+        } else { busReplacement = false }
+        guard localAssignmentForBefore(before) != nil || before == .noOutput || busDeparture || busReplacement,
+              localAssignmentForBefore(desired) != nil || desired == .noOutput || busArrival || busReplacement,
               // No Output is initially one output-only task. In particular,
               // it does not expand the shared physical/stereo input-sink
               // contract or admit a preliminary name write in a mixed plan.
@@ -1671,7 +1680,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private func busOutputInputsCurrent(
         inputFocus: AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope
     ) async -> Bool {
-        guard let task = outputTask, let bus = task.prerequisiteBus else { return true }
+        guard let task = outputTask, !task.prerequisiteBuses.isEmpty else { return true }
         var stage = "captured_source", accepted = false
         defer {
             if !accepted { Log.info("Canonical Bus prerequisite refused at \(stage)", subsystem: "saga") }
@@ -1738,45 +1747,52 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             guard let renewal = observed.source, renewal.permits(runtime: runtime) else { return false }
             outputPair = renewal.pair; outputRenewal = renewal; outputProof = renewal.observation
         }
-        guard let roster = outputRenewal, roster.permits(runtime: runtime) else { return false }
-        for receiver in roster.observedPairs {
-            let owner = receiver.strip
-            guard !receiver.track.matches(task.pair.track),
-                  roster.observedPairs.filter({ $0.strip.matches(owner) }).count == 1 else { continue }
-            stage = "receiver_owner"
-            guard owner.currentIndex(runtime: runtime) != nil else { return false }
-            let current = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
-            guard case .source(let label) = current.reading, let control = current.control,
-                  RoutingGraphPublication.classifyOutputLabel(label).0 == .bus,
-                  RoutingGraphPublication.classifyOutputLabel(label).1 == bus else { continue }
-            let slot = AXMixerInputSlotBinding(owner: owner, control: control, source: label)
-            let read = await AXMixerStripBinding.$current.withValue(owner) {
-                await AXMixerStripBinding.$outputAssociation.withValue(receiver) {
-                    await AccessibilityChannel.getInputBusObservation(runtime: runtime, requiringOriginalInputControl: slot,
-                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
-                        observingRenewedFocus: { inputFocus.retainAssociation($0) })
+        for bus in task.prerequisiteBuses {
+            // A checked input excursion can retire the full native census. Each
+            // distinct Bus uses the latest actual original-header observation.
+            guard let roster = outputRenewal, roster.permits(runtime: runtime) else { return false }
+            var receiverVerified = false
+            for receiver in roster.observedPairs {
+                let owner = receiver.strip
+                guard !receiver.track.matches(task.pair.track),
+                      roster.observedPairs.filter({ $0.strip.matches(owner) }).count == 1 else { continue }
+                stage = "receiver_owner"
+                guard owner.currentIndex(runtime: runtime) != nil else { return false }
+                let current = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
+                guard case .source(let label) = current.reading, let control = current.control,
+                      RoutingGraphPublication.classifyOutputLabel(label).0 == .bus,
+                      RoutingGraphPublication.classifyOutputLabel(label).1 == bus else { continue }
+                let slot = AXMixerInputSlotBinding(owner: owner, control: control, source: label)
+                let read = await AXMixerStripBinding.$current.withValue(owner) {
+                    await AXMixerStripBinding.$outputAssociation.withValue(receiver) {
+                        await AccessibilityChannel.getInputBusObservation(runtime: runtime, requiringOriginalInputControl: slot,
+                            observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
+                            observingRenewedFocus: { inputFocus.retainAssociation($0) })
+                    }
                 }
+                stage = "receiver_checked_read"
+                guard read.assignment == .bus(bus) else {
+                    Log.info("Canonical Bus receiver read: assignment_present=\(read.assignment != nil),slot_present=\(read.inputSlot != nil),renewed=\(read.inputRenewal != nil)", subsystem: "saga")
+                    return false
+                }
+                if let renewal = read.inputRenewal {
+                    stage = "receiver_original_header_renewal"
+                    guard renewal.original.matches(owner), renewal.originalTrack.matches(receiver.track),
+                          read.inputSlot?.owner.matches(renewal.pair.strip) == true,
+                          let primary = renewal.sourceForOriginalHeader(task.pair, runtime: runtime) else { return false }
+                    outputPair = primary.pair; outputRenewal = primary; outputProof = primary.observation
+                } else {
+                    guard read.inputSlot?.matches(slot) == true, owner.currentIndex(runtime: runtime) != nil else { return false }
+                }
+                stage = "final_project"
+                guard await projectIsCurrent(allowPendingCancellation: true) else { return false }
+                receiverVerified = true
+                break
             }
-            stage = "receiver_checked_read"
-            guard read.assignment == .bus(bus) else {
-                Log.info("Canonical Bus receiver read: assignment_present=\(read.assignment != nil),slot_present=\(read.inputSlot != nil),renewed=\(read.inputRenewal != nil)", subsystem: "saga")
-                return false
-            }
-            if let renewal = read.inputRenewal {
-                stage = "receiver_original_header_renewal"
-                guard renewal.original.matches(owner), renewal.originalTrack.matches(receiver.track),
-                      read.inputSlot?.owner.matches(renewal.pair.strip) == true,
-                      let primary = renewal.sourceForOriginalHeader(task.pair, runtime: runtime) else { return false }
-                outputPair = primary.pair; outputRenewal = primary; outputProof = primary.observation
-            } else {
-                guard read.inputSlot?.matches(slot) == true, owner.currentIndex(runtime: runtime) != nil else { return false }
-            }
-            stage = "final_project"
-            accepted = await projectIsCurrent(allowPendingCancellation: true)
-            return accepted
+            guard receiverVerified else { stage = "no_retained_receiver"; return false }
         }
-        stage = "no_retained_receiver"
-        return false
+        accepted = true
+        return true
     }
 
     private func outputReading() async -> OutputAssignment? {
@@ -1794,7 +1810,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         stage = "initial_native_proof"
         guard let proof = heldOutputProof(pair) else { return nil }
         outputProof = proof
-        if let outputTask, outputTask.prerequisiteBus != nil {
+        if let outputTask, !outputTask.prerequisiteBuses.isEmpty {
             stage = "input_prerequisites"
             let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
             guard await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { [self] in
