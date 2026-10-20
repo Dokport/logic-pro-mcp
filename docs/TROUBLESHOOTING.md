@@ -151,6 +151,12 @@ Read `logic://mixer` after the write. `set_volume` and `set_pan` use visible-str
 
 ## MIDI
 
+### Duplicate server launches and MIDI ownership
+
+Claude Desktop may launch two copies of one MCP configuration: one for chat and another for Code/Cowork. Separate clients can also start competing copies. The server reserves its virtual MIDI port group for one process before creating individual endpoints, so updated instances do not split CoreMIDI, MCU, Key Commands and Scripter ports between them. The other process reports that it did not acquire the virtual MIDI port group; its MIDI operations remain unavailable/degraded, while unrelated channels retain their own readiness checks.
+
+Use `logic_system health` and the client logs to identify ownership failures. Stop competing launches through their clients, then restart the intended server. A losing process keeps its refused claim until it exits: the owner's exit alone does not silently enable MIDI in the loser. OS creation failures, unreadable endpoint censuses and existing foreign/stale endpoints still refuse; a group reservation does not certify that all endpoints were created. Do not add duplicate Logic control surfaces, change permissions, delete lock files or kill CoreMIDI to work around a second launcher. An older already-running server does not participate in the new group claim, so stop old copies before evaluating ownership after an update.
+
 ### Virtual MIDI ports are not visible
 
 Start the MCP server once, then check:
