@@ -6379,6 +6379,10 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga("composed_name_preview", canonical: true)
     }
 
+    @Test func matchingInputAndChangedOutputRetainBothApprovedGoals() async throws {
+        try await assertRegisteredInputSaga("matching_output_preview", canonical: true)
+    }
+
     @Test(arguments: ["completed", "different_display", "wrong_digest", "foreign_project", "changed_peer",
                       "changed_input", "replaced_control", "foreign_focus", "after_name_input", "external_name",
                       "between_name_input", "cancel", "preflight_renewal"])
@@ -6464,10 +6468,15 @@ struct Issue965HeldSelectionAssociationTests {
             let pair = try #require(fresh.selectionAssociations.first)
             let input = try #require(fresh.checkedInputs.first { $0.receiver.matches(pair.strip) })
             #expect(input.assignment == .bus(1))
-            let policy: Value = .object(["schema": .string(ProjectSessionAudit.intentPolicySchema),
+            var policy: Value = .object(["schema": .string(ProjectSessionAudit.intentPolicySchema),
                 "project_ref": .string(project.rawValue),
                 "targets": .array([.object(["handle": .string("source"), "track_ref": .string(trackReference.rawValue)])]),
                 "inputs": .array([.object(["target": .string("source"), "bus": .int(outcome.hasPrefix("matching") || matchingInputWithChangedName ? 1 : 2)])])])
+            if outcome == "matching_output_preview", var fields = policy.objectValue {
+                fields["outputs"] = .array([.object(["target": .string("source"),
+                    "output": .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])])])
+                policy = .object(fields)
+            }
             let planner = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
             var planning: [String: Value] = ["snapshot_id": .string(snapshotID), "policy": policy]
             if outcome.hasPrefix("composed_name_") {
@@ -6483,6 +6492,13 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(executable, "The qualified singleton input must have an executable plan: \(preview)")
             #expect(f.routingDestinationPresses == 0)
             guard executable else { return }
+            if outcome == "matching_output_preview" {
+                let steps = try #require(preview["steps"] as? [[String: Any]])
+                #expect(steps.compactMap { $0["kind"] as? String } == ["output_assignment"])
+                #expect(preview["unchanged_tasks"] as? [String] == ["input_source"])
+                #expect(f.routingDestinationPresses == 0)
+                return
+            }
             if retainedName && !outcome.hasPrefix("matching") {
                 let steps = try #require(preview["steps"] as? [[String: Any]])
                 #expect(steps.compactMap { $0["kind"] as? String } == ["input_assignment"])
