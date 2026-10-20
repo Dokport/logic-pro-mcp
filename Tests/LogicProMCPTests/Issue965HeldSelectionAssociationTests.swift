@@ -557,6 +557,7 @@ struct Issue965HeldSelectionAssociationTests {
         var lateAssociationFocusSampled = false
         var lateAssociationFocusLanded = false
         var inputMenuPresses = 0
+        var matchingGoalContextID: ObjectIdentifier?
         var inputMenuCancels = 0
         var renewedOutputPresses = 0
         var renewedOutputCancels = 0
@@ -6383,6 +6384,15 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga("retained_name_" + outcome, canonical: true)
     }
 
+    @Test(arguments: ["matching", "matching_different_display", "matching_renewal", "matching_renewal_rail",
+                      "matching_preopen_focus", "matching_checkmark", "matching_control", "matching_project",
+                      "matching_focus", "matching_peer", "matching_cleanup", "matching_late_proof_document",
+                      "matching_name_before", "matching_final_name", "matching_final_checkmark",
+                      "matching_between_name_input"])
+    func alreadyMatchingNameAndInputAreBothIndependentlyVerified(outcome: String) async throws {
+        try await assertRegisteredInputSaga("retained_name_" + outcome, canonical: true)
+    }
+
     @Test(arguments: ["composed_name_execution", "composed_name_execution_preflight_renewal",
                       "composed_name_execution_wrong_digest", "composed_name_execution_foreign_project",
                       "composed_name_execution_changed_peer", "composed_name_execution_changed_input",
@@ -6463,7 +6473,7 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(executable, "The qualified singleton input must have an executable plan: \(preview)")
             #expect(f.routingDestinationPresses == 0)
             guard executable else { return }
-            if retainedName {
+            if retainedName && !outcome.hasPrefix("matching") {
                 let steps = try #require(preview["steps"] as? [[String: Any]])
                 #expect(steps.compactMap { $0["kind"] as? String } == ["input_assignment"])
                 #expect(steps.first?["dependencies"] as? [String] == [])
@@ -6553,7 +6563,8 @@ struct Issue965HeldSelectionAssociationTests {
                 return
             }
             if outcome.hasPrefix("matching") {
-                try await assertMatchingInputExecution(f, dependencies: dependencies, preview: preview, key: key, outcome: outcome)
+                try await assertMatchingInputExecution(f, dependencies: dependencies, preview: preview, key: key,
+                    outcome: outcome, retainedName: retainedName)
                 return
             }
             let id = try #require(preview["plan_id"] as? String)
@@ -6660,10 +6671,13 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     private func assertMatchingInputExecution(_ f: Fixture, dependencies: HandlerDependencies,
-                                               preview: [String: Any], key: String, outcome: String) async throws {
+                                               preview: [String: Any], key: String, outcome: String,
+                                               retainedName: Bool = false) async throws {
         let steps = try #require(preview["steps"] as? [[String: Any]])
         #expect(steps.isEmpty, "An already-matching input is not a mutating task")
-        #expect(preview["unchanged_tasks"] as? [String] == ["input_source"])
+        let unchanged = try #require(preview["unchanged_tasks"] as? [String])
+        let expectedIDs = retainedName ? ["input_source", "name_source"] : ["input_source"]
+        #expect(unchanged.count == expectedIDs.count && Set(unchanged) == Set(expectedIDs))
         let id = try #require(preview["plan_id"] as? String), digest = try #require(preview["digest"] as? String)
         let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
         let params: [String: Value] = ["plan_id": .string(id), "digest": .string(digest),
@@ -6677,6 +6691,19 @@ struct Issue965HeldSelectionAssociationTests {
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
         let denied = await OperationTraceContext.$current.withValue(context) {
             #expect(gate.stillOwns(claim), "The read-only refusal is not caused by a missing gate")
+            if retainedName && outcome == "matching" {
+                let b = f.builder
+                b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "")
+                b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "✓")
+                #expect(!approval.verifiesMatchingNamesOnly,
+                    "An approved input goal cannot be completed by a names-only verifier")
+                let namesOnly = await approval.verifyMatchingNames()
+                let body = sharedJSONObject(namesOnly.body)
+                #expect(body?["state"] as? String == "C",
+                    "Checking names alone must not certify the unchecked changed input: \(namesOnly.body)")
+                b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "✓")
+                b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "")
+            }
             return await readOnly.run(readOnly.forward, router: dependencies.router,
                 cache: dependencies.cache, registry: dependencies.targetRegistry)
         }
@@ -6685,6 +6712,42 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.inputSetterDispatches == 0)
         let b = f.builder, input = b.element(1_291_200)
         switch outcome {
+        case "matching_name_before":
+            b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
+        case "matching_between_name_input":
+            let reads = f.inputMenuPresses, previousRead = f.routingRead
+            f.routingRead = { element, attribute in
+                previousRead?(element, attribute)
+                guard CFEqual(element, f.headers[0]), attribute == kAXTitleAttribute as String,
+                      let context = OperationTraceContext.current else { return }
+                if f.inputMenuPresses == reads, f.matchingGoalContextID == nil {
+                    f.matchingGoalContextID = ObjectIdentifier(context)
+                }
+                guard f.inputMenuPresses == reads + 1, !f.routingLateScopeInjected,
+                      ObjectIdentifier(context) == f.matchingGoalContextID else { return }
+                // Mutate during the independent name sample, outside the first
+                // input reader. This happens even if the final read is omitted.
+                b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "")
+                b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "✓")
+                f.routingLateScopeInjected = true
+            }
+        case "matching_final_name", "matching_final_checkmark":
+            let reads = f.inputMenuPresses, previous = f.routingAction
+            f.routingAction = { element, action in
+                let result = previous?(element, action) ?? false
+                guard f.inputMenuPresses >= reads + 2, !f.routingLateScopeInjected else { return result }
+                if outcome == "matching_final_name", action == kAXCancelAction as String,
+                   CFEqual(element, b.element(1_291_202)) {
+                    b.setAttribute(f.headers[0], kAXTitleAttribute as String, "External Name")
+                    f.routingLateScopeInjected = true
+                }
+                if outcome == "matching_final_checkmark", action == kAXPressAction as String, CFEqual(element, input) {
+                    b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "")
+                    b.setAttribute(b.element(1_291_207), "AXMenuItemMarkChar", "✓")
+                    f.routingLateScopeInjected = true
+                }
+                return result
+            }
         case "matching_checkmark":
             b.setAttribute(b.element(1_291_203), kAXTitleAttribute as String, "Bus 2")
             b.setAttribute(b.element(1_291_206), "AXMenuItemMarkChar", "")
@@ -6731,12 +6794,26 @@ struct Issue965HeldSelectionAssociationTests {
         let beforeReads = f.inputMenuPresses
         let result = await apply(dependencies, params)
         let body = try #require(sharedJSONObject(sharedToolText(result)))
+        #expect(f.routingNameWrites.isEmpty && f.routingNameConfirms == 0)
         if !["matching", "matching_different_display", "matching_renewal"].contains(outcome) {
             #expect(body["state"] as? String == "C", "Actual matching refusal: \(body)")
             #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
             if outcome == "matching_checkmark" { #expect(f.inputMenuPresses > beforeReads) }
             if ["matching_cleanup", "matching_late_proof_document", "matching_preopen_focus"].contains(outcome) { #expect(f.routingLateScopeInjected) }
             if outcome == "matching_late_proof_document" { #expect(f.inputForeignScopeHelpReads == 0) }
+            if ["matching_final_name", "matching_final_checkmark"].contains(outcome) {
+                #expect(f.routingLateScopeInjected, "Reach the deciding second read, not only the earlier matching sample")
+            }
+            if outcome == "matching_between_name_input" {
+                #expect(f.routingLateScopeInjected, "The input changed during the independently reached name sample")
+                #expect(b.attributeValue(b.element(1_291_207), "AXMenuItemMarkChar") as? String == "✓")
+                let receipt = try #require(body["input_read_receipt"] as? [String: Any])
+                #expect(receipt["state"] as? String == "C")
+            }
+            if ["matching_name_before", "matching_final_name"].contains(outcome) {
+                #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "External Name")
+            }
+            if outcome == "matching_name_before" { #expect(f.inputMenuPresses == beforeReads) }
             if outcome == "matching_renewal_rail" {
                 #expect(f.routingReplacement != nil, "Reach the real Cancel-retired source before the reader refuses changed focus")
                 let receipt = try #require(body["input_read_receipt"] as? [String: Any])
@@ -6753,13 +6830,21 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.inputMenuPresses > beforeReads, "Completion must independently reread the native input")
         #expect(f.inputSetterDispatches == 0)
         #expect(f.routingDestinationPresses == 0)
+        #expect(f.routingNameWrites.isEmpty && f.routingNameConfirms == 0)
         if outcome == "matching_renewal" {
             #expect(f.routingReplacement != nil, "Reach the actual Cancel-retired source and original-header renewal")
         }
         let goals = try #require(body["goal_evidence"] as? [[String: Any]])
-        let read = try #require(goals.first?["read"] as? [String: Any])
+        let read = try #require(goals.compactMap { $0["read"] as? [String: Any] }
+            .first { $0["read_source"] as? String == "ax_input_menu_checkmark" })
         #expect(read["read_source"] as? String == "ax_input_menu_checkmark")
         #expect(read["observed"] as? String == "bus:1")
+        if retainedName {
+            #expect(goals.count == 2)
+            let name = try #require(goals.compactMap { $0["read"] as? [String: Any] }
+                .first { $0["read_source"] as? String == "ax_track_name" })
+            #expect(name["observed"] as? String == "Duplicate")
+        }
         let reads = f.inputMenuPresses
         let replay = await apply(dependencies, params)
         let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
