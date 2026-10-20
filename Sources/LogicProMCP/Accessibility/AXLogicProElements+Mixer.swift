@@ -1097,13 +1097,13 @@ extension AXLogicProElements {
         case source(String)
         /// Every element in the walk read, no button's help named the input slot, and no button
         /// whose help named none of the input, output and send slots is described as a bus or
-        /// retains the measured unpopulated input description; the
+        /// retains an unpopulated input caption in its description or title; the
         /// bounded walk also established that it omitted no descendants: a
         /// software instrument strip, or one whose unrecognised buttons all name something else.
         case noSlot
         /// A children, role or help read in the walk failed; the slot was found and named nothing;
-        /// the description of a button whose help named no known slot failed to read; or such a
-        /// button retains the unpopulated input description or is described as a bus — possibly
+        /// the description or title of a button whose help named no known slot failed to read; or such a
+        /// button retains an unpopulated input caption or is described as a bus — possibly
         /// another input slot whose help wording this project's LabelSet does not know; or
         /// matching slots repeat or descendants exceed the bound.
         case unreadable
@@ -1168,10 +1168,20 @@ extension AXLogicProElements {
                 guard case let .success(description) = slotDecidingString(
                     visit.element, kAXDescriptionAttribute as String, runtime: runtime
                 ) else { return (.unreadable, nil) }
-                // Logic 12.3 en-US leaves an offscreen input button described as "input",
-                // without help or a source label. This existing description read observes
-                // an unpopulated slot, not absence; it supplies no source authority.
-                if description?.lowercased() == "input" { return (.unreadable, nil) }
+                // An offscreen input button can retain only the localized generic caption,
+                // without help or a source label. It may deny absence, never grant source
+                // or control authority. Preserve failures in either possible caption read.
+                if let description,
+                   AXLocalePolicy.unassignedInputSlotLabel.matches(description, mode: .exact) {
+                    return (.unreadable, nil)
+                }
+                guard case let .success(title) = slotDecidingString(
+                    visit.element, kAXTitleAttribute as String, runtime: runtime
+                ) else { return (.unreadable, nil) }
+                if let title,
+                   AXLocalePolicy.unassignedInputSlotLabel.matches(title, mode: .exact) {
+                    return (.unreadable, nil)
+                }
                 if let description,
                    RoutingGraphPublication.classifyOutputLabel(description).0 == .bus {
                     unidentifiedButtonNamesBus = true
