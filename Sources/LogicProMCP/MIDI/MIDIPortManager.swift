@@ -371,7 +371,7 @@ enum MIDIPortError: Error, CustomStringConvertible {
         case .censusUnknown(let name, let census):
             return "MIDI port '\(name)' was not created because its CoreMIDI endpoint census is unknown: \(census.reason ?? "no reason supplied")"
         case .ownershipLockHeld(let name):
-            return "MIDI port '\(name)' was not created because another process is checking or creating virtual MIDI endpoints"
+            return "MIDI port '\(name)' was not created because \(VirtualMIDIEndpointOwnershipLock.heldHint)"
         case .ownershipLockUnavailable(let name, let reason):
             return "MIDI port '\(name)' was not created because cross-process ownership locking is unavailable: \(reason)"
         case .uniqueIDCollision(let name, let kind, let uniqueID):

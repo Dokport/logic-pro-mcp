@@ -51,6 +51,10 @@ Source build:
 claude mcp add --scope user logic-pro -- /absolute/path/to/.build/release/LogicProMCP
 ```
 
+### Multiple server launches
+
+Claude Desktop can launch the same configured MCP server separately for chat and Code/Cowork. Only one process reserves the virtual MIDI port group (CoreMIDI, MCU, Key Commands and Scripter); other processes keep MIDI channels degraded instead of taking a subset of the ports. Check `logic_system health` for ownership failures. A process that did not acquire the group does not automatically take over later: stop competing launches and restart the intended server. Normal CoreMIDI startup/census failures can still degrade the owner. No additional Logic control surface or permission change is needed to resolve a duplicate launch. See [Troubleshooting](TROUBLESHOOTING.md#duplicate-server-launches-and-midi-ownership).
+
 ## macOS Permissions
 
 Open **System Settings -> Privacy & Security**:
