@@ -937,10 +937,26 @@ extension AccessibilityChannel {
                 guard childMenus(view)?.isEmpty == true, scopeHeld() else { return false }
                 effects.changed.append("mixer_scroll_to_" + name)
             }
-            recoveryStage = "final_layout_and_custody"
-            guard let final = observedMixerViewportGeometry(), final.frames == original.frames,
-                  let current = currentViewport(), Self.sameViewport(current, expectedViewport),
-                  Self.sameViewport(current, viewport), await referenceIsCurrent(), permitsRead() else { return false }
+            recoveryStage = "final_geometry_read"
+            guard let final = observedMixerViewportGeometry() else { return false }
+            recoveryStage = "final_strip_frames"
+            guard final.frames == original.frames else {
+                let changed = zip(original.frames, final.frames).enumerated().compactMap { index, pair in
+                    pair.0 == pair.1 ? nil : "\(index):\(pair.0)->\(pair.1)"
+                }.joined(separator: ";")
+                Log.info("Owned Mixer recovery layout differs: \(changed)", subsystem: "ax")
+                return false
+            }
+            recoveryStage = "final_viewport_read"
+            guard let current = currentViewport() else { return false }
+            recoveryStage = "final_expected_viewport"
+            guard Self.sameViewport(current, expectedViewport) else { return false }
+            recoveryStage = "final_original_viewport"
+            guard Self.sameViewport(current, viewport) else { return false }
+            recoveryStage = "final_reference"
+            guard await referenceIsCurrent() else { return false }
+            recoveryStage = "final_native_custody"
+            guard permitsRead() else { return false }
             effects.restoration = "restored"
             recovered = true
             return true
