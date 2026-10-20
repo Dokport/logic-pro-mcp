@@ -113,7 +113,10 @@ extension AccessibilityChannel {
             _ hint: String,
             _ more: [String: Any] = [:]
         ) -> ChannelResult {
-            .error(HonestContract.encodeStateC(
+            if ApprovedSessionRepair.current != nil {
+                Log.info("Canonical output refused: \(hint)", subsystem: "saga")
+            }
+            return .error(HonestContract.encodeStateC(
                 error: error, hint: hint, extras: extras.merging(more) { _, new in new }
             ))
         }

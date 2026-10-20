@@ -1618,6 +1618,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             // independently checks expected_current and the full protected
             // footprint at its final leaf boundary; do not repeat that scan.
             guard outputProof?.permitsRead() == true else {
+                Log.info("Canonical output refused: retained before-read custody expired", subsystem: "saga")
                 return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
             }
         } else {
@@ -1626,10 +1627,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             }
         }
         guard await projectIsCurrent(allowPendingCancellation: inverse) else {
+            Log.info("Canonical output refused: project or operation custody changed before routing", subsystem: "saga")
             return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
         }
         let pair = outputPair ?? task.pair, runtime = pair.track.runtime
-        guard let index = pair.strip.currentIndex(runtime: runtime) else { return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false]) }
+        guard let index = pair.strip.currentIndex(runtime: runtime) else {
+            Log.info("Canonical output refused: retained source is no longer uniquely current", subsystem: "saga")
+            return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
+        }
         if inverse { outputInverseConsumed = true }
         let response = await Self.$outputLeafPermission.withValue({ [self] popup in
             outputFootprintHeld(pair: pair, assignment: expected, popup: popup)
