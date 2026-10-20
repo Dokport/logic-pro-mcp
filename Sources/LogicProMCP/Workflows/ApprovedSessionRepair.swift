@@ -1438,6 +1438,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                      ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil,
                                      ownedStripNamePreview: [String]? = nil,
                                      verifiedNameEffect: ExactTrackNameAdapter.VerifiedNameEffect? = nil) -> Bool {
+        var stage = "retained_task", accepted = false
+        defer {
+            if !accepted, popup != nil {
+                Log.info("Canonical output footprint refused at \(stage)", subsystem: "saga")
+            }
+        }
         guard let task = nameFootprintTask, let proof = outputProof else { return false }
         let runtime = pair.track.runtime
         @Sendable func permitted() -> Bool {
@@ -1450,6 +1456,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 && (popup.map { proof.permitsOwnedPopupRead($0,
                     nativeSource: assignment == .noOutput ? pair.strip : nil) } ?? proof.permitsRead())
         }
+        stage = "initial_custody"
         guard permitted(), pair.track.matches(task.pair.track),
               outputRenewal.map { renewal in
                   renewal.pair.strip.matches(pair.strip) && renewal.pair.track.matches(task.pair.track)
@@ -1475,6 +1482,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     stoppingWhen: metadataStopped) }
             return (tracks, strips)
         }
+        stage = "sampled_owners_counts_output"
         guard let tracks = fields.0, let strips = fields.1, permitted(),
               tracks.count == task.capture.tracks.count,
               zip(tracks, task.capture.tracks).allSatisfy({ current, original in
@@ -1492,6 +1500,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               strips[index].physicalBinding?.matches(pair.strip) == true,
               strips[index].output.flatMap(OutputAssignment.observed(slotLabel:)) == assignment else { return false }
         if let renewal = outputRenewal {
+            stage = "renewed_census"
             // This owned original-header receipt holds the entire new census.
             // It corroborates aggregate preserved values; it neither rebinds
             // retired peer references nor grants any peer mutation authority.
@@ -1502,6 +1511,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   }) else { return false }
         }
         for row in strips.indices {
+            stage = "protected_scalars_plugins_\(row)"
             if outputRenewal == nil, row != index,
                strips[row].physicalBinding?.matches(task.capture.channelStrips[row].physicalBinding ?? pair.strip) != true { return false }
             guard strips[row].volumeReadback == task.capture.channelStrips[row].volumeReadback,
@@ -1559,18 +1569,39 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             }
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        stage = "encoded_values"
         guard let expectedTracks = try? encoder.encode(expectedTrackRows),
-              let currentTracks = try? encoder.encode(tracks), expectedTracks == currentTracks,
-              let expectedStrips = try? encoder.encode(expected), let currentStrips = try? encoder.encode(strips),
-              expectedStrips == currentStrips, permitted(),
+              let currentTracks = try? encoder.encode(tracks),
+              let expectedStrips = try? encoder.encode(expected), let currentStrips = try? encoder.encode(strips) else { return false }
+        if expectedTracks != currentTracks || expectedStrips != currentStrips {
+            // Compare already-sampled schema fields only; no extra host reads
+            // or value/name disclosure, and no acceptance change.
+            var changed: [String] = []
+            for (domain, oldData, newData) in [("tracks", expectedTracks, currentTracks), ("strips", expectedStrips, currentStrips)] {
+                guard let old = try? JSONSerialization.jsonObject(with: oldData) as? [[String: Any]],
+                      let new = try? JSONSerialization.jsonObject(with: newData) as? [[String: Any]] else { continue }
+                for (row, pair) in zip(old, new).enumerated() where changed.count < 4 {
+                    let keys = Set(pair.0.keys).union(pair.1.keys).filter {
+                        (pair.0[$0] as? NSObject)?.isEqual(pair.1[$0]) != true
+                    }.sorted()
+                    if !keys.isEmpty { changed.append("\(domain)[\(row)]:\(keys.joined(separator: ","))") }
+                }
+            }
+            Log.info("Canonical output footprint fields changed: \(changed.joined(separator: ";"))", subsystem: "saga")
+            return false
+        }
+        stage = "final_custody"
+        guard permitted(),
               ownedNameEditor != nil || (outputRenewal.map { $0.permits(runtime: runtime, ownedPopup: popup,
                 nativeOutputPopup: assignment == .noOutput) } ?? true),
               pair.strip.currentIndex(runtime: runtime) == index,
               case .success(.some(let finalDocument)) = AXLogicProElements.projectPickerDocumentRead(pair.strip.window, runtime: runtime),
               finalDocument.utf8.elementsEqual(document.utf8) else { return false }
         if let editor = ownedNameEditor {
-            return ExactTrackNameAdapter.coupledWriteFocusMatches(editor, runtime: runtime)
+            accepted = ExactTrackNameAdapter.coupledWriteFocusMatches(editor, runtime: runtime)
+            return accepted
         }
+        accepted = true
         return true
     }
 
