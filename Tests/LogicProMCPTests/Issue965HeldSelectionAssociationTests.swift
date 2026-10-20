@@ -1287,7 +1287,8 @@ struct Issue965HeldSelectionAssociationTests {
 
     @Test("Scroll To actions renew native scope after deciding reads and clean up a failed opening",
           arguments: ["late_open", "late_leaf", "failed_open", "delayed_root", "native_container_parent",
-                      "foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "late_competing_root"])
+                      "foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "late_competing_root",
+                      "native_english_outputs", "native_korean_outputs", "native_japanese_outputs", "singular_filter_output"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1319,7 +1320,10 @@ struct Issue965HeldSelectionAssociationTests {
                 (root, kAXMenuRole, ""),
                 (scroll, kAXMenuItemRole, AXLocalePolicy.mixerScrollToMenuItem.canonical),
                 (submenu, kAXMenuRole, ""),
-                (output, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterOutput.canonical),
+                (output, kAXMenuItemRole, fault == "native_english_outputs" ? "Outputs"
+                    : fault == "native_korean_outputs" ? "출력"
+                    : fault == "native_japanese_outputs" ? "出力"
+                    : fault == "singular_filter_output" ? "Output" : AXLocalePolicy.mixerScrollToOutputsMenuItem.canonical),
                 (audio, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterAudio.canonical)
             ] {
                 f.builder.setRole(element, role as String)
@@ -1406,7 +1410,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(probe.foreignActions == 0, "No opening, leaf or cleanup action in a foreign document")
                     #expect(!recovered)
                     if fault == "late_competing_root" { #expect(probe.leafPresses == 0) }
-                } else if ["foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent"].contains(fault) {
+                } else if ["foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "singular_filter_output"].contains(fault) {
                     #expect(!recovered)
                     #expect(probe.leafPresses == 0)
                 } else if failedOpen {
@@ -1906,7 +1910,7 @@ struct Issue965HeldSelectionAssociationTests {
                         (scrollRoot, kAXMenuRole, ""),
                         (scrollTo, kAXMenuItemRole, AXLocalePolicy.mixerScrollToMenuItem.canonical),
                         (scrollSubmenu, kAXMenuRole, ""),
-                        (scrollOutput, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterOutput.canonical),
+                        (scrollOutput, kAXMenuItemRole, AXLocalePolicy.mixerScrollToOutputsMenuItem.canonical),
                         (scrollAudio, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterAudio.canonical)
                     ] {
                         f.builder.setRole(element, role as String)

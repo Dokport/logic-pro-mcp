@@ -885,7 +885,7 @@ extension AccessibilityChannel {
                    let current = currentViewport(), Self.sameViewport(current, viewport),
                    await referenceIsCurrent() { effects.restoration = "restored" }
             }
-            for (name, labels) in [("output", AXLocalePolicy.mixerTypeFilterOutput), ("audio", AXLocalePolicy.mixerTypeFilterAudio)] {
+            for (name, labels) in [("output", AXLocalePolicy.mixerScrollToOutputsMenuItem), ("audio", AXLocalePolicy.mixerTypeFilterAudio)] {
                 recoveryStage = name + "_view_action"
                 guard childMenus(view)?.isEmpty == true,
                       AXHelpers.getAttribute(view, kAXEnabledAttribute as String, runtime: logic.ax) as Bool? == true,
