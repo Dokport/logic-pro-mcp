@@ -1244,6 +1244,11 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_" + outcome)
     }
 
+    @Test("A post-write input Cancel must recover retained offscreen observations before final verification")
+    func canonicalBusReplacementRecoversOffscreenReadback() async throws {
+        try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer")
+    }
+
     @Test("An existing Bus output goal uses the current checked receiver and owns only its conditional inverse",
           arguments: ["forward", "physical_before", "cancel", "physical_input", "physical_cancel", "popup_both_retired", "late_peer", "late_project", "external_peer"])
     func canonicalObservedExistingBusExecutes(_ outcome: String) async throws {
@@ -2085,6 +2090,14 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, root), action == kAXCancelAction as String {
                         f.routingNativePopupFrame = nil
+                        if mode == "offscreen_peer", f.routingDestinationPresses == 1,
+                           f.routingOpenedOutputIndex == nil, !f.routingLateScopeInjected {
+                            // Native counterexample: input-popup Cancel retires
+                            // the old presentation and an offscreen peer loses
+                            // its rendered slot value, without an audio write.
+                            f.routingLateScopeInjected = true
+                            f.builder.setAttribute(outputs[3], kAXDescriptionAttribute as String, "Output")
+                        }
                         if ["popup_source_retired", "popup_both_retired"].contains(outputMode), f.inputMenuPresses > 2, f.routingReplacement == nil {
                             let replacement = f.builder.element(1_973_140)
                             f.builder.setRole(replacement, kAXLayoutItemRole as String)
@@ -2579,6 +2592,13 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if mode.hasPrefix("coupled_menu_overlay_census"), ["census", "census_second_failure"].contains(censusMode) {
                     #expect(f.routingOutputChannelStates.first == "A", "Reach the verified real channel before judging the owned-name continuation")
+                }
+                if mode == "offscreen_peer" {
+                    #expect(f.routingLateScopeInjected, "Reach the actual post-write input Cancel before judging recovery")
+                    #expect(f.routingDestinationPresses == 1, "An unreadable peer does not authorize a guessed inverse")
+                    #expect(result["saga_state"] as? String == "completed", "The retained peer needs owned re-exposure and fresh final readback")
+                    #expect(result["verified"] as? Bool == true)
+                    return
                 }
                 if composed {
                     if ["census_scalar", "census_input", "census_send", "census_plugin", "census_header", "census_project"].contains(censusMode) {
