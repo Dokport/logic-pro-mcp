@@ -160,8 +160,23 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   guard let owner = strip.physicalBinding, strip.name != nil, strip.nameReadError == nil,
                         strip.volumeReadback != nil, strip.panReadback != nil,
                         strip.pluginsSource == "ax", strip.pluginsReadError == nil, strip.pluginsFullyObserved == true,
-                        let input = strip.inputObservation, input.state != .unreadable,
-                        let sends = strip.sendSlots, sends.allSatisfy({ $0.state == .observedEmpty }) else { return false }
+                        let observedInput = strip.inputObservation, observedInput.state != .unreadable,
+                        let sends = strip.sendSlots else { return false }
+                  // Only a zero-write matching goal may preserve an occupied peer.
+                  // Raw display/level/bypass observations are a protected baseline,
+                  // never a Send destination, routing edge or writer capability.
+                  let matchingReadOnlyPeer = before == input.bus && policy.outputs.isEmpty
+                      && names.allSatisfy({ $0.name.utf8.elementsEqual(row.name.utf8) })
+                      && !owner.matches(pair.strip)
+                  guard sends.allSatisfy({ slot in
+                      if slot.state == .observedEmpty { return true }
+                      guard matchingReadOnlyPeer, slot.state == .occupiedUnknownDestination,
+                            let display = slot.destinationDisplay, !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            let raw = slot.levelRaw, raw.isFinite,
+                            let description = slot.levelDescription, !description.isEmpty,
+                            slot.bypassed != nil else { return false }
+                      return true
+                  }) else { return false }
                   return source.channelStrips.filter { $0.physicalBinding?.matches(owner) == true }.count == 1
               }) else { return nil }
         if !policy.outputs.isEmpty {

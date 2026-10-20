@@ -6417,6 +6417,14 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertRegisteredInputSaga("retained_name_" + outcome, canonical: true)
     }
 
+    @Test(arguments: ["matching_peer_send", "retained_name_matching_peer_send",
+                      "retained_name_matching_peer_send_changed", "retained_name_matching_peer_send_unread",
+                      "retained_name_peer_send_changed_input", "composed_name_matching_input_peer_send",
+                      "matching_output_peer_send", "retained_name_matching_peer_send_source"])
+    func zeroWriteMatchingGoalsPreserveAnObservedOccupiedPeerSend(outcome: String) async throws {
+        try await assertRegisteredInputSaga(outcome, canonical: true)
+    }
+
     @Test(arguments: ["composed_name_execution", "composed_name_execution_preflight_renewal",
                       "composed_name_execution_wrong_digest", "composed_name_execution_foreign_project",
                       "composed_name_execution_changed_peer", "composed_name_execution_changed_input",
@@ -6474,7 +6482,9 @@ struct Issue965HeldSelectionAssociationTests {
                 let pluginsObserved = try #require(strip.pluginsFullyObserved as Bool?)
                 #expect(pluginsObserved)
                 let sends = try #require(strip.sendSlots)
-                #expect(sends.allSatisfy { $0.state == .observedEmpty })
+                if outcome.contains("peer_send"), sends.contains(where: { $0.state == .occupiedUnknownDestination }) {
+                    #expect(sends.filter { $0.state == .occupiedUnknownDestination }.count == 1)
+                } else { #expect(sends.allSatisfy { $0.state == .observedEmpty }) }
             }
             let pair = try #require(fresh.selectionAssociations.first)
             let input = try #require(fresh.checkedInputs.first { $0.receiver.matches(pair.strip) })
@@ -6500,6 +6510,12 @@ struct Issue965HeldSelectionAssociationTests {
             let planned = await planner(dependencies, planning)
             let preview = try #require(sharedJSONObject(sharedToolText(planned)))
             let executable = try #require(preview["executable"] as? Bool)
+            if outcome.contains("peer_send"), outcome.hasSuffix("_unread") || outcome.hasSuffix("_changed_input")
+                || outcome.hasSuffix("_source") || outcome.hasPrefix("composed_name_") || outcome.hasPrefix("matching_output_") {
+                #expect(!executable, "Occupied Send preservation cannot extend any writer or an unread baseline")
+                #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0 && f.routingNameWrites.isEmpty)
+                return
+            }
             #expect(executable, "The qualified singleton input must have an executable plan: \(preview)")
             #expect(f.routingDestinationPresses == 0)
             guard executable else { return }
@@ -6975,6 +6991,8 @@ struct Issue965HeldSelectionAssociationTests {
         case "matching_project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
         case "matching_focus": injectForeignInputEditor(f)
         case "matching_peer": b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
+        case "matching_peer_send_changed":
+            b.setAttribute(b.element(1_291_454), kAXValueAttribute as String, NSNumber(value: 0.5))
         case "matching_cleanup":
             let previous = f.routingAction
             f.routingAction = { element, action in
@@ -7010,10 +7028,14 @@ struct Issue965HeldSelectionAssociationTests {
         let result = await apply(dependencies, params)
         let body = try #require(sharedJSONObject(sharedToolText(result)))
         #expect(f.routingNameWrites.isEmpty && f.routingNameConfirms == 0)
-        if !["matching", "matching_different_display", "matching_renewal"].contains(outcome) {
+        if !["matching", "matching_different_display", "matching_renewal", "matching_peer_send"].contains(outcome) {
             #expect(body["state"] as? String == "C", "Actual matching refusal: \(body)")
             #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 0)
             if outcome == "matching_checkmark" { #expect(f.inputMenuPresses > beforeReads) }
+            if outcome == "matching_peer_send_changed" {
+                let level = try #require(b.attributeValue(b.element(1_291_454), kAXValueAttribute as String) as? NSNumber)
+                #expect(level.doubleValue == 0.5)
+            }
             if ["matching_cleanup", "matching_late_proof_document", "matching_preopen_focus"].contains(outcome) { #expect(f.routingLateScopeInjected) }
             if outcome == "matching_late_proof_document" { #expect(f.inputForeignScopeHelpReads == 0) }
             if ["matching_final_name", "matching_final_checkmark"].contains(outcome) {
@@ -7293,6 +7315,23 @@ struct Issue965HeldSelectionAssociationTests {
                     return true
                 }
                 Issue.record("Unexpected input Saga action"); return false
+            }
+            if outcome.contains("peer_send") {
+                let anchor = b.element(1_291_450), group = b.element(1_291_451)
+                let bypass = b.element(1_291_452), list = b.element(1_291_453), knob = b.element(1_291_454)
+                b.setButton(anchor, description: "send button", help: "Send slot. Route signal.", x: 0, y: 0, width: 1, height: 1)
+                b.setChildren(anchor, [])
+                b.setRole(group, kAXGroupRole as String); b.setAttribute(group, kAXDescriptionAttribute as String, "Stereo Output")
+                b.setRole(bypass, kAXCheckBoxRole as String); b.setAttribute(bypass, kAXValueAttribute as String, 0)
+                b.setChildren(bypass, [])
+                b.setRole(list, kAXButtonRole as String); b.setAttribute(list, kAXDescriptionAttribute as String, "list")
+                b.setChildren(list, []); b.setChildren(group, [bypass, list])
+                b.setRole(knob, kAXSliderRole as String); b.setAttribute(knob, kAXHelpAttribute as String, "Send Level knob. Set level.")
+                b.setAttribute(knob, kAXValueAttribute as String, outcome.hasSuffix("_unread") ? NSNull() : NSNumber(value: 0))
+                b.setAttribute(knob, kAXValueDescriptionAttribute as String, "-∞")
+                b.setChildren(knob, []); f.routingScalarControls.append(knob)
+                let owner = outcome.hasSuffix("_source") ? f.strips[1] : f.strips[0]
+                b.setChildren(owner, b.makeAXRuntime().children(owner) + [anchor, group, knob])
             }
             let captured = try await inspect(f, cache: cache, registry: registry,
                 domains: canonical ? ["tracks", "strips", "associations", "routing"] : ["associations"],
