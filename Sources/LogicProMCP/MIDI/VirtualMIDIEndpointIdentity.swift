@@ -269,11 +269,63 @@ final class VirtualMIDIEndpointProcessOwnership: @unchecked Sendable {
 
 /// A process-safe token for the cross-process virtual-endpoint ownership lock.
 final class VirtualMIDIEndpointOwnershipLock: @unchecked Sendable {
+    static let heldHint = "this process did not acquire the virtual MIDI port group or endpoint creation lock; stop competing instances and restart the intended server"
+
     enum Acquisition: Sendable {
         case acquired(VirtualMIDIEndpointOwnershipLock)
         case held
         case unavailable(String)
     }
+
+    /// All channel creators in one process share one lifetime claim. A denied
+    /// process never retries into a partial group when another owner exits.
+    /// The separate creation lease still protects each census/create sequence.
+    final class ProcessGroup: @unchecked Sendable {
+        private let stateLock = NSLock()
+        private let creationGate = DispatchSemaphore(value: 1)
+        private let acquireGroup: @Sendable () -> Acquisition
+        private let acquireCreation: @Sendable () -> Acquisition
+        private var group: Acquisition?
+
+        init(acquireGroup: @escaping @Sendable () -> Acquisition,
+             acquireCreation: @escaping @Sendable () -> Acquisition) {
+            self.acquireGroup = acquireGroup
+            self.acquireCreation = acquireCreation
+        }
+
+        func acquire() -> Acquisition {
+            stateLock.lock()
+            if group == nil { group = acquireGroup() }
+            let decision = group!
+            stateLock.unlock()
+            switch decision {
+            case .held: return .held
+            case .unavailable(let reason): return .unavailable(reason)
+            case .acquired: break
+            }
+            // The owner's independent channel actors must not reject one
+            // another while holding the short cross-process creation lock.
+            creationGate.wait()
+            switch acquireCreation() {
+            case .acquired(let lease):
+                return .acquired(VirtualMIDIEndpointOwnershipLock(releaseAction: {
+                    lease.release()
+                    self.creationGate.signal()
+                }))
+            case .held:
+                creationGate.signal()
+                return .held
+            case .unavailable(let reason):
+                creationGate.signal()
+                return .unavailable(reason)
+            }
+        }
+    }
+
+    private static let processGroup = ProcessGroup(
+        acquireGroup: { acquireFile(named: "logic-pro-mcp-virtual-midi-group-ownership.lock") },
+        acquireCreation: { acquireFile(named: "logic-pro-mcp-virtual-midi-ownership.lock") }
+    )
 
     private let stateLock = NSLock()
     private var releaseAction: (@Sendable () -> Void)?
@@ -287,8 +339,12 @@ final class VirtualMIDIEndpointOwnershipLock: @unchecked Sendable {
     }
 
     static func acquire() -> Acquisition {
+        processGroup.acquire()
+    }
+
+    private static func acquireFile(named name: String) -> Acquisition {
         let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("logic-pro-mcp-virtual-midi-ownership.lock")
+            .appendingPathComponent(name)
             .path
         let descriptor = open(path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else {
