@@ -58,6 +58,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let desired: OutputAssignment
         let capture: SessionPopulationObservation.Capture
         let handle: String
+
+        var prerequisiteBus: Int? {
+            if case .bus(let number) = before { return number }
+            if case .bus(let number) = desired { return number }
+            return nil
+        }
     }
     private struct SendTask: Sendable {
         let reference: TargetReference
@@ -288,8 +294,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         switch destination {
         case .physical(let first, let second): return .physical(first, second)
         case .stereoOutput: return .stereoOutput
+        case .bus(let number): return .bus(number)
         case .noOutput: return .noOutput
-        default: return nil
         }
     }
 
@@ -336,15 +342,23 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == nil }
         guard strips.count == 1, let stripIndex = strips.first, let mixerRef = source.mixerReference(at: stripIndex),
               checked.count == 1, let before = checked.first?.assignment else { return nil }
-        // Leaving an existing Bus is one output-only task. This does not admit
-        // Bus destinations or expand the shared input/name sink contract.
+        // Both Bus directions are singleton output-only tasks. A positive
+        // existing receiver is required; this grants no allocation/lifecycle
+        // or shared input/name sink authority.
         let busDeparture: Bool
         if case .bus(let number) = before {
             busDeparture = OutputAssignment.busNumbers.contains(number) && names.isEmpty && policy.inputs.isEmpty
                 && localAssignmentForBefore(desired) != nil
-                && capturedBusInverseAvailable(number, source: source, sourceIndex: stripIndex)
+                && capturedExistingBusPrerequisites(number, source: source, sourceIndex: stripIndex)
         } else { busDeparture = false }
+        let busArrival: Bool
+        if case .bus(let number) = desired {
+            busArrival = OutputAssignment.busNumbers.contains(number) && names.isEmpty && policy.inputs.isEmpty
+                && localAssignmentForBefore(before) != nil
+                && capturedExistingBusPrerequisites(number, source: source, sourceIndex: stripIndex)
+        } else { busArrival = false }
         guard localAssignmentForBefore(before) != nil || before == .noOutput || busDeparture,
+              localAssignmentForBefore(desired) != nil || desired == .noOutput || busArrival,
               // No Output is initially one output-only task. In particular,
               // it does not expand the shared physical/stereo input-sink
               // contract or admit a preliminary name write in a mixed plan.
@@ -380,7 +394,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         switch assignment { case .physical, .stereoOutput: return assignment; default: return nil }
     }
 
-    private static func capturedBusInverseAvailable(_ bus: Int, source: SessionPopulationObservation.Capture,
+    private static func capturedExistingBusPrerequisites(_ bus: Int, source: SessionPopulationObservation.Capture,
                                                     sourceIndex: Int) -> Bool {
         func input(_ strip: ChannelStripState) -> AXLogicProElements.InputSlotReading {
             guard let observation = strip.inputObservation else { return .unreadable }
@@ -1651,13 +1665,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return true
     }
 
-    /// Bus restoration needs current checked prerequisites, not capture-time
+    /// Bus output or restoration needs current checked prerequisites, not capture-time
     /// captions. These read-only menus run before forward/inverse ownership is
     /// established; neither an input write nor receiver creation is authorized.
-    private func busDepartureInputsCurrent(
+    private func busOutputInputsCurrent(
         inputFocus: AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope
     ) async -> Bool {
-        guard let task = outputTask, case .bus(let bus) = task.before else { return true }
+        guard let task = outputTask, let bus = task.prerequisiteBus else { return true }
         var stage = "captured_source", accepted = false
         defer {
             if !accepted { Log.info("Canonical Bus prerequisite refused at \(stage)", subsystem: "saga") }
@@ -1780,7 +1794,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         stage = "initial_native_proof"
         guard let proof = heldOutputProof(pair) else { return nil }
         outputProof = proof
-        if let outputTask, case .bus = outputTask.before {
+        if let outputTask, outputTask.prerequisiteBus != nil {
             stage = "input_prerequisites"
             let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
             guard await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { [self] in
@@ -1788,7 +1802,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 // clears it on exit. Check that temporary custody before an
                 // original-focus proof that irreversibly records focus loss.
                 !inputFocus.permits() && outputProof?.permitsRead() != true
-            }), operation: { [self] in await busDepartureInputsCurrent(inputFocus: inputFocus) }) else { return nil }
+            }), operation: { [self] in await busOutputInputsCurrent(inputFocus: inputFocus) }) else { return nil }
             // The input reader may legitimately renew this original header's
             // source. Its receipt is not a replacement for fresh native proof.
             pair = outputPair ?? task.pair
