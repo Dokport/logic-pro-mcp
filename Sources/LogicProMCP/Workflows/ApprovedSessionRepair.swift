@@ -1663,6 +1663,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             if !accepted { Log.info("Canonical Bus prerequisite refused at \(stage)", subsystem: "saga") }
         }
         let pair = outputPair ?? task.pair, runtime = pair.track.runtime
+        stage = "entry_footprint"
+        guard let label = AXLogicProElements.outputSlotDestination(in: pair.strip.strip, runtime: runtime.ax),
+              let assignment = OutputAssignment.observed(slotLabel: label),
+              assignment == task.before || (outputAttempted && assignment == task.desired),
+              outputFootprintHeld(pair: pair, assignment: assignment) else { return false }
         guard let source = task.capture.channelStrips.first(where: {
             $0.physicalBinding?.matches(task.pair.strip) == true
         }), let own = source.inputObservation else { return false }
@@ -1707,27 +1712,50 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 guard read.inputSlot?.matches(current) == true else { return false }
             }
         }
-        // Retain one actual existing receiver, not a complete namespace claim.
-        // A retired peer/control or contradictory menu refuses this task.
-        for receiver in task.capture.channelStrips {
-            guard let owner = receiver.physicalBinding, !owner.matches(task.pair.strip),
-                  let slot = receiver.inputSlotBinding,
-                  RoutingGraphPublication.classifyOutputLabel(slot.source).0 == .bus,
-                  RoutingGraphPublication.classifyOutputLabel(slot.source).1 == bus else { continue }
+        // Observe current positive receivers through the owned original-header
+        // census. A menu can retire all strips, not just its own source. These
+        // native pairs supply read custody only; no cached reference is rebound.
+        if outputRenewal?.observedPairs.isEmpty != false {
+            stage = "receiver_header_observation"
+            let current = outputPair ?? task.pair
+            let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(current, original: current.strip,
+                runtime: runtime, sourceDisposition: .survivingOriginal,
+                observingReadFocus: { inputFocus.retainAssociation($0) })
+            guard let renewal = observed.source, renewal.permits(runtime: runtime) else { return false }
+            outputPair = renewal.pair; outputRenewal = renewal; outputProof = renewal.observation
+        }
+        guard let roster = outputRenewal, roster.permits(runtime: runtime) else { return false }
+        for receiver in roster.observedPairs {
+            let owner = receiver.strip
+            guard !receiver.track.matches(task.pair.track),
+                  roster.observedPairs.filter({ $0.strip.matches(owner) }).count == 1 else { continue }
             stage = "receiver_owner"
-            guard slot.owner.matches(owner), owner.currentIndex(runtime: runtime) != nil else { return false }
-            let pairs = task.capture.freshPopulation?.selectionAssociations.filter { $0.strip.matches(owner) } ?? []
+            guard owner.currentIndex(runtime: runtime) != nil else { return false }
+            let current = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
+            guard case .source(let label) = current.reading, let control = current.control,
+                  RoutingGraphPublication.classifyOutputLabel(label).0 == .bus,
+                  RoutingGraphPublication.classifyOutputLabel(label).1 == bus else { continue }
+            let slot = AXMixerInputSlotBinding(owner: owner, control: control, source: label)
             let read = await AXMixerStripBinding.$current.withValue(owner) {
-                await AXMixerStripBinding.$outputAssociation.withValue(pairs.count == 1 ? pairs.first : nil) {
+                await AXMixerStripBinding.$outputAssociation.withValue(receiver) {
                     await AccessibilityChannel.getInputBusObservation(runtime: runtime, requiringOriginalInputControl: slot,
-                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
+                        observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
+                        observingRenewedFocus: { inputFocus.retainAssociation($0) })
                 }
             }
             stage = "receiver_checked_read"
-            guard read.assignment == .bus(bus), read.inputRenewal == nil,
-                  read.inputSlot?.matches(slot) == true, owner.currentIndex(runtime: runtime) != nil else {
+            guard read.assignment == .bus(bus) else {
                 Log.info("Canonical Bus receiver read: assignment_present=\(read.assignment != nil),slot_present=\(read.inputSlot != nil),renewed=\(read.inputRenewal != nil)", subsystem: "saga")
                 return false
+            }
+            if let renewal = read.inputRenewal {
+                stage = "receiver_original_header_renewal"
+                guard renewal.original.matches(owner), renewal.originalTrack.matches(receiver.track),
+                      read.inputSlot?.owner.matches(renewal.pair.strip) == true,
+                      let primary = renewal.sourceForOriginalHeader(task.pair, runtime: runtime) else { return false }
+                outputPair = primary.pair; outputRenewal = primary; outputProof = primary.observation
+            } else {
+                guard read.inputSlot?.matches(slot) == true, owner.currentIndex(runtime: runtime) != nil else { return false }
             }
             stage = "final_project"
             accepted = await projectIsCurrent(allowPendingCancellation: true)
