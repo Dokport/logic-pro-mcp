@@ -6562,7 +6562,9 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(outputRead["target_ref"] as? String == trackReference.rawValue)
                 #expect((outputRead["read"] as? [String: Any])?["observed"] as? String == "physical:3-4")
                 let replay = await apply(dependencies, params)
-                #expect(try #require(sharedJSONObject(sharedToolText(replay)))["duplicate"] as? Bool == true)
+                let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                #expect(duplicate)
                 #expect(f.inputSetterDispatches == 0 && f.routingDestinationPresses == 1)
                 return
             }
