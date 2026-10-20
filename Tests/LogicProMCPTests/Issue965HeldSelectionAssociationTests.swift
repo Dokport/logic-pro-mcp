@@ -420,6 +420,27 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Passive Help retains a fresh final focus/window tuple and separate document bookend",
+          arguments: ["unchanged", "legacy", "null_fallback", "failure", "short", "focus_type", "main_type", "window_type",
+                      "foreign_focus", "foreign_main", "foreign_window", "absent", "late_document"])
+    func passiveHelpFinalAppTupleIsFreshAndStrict(fault: String) async throws {
+        let f = try Fixture()
+        f.useBulkReads = fault != "legacy"
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            f.passiveFinalAppTupleFault = fault
+            #expect(association.permitsPassiveFocusRead() == ["unchanged", "legacy", "null_fallback"].contains(fault))
+            #expect(f.passiveFinalAppTupleReads == (fault == "legacy" ? 0 : 1),
+                    "Read the original app's final focus and both windows together, not an earlier ownership tuple")
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
     private final class Fixture: @unchecked Sendable {
         let builder = FakeAXRuntimeBuilder()
         let app: AXUIElement
@@ -454,6 +475,8 @@ struct Issue965HeldSelectionAssociationTests {
         var windowCustodyBatchCalls = 0
         var windowCustodySingleReads = 0
         var windowCustodyFault: String?
+        var passiveFinalAppTupleReads = 0
+        var passiveFinalAppTupleFault: String?
         var activeBulkAttributes: [String]?
         var fault: String?
         var transientEditorRead = false
@@ -965,6 +988,32 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         activeBulkAttributes = attributes
                         defer { activeBulkAttributes = nil }
+                        if CFEqual(element, app), attributes == [kAXFocusedUIElementAttribute,
+                            kAXMainWindowAttribute, kAXFocusedWindowAttribute] as [String] {
+                            passiveFinalAppTupleReads += 1
+                            let foreign = builder.element(1_965_999)
+                            switch passiveFinalAppTupleFault {
+                            case "failure": return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                            case "short": return .success([strips[1], window])
+                            case "focus_type": return .success([NSNumber(value: 0), window, window])
+                            case "main_type": return .success([strips[1], NSNumber(value: 0), window])
+                            case "window_type": return .success([strips[1], window, NSNumber(value: 0)])
+                            case "foreign_focus": return .success([foreign, window, window])
+                            case "foreign_main": return .success([strips[1], foreign, window])
+                            case "foreign_window": return .success([strips[1], window, foreign])
+                            case "null_fallback": return .success([NSNull(), NSNull(), NSNull()])
+                            case "absent":
+                                var error = AXError.noValue
+                                guard let wrapped = AXValueCreate(.axError, &error) else {
+                                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                                }
+                                return .success([wrapped, window, window])
+                            case "late_document":
+                                builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                                return .success([strips[1], window, window])
+                            default: break
+                            }
+                        }
                         if CFEqual(element, app), attributes == [kAXMainWindowAttribute as String, kAXFocusedWindowAttribute as String] {
                             windowCustodyBatchCalls += 1
                             if windowCustodyFault == "failure" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
