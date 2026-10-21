@@ -37,7 +37,12 @@ def _ui_events_with_staged_artifact(staging_dir: str, typed_name):
 
 
 class LogicBounceMainTests(unittest.TestCase):
-    def _run_artifact_recovery(self, *, wrong_directory=False, delay=0, ambiguous=False, temporary=False):
+    def setUp(self):
+        identity = mock.patch.object(logic_bounce, "bounce_project_identity", return_value=(123, "file:///Fixture.logicx/"), create=True)
+        identity.start()
+        self.addCleanup(identity.stop)
+
+    def _run_artifact_recovery(self, *, wrong_directory=False, delay=0, ambiguous=False, temporary=False, render_delay=0, foreign_project=False):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as output_dir:
             staging = os.path.join(home, "Downloads")
             documents = os.path.join(home, "Documents")
@@ -49,6 +54,15 @@ class LogicBounceMainTests(unittest.TestCase):
             temporary_path = os.path.join(staging, staged_name + ".tmp")
 
             def produce_if_ready():
+                if clock["created"] and render_delay is not None and clock["now"] - clock["fired"] >= render_delay:
+                    for path in source_paths:
+                        if os.path.exists(path):
+                            with open(path, "rb") as artifact:
+                                unfinished = artifact.read() == b"unfinished render"
+                            if unfinished:
+                                with open(path, "wb") as artifact:
+                                    artifact.write(b"bounce")
+                                os.utime(path, (clock["now"], clock["now"]))
                 if clock["fired"] is None or delay is None or clock["created"]:
                     return
                 if clock["now"] - clock["fired"] < delay:
@@ -62,7 +76,7 @@ class LogicBounceMainTests(unittest.TestCase):
                 for directory in destinations:
                     path = os.path.join(directory, staged_name + ".aif")
                     with open(path, "wb") as artifact:
-                        artifact.write(b"bounce")
+                        artifact.write(b"bounce" if render_delay == 0 else b"unfinished render")
                     os.utime(path, (clock["now"], clock["now"]))
                     source_paths.append(path)
 
@@ -83,6 +97,13 @@ class LogicBounceMainTests(unittest.TestCase):
             def expanduser(path):
                 return home if path == "~" else os.path.join(home, path.removeprefix("~/"))
 
+            def project_identity():
+                if clock["fired"] is None:
+                    return (123, "file:///Fixture.logicx/")
+                if render_delay is None or clock["now"] - clock["fired"] < render_delay:
+                    return None
+                return (123, "file:///Other.logicx/" if foreign_project else "file:///Fixture.logicx/")
+
             stdout = io.StringIO()
             with (
                 mock.patch.object(sys, "argv", ["logic_bounce.py", "--target-path", os.path.join(output_dir, "Song.wav"), "--staging", staging]),
@@ -93,6 +114,7 @@ class LogicBounceMainTests(unittest.TestCase):
                 mock.patch.object(logic_bounce, "logic_process_osa", side_effect=_window_metrics_logic_process),
                 mock.patch.object(logic_bounce, "send_ui_events", side_effect=send),
                 mock.patch.object(logic_bounce, "unique_staging_name", return_value=staged_name),
+                mock.patch.object(logic_bounce, "bounce_project_identity", side_effect=project_identity),
                 mock.patch.object(logic_bounce.os.path, "expanduser", side_effect=expanduser),
                 mock.patch.object(logic_bounce.time, "sleep", side_effect=sleep),
                 mock.patch.object(logic_bounce.time, "time", side_effect=lambda: clock["now"]),
@@ -131,6 +153,40 @@ class LogicBounceMainTests(unittest.TestCase):
         self.assertEqual(observed["final_bytes"], b"bounce")
         self.assertGreaterEqual(observed["elapsed"], 50)
         self.assertLess(observed["elapsed"], 281)
+
+    def test_main_does_not_move_an_audio_suffix_while_the_renderer_is_still_active(self):
+        code, result, observed = self._run_artifact_recovery(render_delay=50)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(observed["final_bytes"], b"bounce")
+        self.assertGreaterEqual(observed["elapsed"], 50)
+
+    def test_main_does_not_move_audio_when_completion_cannot_be_observed(self):
+        code, result, observed = self._run_artifact_recovery(render_delay=None)
+        self.assertEqual(code, 1, result)
+        self.assertTrue(result["bounce_fired"])
+        self.assertFalse(observed["final_exists"])
+        self.assertEqual(observed["sources_remaining"], 1)
+
+    def test_main_does_not_move_audio_after_a_different_project_returns(self):
+        code, result, observed = self._run_artifact_recovery(foreign_project=True)
+        self.assertEqual(code, 1, result)
+        self.assertFalse(observed["final_exists"])
+        self.assertEqual(observed["sources_remaining"], 1)
+
+    def test_main_refuses_an_unreadable_project_before_keyboard_or_ui_actions(self):
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(sys, "argv", ["logic_bounce.py", "--target-path", "/unused/Song.wav"]),
+            mock.patch.object(logic_bounce, "bounce_project_identity", return_value=None),
+            mock.patch.object(logic_bounce, "set_input_abc") as switch_input,
+            mock.patch.object(logic_bounce, "open_bounce_dialog") as open_dialog,
+            contextlib.redirect_stdout(stdout),
+        ):
+            code = logic_bounce.main()
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads(stdout.getvalue())["bounce_fired"])
+        switch_input.assert_not_called()
+        open_dialog.assert_not_called()
 
     def test_main_leaves_in_flight_temporary_file_until_final_audio_appears(self):
         code, result, observed = self._run_artifact_recovery(temporary=True, delay=50)

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import os
+import json
+import subprocess
 import tempfile
 import time
 import unittest
 from unittest import mock
 
 import logic_bounce
+import logic_bounce_ui
 from logic_bounce import TARGET_INPUT_SOURCE_IDS, _select_input_source, set_input_abc
 
 
@@ -27,6 +30,39 @@ class FakeTISRuntime:
 
 
 class LogicBounceSupportTests(unittest.TestCase):
+    def test_render_project_identity_requires_a_readable_unobstructed_saved_project(self):
+        baseline = {"status": "ok", "process_id": 123, "role": "AXWindow", "subrole": "AXStandardWindow", "document": "file:///Fixture.logicx/", "sheet_count": 0}
+        def run(payload):
+            return lambda _: subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+        self.assertEqual(logic_bounce_ui.bounce_project_identity(run(baseline)), (123, "file:///Fixture.logicx/"))
+        for change in ({"status": "error"}, {"subrole": "AXDialog"}, {"sheet_count": 1}, {"sheet_count": False}, {"process_id": True}, {"document": ""}, {"document": "https://example.test/"}, {"role": ""}):
+            with self.subTest(change=change):
+                self.assertIsNone(logic_bounce_ui.bounce_project_identity(run({**baseline, **change})))
+
+    def test_render_project_identity_does_not_convert_probe_failures_to_completion(self):
+        for result in (subprocess.CompletedProcess([], 1, '{}', 'denied'), subprocess.CompletedProcess([], 0, 'not JSON', '')):
+            with self.subTest(result=result):
+                self.assertIsNone(logic_bounce_ui.bounce_project_identity(lambda _: result))
+        def timeout(_):
+            raise subprocess.TimeoutExpired("probe", 12)
+        self.assertIsNone(logic_bounce_ui.bounce_project_identity(timeout))
+
+    def test_find_staged_artifact_never_selects_an_empty_audio_file(self):
+        with tempfile.TemporaryDirectory() as staging_dir:
+            path = os.path.join(staging_dir, "bounce--lpmcp-fixed.aif")
+            with open(path, "wb"):
+                pass
+            self.assertIsNone(logic_bounce.find_staged_artifact(staging_dir, "bounce--lpmcp-fixed", time.time() - 1))
+
+    def test_artifact_locations_preserve_the_bounded_standard_filesystem_paths(self):
+        with tempfile.TemporaryDirectory() as home:
+            def expanduser(path):
+                return home if path == "~" else os.path.join(home, path.removeprefix("~/"))
+            with mock.patch.object(logic_bounce.os.path, "expanduser", side_effect=expanduser):
+                actual = logic_bounce.bounce_artifact_locations(os.path.join(home, "Downloads"), os.path.join(home, "out"))
+            expected = ["Downloads", "Documents", "Desktop", "Music", "Movies", "", "out"]
+            self.assertEqual(actual, [os.path.realpath(os.path.join(home, path)) for path in expected])
+
     def test_select_input_source_prefers_abc_before_us_fallback(self):
         runtime = FakeTISRuntime(
             sources=[1, 2],

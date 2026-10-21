@@ -31,6 +31,7 @@ from logic_bounce_ui import (
     OSA_TIMEOUT_SEC,
     bounce_dialog_present,
     bounce_focus_diagnostics,
+    bounce_project_identity,
     bounce_settings_present,
     click_bounce_settings_confirm,
     open_bounce_dialog,
@@ -70,6 +71,8 @@ def find_staged_artifact(staging_dir: str, staged_name: str, min_mtime: float) -
         if not fresh_staged_file(path, staging_dir, min_mtime):
             continue
         try:
+            if os.path.getsize(path) == 0:
+                continue
             scored.append((os.path.getmtime(path), path))
         except OSError:
             # Candidate vanished/renamed in the race window between the filter and
@@ -84,8 +87,8 @@ def find_staged_artifact(staging_dir: str, staged_name: str, min_mtime: float) -
 def bounce_artifact_locations(staging_dir: str, output_dir: str) -> list[str]:
     home_dir = os.path.expanduser("~")
     candidates = [staging_dir]
-    candidates.extend(os.path.join(home_dir, name) for name in (
-        "Documents", "Desktop", "Music", "Movies", "Downloads",
+    candidates.extend(os.path.expanduser(path) for path in (
+        "~/Documents", "~/Desktop", "~/Music", "~/Movies", "~/Downloads",
     ))
     candidates.extend([home_dir, output_dir])
     locations = []
@@ -170,6 +173,11 @@ def main() -> int:
     result = {"name": target_name, "output_dir": output_dir, "target_path": target_path}
     result["bounce_fired"] = False
     helper_deadline = time.monotonic() + BOUNCE_HELPER_BUDGET_SECONDS
+    project_identity = bounce_project_identity()
+    if project_identity is None:
+        result["success"] = False
+        result["error"] = "bounce_project_window_unavailable"
+        print(json.dumps(result)); return 1
 
     # 1. deterministic input-source switch (avoid Korean IME mangling the filename)
     if not set_input_abc():
@@ -268,17 +276,30 @@ def main() -> int:
     # The single monotonic budget includes dialog setup, unlike a second full
     # 300-second poll that the parent would kill before it could report.
     appeared = None
+    pending_artifact = None
     locations = bounce_artifact_locations(args.staging, output_dir)
     while time.monotonic() < helper_deadline:
+        # A final suffix can already exist while Logic is still rendering it.
+        # Require the original saved project to return, then an unchanged file
+        # across two polls. Failed UI observations never mean completion.
+        observed_project = bounce_project_identity()
         candidates = [path for directory in locations
                       if (path := find_staged_artifact(directory, staged_name, bounce_started_at)) is not None]
         if len(candidates) > 1:
             result["success"] = False
             result["error"] = "ambiguous_bounce_artifacts"
             print(json.dumps(result)); return 1
-        if candidates:
+        signature = None
+        if candidates and observed_project == project_identity:
+            try:
+                info = os.stat(candidates[0], follow_symlinks=False)
+                signature = (candidates[0], info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+            except OSError:
+                pass
+        if signature is not None and signature == pending_artifact:
             appeared = candidates[0]
             break
+        pending_artifact = signature
         time.sleep(1.0)
     if not appeared:
         result["success"] = False
