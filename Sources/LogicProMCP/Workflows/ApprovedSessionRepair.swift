@@ -812,6 +812,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             + Set(captured.receivers.map(\.bus)).sorted().map { "receiver_keep_bus_\($0)" }
         if let send = captured.send, send.desired == send.before { unchangedIDs.append(send.goalID) }
         if let input = captured.input, input.desired == input.before { unchangedIDs.append("input_" + input.handle) }
+        if let sort = captured.sort, sort.before == sort.policy.expectedOrder { unchangedIDs.append("track_sort") }
         guard unchanged.count == unchangedIDs.count,
               Set(unchanged.compactMap(\.stringValue)) == Set(unchangedIDs) else { return nil }
         let issued = captured.projectRef
@@ -890,26 +891,31 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 cache: cache, registry: registry, journal: journal)
         }
         if let sort = captured.sort {
-            guard steps.count == (captured.mixer == nil ? 1 : 2), let step = steps[0].objectValue,
-                  step["kind"] == .string("track_sort"), step["target_ref"] == .string(issued.rawValue),
-                  step["before"]?.objectValue?["order"] == .array(sort.before.map(Value.string)),
-                  step["after"]?.objectValue?["criterion"] == .string(sort.policy.criterion.rawValue),
-                  step["after"]?.objectValue?["order"] == .array(sort.policy.expectedOrder.map(Value.string)),
-                  step["inverse"]?.objectValue?["criterion"] == .string(sort.policy.inverseCriterion.rawValue),
-                  step["inverse"]?.objectValue?["expected_order"] == .array(sort.before.map(Value.string)),
-                  step["blocked_reasons"]?.arrayValue?.isEmpty == true,
-                  step["dependencies"]?.arrayValue?.isEmpty == true,
-                  let orderValue = sortOrderValue(sort.policy.expectedOrder) else { return nil }
-            var sagaSteps: [SagaStep] = [.init(operationID: .tracksSortVerified, targetRef: issued,
-                params: ["criterion": .string(sort.policy.criterion.rawValue),
-                         "expected_order": orderValue],
-                expectedInverse: .init(operationID: .tracksSortVerified, valueParameter: "expected_order"))]
+            let matching = sort.before == sort.policy.expectedOrder
+            guard steps.count == (matching ? 0 : 1) + (captured.mixer == nil ? 0 : 1) else { return nil }
+            var sagaSteps: [SagaStep] = []
+            if !matching {
+                guard let step = steps[0].objectValue,
+                      step["kind"] == .string("track_sort"), step["target_ref"] == .string(issued.rawValue),
+                      step["before"]?.objectValue?["order"] == .array(sort.before.map(Value.string)),
+                      step["after"]?.objectValue?["criterion"] == .string(sort.policy.criterion.rawValue),
+                      step["after"]?.objectValue?["order"] == .array(sort.policy.expectedOrder.map(Value.string)),
+                      step["inverse"]?.objectValue?["criterion"] == .string(sort.policy.inverseCriterion.rawValue),
+                      step["inverse"]?.objectValue?["expected_order"] == .array(sort.before.map(Value.string)),
+                      step["blocked_reasons"]?.arrayValue?.isEmpty == true,
+                      step["dependencies"]?.arrayValue?.isEmpty == true,
+                      let orderValue = sortOrderValue(sort.policy.expectedOrder) else { return nil }
+                sagaSteps.append(.init(operationID: .tracksSortVerified, targetRef: issued,
+                    params: ["criterion": .string(sort.policy.criterion.rawValue),
+                             "expected_order": orderValue],
+                    expectedInverse: .init(operationID: .tracksSortVerified, valueParameter: "expected_order")))
+            }
             if let mixer = captured.mixer {
-                guard let view = steps[1].objectValue, view["kind"] == .string("mixer_visibility"),
+                guard let view = steps[matching ? 0 : 1].objectValue, view["kind"] == .string("mixer_visibility"),
                       view["target_ref"] == .string(issued.rawValue),
                       view["before"]?.objectValue?["visible"] == .bool(mixer.before),
                       view["after"]?.objectValue?["visible"] == .bool(mixer.desired),
-                      view["dependencies"] == .array([.string("track_sort")]),
+                      view["dependencies"] == .array(matching ? [] : [.string("track_sort")]),
                       view["blocked_reasons"]?.arrayValue?.isEmpty == true else { return nil }
                 sagaSteps.append(.init(operationID: .navigateToggleView, targetRef: issued,
                     params: ["view": .string("mixer"), "visible": .bool(mixer.desired)],
@@ -2036,6 +2042,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     var verifiesMatchingSendOnly: Bool { sendTask.map { $0.desired == $0.before } == true && plan.steps.isEmpty }
     var hasMatchingInputGoal: Bool { inputTask.map { $0.desired == $0.before } ?? false }
     var verifiesMatchingInputOnly: Bool { hasMatchingInputGoal && plan.steps.isEmpty }
+    var verifiesMatchingSortOnly: Bool {
+        sortTask.map { $0.before == $0.policy.expectedOrder } == true && mixerTask == nil && plan.steps.isEmpty
+    }
     var hasMatchingNameGoals: Bool { !nameGoals.isEmpty }
 
     /// The same issued-name proof is used before a composed forward action and
@@ -2318,6 +2327,33 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             nameExecutions[goal.reference, default: .init()].inverse = receipt.inverse
         }
         return receipt.result
+    }
+
+    /// A matching canonical sort is a fresh goal observation, not an unobservable
+    /// sort command. Keep the original complete native footprint and registry custody.
+    func verifyMatchingSort() async -> SagaJournal.StoredOutcome {
+        func refused() -> SagaJournal.StoredOutcome {
+            SagaWire.storedOutcome(from: SagaWire.scopedStateC(.staleTargetReference,
+                hint: "The approved track order or its retained native footprint could not be independently verified.",
+                extras: ["idempotency_key": plan.idempotencyKey,
+                    "goal_verification_failure": "approved_matching_sort_unverified",
+                    "write_attempted": false, "writes_performed": 0]))
+        }
+        guard verifiesMatchingSortOnly, let sort = sortTask, await projectIsCurrent(),
+              let reading = sortReading(), reading.order == sort.policy.expectedOrder,
+              await projectIsCurrent(), let value = Self.sortOrderValue(reading.order) else { return refused() }
+        let evidence = SagaReadEvidence(readSource: .axTrackOrder, provenance: .liveIndependent,
+            trackIndex: nil, projectReference: projectRef.rawValue, field: "track_order_json",
+            observed: value, sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
+        guard let data = try? JSONEncoder().encode(evidence),
+              let read = try? JSONSerialization.jsonObject(with: data) else { return refused() }
+        let outcome = SagaOutcome(idempotencyKey: plan.idempotencyKey, state: .completed, complete: true,
+            journal: [], stateHistory: [.validated, .running, .completed], preflightIssues: [])
+        let stored = SagaWire.storedOutcome(plan: plan, outcome: outcome)
+        guard var body = decodedJSONObject(stored.body) else { return refused() }
+        body["write_attempted"] = false; body["writes_performed"] = 0
+        body["goal_evidence"] = [["target_ref": projectRef.rawValue, "read": read]]
+        return .init(body: HonestContract.jsonString(body), isError: stored.isError)
     }
 
     /// No scalar operation is dispatched for the names-only case.

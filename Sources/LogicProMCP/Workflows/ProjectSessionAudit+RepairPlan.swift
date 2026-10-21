@@ -556,21 +556,25 @@ extension ProjectSessionAudit {
                 blocked.insert("transport_not_stopped")
             }
             reasons.formUnion(blocked)
-            // Sort the approved final names/topology, not an independently schedulable earlier state.
-            let dependencies = steps.compactMap { $0.objectValue?["id"]?.stringValue }.sorted()
-            steps.append(.object([
-                "id": .string("track_sort"), "kind": .string("track_sort"),
-                "target_ref": policy.projectRef.map { .string($0.rawValue) } ?? .null,
-                "before": .object(["order": .array(originalOrder.map(Value.string)),
-                    "coverage": .string(tracks.coverage.rawValue)]),
-                "after": .object(["criterion": .string(sort.criterion.rawValue),
-                    "order": .array(sort.expectedOrder.map(Value.string))]),
-                "inverse": .object(["criterion": .string(sort.inverseCriterion.rawValue),
-                    "expected_order": .array(originalOrder.map(Value.string))]),
-                "dependencies": .array(dependencies.map(Value.string)), "blocked_reasons": .array(blocked.sorted().map(Value.string)),
-                "required_invariants": .array(["complete_issued_track_order", "observed_stopped_non_recording",
-                    "measured_sort_menu", "conditional_inverse_order", "coupled_sort_preservation"].map(Value.string))
-            ]))
+            if blocked.isEmpty, originalOrder == sort.expectedOrder {
+                unchanged.append(.string("track_sort"))
+            } else {
+                // Sort the approved final names/topology, not an independently schedulable earlier state.
+                let dependencies = steps.compactMap { $0.objectValue?["id"]?.stringValue }.sorted()
+                steps.append(.object([
+                    "id": .string("track_sort"), "kind": .string("track_sort"),
+                    "target_ref": policy.projectRef.map { .string($0.rawValue) } ?? .null,
+                    "before": .object(["order": .array(originalOrder.map(Value.string)),
+                        "coverage": .string(tracks.coverage.rawValue)]),
+                    "after": .object(["criterion": .string(sort.criterion.rawValue),
+                        "order": .array(sort.expectedOrder.map(Value.string))]),
+                    "inverse": .object(["criterion": .string(sort.inverseCriterion.rawValue),
+                        "expected_order": .array(originalOrder.map(Value.string))]),
+                    "dependencies": .array(dependencies.map(Value.string)), "blocked_reasons": .array(blocked.sorted().map(Value.string)),
+                    "required_invariants": .array(["complete_issued_track_order", "observed_stopped_non_recording",
+                        "measured_sort_menu", "conditional_inverse_order", "coupled_sort_preservation"].map(Value.string))
+                ]))
+            }
         }
         if let desired = policy.mixerVisible {
             var blocked = Set<String>()
