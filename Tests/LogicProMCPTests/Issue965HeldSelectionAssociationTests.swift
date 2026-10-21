@@ -4727,6 +4727,11 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("An occupied Send retains the actual pre-popup geometry through post-press source renewal")
+    func occupiedSendRenewalRetainsPrePopupMixerGeometry() async throws {
+        try await assertOccupiedSingleSendRenewal(sendGeometry: true)
+    }
+
     @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8])
     func canonicalExistingBusSendRenewsHelpCustodyDuringInverseControlScan(roleSample: Int) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -4777,7 +4782,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                expireInspectionBeforeSendDispatch: Bool = false,
                                                freshPhysicalReturn: Bool = false,
                                                canonicalMatching: Bool = false,
-                                               matchingFault: String? = nil) async throws {
+                                               matchingFault: String? = nil,
+                                               sendGeometry: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             if stableDestinationBulkReads { f.useBulkReads = true }
@@ -5677,6 +5683,25 @@ struct Issue965HeldSelectionAssociationTests {
                     let children = b.makeAXRuntime().children(f.mixer)
                     if !children.contains(where: { CFEqual($0, receiver) }) {
                         b.setChildren(f.mixer, children + [receiver])
+                    }
+                    return acknowledged
+                }
+            }
+            if sendGeometry {
+                f.setInputGeometry(top: 100, renewed: false)
+                f.routingSelection = { index in
+                    if index == 0, f.routingDestinationPresses > 0 {
+                        f.setInputGeometry(top: 100, renewed: true)
+                    }
+                }
+                let originalAction = try #require(f.routingAction)
+                f.routingAction = { element, action in
+                    let writes = f.routingDestinationPresses
+                    let acknowledged = originalAction(element, action)
+                    if f.routingDestinationPresses > writes {
+                        // Native counterexample: a transient post-press layout
+                        // is not the original presentation restoration duty.
+                        f.setInputGeometry(top: 115, renewed: true)
                     }
                     return acknowledged
                 }
