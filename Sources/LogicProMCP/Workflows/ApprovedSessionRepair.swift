@@ -1185,6 +1185,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             guard sourceCurrent(), let capturedSource = task.capture.channelStrips.first(where: {
                 $0.physicalBinding?.matches(task.pair.strip) == true
             }), let own = capturedSource.inputObservation else { return false }
+            let originalMixerGeometry = proof.observedMixerViewportGeometry()
             switch own.state {
             case .unreadable: return false
             case .noSlot:
@@ -1201,12 +1202,22 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
                     await AXMixerStripBinding.$outputAssociation.withValue(pair) {
                         await AccessibilityChannel.getCheckedInputObservation(runtime: runtime,
+                            restoringMixerGeometry: originalMixerGeometry,
                             observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                             observingRenewedFocus: { inputFocus.retainAssociation($0) })
                     }
                 }
                 guard read.inputAssignment == expected, read.inputSlot?.matches(current) == true,
                       read.inputRenewal == nil, sourceCurrent() else {
+                    if let renewal = read.inputRenewal {
+                        let renewed = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: {
+                            !renewal.observation.permitsRead()
+                        })) {
+                            AXLogicProElements.assignedSendMenuControl(in: renewal.pair.strip.strip,
+                                ordinal: task.ordinal, runtime: runtime.ax)
+                        }
+                        Log.info("Canonical Send input renewal retained controls: group=\(renewed.map { CFEqual(control.group, $0.group) } ?? false),list=\(renewed.map { CFEqual(control.list, $0.list) } ?? false),bypass=\(renewed.map { CFEqual(control.bypass, $0.bypass) } ?? false),path=\(renewed.map(control.matches) ?? false)", subsystem: "saga")
+                    }
                     Log.info("Canonical Send source input refused: \(read.result.message)", subsystem: "saga")
                     return false
                 }
@@ -1222,6 +1233,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         await AXMixerStripBinding.$outputAssociation.withValue(nil) {
                             await AccessibilityChannel.getInputBusObservation(runtime: runtime,
                                 requiringOriginalInputControl: slot,
+                                restoringMixerGeometry: originalMixerGeometry,
                                 observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                                 observingRenewedFocus: { inputFocus.retainAssociation($0) })
                         }
