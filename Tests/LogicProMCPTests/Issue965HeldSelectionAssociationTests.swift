@@ -9632,6 +9632,46 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.selections == [1, 0])
     }
 
+    @Test("A contradictory physical-focus entry refuses before changing selection",
+          arguments: ["aligned", "conflict", "unreported"])
+    func physicalEntryRefusesObservedSelectedChildFocusConflict(profile: String) async throws {
+        let f = try Fixture()
+        let originalFocus = f.strips[1]
+        if profile != "unreported" {
+            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                [profile == "conflict" ? f.strips[0] : originalFocus])
+        }
+        if profile == "conflict" {
+            // The selected header's actual strip is not the passive keyboard
+            // focus. Returning to that header cannot restore both by selection.
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
+                   let selected = f.selections.last {
+                    f.builder.setAttribute(f.app, attribute, f.strips[selected])
+                }
+            }
+        }
+        f.routingSelection = { index in
+            guard profile != "unreported" else { return }
+            let selected = profile == "conflict" ? f.strips[index] : f.strips[1 - index]
+            f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [selected])
+        }
+        let body = try await inspect(f, scope: "selection")
+        if profile == "conflict" {
+            #expect(f.selections.isEmpty, "A known contradictory baseline must refuse before navigation")
+            #expect(f.focusRestorationWrites.isEmpty && f.scrollWrites.isEmpty)
+            let finalFocus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+                kAXFocusedUIElementAttribute as String, runtime: f.builder.makeAXRuntime()))
+            #expect(CFEqual(finalFocus, originalFocus))
+            let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]]
+            #expect(rows?.isEmpty ?? true)
+        } else {
+            let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
+            #expect(rows.count == 1 && rows.first?["track_index"] as? Int == 0)
+            #expect(f.selections == [1, 0])
+        }
+    }
+
     @Test("Selection challenge evidence cannot authorize an unselected peer's routing popup", arguments: ["input", "output"])
     func selectionChallengeDoesNotPromotePeerRoutingAuthority(kind: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {

@@ -1346,6 +1346,11 @@ extension AccessibilityChannel {
             guard await referenceIsCurrent(), permitsRead(), !stop() else { return [] }
             switch selectedChildRead() {
             case .observed(let child):
+                // Selection-only collection restores by returning to its original
+                // header. A different physical entry focus cannot return with it.
+                if !allHeldHeaders, originalRailFocus == nil, !CFEqual(child, originalFocus) {
+                    effects.reason = "association_selection_unverified"; return []
+                }
                 originalSelectedChild = child; expectedSelectedChild = child
                 guard permitsRead(), !stop() else { return [] }
             case .unavailable: break
