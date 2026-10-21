@@ -2126,6 +2126,71 @@ struct Issue971ApprovedMixerSagaTests {
     }
 
     @Test(arguments: [false, true], [false, true])
+    func unsupportedFinalFocusIsKnownBeforeCanonicalExecution(initial: Bool, desired: Bool) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = try Fixture(showing: initial)
+                let background = f.view.builder.element(971_901)
+                f.view.builder.setRole(background, kAXLayoutAreaRole as String)
+                f.view.builder.setChildren(background, [])
+                f.view.builder.setAttributeSettable(background, kAXFocusedAttribute as String, true)
+                f.view.extraWindowChildren.append(background)
+                f.view.updateVisibility()
+                f.view.builder.setAttribute(f.view.app, kAXFocusedUIElementAttribute as String, background)
+                let report = try await f.call("inspect_session", params: ["domains": .array([.string("strips")])])
+                let snapshot = try #require(report["snapshot_id"] as? String)
+                let project = try #require((report["project"] as? [String: Any])?["project_ref"] as? String)
+                let plan = try await f.call("plan_session_repair", params: ["snapshot_id": .string(snapshot),
+                    "policy": sortPolicy(project: project,
+                        presentation: .object(["mixer_visible": .bool(desired)]))])
+                let executable = try #require(plan["executable"] as? Bool)
+                if initial == desired { #expect(executable) }
+                else { #expect(!executable) }
+                if initial != desired {
+                    let reasons = try #require(plan["reasons"] as? [String])
+                    #expect(reasons.contains("workspace_focus_restoration_unavailable"))
+                }
+                #expect(f.view.events.isEmpty)
+                let unchanged = f.view.showing == initial
+                #expect(unchanged)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func canonicalBeforeStateRenewsFinalFocusQualification(qualified: Bool) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+                let f = try Fixture(showing: false)
+                let background = f.view.builder.element(971_902)
+                f.view.builder.setRole(background, kAXGroupRole as String)
+                f.view.builder.setChildren(background, [])
+                f.view.builder.setAttributeSettable(background, kAXFocusedAttribute as String, true)
+                f.view.extraWindowChildren.append(background)
+                f.view.updateVisibility()
+                f.view.builder.setAttribute(f.view.app, kAXFocusedUIElementAttribute as String, background)
+                await f.router.register(f.view.channel())
+                let plan = try await f.plan(desired: true)
+                let executable = try #require(plan["executable"] as? Bool)
+                #expect(executable)
+                if !qualified { f.view.builder.setRole(background, kAXLayoutAreaRole as String) }
+                let outcome = try await f.call("apply_session_repair",
+                    params: f.applyParameters(plan, key: "final-focus-before-state"))
+                if qualified {
+                    #expect(outcome["saga_state"] as? String == "completed")
+                    #expect(f.view.showing)
+                } else {
+                    #expect(outcome["state"] as? String == "C")
+                    #expect(f.view.events.isEmpty)
+                    let availability = try #require(outcome["before_state_availability"] as? [[String: Any]])
+                    let available = try #require(availability.first?["available"] as? Bool)
+                    #expect(!available)
+                }
+            }
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
     func retainedCanonicalMixerPlanExecutesThroughTheExistingSaga(initial: Bool, desired: Bool) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {

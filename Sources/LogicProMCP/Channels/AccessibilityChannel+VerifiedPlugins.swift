@@ -1549,6 +1549,14 @@ extension AccessibilityChannel {
             return CFEqual(current, mixer) || (mixerPath.count > 1 && CFEqual(mixerPath[1], current))
         }
 
+        static func qualifiesFinalVisibilityFocus(role: String?) -> Bool {
+            role == kAXGroupRole as String || role == kAXListRole as String
+        }
+
+        func hasQualifiedFinalVisibilityFocus() -> Bool {
+            Self.qualifiesFinalVisibilityFocus(role: AXHelpers.getRole(focus, runtime: runtime.ax))
+        }
+
         /// Leave the caller's approved Mixer state in place. Only the menu acquired here is
         /// cleaned up; unlike temporary inspection, this never compensates the final view.
         func approvedVisibility(expectedTransport: AXLogicProElements.ObservedTransportActivity? = nil,
@@ -1642,19 +1650,15 @@ extension AccessibilityChannel {
             }
             var acknowledged = true
             if before != desired {
-                func qualifiedFinalFocus() -> Bool {
-                    guard let role = AXHelpers.getRole(focus, runtime: runtime.ax) else { return false }
-                    // Deep workspace layout areas can advertise settable focus but
-                    // ignore restoration. Keep this admission local to changed
-                    // final visibility; temporary navigation has its own proof.
-                    return role == kAXGroupRole as String || role == kAXListRole as String
-                }
-                guard qualifiedFinalFocus() else {
+                // Deep workspace layout areas can advertise settable focus but
+                // ignore restoration. Keep this admission local to changed
+                // final visibility; temporary navigation has its own proof.
+                guard hasQualifiedFinalVisibilityFocus() else {
                     return result(verified: false, reason: "workspace_focus_restoration_unavailable")
                 }
                 acknowledged = await toggle(desiredVisibility: desired, permittingActuation: {
                     guard await owned(), await permittingVisibilityChange?() ?? true,
-                          qualifiedFinalFocus() else { return false }
+                          self.hasQualifiedFinalVisibilityFocus() else { return false }
                     return await owned()
                 }, stoppingWhen: stop)
             }

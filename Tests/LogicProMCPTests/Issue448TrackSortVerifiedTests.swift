@@ -315,7 +315,7 @@ struct Issue448TrackSortVerifiedTests {
         try await canonicalSort(cancelAfterSort: cancelAfterSort)
     }
 
-    @Test(arguments: ["forward", "cancel_sort", "cancel_view", "view_refuses", "foreign_project", "unowned_name"])
+    @Test(arguments: ["forward", "cancel_sort", "cancel_view", "view_refuses", "foreign_project", "unowned_name", "unsupported_focus"])
     func canonicalFlatSortAndMixerFinalViewUseTheirOwnedSteps(mode: String) async throws {
         try await canonicalSort(cancelAfterSort: mode == "cancel_sort", composedMode: mode)
     }
@@ -374,6 +374,14 @@ struct Issue448TrackSortVerifiedTests {
                 f.builder.setAttribute(showHidden, kAXWindowAttribute as String, f.arrangeWindow)
                 f.builder.setAttribute(showHidden, kAXValueAttribute as String, 1)
                 f.builder.setChildren(f.arrangeWindow, [split, bar])
+                if composedMode == "unsupported_focus" {
+                    let background = f.builder.element(969_040)
+                    f.builder.setRole(background, kAXLayoutAreaRole as String)
+                    f.builder.setChildren(background, [])
+                    f.builder.setAttributeSettable(background, kAXFocusedAttribute as String, true)
+                    f.builder.setChildren(f.arrangeWindow, [split, bar, background])
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, background)
+                }
                 let transport = try #require(try AXLogicProElements.observedTransportActivity(
                     in: f.arrangeWindow, runtime: f.runtime, checking: {}))
                 let cache = StateCache(), registry = TargetRegistry(), journal = SagaJournal(), router = ChannelRouter()
@@ -419,6 +427,13 @@ struct Issue448TrackSortVerifiedTests {
                 let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
                     names: [], capture: capture, request: request, snapshotCurrent: true)
                 let executable = try #require(sharedJSONObject(plan.json)?["executable"] as? Bool)
+                if composedMode == "unsupported_focus" {
+                    #expect(!executable)
+                    let reasons = try #require(sharedJSONObject(plan.json)?["reasons"] as? [String])
+                    #expect(reasons.contains("workspace_focus_restoration_unavailable"))
+                    #expect(f.actionProbe.actionOrder.isEmpty)
+                    return
+                }
                 #expect(executable)
                 if matchingMode != nil {
                     let planned = try #require(sharedJSONObject(plan.json))

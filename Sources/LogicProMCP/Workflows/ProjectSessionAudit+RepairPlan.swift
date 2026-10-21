@@ -584,6 +584,10 @@ extension ProjectSessionAudit {
                 blocked.insert("project_view_binding_unavailable")
             }
             if observation?.mixerVisible == nil { blocked.insert("mixer_visibility_unobserved") }
+            if let before = observation?.mixerVisible, before != desired,
+               capture.freshPopulation?.presentationBinding?.finalVisibilityFocusQualified != true {
+                blocked.insert("workspace_focus_restoration_unavailable")
+            }
             if observation?.mixerVisible == true, !desired,
                capture.freshPopulation?.presentationBinding?.mixerFocusWouldBeRetired == true {
                 blocked.insert("mixer_focus_would_be_retired")
