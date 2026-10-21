@@ -209,7 +209,8 @@ struct Issue291OwnedInputBusMenuTests {
 
     @Test("An owned input popup retains current stopped controls, never changed or detached transport",
           arguments: ["owned", "play_started", "record_started", "play_unread", "play_replaced",
-              "bar_reparented", "gate_revoked", "post_close_competing_bar", "late_transport"])
+              "bar_reparented", "gate_revoked", "post_close_competing_bar", "late_transport",
+              "post_close_duplicate_play", "post_close_duplicate_record", "post_close_relabelled_play"])
     func ownedInputPopupRetainsStoppedTransport(fault: String) async throws {
         let (p, expected) = try prepareInputDomain("mono"), f = p.f
         let base = f.logic
@@ -226,6 +227,19 @@ struct Issue291OwnedInputBusMenuTests {
             return nil
         }
         f.onChildrenResultRead = { node in
+            if ["post_close_duplicate_play", "post_close_duplicate_record", "post_close_relabelled_play"].contains(fault),
+               CFEqual(node, f.window), f.mutations.contains(where: { $0.1 == kAXCancelAction as String }) {
+                let replacement = f.b.element(291_974)
+                let label = fault == "post_close_duplicate_record" ? "Record" : "Play"
+                f.b.setRole(replacement, kAXCheckBoxRole as String)
+                f.b.setAttribute(replacement, kAXTitleAttribute as String, label)
+                f.b.setAttribute(replacement, kAXDescriptionAttribute as String, label)
+                f.b.setAttribute(replacement, kAXValueAttribute as String, 1)
+                f.b.setChildren(replacement, [])
+                if fault == "post_close_relabelled_play" { f.b.setAttribute(play, kAXDescriptionAttribute as String, "Cycle") }
+                let controls = base.ax.children(bar)
+                if !controls.contains(where: { CFEqual($0, replacement) }) { f.b.setChildren(bar, controls + [replacement]) }
+            }
             if fault == "post_close_competing_bar", CFEqual(node, f.window),
                f.mutations.contains(where: { $0.1 == kAXCancelAction as String }) {
                 let other = f.b.element(291_970), otherPlay = f.b.element(291_971), otherRecord = f.b.element(291_972)
@@ -291,7 +305,7 @@ struct Issue291OwnedInputBusMenuTests {
             #expect(reading.inputAssignment == nil)
             #expect(reading.assignment == nil)
             #expect(f.mutations.allSatisfy { $0.1 == kAXPressAction as String || $0.1 == kAXCancelAction as String })
-            if fault == "post_close_competing_bar" || fault == "late_transport" {
+            if fault.hasPrefix("post_close_") || fault == "late_transport" {
                 #expect(f.mutations.last?.1 == kAXCancelAction as String)
             }
             return

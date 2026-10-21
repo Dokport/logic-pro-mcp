@@ -1698,8 +1698,10 @@ extension AccessibilityChannel {
         }
 
         func matchesClosedWindow(runtime: AXLogicProElements.Runtime) -> Bool {
-            guard let bar = AXLogicProElements.getControlBar(in: window, runtime: runtime.ax),
-                  CFEqual(bar, activity.controlBar) else { return false }
+            guard let current = try? AXLogicProElements.observedTransportActivity(in: window, runtime: runtime,
+                    checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                  CFEqual(current.controlBar, activity.controlBar), CFEqual(current.play, activity.play),
+                  CFEqual(current.record, activity.record), !current.isPlaying, !current.isRecording else { return false }
             return stillStopped(runtime: runtime)
         }
     }
