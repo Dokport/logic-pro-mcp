@@ -585,6 +585,7 @@ struct Issue965HeldSelectionAssociationTests {
         var associationStopReads = 0
         var associationStopReadsAtWrite = 0
         var routingLateScopeInjected = false
+        var routingHeaderPresentationRefreshed = false
         var routingModeInspectionReads = 0
         var lateAssociationFocusSampled = false
         var lateAssociationFocusLanded = false
@@ -1287,7 +1288,10 @@ struct Issue965HeldSelectionAssociationTests {
                 referenceIsCurrent: { true }, stoppingWhen: { !gate.stillOwns(claim) })
             #expect(recovered)
             #expect(held.effects.restoration == "restored")
-            #expect(held.effects.changed == ["mixer_scroll_to_output", "mixer_scroll_to_audio"])
+            #expect(Array(held.effects.changed.prefix(2)) == ["mixer_scroll_to_output", "mixer_scroll_to_audio"])
+            #expect(held.effects.changed.count == 2 || held.effects.changed == [
+                "mixer_scroll_to_output", "mixer_scroll_to_audio", "mixer_horizontal_viewport"])
+            #expect(held.observedMixerViewportGeometry()?.frames == geometry.frames)
             #expect(held.permitsRead())
         }
     }
@@ -1295,7 +1299,11 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("Scroll To actions renew native scope after deciding reads and clean up a failed opening",
           arguments: ["late_open", "late_leaf", "failed_open", "delayed_root", "native_container_parent",
                       "foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "late_competing_root",
-                      "native_english_outputs", "native_korean_outputs", "native_japanese_outputs", "singular_filter_output"])
+                      "native_english_outputs", "native_korean_outputs", "native_japanese_outputs", "singular_filter_output",
+                      "native_hidden_horizontal", "native_hidden_horizontal_vertical", "native_hidden_horizontal_foreign",
+                      "native_hidden_horizontal_boolean", "native_hidden_horizontal_ack_only", "native_hidden_horizontal_late_document",
+                      "native_hidden_horizontal_late_reference_project", "native_hidden_horizontal_late_reference_control",
+                      "native_hidden_horizontal_late_reference_value"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1306,6 +1314,7 @@ struct Issue965HeldSelectionAssociationTests {
             var foreignActions = 0
             var cancels = 0
             var leafPresses = 0
+            var viewportWrites = 0
             var rootAvailableAt: ContinuousClock.Instant?
         }
         func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false) async throws -> Probe {
@@ -1344,6 +1353,49 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setChildren(root, [scroll]); f.builder.setChildren(view, [])
             f.builder.setChildren(toolbar, [view]); f.builder.setChildren(controls, [toolbar])
             f.builder.setChildren(f.window, f.builder.makeAXRuntime().children(f.window) + [controls, foreignControls])
+            let nativeHorizontal = fault.hasPrefix("native_hidden_horizontal")
+            let horizontal = f.builder.element(1_975_510), thumb = f.builder.element(1_975_511)
+            if nativeHorizontal {
+                let owner = f.builder.element(1_975_512)
+                f.builder.setRole(owner, kAXGroupRole as String)
+                f.builder.setFrame(f.window, x: 0, y: 30, width: 1000, height: 800)
+                f.builder.setFrame(owner, x: 0, y: 300, width: 1000, height: 530)
+                f.builder.setFrame(f.mixer, x: 0, y: 300, width: 2000, height: 600)
+                f.builder.setChildren(owner, [f.mixer, controls])
+                f.builder.setChildren(f.window, [f.rail, owner, f.builder.element(1_965_720)])
+                f.builder.setRole(horizontal, kAXScrollBarRole as String)
+                f.builder.setAttribute(horizontal, kAXOrientationAttribute as String,
+                    fault.hasSuffix("_vertical") ? kAXVerticalOrientationValue as String : kAXHorizontalOrientationValue as String)
+                f.builder.setAttribute(horizontal, kAXWindowAttribute as String, f.window)
+                f.builder.setAttribute(horizontal, kAXParentAttribute as String, fault.hasSuffix("_foreign") ? foreignControls : owner)
+                f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.25))
+                f.builder.setAttributeSettable(horizontal, kAXValueAttribute as String, true)
+                f.builder.setFrame(horizontal, x: 0, y: 813, width: 1000, height: 17)
+                f.builder.setRole(thumb, kAXValueIndicatorRole as String)
+                f.builder.setAttribute(thumb, kAXWindowAttribute as String, f.window)
+                f.builder.setFrame(thumb, x: 75, y: 814, width: 700, height: 15)
+                f.builder.setChildren(horizontal, [thumb]); f.builder.setChildren(thumb, [])
+                // Like the observed native bar, its owner omits it from AXChildren.
+                f.routingFocusHit = { _, _ in .success(thumb) }
+                for (index, strip) in f.strips.enumerated() {
+                    f.builder.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                }
+                f.routingSetter = { element, attribute, value in
+                    guard CFEqual(element, horizontal), attribute == kAXValueAttribute as String,
+                          let number = value as? NSNumber else { return nil }
+                    probe.viewportWrites += 1
+                    if f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String == "file:///tmp/Foreign.logicx" {
+                        probe.foreignActions += 1
+                    }
+                    if fault.hasSuffix("_ack_only") { return true }
+                    f.builder.setAttribute(horizontal, attribute, number)
+                    f.builder.setFrame(thumb, x: 75, y: 814, width: 700, height: 15)
+                    for (index, strip) in f.strips.enumerated() {
+                        f.builder.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                    }
+                    return true
+                }
+            }
             let claim = try #require(gate.tryAcquire(operation: "scroll-to-readback"))
             defer { gate.release(claim) }
             let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
@@ -1352,6 +1404,16 @@ struct Issue965HeldSelectionAssociationTests {
                     logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
                 let geometry = try #require(held.observedMixerViewportGeometry())
                 f.routingReadResult = { element, attribute in
+                    if nativeHorizontal, CFEqual(element, horizontal), attribute == kAXValueAttribute as String {
+                        if probe.leafPresses == 2, fault.hasSuffix("_late_document") {
+                            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            probe.injected = true
+                        }
+                        if probe.leafPresses == 2, fault.hasSuffix("_boolean") { return .success(NSNumber(value: false)) }
+                        // Preserve native numeric zero; the generic fixture's
+                        // convenience bridge otherwise coerces NSNumber(0) to Bool.
+                        return .success(f.builder.attributeValue(horizontal, attribute) as? NSNumber)
+                    }
                     if fault == "unread_parent", CFEqual(element, root), attribute == kAXParentAttribute as String {
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
                     }
@@ -1406,12 +1468,31 @@ struct Issue965HeldSelectionAssociationTests {
                     if CFEqual(element, output) || CFEqual(element, audio), action == kAXPressAction as String {
                         probe.leafPresses += 1
                         if probe.firstLeafChildrenRead == nil { probe.firstLeafChildrenRead = probe.viewChildrenReads }
+                        if nativeHorizontal, CFEqual(element, audio) {
+                            f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0))
+                            f.builder.setFrame(thumb, x: 0, y: 814, width: 700, height: 15)
+                            for (index, strip) in f.strips.enumerated() {
+                                f.builder.setFrame(strip, x: CGFloat(index) * 100, y: 350, width: 100, height: 300)
+                            }
+                        }
                         f.builder.setChildren(view, []); return true
                     }
                     return false
                 }
                 let recovered = await held.recoverMixerReadability(restoring: geometry,
-                    referenceIsCurrent: { true }, stoppingWhen: { false })
+                    referenceIsCurrent: {
+                        if probe.leafPresses == 2, fault.contains("_late_reference_"), !probe.injected {
+                            probe.injected = true
+                            if fault.hasSuffix("_project") {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            } else if fault.hasSuffix("_control") {
+                                f.builder.setAttribute(horizontal, kAXParentAttribute as String, foreignControls)
+                            } else {
+                                f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.5))
+                            }
+                        }
+                        return true
+                    }, stoppingWhen: { false })
                 if parentFault != nil || childrenFault != nil {
                     #expect(probe.injected, "Reach the actual last deciding native path/menu read")
                     #expect(probe.foreignActions == 0, "No opening, leaf or cleanup action in a foreign document")
@@ -1424,7 +1505,19 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(!recovered)
                     #expect(probe.cancels == 1)
                     #expect(f.builder.makeAXRuntime().children(view).isEmpty)
-                } else { #expect(recovered) }
+                } else if nativeHorizontal && fault != "native_hidden_horizontal" {
+                    #expect(!recovered)
+                    #expect(probe.viewportWrites == (fault.hasSuffix("_ack_only") ? 1 : 0))
+                    #expect(probe.foreignActions == 0)
+                    if fault.hasSuffix("_late_document") || fault.contains("_late_reference_") { #expect(probe.injected) }
+                } else {
+                    #expect(recovered)
+                    if nativeHorizontal {
+                        #expect(probe.leafPresses == 2 && probe.viewportWrites == 1)
+                        #expect((f.builder.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25)
+                        #expect(held.observedMixerViewportGeometry()?.frames == geometry.frames)
+                    }
+                }
             }
             return probe
         }
@@ -7340,7 +7433,11 @@ struct Issue965HeldSelectionAssociationTests {
                       "composed_name_execution_failure", "composed_name_execution_preflight_renewal_cancel",
                       "composed_name_execution_preflight_renewal_failure", "composed_name_execution_preflight_renewal_peer",
                       "composed_name_execution_preflight_renewal_project", "composed_name_execution_preflight_renewal_header",
-                      "composed_name_execution_external_name"])
+                      "composed_name_execution_external_name", "composed_name_execution_caption_cancel",
+                      "composed_name_execution_caption_peer_cancel", "composed_name_execution_caption_peer_changed_cancel",
+                      "composed_name_execution_caption_project_cancel", "composed_name_execution_caption_control_cancel",
+                      "composed_name_execution_caption_late_control_cancel", "composed_name_execution_caption_post_read_project_cancel",
+                      "composed_name_execution_caption_header_refresh_cancel"])
     func canonicalInputAndApprovedNameExecuteBothActualWriters(outcome: String) async throws {
         try await assertRegisteredInputSaga(outcome, canonical: true)
     }
@@ -7656,6 +7753,20 @@ struct Issue965HeldSelectionAssociationTests {
                             CFEqual($0, b.element(1_291_200)) ? replacement : $0
                         })
                     }
+                    if outcome == "composed_name_execution_caption_post_read_project_cancel" {
+                        let previous = f.routingRead
+                        f.routingRead = { element, attribute in
+                            previous?(element, attribute)
+                            guard !f.routingLateScopeInjected, f.routingNameConfirms == 2, f.routingDestinationPresses == 2,
+                                  CFEqual(element, b.element(1_291_200)), attribute == kAXDescriptionAttribute as String else { return }
+                            let stack = Thread.callStackSymbols
+                            guard stack.contains(where: { $0.contains("ApprovedSessionRepair") && $0.contains("readState") }),
+                                  stack.contains(where: { $0.contains("inputSlotRead") }),
+                                  !stack.contains(where: { $0.contains("readOwnedCoupledName") || $0.contains("readCapturedCoupledName") }) else { return }
+                            f.routingLateScopeInjected = true
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        }
+                    }
                     let result = await apply(dependencies, params)
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
                     if refusal {
@@ -7676,6 +7787,21 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     let compensated = outcome.hasSuffix("_cancel") || outcome.hasSuffix("_failure")
                     if compensated {
+                        if ["composed_name_execution_caption_peer_changed_cancel", "composed_name_execution_caption_project_cancel",
+                            "composed_name_execution_caption_control_cancel", "composed_name_execution_caption_late_control_cancel",
+                            "composed_name_execution_caption_post_read_project_cancel"].contains(outcome) {
+                            #expect(f.routingLateScopeInjected, "Reach the actual presentation cleanup fault")
+                            #expect(body["state"] as? String == "B")
+                            #expect(body["saga_state"] as? String == "rollbackUncertain")
+                            #expect(f.routingNameWrites == ["Approved Input Source", "Duplicate"])
+                            #expect(f.inputSetterDispatches == 1 && f.routingDestinationPresses == 2,
+                                "Lost cleanup custody cannot dispatch another setter or inverse")
+                            if outcome == "composed_name_execution_caption_peer_changed_cancel" {
+                                let value = try #require(b.attributeValue(b.element(1_291_401), kAXValueAttribute as String) as? NSNumber)
+                                #expect(value.doubleValue == 0.4, "The intervening peer edit remains intact")
+                            }
+                            return
+                        }
                         #expect(body["state"] as? String == "C", "Composed compensation: \(body)")
                         #expect(body["saga_state"] as? String == "fullyCompensated")
                         #expect(f.routingNameWrites == ["Approved Input Source", "Duplicate"])
@@ -7683,6 +7809,19 @@ struct Issue965HeldSelectionAssociationTests {
                             "The owned inverse uses its actual native capsule, not a second public dispatch")
                         #expect(b.attributeValue(b.element(1_291_206), "AXMenuItemMarkChar") as? String == "✓")
                         #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Duplicate")
+                        if outcome.hasPrefix("composed_name_execution_caption_") {
+                            #expect(b.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String == "Duplicate",
+                                "Owned name/input compensation must refresh the original Mixer presentation, not leave its old name alias")
+                            if outcome == "composed_name_execution_caption_header_refresh_cancel" {
+                                #expect(f.routingHeaderPresentationRefreshed, "Reach the original-header presentation refresh")
+                                #expect(b.makeAXRuntime().children(f.strips[1]).contains { CFEqual($0, b.element(1_291_200)) },
+                                    "An unnecessary popup must not retire the already-verified original input control")
+                            }
+                            if outcome == "composed_name_execution_caption_peer_cancel" {
+                                #expect(f.inputReadReplacementPeer != nil,
+                                    "Reach the actual peer retirement during the presentation popup")
+                            }
+                        }
                     } else {
                         #expect(body["state"] as? String == "A", "Actual composed name/input: \(body)")
                         #expect(body["saga_state"] as? String == "completed")
@@ -8012,10 +8151,31 @@ struct Issue965HeldSelectionAssociationTests {
             let captureKeep = canonical && outcome.hasPrefix("keep_capture_")
             let composedRenewal = canonical && composedNameExecution && outcome.contains("_preflight_renewal")
             if retiring || canonicalRenewal || matchingRenewal || composedRenewal || captureKeep
-                || outcome == "matching_output_source_renewal" || outcome == "matching_output_peer_renewal" {
+                || outcome == "matching_output_source_renewal" || outcome == "matching_output_peer_renewal"
+                || outcome.hasPrefix("composed_name_execution_caption_") {
                 f.routingSelection = { index in
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.inputReadReplacementPeer ?? f.strips[0]])
+                    if outcome == "composed_name_execution_caption_header_refresh_cancel", index == 0,
+                       f.routingNameConfirms == 2, f.routingDestinationPresses == 2,
+                       AXMixerStripBinding.current == nil,
+                       Thread.callStackSymbols.contains(where: { $0.contains("renewSourceThroughOriginalHeader") }) {
+                        // A header excursion can refresh the stale presentation
+                        // without opening another input popup or replacing its control.
+                        b.setAttribute(f.strips[1], kAXDescriptionAttribute as String, "Duplicate")
+                        f.routingHeaderPresentationRefreshed = true
+                    }
+                    if outcome == "composed_name_execution_caption_late_control_cancel", index == 1,
+                       f.routingNameConfirms == 2, AXMixerStripBinding.current == nil, !f.routingLateScopeInjected,
+                       b.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String == "Duplicate" {
+                        // The checked read and its Cancel already finished. Replace
+                        // only the input control during the new all-header observer.
+                        let replacement = b.element(1_291_215), original = b.element(1_291_200)
+                        b.setButton(replacement, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+                        b.setChildren(replacement, []); b.setActionNames(replacement, [kAXPressAction as String])
+                        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).map { CFEqual($0, original) ? replacement : $0 })
+                        f.routingLateScopeInjected = true
+                    }
                 }
             }
             let input = b.element(1_291_200), output = b.element(1_291_201)
@@ -8088,6 +8248,9 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(outputMenu, [outputLeaf, physicalOutput])
             }
             let nameField = b.element(1_971_400)
+            if outcome.hasPrefix("composed_name_execution_caption_") {
+                b.setAttribute(f.strips[1], kAXDescriptionAttribute as String, "Duplicate")
+            }
             if composedNameExecution {
                 // The real name writer receives only this fixture's native AX editor.
                 // Any fallback remains inside the fake channel, never the desktop.
@@ -8120,6 +8283,11 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if action == kAXConfirmAction as String {
                         f.routingNameConfirms += 1
+                        if outcome.hasPrefix("composed_name_execution_caption_"), f.routingNameConfirms == 1 {
+                            // The host keeps this alias after the inverse name commit;
+                            // only a later native input-menu lifecycle refreshes it.
+                            b.setAttribute(source, kAXDescriptionAttribute as String, "Approved Input Source")
+                        }
                         b.setAttribute(b.element(1_965_711), kAXValueAttribute as String,
                             b.attributeValue(nameField, kAXDescriptionAttribute as String))
                         b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, source); return true
@@ -8128,6 +8296,9 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXPressAction as String, CFEqual(element, input) || CFEqual(element, replacementInput) || CFEqual(element, output) {
                     let inputPressed = !CFEqual(element, output)
                     if inputPressed { f.inputMenuPresses += 1 }
+                    if outcome.hasPrefix("composed_name_execution_caption_"), inputPressed, f.routingNameConfirms == 2 {
+                        b.setAttribute(source, kAXDescriptionAttribute as String, "Duplicate")
+                    }
                     if matchingOutput, inputPressed, f.routingDestinationPresses == 1 { f.inputReadAfterOutput = true }
                     if outcome == "checked_inverse_input", inputPressed, f.inputSagaForwardVerified,
                        AccessibilityChannel.inputChangeObserver != nil, f.routingDestinationPresses == 1 {
@@ -8204,6 +8375,34 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingReplacement = replacement
                     }
                     let current = f.routingReplacement ?? f.strips[1]
+                    if outcome.hasPrefix("composed_name_execution_caption_peer_"), f.routingNameConfirms == 2,
+                       CFEqual(element, root) {
+                        // Native presentation cleanup can retain the exact source
+                        // and input control while retiring an unrelated peer.
+                        b.setRole(replacementPeer, kAXLayoutItemRole as String)
+                        b.setAttribute(replacementPeer, kAXNumberOfCharactersAttribute as String, 0)
+                        b.setAttribute(replacementPeer, kAXInsertionPointLineNumberAttribute as String, 0)
+                        b.setChildren(replacementPeer, b.makeAXRuntime().children(peer))
+                        f.inputReadReplacementPeer = replacementPeer
+                        f.routingOtherReplacement = replacementPeer
+                        if outcome == "composed_name_execution_caption_peer_changed_cancel" {
+                            b.setAttribute(b.element(1_291_401), kAXValueAttribute as String, NSNumber(value: 0.4))
+                            f.routingLateScopeInjected = true
+                        }
+                    }
+                    if outcome.hasPrefix("composed_name_execution_caption_"), f.routingNameConfirms == 2,
+                       CFEqual(element, root) {
+                        if outcome == "composed_name_execution_caption_project_cancel" {
+                            b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            f.routingLateScopeInjected = true
+                        } else if outcome == "composed_name_execution_caption_control_cancel"
+                            || outcome == "composed_name_execution_caption_header_refresh_cancel" {
+                            b.setButton(replacementInput, description: "Bus 1", help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 60, height: 20)
+                            b.setChildren(replacementInput, []); b.setActionNames(replacementInput, [kAXPressAction as String])
+                            b.setChildren(current, b.makeAXRuntime().children(current).map { CFEqual($0, input) ? replacementInput : $0 })
+                            f.routingLateScopeInjected = true
+                        }
+                    }
                     if outcome.hasPrefix("retired_track_peer_"), f.inputSagaForwardVerified,
                        f.routingDestinationPresses == 1, CFEqual(element, root) {
                         b.setRole(replacementPeer, kAXLayoutItemRole as String)
