@@ -9633,12 +9633,13 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("Selection scope restores its original passive focus without using the inverse as pair evidence",
-          arguments: ["aligned", "moving", "unsettable", "ack_only", "unreported", "late_document", "late_focus", "late_child"])
+          arguments: ["aligned", "moving", "unsettable", "ack_only", "unreported", "moving_unreported", "late_document", "late_focus", "late_child"])
     func selectionInspectionRestoresItsOriginalPassiveFocus(profile: String) async throws {
-        let f = try Fixture()
+        let f = try Fixture(fourTracks: profile == "moving_unreported")
         let originalFocus = f.strips[1]
         let moving = profile != "aligned" && profile != "unreported"
-        if profile != "unreported" {
+        let unreported = profile == "unreported" || profile == "moving_unreported"
+        if !unreported {
             f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                 [moving ? f.strips[0] : originalFocus])
         }
@@ -9649,7 +9650,8 @@ struct Issue965HeldSelectionAssociationTests {
                 if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
                    f.focusRestorationWrites.isEmpty, !f.cleanupScopeInjected,
                    let selected = f.selections.last {
-                    f.builder.setAttribute(f.app, attribute, f.strips[selected])
+                    f.builder.setAttribute(f.app, attribute,
+                        f.strips[profile == "moving_unreported" && selected == 1 ? 2 : selected])
                 }
                 if profile.hasPrefix("late_"), !f.cleanupScopeInjected, f.selections == [1, 0],
                    CFEqual(element, originalFocus), attribute == kAXNumberOfCharactersAttribute as String {
@@ -9665,7 +9667,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
         }
         f.routingSelection = { index in
-            guard profile != "unreported" else { return }
+            guard !unreported else { return }
             let selected = moving ? f.strips[index] : f.strips[1 - index]
             f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [selected])
         }
@@ -9674,14 +9676,16 @@ struct Issue965HeldSelectionAssociationTests {
         let effects = try #require(body["ui_effects"] as? [String: Any])
         #expect(f.selections == [1, 0])
         #expect(f.scrollWrites.isEmpty)
-        if ["aligned", "moving", "unreported"].contains(profile) {
-            #expect(rows.count == 1 && rows.first?["track_index"] as? Int == 0)
+        if ["aligned", "moving", "unreported", "moving_unreported"].contains(profile) {
+            if profile == "moving_unreported" {
+                #expect(rows.isEmpty, "Restoring strip1 focus cannot prove header0 belongs to strip1")
+            } else { #expect(rows.count == 1 && rows.first?["track_index"] as? Int == 0) }
             #expect(effects["restoration"] as? String == "restored")
             let finalFocus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
                 kAXFocusedUIElementAttribute as String, runtime: f.builder.makeAXRuntime()))
             #expect(CFEqual(finalFocus, originalFocus))
             #expect(f.focusRestorationWrites.count == (moving ? 1 : 0))
-            if moving {
+            if moving && !unreported {
                 let strips = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
                 #expect(rows.first?["mixer_strip_ref"] as? String == strips[0]["mixer_strip_ref"] as? String,
                     "The actual selected child, not the inverse focus, identifies the selected header")

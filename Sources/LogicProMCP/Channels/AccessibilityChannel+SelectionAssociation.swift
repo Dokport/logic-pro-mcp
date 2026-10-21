@@ -1445,7 +1445,9 @@ extension AccessibilityChannel {
                 }
                 // A passive rail's selected-child hint becomes a pair only
                 // after this actual changed-strip challenge and exact return.
-                if CFEqual(associationStrip, originalAssociationStrip) { originalPairVerified = true }
+                if originalSelectedChild != nil, CFEqual(associationStrip, originalAssociationStrip) {
+                    originalPairVerified = true
+                }
                 observed.append((challenge, challengeStrip))
             }
             if allHeldHeaders {
