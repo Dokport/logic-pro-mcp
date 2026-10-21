@@ -678,6 +678,18 @@ extension AccessibilityChannel {
                 return refuse(.readbackUnavailable, "The input read requires current Logic keyboard ownership; nothing was pressed.")
             }
         }
+        let sendMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry?
+        if sendReplacement?.destination != nil, assigned != nil,
+           let pair = AXMixerStripBinding.outputAssociation, pair.strip.matches(physical),
+           let proof = HeldSelectionAssociation(window: physical.window, logic: runtime,
+                expectedProject: nil, requiresProjectReference: false, allowsSelectedChildRailEntry: true),
+           CFEqual(proof.mixer, physical.mixer), proof.document.utf8.elementsEqual(physical.document.utf8),
+           proof.headers.filter({ CFEqual($0, pair.track.header) }).count == 1 {
+            // Presentation restoration duty only, sampled before our popup.
+            // A transient post-press layout cannot become the original baseline
+            // and this geometry supplies no source or Send-control identity.
+            sendMixerGeometry = proof.observedMixerViewportGeometry()
+        } else { sendMixerGeometry = nil }
         guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
             return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed.")
         }
@@ -1315,7 +1327,8 @@ extension AccessibilityChannel {
                 }
                 let renewal = await renewSourceThroughOriginalHeader(originalPair, original: physical,
                     runtime: runtime, selectedHeaderRequired: false,
-                    sourceDisposition: originalCount == 0 ? .retiredOriginal : .survivingOriginal)
+                    sourceDisposition: originalCount == 0 ? .retiredOriginal : .survivingOriginal,
+                    restoringMixerGeometry: sendMixerGeometry)
                 extras["ui_effects"] = ["navigation_performed": renewal.effects.navigationPerformed,
                     "attempted": renewal.effects.attempted, "changed": renewal.effects.changed,
                     "restoration": renewal.effects.restoration, "reason": renewal.effects.reason as Any? ?? NSNull()]
