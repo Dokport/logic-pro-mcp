@@ -1265,12 +1265,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           RoutingGraphPublication.classifyOutputLabel(slot.source).1 == bus,
                           slot.owner.currentIndex(runtime: runtime) != nil else { continue }
                     let prior = task.capture.freshPopulation?.selectionAssociations.first { $0.strip.matches(slot.owner) }
+                    stage = "receiver_\(bus)_captured_control"
                     let native = AXLogicProElements.inputSlotRead(in: slot.owner.strip, runtime: runtime.ax)
                     guard case .source(let label) = native.reading, label.utf8.elementsEqual(slot.source.utf8),
                           let nativeControl = native.control, CFEqual(nativeControl, slot.control) else { return nil }
                     candidates.append((prior, slot))
                 }
                 if let roster {
+                    stage = "receiver_\(bus)_roster"
                     guard roster.permits(runtime: runtime) else { return nil }
                     for current in roster.observedPairs {
                         guard !current.track.matches(task.pair.track),
@@ -1286,9 +1288,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         candidates.append((current, .init(owner: current.strip, control: nativeControl, source: label)))
                     }
                 }
+                stage = "receiver_\(bus)_candidates"
+                Log.info("Canonical Send receiver \(bus): candidates=\(candidates.count),paired=\(candidates.filter { $0.0 != nil }.count),roster=\(roster?.observedPairs.count ?? 0)", subsystem: "saga")
                 for (currentPair, currentSlot) in candidates {
+                    stage = "receiver_\(bus)_pre_read"
                     guard sourceCurrent(), currentSlot.owner.currentIndex(runtime: runtime) != nil else { return nil }
                     let owner = currentSlot.owner
+                    stage = "receiver_\(bus)_native_read"
                     let read = await AXMixerStripBinding.$current.withValue(owner) {
                         await AXMixerStripBinding.$outputAssociation.withValue(currentPair) {
                             await AccessibilityChannel.getInputBusObservation(runtime: runtime,
@@ -1298,13 +1304,20 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                 observingRenewedFocus: { inputFocus.retainAssociation($0) })
                         }
                     }
-                    guard read.assignment == .bus(bus) else { return nil }
+                    stage = "receiver_\(bus)_assignment"
+                    guard read.assignment == .bus(bus) else {
+                        Log.info("Canonical Send receiver checked input refused: \(read.result.message)", subsystem: "saga")
+                        return nil
+                    }
                     if let observed = read.inputRenewal {
+                        stage = "receiver_\(bus)_renewal"
                         guard let currentPair, accept(observed, from: currentPair),
                               read.inputSlot?.owner.matches(observed.pair.strip) == true else { return nil }
                     } else {
+                        stage = "receiver_\(bus)_control"
                         guard read.inputSlot?.matches(currentSlot) == true else { return nil }
                     }
+                    stage = "receiver_\(bus)_source_bookend"
                     guard sourceCurrent() else { return nil }
                     checked = true
                     break
