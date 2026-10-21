@@ -1346,11 +1346,6 @@ extension AccessibilityChannel {
             guard await referenceIsCurrent(), permitsRead(), !stop() else { return [] }
             switch selectedChildRead() {
             case .observed(let child):
-                // Selection-only collection restores by returning to its original
-                // header. A different physical entry focus cannot return with it.
-                if !allHeldHeaders, originalRailFocus == nil, !CFEqual(child, originalFocus) {
-                    effects.reason = "association_selection_unverified"; return []
-                }
                 originalSelectedChild = child; expectedSelectedChild = child
                 guard permitsRead(), !stop() else { return [] }
             case .unavailable: break
@@ -1435,6 +1430,13 @@ extension AccessibilityChannel {
                     restored = await select(originalIndex, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
                         && CFEqual(expectedFocus, originalFocus) && selectedChildRestored()
                 } else { restored = false }
+                if !restored, !lost, expectedIndex == originalIndex, selectedChildRestored() {
+                    // As in whole-held collection, restore only our original
+                    // passive focus; the inverse itself is never a pair witness.
+                    if originalSelectedChild == nil { originalPairVerified = false }
+                    restored = await restoreOriginalFocus(referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
+                        && selectedChildRestored()
+                }
                 // Each proof starts at the same original selection/focus. A
                 // previous challenge's passive focus cannot identify this header.
                 guard restored else { break }

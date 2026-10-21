@@ -9632,43 +9632,65 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(f.selections == [1, 0])
     }
 
-    @Test("A contradictory physical-focus entry refuses before changing selection",
-          arguments: ["aligned", "conflict", "unreported"])
-    func physicalEntryRefusesObservedSelectedChildFocusConflict(profile: String) async throws {
+    @Test("Selection scope restores its original passive focus without using the inverse as pair evidence",
+          arguments: ["aligned", "moving", "unsettable", "ack_only", "unreported", "late_document", "late_focus", "late_child"])
+    func selectionInspectionRestoresItsOriginalPassiveFocus(profile: String) async throws {
         let f = try Fixture()
         let originalFocus = f.strips[1]
+        let moving = profile != "aligned" && profile != "unreported"
         if profile != "unreported" {
             f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
-                [profile == "conflict" ? f.strips[0] : originalFocus])
+                [moving ? f.strips[0] : originalFocus])
         }
-        if profile == "conflict" {
-            // The selected header's actual strip is not the passive keyboard
-            // focus. Returning to that header cannot restore both by selection.
+        if moving {
+            f.builder.setAttributeSettable(originalFocus, kAXFocusedAttribute as String, profile != "unsettable")
+            f.focusRestorationAckOnly = profile == "ack_only"
             f.routingRead = { element, attribute in
                 if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
+                   f.focusRestorationWrites.isEmpty, !f.cleanupScopeInjected,
                    let selected = f.selections.last {
                     f.builder.setAttribute(f.app, attribute, f.strips[selected])
+                }
+                if profile.hasPrefix("late_"), !f.cleanupScopeInjected, f.selections == [1, 0],
+                   CFEqual(element, originalFocus), attribute == kAXNumberOfCharactersAttribute as String {
+                    f.cleanupScopeInjected = true
+                    if profile == "late_document" {
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    } else if profile == "late_focus" {
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.builder.element(1_965_999))
+                    } else {
+                        f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
+                    }
                 }
             }
         }
         f.routingSelection = { index in
             guard profile != "unreported" else { return }
-            let selected = profile == "conflict" ? f.strips[index] : f.strips[1 - index]
+            let selected = moving ? f.strips[index] : f.strips[1 - index]
             f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [selected])
         }
         let body = try await inspect(f, scope: "selection")
-        if profile == "conflict" {
-            #expect(f.selections.isEmpty, "A known contradictory baseline must refuse before navigation")
-            #expect(f.focusRestorationWrites.isEmpty && f.scrollWrites.isEmpty)
+        let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+        let effects = try #require(body["ui_effects"] as? [String: Any])
+        #expect(f.selections == [1, 0])
+        #expect(f.scrollWrites.isEmpty)
+        if ["aligned", "moving", "unreported"].contains(profile) {
+            #expect(rows.count == 1 && rows.first?["track_index"] as? Int == 0)
+            #expect(effects["restoration"] as? String == "restored")
             let finalFocus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
                 kAXFocusedUIElementAttribute as String, runtime: f.builder.makeAXRuntime()))
             #expect(CFEqual(finalFocus, originalFocus))
-            let rows = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]]
-            #expect(rows?.isEmpty ?? true)
+            #expect(f.focusRestorationWrites.count == (moving ? 1 : 0))
+            if moving {
+                let strips = try #require((body["strips"] as? [String: Any])?["rows"] as? [[String: Any]])
+                #expect(rows.first?["mixer_strip_ref"] as? String == strips[0]["mixer_strip_ref"] as? String,
+                    "The actual selected child, not the inverse focus, identifies the selected header")
+            }
         } else {
-            let rows = try #require((body["associations"] as? [String: Any])?["rows"] as? [[String: Any]])
-            #expect(rows.count == 1 && rows.first?["track_index"] as? Int == 0)
-            #expect(f.selections == [1, 0])
+            #expect(rows.isEmpty)
+            #expect(effects["restoration"] as? String != "restored")
+            #expect(f.focusRestorationWrites.count == (profile == "ack_only" ? 1 : 0))
+            if profile.hasPrefix("late_") { #expect(f.cleanupScopeInjected, "Reach the actual deciding inverse reads") }
         }
     }
 
