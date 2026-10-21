@@ -548,9 +548,10 @@ extension AccessibilityChannel {
             return refuse(.transportStateUnknown, "Play and Record must read before menu acquisition.")
         }
         guard !playing, !recording else { return refuse(.unsupportedState, "Output-menu acquisition requires stopped transport.") }
-        let inputTransport = inputBusOnly ? HeldInputReadTransport.capture(window: physical.window, runtime: runtime) : nil
+        let routingTransport = sendReplacement == nil && sendOrdinal == nil
+            ? HeldRoutingReadTransport.capture(window: physical.window, runtime: runtime) : nil
         @Sendable func transportStillStopped() -> Bool {
-            if let inputTransport { return inputTransport.stillStopped(runtime: runtime) }
+            if let routingTransport { return routingTransport.stillStopped(runtime: runtime) }
             return AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
                 && AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false
         }
@@ -817,8 +818,7 @@ extension AccessibilityChannel {
                   case .success(.some(let label)) = AXHelpers.getAttributeResult(slot,
                     kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
                   label.utf8.elementsEqual(originalLabel.utf8),
-                  AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
-                  AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
+                  transportStillStopped(),
                   !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else { return false }
             return ownerBoundaryStillCurrent()
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
@@ -1551,12 +1551,12 @@ extension AccessibilityChannel {
                 }
             }
         }
-        if let inputTransport {
+        if let routingTransport {
             // The temporary menu can make the unrelated whole-window batch
             // census fail. Its original live controls were read above, never
             // defaulted to stopped. After cleanup, ordinary unique discovery
-            // must agree again before either input reader retains a fact.
-            sourceAfter = sourceAfter && inputTransport.matchesClosedWindow(runtime: runtime)
+            // must agree again before either direct routing reader retains a fact.
+            sourceAfter = sourceAfter && routingTransport.matchesClosedWindow(runtime: runtime)
                 && (inputRenewal.map { $0.permits(runtime: runtime) } ?? sourceOwned())
         }
         extras["source_custody_after_cleanup"] = sourceAfter
@@ -1674,10 +1674,11 @@ extension AccessibilityChannel {
         return menus
     }
 
-    /// Request-local transport custody, acquired before an input popup exists.
+    /// Request-local transport custody for read-only input/output popups.
     /// Only the existing stopped controls and their reciprocal original paths
     /// are read while the popup is open. No destination or musical write uses it.
-    struct HeldInputReadTransport: @unchecked Sendable {
+    /// Send reads and destination writers retain their existing transport path.
+    struct HeldRoutingReadTransport: @unchecked Sendable {
         let activity: AXLogicProElements.ObservedTransportActivity
         let window: AXUIElement
         let paths: [[AXUIElement]]

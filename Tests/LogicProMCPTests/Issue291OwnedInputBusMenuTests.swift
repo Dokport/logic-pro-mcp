@@ -207,12 +207,20 @@ struct Issue291OwnedInputBusMenuTests {
         #expect(f.mutations.last?.1 == kAXCancelAction as String)
     }
 
-    @Test("An owned input popup retains current stopped controls, never changed or detached transport",
-          arguments: ["owned", "play_started", "record_started", "play_unread", "play_replaced",
+    @Test("Owned input/output reads retain current stopped controls, never changed or detached transport",
+          arguments: ["input", "output"], ["owned", "play_started", "record_started", "play_unread", "play_replaced",
               "bar_reparented", "gate_revoked", "post_close_competing_bar", "late_transport",
-              "post_close_duplicate_play", "post_close_duplicate_record", "post_close_relabelled_play"])
-    func ownedInputPopupRetainsStoppedTransport(fault: String) async throws {
+              "post_close_duplicate_play", "post_close_duplicate_record", "post_close_relabelled_play", "cancel_after_open"])
+    func ownedInputPopupRetainsStoppedTransport(domain: String, fault: String) async throws {
         let (p, expected) = try prepareInputDomain("mono"), f = p.f
+        if domain == "output" {
+            f.b.setAttribute(f.outputs[0], kAXDescriptionAttribute as String, "Stereo Output")
+            f.b.setAttribute(f.outputs[0], kAXHelpAttribute as String, "Output slot. Choose the channel strip output.")
+            f.b.setAttribute(p.echo, kAXTitleAttribute as String, "Stereo Output")
+            f.b.setAttribute(p.inputLeaf, kAXTitleAttribute as String, "Stereo Output")
+            f.b.setAttribute(f.b.element(291_944), kAXTitleAttribute as String, "Output")
+            #expect(AccessibilityChannel.currentOutputMenuAssignment(in: f.root, runtime: f.logic.ax) == .stereoOutput)
+        }
         let base = f.logic
         let play = f.b.element(2_910_301), record = f.b.element(2_910_302), bar = f.b.element(2_910_300)
         defer { f.onChildrenResultRead = nil; f.attributeReadResult = nil }
@@ -295,10 +303,14 @@ struct Issue291OwnedInputBusMenuTests {
         let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
         defer { gate.release(claim) }
         let context = OperationTraceContext(mutationGateAcquired: true,
-            ownsGate: { gate.stillOwns(claim) && (fault != "gate_revoked" || f.mutations.isEmpty) })
+            ownsGate: { gate.stillOwns(claim) && (fault != "gate_revoked" || f.mutations.isEmpty) },
+            cancellationRequested: { fault == "cancel_after_open" && !f.mutations.isEmpty })
         let reading = await OperationTraceContext.$current.withValue(context) {
             await AXMixerStripBinding.$current.withValue(owner) {
-                await AccessibilityChannel.getCheckedInputObservation(runtime: runtime, timing: .immediate)
+                if domain == "input" {
+                    return await AccessibilityChannel.getCheckedInputObservation(runtime: runtime, timing: .immediate)
+                }
+                return await AccessibilityChannel.getOutputObservation(runtime: runtime, timing: .immediate)
             }
         }
         if fault != "owned" {
@@ -308,9 +320,16 @@ struct Issue291OwnedInputBusMenuTests {
             if fault.hasPrefix("post_close_") || fault == "late_transport" {
                 #expect(f.mutations.last?.1 == kAXCancelAction as String)
             }
+            if fault == "cancel_after_open", domain == "output" {
+                let body = try #require(sharedJSONObject(reading.result.message))
+                #expect(body["error"] as? String == "cancelled")
+                #expect(body["popup_menu_state"] as? String == "closed")
+                #expect(f.mutations.last?.1 == kAXCancelAction as String)
+            }
             return
         }
-        #expect(reading.inputAssignment == expected)
+        if domain == "input" { #expect(reading.inputAssignment == expected) }
+        else { #expect(reading.assignment == .stereoOutput) }
         let body = try #require(sharedJSONObject(reading.result.message))
         #expect(body["popup_menu_state"] as? String == "closed")
         #expect(f.mutations.count == 2)
