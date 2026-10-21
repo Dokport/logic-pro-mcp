@@ -31,6 +31,17 @@ struct Issue965FreshPopulationAcquisitionTests {
         var helpCount: Int { lock.withLock { attributes.filter { $0 == kAXHelpAttribute as String }.count } }
     }
 
+    private final class SelectionDispatchClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var acceptedAt: ContinuousClock.Instant?
+        func accept() { lock.withLock { acceptedAt = .now } }
+        var settled: Bool {
+            lock.withLock {
+                acceptedAt.map { $0.duration(to: .now) >= .milliseconds(120) } ?? false
+            }
+        }
+    }
+
     private final class StackBookends: @unchecked Sendable {
         private let lock = NSLock()
         private var titleReads = Array(repeating: 0, count: 42)
@@ -4302,6 +4313,17 @@ struct Issue965FreshPopulationAcquisitionTests {
         try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: "delayed_dispatch")
     }
 
+    @Test func registeredSelectAllObservesDelayedNativeSelectionAfterClosedMenuACK() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "timed_dispatch_healthy")
+    }
+
+    @Test(arguments: ["noop", "subset", "foreign", "document", "focus", "transport", "unread", "cancel"])
+    func registeredDelayedSelectionCannotSupplyMissingCustody(fault: String) async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "timed_dispatch_" + fault)
+    }
+
     @Test func registeredSelectAllSettlesBetweenPostReadAndInverseRead() async throws {
         try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1, fault: "late_deciding_settlement")
     }
@@ -4457,6 +4479,8 @@ struct Issue965FreshPopulationAcquisitionTests {
         fixture.builder.setChildren(transport, controls)
         fixture.builder.setChildren(fixture.window, roots + [owner, transport])
         let selectionReads = Reads()
+        let selectionClock = SelectionDispatchClock()
+        let timedDispatch = fault.hasPrefix("timed_dispatch_")
         let sharedRead = fault.hasPrefix("full_population_shared")
         let snapshotReads = Reads()
         let nativeRead = passiveMixerAttributeRead(initialFocus)
@@ -4479,6 +4503,13 @@ struct Issue965FreshPopulationAcquisitionTests {
                 if CFEqual(element, selectAll), action == kAXPressAction as String {
                     fixture.events.record("select_all")
                     if fault == "delayed_dispatch" { return true }
+                    if timedDispatch {
+                        // The native ACK and menu closure precede selection. No
+                        // background task writes the fixture, even after return.
+                        selectionClock.accept()
+                        fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, false)
+                        return true
+                    }
                     if fault != "noop_selection" && !fault.hasPrefix("late_deciding_") {
                         fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
                     }
@@ -4578,6 +4609,30 @@ struct Issue965FreshPopulationAcquisitionTests {
                     if fault == "unread_selection" { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
                     let opened = fixture.events.recorded.contains("open_edit")
                     let selected = fixture.events.recorded.contains("select_all")
+                    if timedDispatch, selected, selectionClock.settled,
+                       !selectionReads.recorded.contains("timed_dispatch_settled") {
+                        selectionReads.record("timed_dispatch_settled")
+                        switch fault {
+                        case "timed_dispatch_noop": break
+                        case "timed_dispatch_subset":
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.prefix(2)))
+                        case "timed_dispatch_foreign":
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [fixture.header])
+                        case "timed_dispatch_unread": return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                        default:
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
+                            if fault == "timed_dispatch_document" {
+                                fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
+                            if fault == "timed_dispatch_focus" {
+                                fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header)
+                            }
+                            if fault == "timed_dispatch_transport" {
+                                fixture.builder.setAttribute(controls[0], kAXValueAttribute as String, 1)
+                            }
+                            if fault == "timed_dispatch_cancel" { withUnsafeCurrentTask { $0?.cancel() } }
+                        }
+                    }
                     if fault == "before_leaf_transport_document", opened, !selected {
                         selectionReads.record("leaf_deciding")
                     }
@@ -4608,7 +4663,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                         default: fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
                         }
                     }
-                    if fault.hasPrefix("late_deciding_") {
+                    if fault.hasPrefix("late_deciding_") || timedDispatch {
                         // Own this status-bearing result: the legacy value fallback
                         // invokes readingAttribute a second time when it returns nil.
                         return .success(fixture.builder.attributeValue(mixer, attribute).map { $0 as AnyObject })
@@ -4628,10 +4683,24 @@ struct Issue965FreshPopulationAcquisitionTests {
                 return nativeRead(element, attribute)
             })
         let body = try #require(sharedJSONObject(sharedToolText(result)))
-        if fault == "late_deciding_cancel" {
+        if timedDispatch {
+            #expect(selectionReads.recorded.contains("timed_dispatch_settled"),
+                "Actually observe the delayed native result, not merely an ACK or early refusal")
+            #expect(fixture.events.recorded.filter({ $0 == "select_all" }).count == 1)
+            if ["timed_dispatch_noop", "timed_dispatch_subset"].contains(fault) {
+                #expect(fixture.events.recorded.filter({ $0 == "restore_mixer_selection" }).count == 1)
+                let restored = try #require(fixture.builder.attributeValue(mixer,
+                    kAXSelectedChildrenAttribute as String) as? [AXUIElement])
+                #expect(restored.count == original.count && zip(restored, original).allSatisfy { CFEqual($0, $1) })
+                #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+            } else if fault != "timed_dispatch_healthy" {
+                #expect(!fixture.events.recorded.contains("restore_mixer_selection"))
+            }
+        }
+        if fault == "late_deciding_cancel" || fault == "timed_dispatch_cancel" {
             #expect(body["state"] as? String == "C")
             #expect(body["error"] as? String == "cancelled")
-            #expect(selectionReads.recorded.contains("late_deciding_transition"))
+            #expect(selectionReads.recorded.contains(fault == "late_deciding_cancel" ? "late_deciding_transition" : "timed_dispatch_settled"))
             #expect(fixture.events.recorded.filter({ $0 == "select_all" }).count == 1)
             #expect(!fixture.events.recorded.contains("restore_mixer_selection"))
             return
@@ -4641,7 +4710,7 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
             section = body["strips"] as? [String: Any] ?? [:]
         } else { section = try #require(body["strips"] as? [String: Any]) }
-        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch", "late_deciding_settlement", "select_all_first_focus"].contains(fault)
+        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch", "late_deciding_settlement", "select_all_first_focus", "timed_dispatch_healthy"].contains(fault)
             || (["full_population_restore_focus", "full_population_shared"].contains(fault) && originalCount == 1)
             || (originalCount == strips.count && ["noop_selection", "restore_ack_only", "restore_focus_false",
                 "restore_focus_ack_only", "restore_focus_unselected", "restore_focus_selection_drift"].contains(fault))

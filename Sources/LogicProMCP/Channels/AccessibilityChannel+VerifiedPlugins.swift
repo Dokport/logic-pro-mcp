@@ -1294,8 +1294,10 @@ extension AccessibilityChannel {
             _ = ownedFirstSelectionFocus()
             if accepted {
                 // A successful dispatch can settle after its ACK. Observe at
-                // most three owned states before cancelling a still-open menu;
-                // never retry the leaf or manufacture its selected children.
+                // most three owned states, 100ms apart, before cancelling a
+                // still-open menu. Native selection can lag its closed-menu ACK
+                // beyond 50ms; retain the original request deadline and never
+                // retry the leaf or manufacture its selected children.
                 for attempt in 0..<3 {
                     guard await held() else {
                         _ = await dismissOwnedMenu(stoppingWhen: stop)
@@ -1312,7 +1314,7 @@ extension AccessibilityChannel {
                         if sameSet(observed, strips) { break }
                     }
                     guard attempt < 2 else { break }
-                    do { try await Task.sleep(for: .milliseconds(25)) }
+                    do { try await Task.sleep(for: .milliseconds(100)) }
                     catch {
                         _ = await dismissOwnedMenu(stoppingWhen: stop)
                         effects.reason = "navigation_cancelled"; return nil
