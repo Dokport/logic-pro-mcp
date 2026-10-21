@@ -5632,7 +5632,13 @@ struct Issue965HeldSelectionAssociationTests {
                             f.routingReplacement = replacement
                             b.setChildren(replacement, [name] + renewedSend + [sourceInput]
                                 + [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)])
-                            b.setChildren(f.mixer, [f.strips[0], replacement, receiver])
+                            let peer = b.element(1_971_560)
+                            b.setRole(peer, kAXLayoutItemRole as String)
+                            b.setAttribute(peer, kAXNumberOfCharactersAttribute as String, 0)
+                            b.setAttribute(peer, kAXInsertionPointLineNumberAttribute as String, 0)
+                            b.setChildren(peer, b.makeAXRuntime().children(f.strips[0]))
+                            f.routingOtherReplacement = peer
+                            b.setChildren(f.mixer, [peer, replacement, receiver])
                             b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
                         }
                         return true
@@ -5642,6 +5648,11 @@ struct Issue965HeldSelectionAssociationTests {
                     if forward || inverse { f.routingBusLeafPresses.append(forward ? 2 : 1) }
                     // Reuse the source redraw model while retaining this untouched receiver.
                     let acknowledged = originalAction(forward ? destination : inverse ? stereo : element, action)
+                    if canonicalBusReceiverFault == "physical_source_read_renewal", let peer = f.routingOtherReplacement {
+                        b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).map {
+                            CFEqual($0, f.strips[0]) ? peer : $0
+                        })
+                    }
                     if canonicalBusReceiverFault?.contains("source") == true {
                         let currentSource = f.routingReplacement ?? f.strips[1]
                         let currentChildren = b.makeAXRuntime().children(currentSource)
@@ -5671,7 +5682,8 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
             let before = try await inspect(f, cache: cache, registry: registry,
-                domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"])
+                domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"],
+                scope: canonicalBusReceiverFault == "physical_source_read_renewal" ? "selection" : "whole_project")
             if ["changed_control", "typed_mode_changed_control"].contains(inspectSendWitness ?? ""), before["snapshot_id"] == nil {
                 #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 0)
                 #expect(before["state"] as? String == "C")

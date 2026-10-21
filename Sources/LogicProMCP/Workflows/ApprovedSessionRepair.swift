@@ -1163,14 +1163,18 @@ final class ApprovedSessionRepair: @unchecked Sendable {
 
     func sendBusInputsCurrent(at originalPair: AccessibilityChannel.HeldSelectionAssociation.Pair,
         control: AXLogicProElements.AssignedSendMenuControl,
-        expected: OutputAssignment) async -> SendReadCustody? {
+        expected: OutputAssignment,
+        priorSource: AccessibilityChannel.OriginalHeaderSourceRenewal? = nil) async -> SendReadCustody? {
         guard let task = sendTask, case .bus(let before) = task.before,
               case .bus(let after)? = task.desired, before != after else {
             return .init(pair: originalPair, control: control, renewal: nil)
         }
         var stage = "initial_custody", accepted = false
         defer { if !accepted { Log.info("Canonical Send input read refused at \(stage)", subsystem: "saga") } }
-        guard [task.before, task.desired].contains(expected),
+        guard priorSource.map({ $0.pair.strip.matches(originalPair.strip)
+                && $0.pair.track.matches(originalPair.track) && $0.originalTrack.matches(task.pair.track)
+                && $0.permits(runtime: originalPair.track.runtime) }) ?? true,
+              [task.before, task.desired].contains(expected),
               await projectIsCurrent(allowPendingCancellation: true), originalPair.track.matches(task.pair.track),
               let capturedSource = task.capture.channelStrips.first(where: {
                   $0.physicalBinding?.matches(task.pair.strip) == true
@@ -1183,13 +1187,14 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               proof.permitsRead() else { return nil }
         var pair = originalPair
         var renewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
+        var roster = priorSource
         let runtime = originalPair.track.runtime
         func accept(_ observed: AccessibilityChannel.OriginalHeaderSourceRenewal,
                     from prior: AccessibilityChannel.HeldSelectionAssociation.Pair) -> Bool {
             guard observed.original.matches(prior.strip), observed.originalTrack.matches(prior.track),
                   observed.permits(runtime: runtime),
                   let primary = observed.sourceForOriginalHeader(originalPair, runtime: runtime) else { return false }
-            pair = primary.pair; renewal = primary
+            pair = primary.pair; renewal = primary; roster = primary
             return true
         }
         func sourceCurrent() -> Bool {
@@ -1197,9 +1202,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                   pair.track.currentIndex() != nil, pair.strip.currentIndex(runtime: runtime) != nil,
                   let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer,
                     runtime: runtime.ax)?.strips, census.count == task.capture.channelStrips.count else { return false }
-            if let renewal {
-                return renewal.permits(runtime: runtime) && census.count == renewal.observation.strips.count
-                    && zip(census, renewal.observation.strips).allSatisfy({ CFEqual($0, $1) })
+            if let roster {
+                return roster.permits(runtime: runtime) && census.count == roster.observation.strips.count
+                    && zip(census, roster.observation.strips).allSatisfy({ CFEqual($0, $1) })
             }
             guard let current = AXLogicProElements.assignedSendMenuControl(in: pair.strip.strip,
                     ordinal: task.ordinal, runtime: runtime.ax), control.matches(current),
@@ -1251,20 +1256,39 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             for bus in [before, after] {
                 stage = "receiver_\(bus)"
                 var checked = false
+                var candidates: [(AccessibilityChannel.HeldSelectionAssociation.Pair?, AXMixerInputSlotBinding)] = []
+                // A still-current captured control needs no adoption. A selected-
+                // scope capture may have no association for any other header.
                 for receiver in task.capture.channelStrips {
                     guard let slot = receiver.inputSlotBinding, !slot.owner.matches(task.pair.strip),
                           RoutingGraphPublication.classifyOutputLabel(slot.source).0 == .bus,
-                          RoutingGraphPublication.classifyOutputLabel(slot.source).1 == bus else { continue }
-                    guard sourceCurrent() else { return nil }
+                          RoutingGraphPublication.classifyOutputLabel(slot.source).1 == bus,
+                          slot.owner.currentIndex(runtime: runtime) != nil else { continue }
                     let prior = task.capture.freshPopulation?.selectionAssociations.first { $0.strip.matches(slot.owner) }
-                    let currentPair = prior.flatMap { renewal?.sourceForOriginalHeader($0, runtime: runtime)?.pair } ?? prior
-                    let owner = currentPair?.strip ?? slot.owner
-                    guard owner.currentIndex(runtime: runtime) != nil else { return nil }
-                    let native = AXLogicProElements.inputSlotRead(in: owner.strip, runtime: runtime.ax)
+                    let native = AXLogicProElements.inputSlotRead(in: slot.owner.strip, runtime: runtime.ax)
                     guard case .source(let label) = native.reading, label.utf8.elementsEqual(slot.source.utf8),
-                          let nativeControl = native.control,
-                          !owner.matches(slot.owner) || CFEqual(nativeControl, slot.control) else { return nil }
-                    let currentSlot = AXMixerInputSlotBinding(owner: owner, control: nativeControl, source: label)
+                          let nativeControl = native.control, CFEqual(nativeControl, slot.control) else { return nil }
+                    candidates.append((prior, slot))
+                }
+                if let roster {
+                    guard roster.permits(runtime: runtime) else { return nil }
+                    for current in roster.observedPairs {
+                        guard !current.track.matches(task.pair.track),
+                              !candidates.contains(where: { $0.1.owner.matches(current.strip) }),
+                              roster.observedPairs.filter({ $0.strip.matches(current.strip) }).count == 1 else { continue }
+                        let native = AXLogicProElements.inputSlotRead(in: current.strip.strip, runtime: runtime.ax)
+                        guard case .source(let label) = native.reading, let nativeControl = native.control,
+                              RoutingGraphPublication.classifyOutputLabel(label).0 == .bus,
+                              RoutingGraphPublication.classifyOutputLabel(label).1 == bus else { continue }
+                        // This is an actual current positive receiver candidate,
+                        // not a label join to a retired peer ref. Its owned menu
+                        // must independently prove the Bus before it is usable.
+                        candidates.append((current, .init(owner: current.strip, control: nativeControl, source: label)))
+                    }
+                }
+                for (currentPair, currentSlot) in candidates {
+                    guard sourceCurrent(), currentSlot.owner.currentIndex(runtime: runtime) != nil else { return nil }
+                    let owner = currentSlot.owner
                     let read = await AXMixerStripBinding.$current.withValue(owner) {
                         await AXMixerStripBinding.$outputAssociation.withValue(currentPair) {
                             await AccessibilityChannel.getInputBusObservation(runtime: runtime,

@@ -379,7 +379,8 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 }
                 if let approved = self.approved {
                     guard let custody = await approved.sendBusInputsCurrent(at: changed.source.pair,
-                        control: changed.control, expected: changed.checkedAfter), custody.renewal == nil else {
+                        control: changed.control, expected: changed.checkedAfter,
+                        priorSource: changed.source), custody.renewal == nil else {
                         return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed Send read continuity is unavailable")
                     }
                 }
