@@ -473,14 +473,17 @@ struct Issue448TrackSortVerifiedTests {
                 if let matchingMode {
                     let succeeds = matchingMode == "clean"
                     #expect(body["state"] as? String == (succeeds ? "A" : "C"))
-                    #expect(body["verified"] as? Bool == succeeds)
+                    let verified = try #require(body["verified"] as? Bool)
+                    if succeeds { #expect(verified) } else { #expect(!verified) }
                     #expect(f.actionProbe.pressCount == 0)
                     if composedMode == nil { #expect(f.actionProbe.helpReadCount == helpReads) }
                     #expect(await registry.currentTopologyGeneration == generation)
                     #expect(await registry.resolve(order[0]) != nil)
-                    #expect(f.actionProbe.mixerShowing == (composedMode != nil && succeeds))
+                    if composedMode != nil && succeeds { #expect(f.actionProbe.mixerShowing) }
+                    else { #expect(!f.actionProbe.mixerShowing) }
                     if composedMode == nil {
-                        #expect(body["write_attempted"] as? Bool == false)
+                        let attempted = try #require(body["write_attempted"] as? Bool)
+                        #expect(!attempted)
                         #expect(body["writes_performed"] as? Int == 0)
                         #expect(f.actionProbe.actionOrder.isEmpty)
                     } else {
@@ -506,7 +509,8 @@ struct Issue448TrackSortVerifiedTests {
                     }
                     let replay = await ApprovedSessionRepair.apply(request: try #require(.parse(params)), dependencies: dependencies)
                     let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
-                    #expect(replayBody["duplicate"] as? Bool == true)
+                    let duplicate = try #require(replayBody["duplicate"] as? Bool)
+                    #expect(duplicate)
                     #expect(replayBody["state"] as? String == (succeeds ? "A" : "C"))
                     #expect(f.actionProbe.pressCount == 0)
                     #expect(await registry.currentTopologyGeneration == generation)
@@ -516,7 +520,8 @@ struct Issue448TrackSortVerifiedTests {
                         let fresh = await ApprovedSessionRepair.apply(request: try #require(.parse(freshParams)), dependencies: dependencies)
                         let freshBody = try #require(sharedJSONObject(sharedToolText(fresh)))
                         #expect(freshBody["state"] as? String == "C")
-                        #expect(freshBody["write_attempted"] as? Bool == false)
+                        let attempted = try #require(freshBody["write_attempted"] as? Bool)
+                        #expect(!attempted)
                         #expect(f.actionProbe.pressCount == 0)
                     }
                     return
