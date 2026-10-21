@@ -1206,7 +1206,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     }
                 }
                 guard read.inputAssignment == expected, read.inputSlot?.matches(current) == true,
-                      read.inputRenewal == nil, sourceCurrent() else { return false }
+                      read.inputRenewal == nil, sourceCurrent() else {
+                    Log.info("Canonical Send source input refused: \(read.result.message)", subsystem: "saga")
+                    return false
+                }
             }
             for bus in [before, after] {
                 var checked = false
@@ -1224,7 +1227,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         }
                     }
                     guard read.assignment == .bus(bus), read.inputSlot?.matches(slot) == true,
-                          read.inputRenewal == nil, sourceCurrent() else { return false }
+                          read.inputRenewal == nil, sourceCurrent() else {
+                        Log.info("Canonical Send receiver input refused for Bus \(bus): \(read.result.message)", subsystem: "saga")
+                        return false
+                    }
                     checked = true
                     break
                 }
