@@ -548,6 +548,12 @@ extension AccessibilityChannel {
             return refuse(.transportStateUnknown, "Play and Record must read before menu acquisition.")
         }
         guard !playing, !recording else { return refuse(.unsupportedState, "Output-menu acquisition requires stopped transport.") }
+        let inputTransport = inputBusOnly ? HeldInputReadTransport.capture(window: physical.window, runtime: runtime) : nil
+        @Sendable func transportStillStopped() -> Bool {
+            if let inputTransport { return inputTransport.stillStopped(runtime: runtime) }
+            return AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
+                && AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false
+        }
         @Sendable func assignedControl() -> AXLogicProElements.AssignedSendMenuControl? {
             guard let sendOrdinal else { return nil }
             return AXLogicProElements.assignedSendMenuControl(in: physical.strip,
@@ -615,8 +621,7 @@ extension AccessibilityChannel {
                   CFEqual(current, slot),
                   case .success(.some(let label)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
                   (!preservingOriginalLabel || label.utf8.elementsEqual(originalLabel.utf8)),
-                  AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false,
-                  AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportRecordControl, runtime: runtime) == false,
+                  transportStillStopped(),
                   !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else { return false }
             return true
         }
@@ -1546,6 +1551,14 @@ extension AccessibilityChannel {
                 }
             }
         }
+        if let inputTransport {
+            // The temporary menu can make the unrelated whole-window batch
+            // census fail. Its original live controls were read above, never
+            // defaulted to stopped. After cleanup, ordinary unique discovery
+            // must agree again before either input reader retains a fact.
+            sourceAfter = sourceAfter && inputTransport.matchesClosedWindow(runtime: runtime)
+                && (inputRenewal.map { $0.permits(runtime: runtime) } ?? sourceOwned())
+        }
         extras["source_custody_after_cleanup"] = sourceAfter
         extras["menu_custody_at_read"] = dataOwned
         extras["output_checkmark_reads_observed"] = (first == nil ? 0 : 1) + (second == nil ? 0 : 1)
@@ -1659,6 +1672,36 @@ extension AccessibilityChannel {
             if role == kAXMenuRole as String { menus.append(child) }
         }
         return menus
+    }
+
+    /// Request-local transport custody, acquired before an input popup exists.
+    /// Only the existing stopped controls and their reciprocal original paths
+    /// are read while the popup is open. No destination or musical write uses it.
+    struct HeldInputReadTransport: @unchecked Sendable {
+        let activity: AXLogicProElements.ObservedTransportActivity
+        let window: AXUIElement
+        let paths: [[AXUIElement]]
+
+        static func capture(window: AXUIElement, runtime: AXLogicProElements.Runtime) -> Self? {
+            guard runtime.ax.attributeValuesResult != nil,
+                  let activity = try? AXLogicProElements.observedTransportActivity(in: window, runtime: runtime,
+                    checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                  !activity.isPlaying, !activity.isRecording,
+                  let play = HeldSelectionAssociation.path(activity.play, to: window, ax: runtime.ax),
+                  let record = HeldSelectionAssociation.path(activity.record, to: window, ax: runtime.ax) else { return nil }
+            let held = Self(activity: activity, window: window, paths: [play, record])
+            return held.stillStopped(runtime: runtime) ? held : nil
+        }
+
+        func stillStopped(runtime: AXLogicProElements.Runtime) -> Bool {
+            HeldSelectionAssociation.stoppedTransportPathsMatch(paths, activity: activity, window: window, logic: runtime)
+        }
+
+        func matchesClosedWindow(runtime: AXLogicProElements.Runtime) -> Bool {
+            guard let bar = AXLogicProElements.getControlBar(in: window, runtime: runtime.ax),
+                  CFEqual(bar, activity.controlBar) else { return false }
+            return stillStopped(runtime: runtime)
+        }
     }
 
     /// Measured native No Output wrapper. A hit-test only obtains an object;

@@ -207,6 +207,102 @@ struct Issue291OwnedInputBusMenuTests {
         #expect(f.mutations.last?.1 == kAXCancelAction as String)
     }
 
+    @Test("An owned input popup retains current stopped controls, never changed or detached transport",
+          arguments: ["owned", "play_started", "record_started", "play_unread", "play_replaced",
+              "bar_reparented", "gate_revoked", "post_close_competing_bar", "late_transport"])
+    func ownedInputPopupRetainsStoppedTransport(fault: String) async throws {
+        let (p, expected) = try prepareInputDomain("mono"), f = p.f
+        let base = f.logic
+        let play = f.b.element(2_910_301), record = f.b.element(2_910_302), bar = f.b.element(2_910_300)
+        defer { f.onChildrenResultRead = nil; f.attributeReadResult = nil }
+        f.attributeReadResult = { node, attribute in
+            guard CFEqual(node, play), attribute == kAXValueAttribute as String else { return nil }
+            if fault == "play_unread", !f.mutations.isEmpty {
+                return .failure(.init(raw: AXError.cannotComplete.rawValue))
+            }
+            if fault == "late_transport", f.mutations.contains(where: { $0.1 == kAXCancelAction as String }) {
+                f.b.setAttribute(play, attribute, 1)
+            }
+            return nil
+        }
+        f.onChildrenResultRead = { node in
+            if fault == "post_close_competing_bar", CFEqual(node, f.window),
+               f.mutations.contains(where: { $0.1 == kAXCancelAction as String }) {
+                let other = f.b.element(291_970), otherPlay = f.b.element(291_971), otherRecord = f.b.element(291_972)
+                f.b.setRole(other, kAXGroupRole as String)
+                f.b.setAttribute(other, kAXDescriptionAttribute as String, "Control Bar")
+                for (control, label) in [(otherPlay, "Play"), (otherRecord, "Record")] {
+                    f.b.setRole(control, kAXCheckBoxRole as String)
+                    f.b.setAttribute(control, kAXDescriptionAttribute as String, label)
+                    f.b.setAttribute(control, kAXValueAttribute as String, 0)
+                    f.b.setChildren(control, [])
+                }
+                f.b.setChildren(other, [otherPlay, otherRecord])
+                let current = base.ax.children(f.window)
+                if !current.contains(where: { CFEqual($0, other) }) { f.b.setChildren(f.window, current + [other]) }
+            }
+            guard CFEqual(node, f.root), !f.mutations.isEmpty else { return }
+            switch fault {
+            case "play_started": f.b.setAttribute(play, kAXValueAttribute as String, 1)
+            case "record_started": f.b.setAttribute(record, kAXValueAttribute as String, 1)
+            case "play_replaced":
+                let replacement = f.b.element(291_973)
+                f.b.setRole(replacement, kAXCheckBoxRole as String)
+                f.b.setAttribute(replacement, kAXDescriptionAttribute as String, "Play")
+                f.b.setAttribute(replacement, kAXValueAttribute as String, 0)
+                f.b.setChildren(replacement, [])
+                f.b.setChildren(bar, [replacement, record])
+            case "bar_reparented": f.b.setChildren(f.window, base.ax.children(f.window).filter { !CFEqual($0, bar) })
+            default: break
+            }
+        }
+        let ax = AXHelpers.Runtime(axApp: base.ax.axApp, attributeValue: base.ax.attributeValue,
+            attributeIsSettable: base.ax.attributeIsSettable, setAttributeValue: base.ax.setAttributeValue,
+            children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
+            actionNames: base.ax.actionNames, actionNamesResult: base.ax.actionNamesResult,
+            childrenResult: base.ax.childrenResult, attributeValueResult: base.ax.attributeValueResult,
+            performActionResult: base.ax.performActionResult, elementAtPosition: base.ax.elementAtPosition,
+            attributeValuesResult: { node, attributes in
+                // Measured native failure: the popup is readable individually,
+                // but the whole-window Role/Children batch returns AXFailure.
+                if CFEqual(node, f.root), attributes == [kAXRoleAttribute as String, kAXChildrenAttribute as String] {
+                    return .failure(.init(raw: AXError.failure.rawValue))
+                }
+                return .success(attributes.map { attribute in
+                    if attribute == kAXChildrenAttribute as String { return base.ax.children(node) as NSArray }
+                    return base.ax.attributeValue(node, attribute) ?? NSNull()
+                })
+            })
+        let runtime = AXLogicProElements.Runtime(logicProPID: base.logicProPID, ax: ax,
+            onScreenWindowList: base.onScreenWindowList, focusedApplicationPID: base.focusedApplicationPID)
+        let owner = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+            strip: f.strips[0], document: f.bundle.absoluteString)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true,
+            ownsGate: { gate.stillOwns(claim) && (fault != "gate_revoked" || f.mutations.isEmpty) })
+        let reading = await OperationTraceContext.$current.withValue(context) {
+            await AXMixerStripBinding.$current.withValue(owner) {
+                await AccessibilityChannel.getCheckedInputObservation(runtime: runtime, timing: .immediate)
+            }
+        }
+        if fault != "owned" {
+            #expect(reading.inputAssignment == nil)
+            #expect(reading.assignment == nil)
+            #expect(f.mutations.allSatisfy { $0.1 == kAXPressAction as String || $0.1 == kAXCancelAction as String })
+            if fault == "post_close_competing_bar" || fault == "late_transport" {
+                #expect(f.mutations.last?.1 == kAXCancelAction as String)
+            }
+            return
+        }
+        #expect(reading.inputAssignment == expected)
+        let body = try #require(sharedJSONObject(reading.result.message))
+        #expect(body["popup_menu_state"] as? String == "closed")
+        #expect(f.mutations.count == 2)
+        #expect(f.mutations.last?.1 == kAXCancelAction as String)
+    }
+
     @Test("A checked non-Bus menu cannot retain input facts after original source, document or label custody is lost",
           arguments: ["source", "document", "label"])
     func nonBusInputFactsRequireFinalSourceCustody(fault: String) async throws {
