@@ -1287,7 +1287,10 @@ struct Issue965HeldSelectionAssociationTests {
                 referenceIsCurrent: { true }, stoppingWhen: { !gate.stillOwns(claim) })
             #expect(recovered)
             #expect(held.effects.restoration == "restored")
-            #expect(held.effects.changed == ["mixer_scroll_to_output", "mixer_scroll_to_audio"])
+            #expect(Array(held.effects.changed.prefix(2)) == ["mixer_scroll_to_output", "mixer_scroll_to_audio"])
+            #expect(held.effects.changed.count == 2 || held.effects.changed == [
+                "mixer_scroll_to_output", "mixer_scroll_to_audio", "mixer_horizontal_viewport"])
+            #expect(held.observedMixerViewportGeometry()?.frames == geometry.frames)
             #expect(held.permitsRead())
         }
     }
@@ -1295,7 +1298,11 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("Scroll To actions renew native scope after deciding reads and clean up a failed opening",
           arguments: ["late_open", "late_leaf", "failed_open", "delayed_root", "native_container_parent",
                       "foreign_container_parent", "wrong_depth_parent", "missing_parent", "unread_parent", "late_competing_root",
-                      "native_english_outputs", "native_korean_outputs", "native_japanese_outputs", "singular_filter_output"])
+                      "native_english_outputs", "native_korean_outputs", "native_japanese_outputs", "singular_filter_output",
+                      "native_hidden_horizontal", "native_hidden_horizontal_vertical", "native_hidden_horizontal_foreign",
+                      "native_hidden_horizontal_boolean", "native_hidden_horizontal_ack_only", "native_hidden_horizontal_late_document",
+                      "native_hidden_horizontal_late_reference_project", "native_hidden_horizontal_late_reference_control",
+                      "native_hidden_horizontal_late_reference_value"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1306,6 +1313,7 @@ struct Issue965HeldSelectionAssociationTests {
             var foreignActions = 0
             var cancels = 0
             var leafPresses = 0
+            var viewportWrites = 0
             var rootAvailableAt: ContinuousClock.Instant?
         }
         func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false) async throws -> Probe {
@@ -1344,6 +1352,49 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setChildren(root, [scroll]); f.builder.setChildren(view, [])
             f.builder.setChildren(toolbar, [view]); f.builder.setChildren(controls, [toolbar])
             f.builder.setChildren(f.window, f.builder.makeAXRuntime().children(f.window) + [controls, foreignControls])
+            let nativeHorizontal = fault.hasPrefix("native_hidden_horizontal")
+            let horizontal = f.builder.element(1_975_510), thumb = f.builder.element(1_975_511)
+            if nativeHorizontal {
+                let owner = f.builder.element(1_975_512)
+                f.builder.setRole(owner, kAXGroupRole as String)
+                f.builder.setFrame(f.window, x: 0, y: 30, width: 1000, height: 800)
+                f.builder.setFrame(owner, x: 0, y: 300, width: 1000, height: 530)
+                f.builder.setFrame(f.mixer, x: 0, y: 300, width: 2000, height: 600)
+                f.builder.setChildren(owner, [f.mixer, controls])
+                f.builder.setChildren(f.window, [f.rail, owner, f.builder.element(1_965_720)])
+                f.builder.setRole(horizontal, kAXScrollBarRole as String)
+                f.builder.setAttribute(horizontal, kAXOrientationAttribute as String,
+                    fault.hasSuffix("_vertical") ? kAXVerticalOrientationValue as String : kAXHorizontalOrientationValue as String)
+                f.builder.setAttribute(horizontal, kAXWindowAttribute as String, f.window)
+                f.builder.setAttribute(horizontal, kAXParentAttribute as String, fault.hasSuffix("_foreign") ? foreignControls : owner)
+                f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.25))
+                f.builder.setAttributeSettable(horizontal, kAXValueAttribute as String, true)
+                f.builder.setFrame(horizontal, x: 0, y: 813, width: 1000, height: 17)
+                f.builder.setRole(thumb, kAXValueIndicatorRole as String)
+                f.builder.setAttribute(thumb, kAXWindowAttribute as String, f.window)
+                f.builder.setFrame(thumb, x: 75, y: 814, width: 700, height: 15)
+                f.builder.setChildren(horizontal, [thumb]); f.builder.setChildren(thumb, [])
+                // Like the observed native bar, its owner omits it from AXChildren.
+                f.routingFocusHit = { _, _ in .success(thumb) }
+                for (index, strip) in f.strips.enumerated() {
+                    f.builder.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                }
+                f.routingSetter = { element, attribute, value in
+                    guard CFEqual(element, horizontal), attribute == kAXValueAttribute as String,
+                          let number = value as? NSNumber else { return nil }
+                    probe.viewportWrites += 1
+                    if f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String == "file:///tmp/Foreign.logicx" {
+                        probe.foreignActions += 1
+                    }
+                    if fault.hasSuffix("_ack_only") { return true }
+                    f.builder.setAttribute(horizontal, attribute, number)
+                    f.builder.setFrame(thumb, x: 75, y: 814, width: 700, height: 15)
+                    for (index, strip) in f.strips.enumerated() {
+                        f.builder.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                    }
+                    return true
+                }
+            }
             let claim = try #require(gate.tryAcquire(operation: "scroll-to-readback"))
             defer { gate.release(claim) }
             let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
@@ -1352,6 +1403,16 @@ struct Issue965HeldSelectionAssociationTests {
                     logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
                 let geometry = try #require(held.observedMixerViewportGeometry())
                 f.routingReadResult = { element, attribute in
+                    if nativeHorizontal, CFEqual(element, horizontal), attribute == kAXValueAttribute as String {
+                        if probe.leafPresses == 2, fault.hasSuffix("_late_document") {
+                            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            probe.injected = true
+                        }
+                        if probe.leafPresses == 2, fault.hasSuffix("_boolean") { return .success(NSNumber(value: false)) }
+                        // Preserve native numeric zero; the generic fixture's
+                        // convenience bridge otherwise coerces NSNumber(0) to Bool.
+                        return .success(f.builder.attributeValue(horizontal, attribute) as? NSNumber)
+                    }
                     if fault == "unread_parent", CFEqual(element, root), attribute == kAXParentAttribute as String {
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
                     }
@@ -1406,12 +1467,31 @@ struct Issue965HeldSelectionAssociationTests {
                     if CFEqual(element, output) || CFEqual(element, audio), action == kAXPressAction as String {
                         probe.leafPresses += 1
                         if probe.firstLeafChildrenRead == nil { probe.firstLeafChildrenRead = probe.viewChildrenReads }
+                        if nativeHorizontal, CFEqual(element, audio) {
+                            f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0))
+                            f.builder.setFrame(thumb, x: 0, y: 814, width: 700, height: 15)
+                            for (index, strip) in f.strips.enumerated() {
+                                f.builder.setFrame(strip, x: CGFloat(index) * 100, y: 350, width: 100, height: 300)
+                            }
+                        }
                         f.builder.setChildren(view, []); return true
                     }
                     return false
                 }
                 let recovered = await held.recoverMixerReadability(restoring: geometry,
-                    referenceIsCurrent: { true }, stoppingWhen: { false })
+                    referenceIsCurrent: {
+                        if probe.leafPresses == 2, fault.contains("_late_reference_"), !probe.injected {
+                            probe.injected = true
+                            if fault.hasSuffix("_project") {
+                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            } else if fault.hasSuffix("_control") {
+                                f.builder.setAttribute(horizontal, kAXParentAttribute as String, foreignControls)
+                            } else {
+                                f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.5))
+                            }
+                        }
+                        return true
+                    }, stoppingWhen: { false })
                 if parentFault != nil || childrenFault != nil {
                     #expect(probe.injected, "Reach the actual last deciding native path/menu read")
                     #expect(probe.foreignActions == 0, "No opening, leaf or cleanup action in a foreign document")
@@ -1424,7 +1504,19 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(!recovered)
                     #expect(probe.cancels == 1)
                     #expect(f.builder.makeAXRuntime().children(view).isEmpty)
-                } else { #expect(recovered) }
+                } else if nativeHorizontal && fault != "native_hidden_horizontal" {
+                    #expect(!recovered)
+                    #expect(probe.viewportWrites == (fault.hasSuffix("_ack_only") ? 1 : 0))
+                    #expect(probe.foreignActions == 0)
+                    if fault.hasSuffix("_late_document") || fault.contains("_late_reference_") { #expect(probe.injected) }
+                } else {
+                    #expect(recovered)
+                    if nativeHorizontal {
+                        #expect(probe.leafPresses == 2 && probe.viewportWrites == 1)
+                        #expect((f.builder.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25)
+                        #expect(held.observedMixerViewportGeometry()?.frames == geometry.frames)
+                    }
+                }
             }
             return probe
         }
