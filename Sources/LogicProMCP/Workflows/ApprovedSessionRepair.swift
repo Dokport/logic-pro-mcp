@@ -76,6 +76,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let before: OutputAssignment
         let desired: OutputAssignment?
         let footprint: [SendSlotObservation]
+        let capture: SessionPopulationObservation.Capture
         let goalID: String
         let handle: String
     }
@@ -441,6 +442,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
     }
 
+    private static func capturedExistingSendBusChange(before: OutputAssignment, desired: OutputAssignment?,
+        source: SessionPopulationObservation.Capture, sourceIndex: Int) -> Bool {
+        guard case .bus(let original) = before, case .bus(let requested)? = desired,
+              original != requested, OutputAssignment.busNumbers.contains(original),
+              OutputAssignment.busNumbers.contains(requested) else { return false }
+        return capturedExistingBusPrerequisites(original, source: source, sourceIndex: sourceIndex)
+            && capturedExistingBusPrerequisites(requested, source: source, sourceIndex: sourceIndex)
+    }
+
     /// Removal and typed local output endpoints need no receiver allocation. The ordinal
     /// selects this capture's original native control, which execution must still prove current.
     private static func capturedSend(policy: ProjectSessionAudit.IntentPolicy,
@@ -475,9 +485,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let desired = intent.localOutput ?? intent.bus.map(OutputAssignment.bus)
         guard rows.count == 1, let row = rows.first, let mixerRef = source.mixerReference(at: row),
               checked.count == 1, let reading = checked.first,
-              // A Bus intent enters only the existing read-only matching-goal path.
-              // No Bus mutation, allocation, mixed input or preliminary naming is admitted.
-              intent.bus == nil || (names.isEmpty && policy.inputs.isEmpty && reading.assignment == desired),
+              // A changed Bus goal remains one Send-only task, with positive existing
+              // receiver prerequisites for both its forward and owned return destinations.
+              intent.bus == nil || (names.isEmpty && policy.inputs.isEmpty
+                && (reading.assignment == desired || capturedExistingSendBusChange(before: reading.assignment,
+                    desired: desired, source: source, sourceIndex: row))),
               desired.map({ reading.assignment == $0 || AccessibilityChannel.supportsOccupiedSendChange(before: reading.assignment, after: $0) })
                 ?? (intent.isRemoval && reading.assignment == .stereoOutput),
               reading.sendNonRoutingChecks == ["Post Fader"] || reading.sendNonRoutingChecks == ["포스트 페이더"],
@@ -497,7 +509,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         return .init(reference: target.trackRef, mixerRef: mixerRef, pair: pair,
             control: control, ordinal: ordinal, before: reading.assignment, desired: desired,
-            footprint: slots, goalID: "send.target.\(intent.target).\(intent.selectorID)", handle: target.handle)
+            footprint: slots, capture: source, goalID: "send.target.\(intent.target).\(intent.selectorID)", handle: target.handle)
     }
 
     static func capturedMatchingSendID(policy: ProjectSessionAudit.IntentPolicy,
@@ -1136,6 +1148,91 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               supports(step), plan.canonicalPlanID != nil,
               plan.canonicalDigest != nil else { return nil }
         return (task.pair, task.control)
+    }
+
+    /// A caption admits only a candidate. Both Bus endpoints and the source's
+    /// loop-safety input must be independently checked before either route press.
+    /// These existing read-only acquisitions may not replace the owned Send.
+    func sendBusInputsCurrent(at pair: AccessibilityChannel.HeldSelectionAssociation.Pair,
+        control: AXLogicProElements.AssignedSendMenuControl) async -> Bool {
+        guard let task = sendTask, case .bus(let before) = task.before,
+              case .bus(let after)? = task.desired, before != after else { return true }
+        guard await projectIsCurrent(allowPendingCancellation: true), pair.track.matches(task.pair.track),
+              let proof = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
+                logic: pair.track.runtime, expectedProject: nil, requiresProjectReference: false,
+                allowsSelectedChildRailEntry: true),
+              CFEqual(proof.headers[proof.originalIndex], pair.track.header),
+              CFEqual(proof.mixer, pair.strip.mixer), proof.document.utf8.elementsEqual(document.utf8),
+              proof.permitsRead() else { return false }
+        let runtime = pair.track.runtime
+        @Sendable func sourceCurrent() -> Bool {
+            guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  pair.track.currentIndex() != nil, pair.strip.currentIndex(runtime: runtime) != nil,
+                  let current = AXLogicProElements.assignedSendMenuControl(in: pair.strip.strip,
+                    ordinal: task.ordinal, runtime: runtime.ax), control.matches(current),
+                  let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer,
+                    runtime: runtime.ax)?.strips, census.count == task.capture.channelStrips.count,
+                  zip(census, task.capture.channelStrips).allSatisfy({ current, captured in
+                    guard let owner = captured.physicalBinding else { return false }
+                    return CFEqual(current, owner.matches(task.pair.strip) ? pair.strip.strip : owner.strip)
+                  }) else { return false }
+            return proof.permitsRead()
+        }
+        let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+        return await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: {
+            !inputFocus.permits() && !proof.permitsRead()
+        }), operation: { [self] in
+            guard sourceCurrent(), let capturedSource = task.capture.channelStrips.first(where: {
+                $0.physicalBinding?.matches(task.pair.strip) == true
+            }), let own = capturedSource.inputObservation else { return false }
+            switch own.state {
+            case .unreadable: return false
+            case .noSlot:
+                guard AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax).reading == .noSlot else { return false }
+            case .observedSource:
+                let held = task.capture.freshPopulation?.checkedInputs.filter { $0.receiver.matches(task.pair.strip) } ?? []
+                guard held.count == 1, let expected = held.first?.assignment, case .physical = expected,
+                      let original = capturedSource.inputSlotBinding else { return false }
+                let slot = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
+                guard case .source(let label) = slot.reading, let nativeControl = slot.control,
+                      label.utf8.elementsEqual(original.source.utf8),
+                      !pair.strip.matches(task.pair.strip) || CFEqual(nativeControl, original.control) else { return false }
+                let current = AXMixerInputSlotBinding(owner: pair.strip, control: nativeControl, source: label)
+                let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
+                    await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                        await AccessibilityChannel.getCheckedInputObservation(runtime: runtime,
+                            observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
+                            observingRenewedFocus: { inputFocus.retainAssociation($0) })
+                    }
+                }
+                guard read.inputAssignment == expected, read.inputSlot?.matches(current) == true,
+                      read.inputRenewal == nil, sourceCurrent() else { return false }
+            }
+            for bus in [before, after] {
+                var checked = false
+                for receiver in task.capture.channelStrips {
+                    guard let slot = receiver.inputSlotBinding, !slot.owner.matches(task.pair.strip),
+                          RoutingGraphPublication.classifyOutputLabel(slot.source).0 == .bus,
+                          RoutingGraphPublication.classifyOutputLabel(slot.source).1 == bus else { continue }
+                    guard sourceCurrent(), slot.owner.currentIndex(runtime: runtime) != nil else { return false }
+                    let read = await AXMixerStripBinding.$current.withValue(slot.owner) {
+                        await AXMixerStripBinding.$outputAssociation.withValue(nil) {
+                            await AccessibilityChannel.getInputBusObservation(runtime: runtime,
+                                requiringOriginalInputControl: slot,
+                                observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
+                                observingRenewedFocus: { inputFocus.retainAssociation($0) })
+                        }
+                    }
+                    guard read.assignment == .bus(bus), read.inputSlot?.matches(slot) == true,
+                          read.inputRenewal == nil, sourceCurrent() else { return false }
+                    checked = true
+                    break
+                }
+                guard checked else { return false }
+            }
+            guard sourceCurrent() else { return false }
+            return await projectIsCurrent(allowPendingCancellation: true)
+        })
     }
 
     /// Carry only this plan's independently observed Send effect through the

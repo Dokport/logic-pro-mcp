@@ -34,14 +34,23 @@ extension AccessibilityChannel {
                     return result
                 }
             }
-            guard source.permits(runtime: runtime, ownedPopup: ownedPopup),
-                  let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
-                    ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
-                  let slots = AXLogicProElements.sendSlotObservations(in: source.pair.strip.strip, runtime: runtime.ax),
-                  protected(slots) == protected(footprint),
-                  let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
-                  zip(census, population).allSatisfy({ CFEqual($0, $1) }) else { return false }
-            return source.permits(runtime: runtime, ownedPopup: ownedPopup)
+            // Role/Children samples inside the control scan can observe scope
+            // loss. Its later bookend cannot authorize intervening Help reads.
+            let outer = AXHelpers.HelpReadGuard.current
+            return AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: {
+                outer?.permits() == false || !(ownedPopup.map {
+                    source.observation.permitsOwnedPopupRead($0)
+                } ?? source.observation.permitsRead())
+            })) {
+                guard source.permits(runtime: runtime, ownedPopup: ownedPopup),
+                      let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
+                        ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
+                      let slots = AXLogicProElements.sendSlotObservations(in: source.pair.strip.strip, runtime: runtime.ax),
+                      protected(slots) == protected(footprint),
+                      let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
+                      zip(census, population).allSatisfy({ CFEqual($0, $1) }) else { return false }
+                return source.permits(runtime: runtime, ownedPopup: ownedPopup)
+            }
         }
     }
 

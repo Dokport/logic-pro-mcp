@@ -373,7 +373,9 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 self.creationRemoval = result.removedSend
                 response = toolTextResult(result.result)
             } else if let changed = self.change {
-                guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime) else {
+                guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime),
+                      await self.approved?.sendBusInputsCurrent(at: changed.source.pair, control: changed.control) != false,
+                      changed.permits(runtime: held.track.runtime) else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
                 }
                 self.inverseConsumed = true
@@ -395,6 +397,10 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 if let approved = self.approved, approved.hasMatchingNameGoals,
                    await approved.nameGoalEvidence(afterExecution: true) == nil {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Approved name changed before Send")
+                }
+                if let approved = self.approved, let control = self.capturedControl,
+                   !(await approved.sendBusInputsCurrent(at: held, control: control)) {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Checked Bus input prerequisites changed before Send")
                 }
                 self.attempted = true
                 let nameCheck: (@Sendable (AXMixerStripBinding.Binding) -> Bool)?

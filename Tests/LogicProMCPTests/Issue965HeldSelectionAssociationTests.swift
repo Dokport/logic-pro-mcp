@@ -515,6 +515,9 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDocumentReadsAtFirstNameWrite: Int?
         var routingDocumentReadsAtFirstNameConfirm: Int?
         var routingDestinationPresses = 0
+        var routingBusLeafPresses: [Int] = []
+        var routingChangedSendPublished = false
+        var routingForeignHelpReads = 0
         var scrollToChangedOutput = false
         var scrollToViewportDriftEnabled = false
         var scrollToViewportShifted = false
@@ -4674,6 +4677,54 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: ["forward", "cancel"])
+    func canonicalExistingBusSendUsesItsQualifiedReceiversAndOwnedInverse(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true,
+                canonicalBusChange: true)
+        }
+    }
+
+    @Test(arguments: ["missing_before", "missing_after"])
+    func canonicalExistingBusSendRequiresBothReturnAndForwardReceivers(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "missing_receiver", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusReceiverFault: fault)
+        }
+    }
+
+    @Test(arguments: ["checked_before_at_capture", "checked_after_at_capture",
+                      "checked_before_after_preview", "checked_after_after_preview",
+                      "checked_before_after_forward", "checked_source_after_preview",
+                      "checked_source_after_forward"])
+    func canonicalExistingBusSendChecksReceiverMenusRatherThanCaptions(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: fault.hasSuffix("after_forward") ? "cancel" : "forward",
+                canonicalBus: true, canonicalBusChange: true, canonicalBusReceiverFault: fault)
+        }
+    }
+
+    @Test(arguments: ["forward", "cancel"])
+    func canonicalExistingBusSendRetainsItsCheckedPhysicalSourceInput(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source")
+        }
+    }
+
+    @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8])
+    func canonicalExistingBusSendRenewsHelpCustodyDuringInverseControlScan(roleSample: Int) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "checked_inverse_help", inverseHelpRole: roleSample)
+        }
+    }
+
     @Test("A different Bus Send goal does not gain write authority from matching-goal support")
     func canonicalMatchingBusSendCannotAdmitAnotherBus() async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -4702,6 +4753,9 @@ struct Issue965HeldSelectionAssociationTests {
                                                canonicalSend: String? = nil,
                                                canonicalPhysical: Bool = false,
                                                canonicalBus: Bool = false,
+                                               canonicalBusChange: Bool = false,
+                                               canonicalBusReceiverFault: String? = nil,
+                                               inverseHelpRole: Int = 1,
                                                canonicalName: Bool = false,
                                                stableDestinationControls: Bool = false,
                                                stableDestinationBulkReads: Bool = false,
@@ -5413,6 +5467,137 @@ struct Issue965HeldSelectionAssociationTests {
                 else { return nil }
                 return .failure(.init(raw: AXError.invalidUIElement.rawValue))
             }
+            if canonicalBusChange {
+                let receiver = b.element(1_971_500), receiverName = b.element(1_971_501)
+                let input = b.element(1_971_502), busTwo = b.element(1_971_503)
+                b.setRole(receiver, kAXLayoutItemRole as String)
+                b.setAttribute(receiver, kAXNumberOfCharactersAttribute as String, 0)
+                b.setAttribute(receiver, kAXInsertionPointLineNumberAttribute as String, 0)
+                b.setRole(receiverName, kAXTextFieldRole as String)
+                b.setAttribute(receiverName, kAXDescriptionAttribute as String, "Name")
+                b.setAttribute(receiverName, kAXValueAttribute as String, "Existing Bus 2")
+                b.setChildren(receiverName, [])
+                b.setButton(input, description: canonicalBusReceiverFault == "missing_after" ? "Bus 3" : "Bus 2",
+                    help: "Input slot. Choose the channel strip input source.",
+                    x: 0, y: 0, width: 1, height: 1)
+                b.setChildren(input, [])
+                b.setChildren(receiver, [receiverName, input])
+                let inputRoot = b.element(1_971_510), inputEcho = b.element(1_971_511)
+                let inputBusParent = b.element(1_971_512), inputBusMenu = b.element(1_971_513)
+                let inputBuses = (1...3).map { b.element(1_971_513 + $0) }
+                let sourceInput = b.element(1_971_517), physicalParent = b.element(1_971_518)
+                let physicalMenu = b.element(1_971_519), physicalLeaf = b.element(1_971_520)
+                if canonicalBusReceiverFault?.contains("source") == true {
+                    b.setButton(sourceInput, description: "Input 1",
+                        help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 1, height: 1)
+                    b.setChildren(sourceInput, []); b.setActionNames(sourceInput, [kAXPressAction as String])
+                    b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [sourceInput])
+                    b.setRole(physicalParent, kAXMenuItemRole as String)
+                    b.setAttribute(physicalParent, kAXTitleAttribute as String, "Input")
+                    b.setRole(physicalMenu, kAXMenuRole as String)
+                    b.setRole(physicalLeaf, kAXMenuItemRole as String)
+                    b.setAttribute(physicalLeaf, kAXTitleAttribute as String, "Input 1")
+                    b.setChildren(physicalLeaf, []); b.setChildren(physicalMenu, [physicalLeaf])
+                    b.setChildren(physicalParent, [physicalMenu])
+                }
+                for node in [inputRoot, inputBusMenu] { b.setRole(node, kAXMenuRole as String) }
+                b.setRole(inputBusParent, kAXMenuItemRole as String)
+                b.setAttribute(inputBusParent, kAXTitleAttribute as String, "Bus")
+                b.setChildren(inputBusParent, [inputBusMenu]); b.setChildren(inputBusMenu, inputBuses)
+                b.setRole(inputEcho, kAXMenuItemRole as String); b.setChildren(inputEcho, [])
+                b.setAttribute(inputEcho, "AXMenuItemMarkChar", "✓")
+                for (offset, leaf) in inputBuses.enumerated() {
+                    b.setRole(leaf, kAXMenuItemRole as String)
+                    b.setAttribute(leaf, kAXTitleAttribute as String, "Bus \(offset + 1)")
+                    b.setChildren(leaf, [])
+                }
+                b.setActionNames(inputRoot, [kAXCancelAction as String])
+                for slot in [input, b.element(1_965_2680)] {
+                    b.setActionNames(slot, [kAXPressAction as String])
+                }
+                b.setRole(busTwo, kAXMenuItemRole as String)
+                b.setAttribute(busTwo, kAXTitleAttribute as String, "Bus 2 → Existing")
+                b.setAttribute(busTwo, kAXEnabledAttribute as String, true)
+                b.setAttribute(busTwo, "AXMenuItemMarkChar", "")
+                b.setChildren(busTwo, []); b.setActionNames(busTwo, [kAXPressAction as String])
+                b.setChildren(b.element(1_965_2682), [destination, busTwo])
+                b.setChildren(f.mixer, f.strips + [receiver])
+                if canonicalBusReceiverFault == "missing_before" {
+                    b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]).filter {
+                        !CFEqual($0, b.element(1_965_2680))
+                    })
+                }
+                let originalAction = try #require(f.routingAction)
+                let originalRead = f.routingRead
+                if canonicalBusReceiverFault == "checked_inverse_help" {
+                    f.routingRead = { element, attribute in
+                        originalRead?(element, attribute)
+                        if f.routingChangedSendPublished, !f.routingLateScopeInjected,
+                           CFEqual(element, renewedSend[1]), attribute == kAXRoleAttribute as String {
+                            f.routingClassifierHelpReads += 1
+                            if f.routingClassifierHelpReads == inverseHelpRole {
+                                f.routingLateScopeInjected = true
+                                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            }
+                        }
+                        if f.routingLateScopeInjected, attribute == kAXHelpAttribute as String {
+                            f.routingForeignHelpReads += 1
+                        }
+                    }
+                }
+                f.routingAction = { element, action in
+                    if action == kAXPressAction as String,
+                       CFEqual(element, input) || CFEqual(element, b.element(1_965_2680)) || CFEqual(element, sourceInput) {
+                        let ownInput = CFEqual(element, sourceInput)
+                        let bus = CFEqual(element, input) ? 2 : 1
+                        let appliesToReceiver = canonicalBusReceiverFault?.hasPrefix(ownInput ? "checked_source_"
+                            : bus == 1 ? "checked_before_" : "checked_after_") == true
+                        let contradicted = appliesToReceiver && (canonicalBusReceiverFault?.hasSuffix("at_capture") == true
+                            || f.routingLateScopeInjected
+                            || (canonicalBusReceiverFault?.hasSuffix("after_forward") == true && f.routingDestinationPresses > 0))
+                        // The original caption and native owner stay unchanged. Only the actual
+                        // checked input differs, which a caption-only guard cannot observe.
+                        b.setAttribute(inputEcho, kAXTitleAttribute as String, ownInput ? "Input 1" : "Bus \(bus)")
+                        for (offset, leaf) in inputBuses.enumerated() {
+                            let checked = ownInput ? (contradicted ? 2 : 0) : (contradicted ? 3 : bus)
+                            b.setAttribute(leaf, "AXMenuItemMarkChar", offset + 1 == checked ? "✓" : "")
+                        }
+                        if ownInput { b.setAttribute(physicalLeaf, "AXMenuItemMarkChar", contradicted ? "" : "✓") }
+                        b.setChildren(inputRoot, [inputEcho] + (ownInput ? [physicalParent] : []) + [inputBusParent])
+                        let rows = b.makeAXRuntime().children(f.mixer)
+                        b.setChildren(f.mixer, rows + [inputRoot]); f.inputMenuPresses += 1
+                        return true
+                    }
+                    if CFEqual(element, inputRoot), action == kAXCancelAction as String {
+                        b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, inputRoot) })
+                        return true
+                    }
+                    let forward = CFEqual(element, busTwo) && action == kAXPressAction as String
+                    let inverse = CFEqual(element, destination) && action == kAXPressAction as String
+                    if forward || inverse { f.routingBusLeafPresses.append(forward ? 2 : 1) }
+                    // Reuse the source redraw model while retaining this untouched receiver.
+                    let acknowledged = originalAction(forward ? destination : inverse ? stereo : element, action)
+                    if canonicalBusReceiverFault?.contains("source") == true {
+                        let currentSource = f.routingReplacement ?? f.strips[1]
+                        let currentChildren = b.makeAXRuntime().children(currentSource)
+                        if !currentChildren.contains(where: { CFEqual($0, sourceInput) }) {
+                            b.setChildren(currentSource, currentChildren + [sourceInput])
+                        }
+                    }
+                    if forward || inverse {
+                        b.setAttribute(echo, kAXTitleAttribute as String, forward ? "Bus 2 → Existing" : "Bus 1 → Existing")
+                        b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        b.setAttribute(destination, "AXMenuItemMarkChar", forward ? "" : "✓")
+                        b.setAttribute(busTwo, "AXMenuItemMarkChar", forward ? "✓" : "")
+                    }
+                    let children = b.makeAXRuntime().children(f.mixer)
+                    if !children.contains(where: { CFEqual($0, receiver) }) {
+                        b.setChildren(f.mixer, children + [receiver])
+                    }
+                    return acknowledged
+                }
+            }
             let before = try await inspect(f, cache: cache, registry: registry,
                 domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"])
             if ["changed_control", "typed_mode_changed_control"].contains(inspectSendWitness ?? ""), before["snapshot_id"] == nil {
@@ -5438,6 +5623,13 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(checked.first?.assignment == .bus(1))
                 #expect(checked.first?.sendNonRoutingChecks == ["Post Fader"])
                 #expect(checked.first?.sendControl != nil)
+                if canonicalBusChange {
+                    let receiver = try #require(capture.channelStrips.first {
+                        $0.physicalBinding.map { CFEqual($0.strip, b.element(1_971_500)) } == true
+                    })
+                    #expect(receiver.inputObservation?.source == (canonicalBusReceiverFault == "missing_after" ? "Bus 3" : "Bus 2"))
+                    #expect(receiver.inputSlotBinding != nil)
+                }
             }
             if let canonicalSend {
                 let router = ChannelRouter(), gate = LogicMutationGate()
@@ -5471,7 +5663,7 @@ struct Issue965HeldSelectionAssociationTests {
                 var sendIntent: [String: Value] = ["target": .string("source"),
                     canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1)]
                 if canonicalBus {
-                    sendIntent["bus"] = .int(canonicalSend == "nonmatching_bus" ? 2 : 1)
+                    sendIntent["bus"] = .int(canonicalBusChange || canonicalSend == "nonmatching_bus" ? 2 : 1)
                 } else if canonicalPhysical {
                     sendIntent["output"] = (canonicalMatching ? !freshPhysicalReturn : freshPhysicalReturn && canonicalSend != "unsupported_pair") ? .object(["kind": .string("stereo_output")])
                         : .object(["kind": .string("physical"), "ports": .array(canonicalSend == "unsupported_pair" ? [.int(1), .int(2)] : [.int(3), .int(4)])])
@@ -5525,6 +5717,13 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 let plannedText = sharedToolText(await planHandler(dependencies, planArguments))
                 let planned = try #require(sharedJSONObject(plannedText))
+                if canonicalBusReceiverFault?.hasPrefix("missing_") == true {
+                    let executable = try #require(planned["executable"] as? Bool)
+                    #expect(!executable)
+                    #expect(f.routingDestinationPresses == 0)
+                    #expect(f.routingBusLeafPresses.isEmpty)
+                    return
+                }
                 if ["physical_slot", "mixed", "unsupported_pair", "physical_removal", "nonmatching_bus"].contains(canonicalSend) {
                     let executable = try #require(planned["executable"] as? Bool)
                     #expect(!executable)
@@ -5711,7 +5910,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(!gate.isHeldByEntitledHolder())
                     return
                 }
-                #expect(preview.count == 1 && preview[0]["kind"] as? String == (canonicalPhysical ? "local_send_output" : "local_send_removal"))
+                #expect(preview.count == 1 && preview[0]["kind"] as? String == (canonicalPhysical || canonicalBusChange ? "local_send_output" : "local_send_removal"))
                 #expect(preview[0]["observed_ordinal"] as? Int == 1 && preview[0]["physical_slot"] == nil)
                 if canonicalPhysical {
                     let before = try #require(preview[0]["before"] as? [String: Any])
@@ -5736,12 +5935,39 @@ struct Issue965HeldSelectionAssociationTests {
                 if canonicalSend == "wrong_project" {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 }
+                if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
                 let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let arguments: [String: Value] = ["plan_id": .string(planID),
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
                     "confirmed": .bool(true), "idempotency_key": .string(key)]
-                let result = await apply(dependencies, arguments)
+                let result: CallTool.Result
+                if canonicalBusReceiverFault == "checked_inverse_help" {
+                    result = await AccessibilityChannel.$sendChangeObserver.withValue({ _ in
+                        f.routingChangedSendPublished = true
+                    }) { await apply(dependencies, arguments) }
+                } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if canonicalBusReceiverFault == "checked_inverse_help" {
+                    #expect(f.routingChangedSendPublished)
+                    #expect(f.routingLateScopeInjected, "Reach the actual post-effect Send control Role read")
+                    #expect(f.routingForeignHelpReads == 0, "A later scope refusal cannot excuse foreign-scope Help reads")
+                    #expect(f.routingBusLeafPresses == [2])
+                    #expect(body["saga_state"] as? String != "fullyCompensated")
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
+                }
+                if canonicalBusReceiverFault?.hasPrefix("checked_") == true {
+                    if canonicalBusReceiverFault?.hasSuffix("after_forward") == true {
+                        #expect(f.routingBusLeafPresses == [2], "An invalid original receiver must prevent the owned inverse")
+                        #expect(body["saga_state"] as? String != "fullyCompensated")
+                    } else {
+                        #expect(body["state"] as? String == "C", "Actual refusal: \(sharedToolText(result))")
+                        #expect(f.routingBusLeafPresses.isEmpty, "No routing leaf may run from a misleading receiver caption")
+                        #expect(f.routingDestinationPresses == 0)
+                    }
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
+                }
                 if ["replacement", "late_replacement", "wrong_digest", "wrong_project"].contains(canonicalSend) {
                     #expect(body["state"] as? String == "C", "Actual refusal: \(sharedToolText(result))")
                     #expect(f.routingDestinationPresses == 0)
@@ -5753,6 +5979,19 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(body["saga_state"] as? String == (canonicalSend == "cancel" ? "fullyCompensated" : "completed"),
                         "Actual apply: \(sharedToolText(result))")
                     #expect(f.routingDestinationPresses == (canonicalSend == "cancel" ? 2 : 1))
+                    if canonicalBusChange {
+                        #expect(f.routingBusLeafPresses == (canonicalSend == "cancel" ? [2, 1] : [2]))
+                        let steps = try #require(body["steps"] as? [[String: Any]])
+                        let evidence = try #require(steps.first?["evidence"] as? [String: Any])
+                        let verification = try #require(evidence["verification"] as? [String: Any])
+                        let readback = try #require(verification["readback"] as? [String: Any])
+                        #expect(readback["observed"] as? String == OutputAssignment.bus(2).token)
+                        if canonicalSend == "cancel" {
+                            let compensation = try #require(steps.first?["compensation"] as? [String: Any])
+                            let restored = try #require(compensation["readback"] as? [String: Any])
+                            #expect(restored["observed"] as? String == OutputAssignment.bus(1).token)
+                        }
+                    }
                     if canonicalPhysical {
                         let steps = try #require(body["steps"] as? [[String: Any]])
                         let evidence = try #require(steps[0]["evidence"] as? [String: Any])
