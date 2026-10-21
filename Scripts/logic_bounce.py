@@ -3,10 +3,10 @@
 
 Logic exposes no AppleScript bounce verb and its save panel's filename field is not
 Accessibility-exposed, so this drives the dialog with native CGEvent posts. Coordinates
-are computed from the save-panel window frame (AX-readable) for portability. The bounce
-is written to a staging folder (a sidebar Favorite, default Downloads) and moved to the
-requested output_dir afterwards, because Cmd+Shift+G "Go to Folder" cannot be confirmed
-via automation.
+are computed from the save-panel window frame (AX-readable). The legacy sidebar click
+can select different Favorites on different hosts. Recover only this run's uniquely
+named fresh artifact from a bounded set of known folders, then move it to output_dir;
+finding the artifact does not verify the sidebar selection itself.
 
 CRITICAL: the input source MUST be ABC before typing or a Korean IME mangles the name.
 
@@ -31,6 +31,7 @@ from logic_bounce_ui import (
     OSA_TIMEOUT_SEC,
     bounce_dialog_present,
     bounce_focus_diagnostics,
+    bounce_project_identity,
     bounce_settings_present,
     click_bounce_settings_confirm,
     open_bounce_dialog,
@@ -40,6 +41,10 @@ from logic_bounce_ui import (
 )
 
 _select_input_source = select_input_source
+# Leave time to report a truthful result before the executor's 300-second timeout.
+BOUNCE_HELPER_BUDGET_SECONDS = 280.0
+# Match the executor's eligible audio suffixes, never Logic's in-flight .tmp.
+BOUNCE_AUDIO_SUFFIXES = {".wav", ".wave", ".aif", ".aiff", ".aifc", ".m4a", ".mp3"}
 
 
 def unique_staging_name(name: str) -> str:
@@ -60,10 +65,14 @@ def fresh_staged_file(path: str, staging_dir: str, min_mtime: float) -> bool:
 
 def find_staged_artifact(staging_dir: str, staged_name: str, min_mtime: float) -> Optional[str]:
     scored = []
-    for path in glob.glob(os.path.join(staging_dir, f"{staged_name}.*")):
+    for path in glob.glob(os.path.join(glob.escape(staging_dir), f"{glob.escape(staged_name)}.*")):
+        if os.path.splitext(path)[1].lower() not in BOUNCE_AUDIO_SUFFIXES:
+            continue
         if not fresh_staged_file(path, staging_dir, min_mtime):
             continue
         try:
+            if os.path.getsize(path) == 0:
+                continue
             scored.append((os.path.getmtime(path), path))
         except OSError:
             # Candidate vanished/renamed in the race window between the filter and
@@ -73,6 +82,21 @@ def find_staged_artifact(staging_dir: str, staged_name: str, min_mtime: float) -
             continue
     scored.sort(reverse=True)
     return scored[0][1] if scored else None
+
+
+def bounce_artifact_locations(staging_dir: str, output_dir: str) -> list[str]:
+    home_dir = os.path.expanduser("~")
+    candidates = [staging_dir]
+    candidates.extend(os.path.expanduser(path) for path in (
+        "~/Documents", "~/Desktop", "~/Music", "~/Movies", "~/Downloads",
+    ))
+    candidates.extend([home_dir, output_dir])
+    locations = []
+    for candidate in candidates:
+        canonical = os.path.realpath(os.path.abspath(candidate))
+        if canonical not in locations:
+            locations.append(canonical)
+    return locations
 
 
 def move_staged_artifact_no_overwrite(staged_path: str, final_path: str) -> Optional[str]:
@@ -148,6 +172,12 @@ def main() -> int:
 
     result = {"name": target_name, "output_dir": output_dir, "target_path": target_path}
     result["bounce_fired"] = False
+    helper_deadline = time.monotonic() + BOUNCE_HELPER_BUDGET_SECONDS
+    project_identity = bounce_project_identity()
+    if project_identity is None:
+        result["success"] = False
+        result["error"] = "bounce_project_window_unavailable"
+        print(json.dumps(result)); return 1
 
     # 1. deterministic input-source switch (avoid Korean IME mangling the filename)
     if not set_input_abc():
@@ -215,8 +245,8 @@ def main() -> int:
         print(json.dumps(result)); return 1
     time.sleep(0.4)
 
-    # 6. navigate to the staging Favorite (sidebar Downloads); go-to-folder is unusable.
-    # Sidebar is a fixed-width left column: Downloads row at frame +(86,184).
+    # 6. Legacy staging-Favorite click. Its row varies by host, so this click
+    # does not establish the destination; recovery below observes the actual file.
     downloads = (ox + 86, oy + 184)
     if not send_ui_events(f"c:{downloads[0]},{downloads[1]}"):
         result["success"] = False
@@ -230,6 +260,10 @@ def main() -> int:
     if os.path.exists(staged):
         os.remove(staged)
     bounce_btn = (ox + w - 60, oy + h - 32)
+    if time.monotonic() >= helper_deadline:
+        result["success"] = False
+        result["error"] = "bounce_helper_deadline_exhausted_before_write"
+        print(json.dumps(result)); return 1
     bounce_started_at = time.time()
     if not send_ui_events(f"c:{bounce_btn[0]},{bounce_btn[1]}"):
         result["success"] = False
@@ -237,20 +271,41 @@ def main() -> int:
         print(json.dumps(result)); return 1
     result["bounce_fired"] = True
 
-    # 8. poll the staging folder for the produced artifact. Use the
-    # extension-agnostic finder so any operator-configured Bounce format
-    # (WAV/CAF/MP3/AAC, not only AIFF) is detected as soon as it lands, instead
-    # of waiting out the full 25s budget before an .aif-only check fails over.
+    # 8. Find only this run's exact fresh name, non-recursively, in the known
+    # staging/user/output locations. Never select between conflicting locations.
+    # The single monotonic budget includes dialog setup, unlike a second full
+    # 300-second poll that the parent would kill before it could report.
     appeared = None
-    for _ in range(25):
-        appeared = find_staged_artifact(args.staging, staged_name, bounce_started_at)
-        if appeared:
+    pending_artifact = None
+    locations = bounce_artifact_locations(args.staging, output_dir)
+    while time.monotonic() < helper_deadline:
+        # A final suffix can already exist while Logic is still rendering it.
+        # Require the original saved project to return, then an unchanged file
+        # across two polls. Failed UI observations never mean completion.
+        observed_project = bounce_project_identity()
+        candidates = [path for directory in locations
+                      if (path := find_staged_artifact(directory, staged_name, bounce_started_at)) is not None]
+        if len(candidates) > 1:
+            result["success"] = False
+            result["error"] = "ambiguous_bounce_artifacts"
+            print(json.dumps(result)); return 1
+        signature = None
+        if candidates and observed_project == project_identity:
+            try:
+                info = os.stat(candidates[0], follow_symlinks=False)
+                signature = (candidates[0], info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+            except OSError:
+                pass
+        if signature is not None and signature == pending_artifact:
+            appeared = candidates[0]
             break
+        pending_artifact = signature
         time.sleep(1.0)
     if not appeared:
         result["success"] = False
-        result["error"] = "artifact_not_produced_in_staging"
+        result["error"] = "artifact_not_found_within_helper_budget"
         print(json.dumps(result)); return 1
+    result["staging_directory"] = os.path.dirname(appeared)
 
     # 9. move to the requested output_dir (locate-and-move)
     if os.path.lexists(output_dir):

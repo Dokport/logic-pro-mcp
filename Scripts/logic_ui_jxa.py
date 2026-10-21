@@ -13,6 +13,26 @@ from logic_variants import jxa_find_process_snippet
 JsonValue = Union[str, int, float, bool, None, List["JsonValue"], dict[str, "JsonValue"]]
 
 
+def bounce_project_snapshot_source() -> str:
+    find_process = jxa_find_process_snippet(se_binding="se", proc_var="proc")
+    return "\n".join([
+        'const se = Application("System Events");',
+        find_process,
+        'try {',
+        '  if (proc === null) throw new Error("logic_not_running");',
+        '  const windows = proc.windows();',
+        '  if (windows.length === 0) throw new Error("missing_front_window");',
+        '  const win = windows[0];',
+        '  JSON.stringify({status: "ok", process_id: proc.unixId(),',
+        '    role: win.role(), subrole: win.subrole(),',
+        '    document: win.attributes.byName("AXDocument").value(),',
+        '    sheet_count: win.sheets().length});',
+        '} catch (error) {',
+        '  JSON.stringify({status: "error", reason: String(error)});',
+        '}',
+    ])
+
+
 def save_panel_snapshot_source() -> str:
     find_process = jxa_find_process_snippet(se_binding="se", proc_var="proc")
     return "\n".join([

@@ -482,18 +482,24 @@ extension AccessibilityChannel {
     ///
     /// `titles.contains("Audio Units")` plus a hand-written `|| "유틸리티"` recognised this menu in
     /// two languages. Both labels go through AXLocalePolicy now: Audio Units is derived from
-    /// Apple's own data, Utility is measured because Apple ships no key for it. `Channel EQ` stays
-    /// a literal -- it is a plug-in NAME and Logic does not translate it in any locale.
+    /// Apple's own data, Utility is measured because Apple ships no key for it. Recent plug-in
+    /// names are history, not root-menu evidence. An independent built-in category comes from
+    /// the existing supported insert paths, excluding the short Recent shortcut paths.
     ///
     /// #993 -- a zh_TW Logic has no Audio Units item: its menu ends in one `音訊單元：<maker>` item
     /// per manufacturer (see `pluginMenuAudioUnitsManufacturerItem`), so either form is accepted.
     static func isAudioPluginRootMenu(titles: [String]) -> Bool {
-        titles.contains(where: {
+        let hasStockCategory = ["Compressor", "Channel EQ"].contains { name in
+            pluginInsertSpec(named: name)?.menuPaths.contains { path in
+                path.count > 2 && titles.contains(path[0])
+            } ?? false
+        }
+        return titles.contains(where: {
             AXLocalePolicy.pluginMenuAudioUnits.matches($0)
                 || AXLocalePolicy.pluginMenuAudioUnitsManufacturerItem.matches($0, mode: .prefix)
         })
             && titles.contains(where: { AXLocalePolicy.pluginMenuUtility.matches($0) })
-            && titles.contains("Channel EQ")
+            && hasStockCategory
     }
 
     private static func findAudioPluginRootMenu(

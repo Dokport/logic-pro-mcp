@@ -14,7 +14,7 @@ from logic_variants import (
     logic_process_osa_action_with_runner,
     logic_process_osa_with_runner,
 )
-from logic_ui_jxa import parse_jxa_json_result, run_jxa, save_panel_snapshot_source
+from logic_ui_jxa import bounce_project_snapshot_source, parse_jxa_json_result, run_jxa, save_panel_snapshot_source
 
 
 RunJxa = Callable[..., subprocess.CompletedProcess[str]]
@@ -339,6 +339,26 @@ def bounce_dialog_present(run_osa: RunOsa = osa) -> bool:
         if name
     )
     return any(keyword in hay for keyword in BOUNCE_DIALOG_KEYWORDS)
+
+
+def bounce_project_identity(run_jxa_fn: RunJxa = run_jxa) -> Optional[tuple[int, str]]:
+    """Positive saved-project observation; dialogs, sheets and failed reads stay unknown."""
+    try:
+        result = run_jxa_fn(bounce_project_snapshot_source())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    snapshot = parse_jxa_json_result(result)
+    pid = snapshot.get("process_id")
+    document = snapshot.get("document")
+    if (snapshot.get("status") != "ok" or snapshot.get("role") != "AXWindow"
+            or snapshot.get("subrole") != "AXStandardWindow"
+            or type(snapshot.get("sheet_count")) is not int or snapshot["sheet_count"] != 0
+            or type(pid) is not int or pid <= 0
+            or not isinstance(document, str) or not document.startswith("file:///")):
+        return None
+    return pid, document
 
 
 def _string_items(values) -> list[str]:
