@@ -180,6 +180,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     // The deciding before-read already checked this native pair under this
     // operation's gate. Inspection-cache eviction cannot erase that tether.
     @TaskLocal static var checkedSourcePair: AccessibilityChannel.HeldSelectionAssociation.Pair?
+    @TaskLocal static var checkedReadRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
     let forward: SagaStep
     private let capturedControl: AXLogicProElements.AssignedSendMenuControl?
     private let approved: ApprovedSessionRepair?
@@ -358,7 +359,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
 
     func run(_ step: SagaStep, router: ChannelRouter, cache: StateCache, registry: TargetRegistry) async -> StepResult {
         await scope {
-            guard FeatureFlags.adr002TargetRef, self.supports(step), let held = self.pair,
+            guard FeatureFlags.adr002TargetRef, self.supports(step), var held = self.pair,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                 return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Native removal custody unavailable")
             }
@@ -373,9 +374,16 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 self.creationRemoval = result.removedSend
                 response = toolTextResult(result.result)
             } else if let changed = self.change {
-                guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime),
-                      await self.approved?.sendBusInputsCurrent(at: changed.source.pair, control: changed.control) != false,
-                      changed.permits(runtime: held.track.runtime) else {
+                guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime) else {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
+                }
+                if let approved = self.approved {
+                    guard let custody = await approved.sendBusInputsCurrent(at: changed.source.pair,
+                        control: changed.control, expected: changed.checkedAfter), custody.renewal == nil else {
+                        return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed Send read continuity is unavailable")
+                    }
+                }
+                guard changed.permits(runtime: held.track.runtime) else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
                 }
                 self.inverseConsumed = true
@@ -398,9 +406,15 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                    await approved.nameGoalEvidence(afterExecution: true) == nil {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Approved name changed before Send")
                 }
-                if let approved = self.approved, let control = self.capturedControl,
-                   !(await approved.sendBusInputsCurrent(at: held, control: control)) {
-                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Checked Bus input prerequisites changed before Send")
+                var readRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
+                var requiredControl = self.capturedControl
+                if let approved = self.approved, let control = requiredControl,
+                   let expected = Self.expectedBefore(self.forward) {
+                    guard let custody = await approved.sendBusInputsCurrent(at: held, control: control, expected: expected) else {
+                        return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Checked Bus input prerequisites changed before Send")
+                    }
+                    held = custody.pair; self.pair = held
+                    requiredControl = custody.control; readRenewal = custody.renewal
                 }
                 self.attempted = true
                 let nameCheck: (@Sendable (AXMixerStripBinding.Binding) -> Bool)?
@@ -408,17 +422,18 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 else { nameCheck = nil }
                 var params = self.forward.params
                 params["target_ref"] = .string(self.forward.targetRef!.rawValue)
+                let routedHeld = held
                 let upstream = AccessibilityChannel.sendRemovalObserver
                 let upstreamChange = AccessibilityChannel.sendChangeObserver
                 let upstreamCreation = AccessibilityChannel.sendCreationObserver
                 response = await AccessibilityChannel.$sendCreationObserver.withValue({ proof in
-                    if Self.isCreation(self.forward), proof.source.original.matches(held.strip),
-                       proof.source.originalTrack.matches(held.track) {
+                    if Self.isCreation(self.forward), proof.source.original.matches(routedHeld.strip),
+                       proof.source.originalTrack.matches(routedHeld.track) {
                         self.creation = proof; upstreamCreation?(proof)
                     }
                 }) {
                     await AccessibilityChannel.$sendChangeObserver.withValue({ proof in
-                        if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track),
+                        if proof.source.original.matches(routedHeld.strip) && proof.source.originalTrack.matches(routedHeld.track),
                            proof.checkedBefore == Self.changeAssignments(self.forward)?.before,
                            proof.checkedAfter == Self.changeAssignments(self.forward)?.after {
                             self.change = proof
@@ -426,16 +441,18 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                         }
                     }) {
                         await AccessibilityChannel.$sendRemovalObserver.withValue({ proof in
-                            if proof.source.original.matches(held.strip) && proof.source.originalTrack.matches(held.track) {
+                            if proof.source.original.matches(routedHeld.strip) && proof.source.originalTrack.matches(routedHeld.track) {
                                 self.removal = proof
                                 upstream?(proof)
                             }
                         }) {
-                            await Self.$requiredSendControl.withValue(self.capturedControl) {
+                            await Self.$requiredSendControl.withValue(requiredControl) {
                                 await Self.$requiredNameCheck.withValue(nameCheck) {
                                     await Self.$checkedSourcePair.withValue(held) {
-                                        await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
-                                            router: router, cache: cache, targetRegistry: registry)
+                                        await Self.$checkedReadRenewal.withValue(readRenewal) {
+                                            await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                                                router: router, cache: cache, targetRegistry: registry)
+                                        }
                                     }
                                 }
                             }

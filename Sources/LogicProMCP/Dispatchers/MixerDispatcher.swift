@@ -198,19 +198,34 @@ struct MixerDispatcher: OperationTraceDispatching {
                 let cachedPair = await cache.retainedMixerAssociation(reference: reference, source: physical,
                     snapshot: await targetRegistry.currentSnapshot)
                 let pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
+                let currentPhysical: AXMixerStripBinding.Binding
                 if let checked = SendRemovalSagaAdapter.checkedSourcePair {
-                    guard checked.strip.matches(physical),
+                    if let renewal = SendRemovalSagaAdapter.checkedReadRenewal {
+                        guard renewal.original.matches(physical), renewal.originalTrack.matches(checked.track),
+                              renewal.pair.track.matches(checked.track), renewal.pair.strip.matches(checked.strip),
+                              cachedPair.map({ $0.strip.matches(physical) && $0.track.matches(checked.track) }) ?? true,
+                              renewal.permits(runtime: checked.track.runtime) else {
+                            return TargetRefResolver.staleTargetReferenceResult(reference.rawValue, operation: operation)
+                        }
+                        // A genuine owned input-read receipt carries this request
+                        // to its original header's current physical source only.
+                        // Resolution, cache, TTL and the original ref stay untouched.
+                        currentPhysical = renewal.pair.strip
+                    } else {
+                        guard checked.strip.matches(physical),
                           cachedPair.map({ $0.strip.matches(checked.strip) && $0.track.matches(checked.track) }) ?? true,
                           checked.track.currentIndex() != nil,
                           physical.currentIndex(runtime: checked.track.runtime) != nil,
                           (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                         return TargetRefResolver.staleTargetReferenceResult(reference.rawValue, operation: operation)
+                        }
+                        currentPhysical = physical
                     }
                     // Request-local history only. The native writer still proves
                     // the source/control and independently renews its own effect.
                     // No cache entry, TTL, reference or unstarted plan is renewed.
                     pair = checked
-                } else { pair = cachedPair }
+                } else { pair = cachedPair; currentPhysical = physical }
                 if creating, pair == nil {
                     return toolTextResult(.error(HonestContract.encodeStateC(error: .staleSnapshot,
                         hint: "Fresh-empty creation requires its retained original-header association; acquire a fresh selected-source inspection.",
@@ -223,7 +238,7 @@ struct MixerDispatcher: OperationTraceDispatching {
                 }
                 let traceID = await startTraceIfEnabled(command: command)
                 let routed = await withWriteBoundaryArmed(traceID) {
-                    await AXMixerStripBinding.$current.withValue(physical) {
+                    await AXMixerStripBinding.$current.withValue(currentPhysical) {
                         await AXMixerStripBinding.$outputAssociation.withValue(pair) {
                             await routedTextResult(router, operation: operation, params: ["send_ordinal": String(ordinal),
                                 "destination": removing ? "no_send" : destination?.token ?? "",

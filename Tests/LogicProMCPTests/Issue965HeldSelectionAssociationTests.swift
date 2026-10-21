@@ -517,6 +517,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDestinationPresses = 0
         var routingBusLeafPresses: [Int] = []
         var routingChangedSendPublished = false
+        var routingInputReadRenewalArmed = false
+        var routingInputReadRenewed = false
         var routingForeignHelpReads = 0
         var scrollToChangedOutput = false
         var scrollToViewportDriftEnabled = false
@@ -4716,6 +4718,15 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: ["forward", "cancel"])
+    func canonicalExistingBusSendSurvivesItsOwnedInputReadRenewal(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_read_renewal")
+        }
+    }
+
     @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8])
     func canonicalExistingBusSendRenewsHelpCustodyDuringInverseControlScan(roleSample: Int) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -5487,6 +5498,8 @@ struct Issue965HeldSelectionAssociationTests {
                 let inputBuses = (1...3).map { b.element(1_971_513 + $0) }
                 let sourceInput = b.element(1_971_517), physicalParent = b.element(1_971_518)
                 let physicalMenu = b.element(1_971_519), physicalLeaf = b.element(1_971_520)
+                let mainRoot = b.element(1_971_550), mainEcho = b.element(1_971_551)
+                let mainParent = b.element(1_971_552), mainMenu = b.element(1_971_553), mainLeaf = b.element(1_971_554)
                 if canonicalBusReceiverFault?.contains("source") == true {
                     b.setButton(sourceInput, description: "Input 1",
                         help: "Input slot. Choose the channel strip input source.", x: 0, y: 0, width: 1, height: 1)
@@ -5522,6 +5535,38 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(busTwo, []); b.setActionNames(busTwo, [kAXPressAction as String])
                 b.setChildren(b.element(1_965_2682), [destination, busTwo])
                 b.setChildren(f.mixer, f.strips + [receiver])
+                if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                    // Read renewal must preserve independently observed scalars,
+                    // inserts and the unchanged main output, not just Send values.
+                    for (index, owner) in (f.strips + [receiver]).enumerated() {
+                        let volume = b.element(1_971_530 + index * 3), pan = b.element(1_971_531 + index * 3)
+                        let output = b.element(1_971_532 + index * 3)
+                        for (control, description, value, minimum, maximum) in [
+                            (volume, "Volume", 100.0, 0.0, 233.0), (pan, "Pan", 0.2, -1.0, 1.0)
+                        ] {
+                            b.setRole(control, kAXSliderRole as String)
+                            b.setAttribute(control, kAXDescriptionAttribute as String, description)
+                            b.setAttribute(control, kAXValueAttribute as String, NSNumber(value: value))
+                            b.setAttribute(control, kAXMinValueAttribute as String, NSNumber(value: minimum))
+                            b.setAttribute(control, kAXMaxValueAttribute as String, NSNumber(value: maximum))
+                            b.setChildren(control, [])
+                            f.routingScalarControls.append(control)
+                        }
+                        b.setButton(output, description: "Stereo Output",
+                            help: "Output slot. Choose the channel strip output.", x: 0, y: 0, width: 1, height: 1)
+                        b.setChildren(output, [])
+                        b.setChildren(owner, b.makeAXRuntime().children(owner) + [volume, pan, output])
+                    }
+                    for node in [mainRoot, mainMenu] { b.setRole(node, kAXMenuRole as String) }
+                    for (node, title) in [(mainEcho, "Stereo Output"), (mainParent, "Output"), (mainLeaf, "Stereo Output")] {
+                        b.setRole(node, kAXMenuItemRole as String)
+                        b.setAttribute(node, kAXTitleAttribute as String, title)
+                        b.setChildren(node, [])
+                    }
+                    for node in [mainEcho, mainLeaf] { b.setAttribute(node, "AXMenuItemMarkChar", "✓") }
+                    b.setChildren(mainRoot, [mainEcho, mainParent]); b.setChildren(mainParent, [mainMenu])
+                    b.setChildren(mainMenu, [mainLeaf]); b.setActionNames(mainRoot, [kAXCancelAction as String])
+                }
                 if canonicalBusReceiverFault == "missing_before" {
                     b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]).filter {
                         !CFEqual($0, b.element(1_965_2680))
@@ -5546,6 +5591,17 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 f.routingAction = { element, action in
+                    if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                        if action == kAXPressAction as String,
+                           [1_971_532, 1_971_535, 1_971_538].contains(where: { CFEqual(element, b.element($0)) }) {
+                            b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [mainRoot])
+                            return true
+                        }
+                        if CFEqual(element, mainRoot), action == kAXCancelAction as String {
+                            b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, mainRoot) })
+                            return true
+                        }
+                    }
                     if action == kAXPressAction as String,
                        CFEqual(element, input) || CFEqual(element, b.element(1_965_2680)) || CFEqual(element, sourceInput) {
                         let ownInput = CFEqual(element, sourceInput)
@@ -5570,6 +5626,15 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, inputRoot), action == kAXCancelAction as String {
                         b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, inputRoot) })
+                        if canonicalBusReceiverFault == "physical_source_read_renewal",
+                           f.routingInputReadRenewalArmed, !f.routingInputReadRenewed {
+                            f.routingInputReadRenewed = true
+                            f.routingReplacement = replacement
+                            b.setChildren(replacement, [name] + renewedSend + [sourceInput]
+                                + [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)])
+                            b.setChildren(f.mixer, [f.strips[0], replacement, receiver])
+                            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                        }
                         return true
                     }
                     let forward = CFEqual(element, busTwo) && action == kAXPressAction as String
@@ -5582,6 +5647,13 @@ struct Issue965HeldSelectionAssociationTests {
                         let currentChildren = b.makeAXRuntime().children(currentSource)
                         if !currentChildren.contains(where: { CFEqual($0, sourceInput) }) {
                             b.setChildren(currentSource, currentChildren + [sourceInput])
+                        }
+                        if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                            let fields = [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)]
+                            let observed = b.makeAXRuntime().children(currentSource)
+                            b.setChildren(currentSource, observed + fields.filter { control in
+                                !observed.contains(where: { CFEqual($0, control) })
+                            })
                         }
                     }
                     if forward || inverse {
@@ -5936,6 +6008,7 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 }
                 if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
+                if canonicalBusReceiverFault == "physical_source_read_renewal" { f.routingInputReadRenewalArmed = true }
                 let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let arguments: [String: Value] = ["plan_id": .string(planID),
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
@@ -5947,6 +6020,9 @@ struct Issue965HeldSelectionAssociationTests {
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                    #expect(f.routingInputReadRenewed, "Reach actual post-menu retirement before routing")
+                }
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     #expect(f.routingChangedSendPublished)
                     #expect(f.routingLateScopeInjected, "Reach the actual post-effect Send control Role read")
