@@ -3255,6 +3255,127 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Selected routing can corroborate newly readable peer displays without accepting changed known values",
+          arguments: ["unchanged", "input", "output", "both", "known_input", "known_output",
+                      "no_slot", "selected_input", "name", "whole_project", "later_input",
+                      "later_owner", "later_slot", "later_project", "unclassified_output"])
+    func selectedRoutingCorroboratesOnlyMonotonePeerObservations(profile: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(withViewport: true), b = f.builder
+            let outer = b.element(1_291_928)
+            b.setRole(outer, kAXGroupRole as String); b.setAttribute(outer, kAXDescriptionAttribute as String, "Mixer")
+            b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
+            b.setChildren(outer, [f.mixer])
+            b.setChildren(f.window, [f.rail, outer, b.element(1_965_720), f.scroll])
+            let output = b.element(1_291_920), peerInput = b.element(1_291_921), peerOutput = b.element(1_291_922)
+            let root = b.element(1_291_923), parent = b.element(1_291_924), menu = b.element(1_291_925)
+            let echo = b.element(1_291_926), leaf = b.element(1_291_927)
+            b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output.",
+                x: 0, y: 0, width: 60, height: 20)
+            b.setChildren(output, []); b.setActionNames(output, [kAXPressAction as String])
+            b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [output])
+            let inputOwner = profile == "selected_input" ? f.strips[1] : f.strips[0]
+            b.setButton(peerInput, description: profile == "known_input" ? "Bus 1" : profile == "no_slot" ? "Settings" : "Input",
+                help: profile == "known_input" ? "Input slot. Choose the channel strip input." : "",
+                x: 0, y: 0, width: 60, height: 20)
+            b.setChildren(peerInput, [])
+            b.setChildren(inputOwner, b.makeAXRuntime().children(inputOwner) + [peerInput])
+            b.setButton(peerOutput, description: profile == "known_output" ? "Bus 1"
+                : profile == "unclassified_output" ? "External Destination" : "Output",
+                help: "Output slot. Choose the channel strip output.", x: 0, y: 0, width: 60, height: 20)
+            b.setChildren(peerOutput, [])
+            b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]) + [peerOutput])
+            for node in [root, menu] { b.setRole(node, kAXMenuRole as String) }
+            for (node, title) in [(echo, "Stereo Output"), (parent, "Output"), (leaf, "Stereo Output")] {
+                b.setRole(node, kAXMenuItemRole as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+                b.setChildren(node, [])
+            }
+            for node in [echo, leaf] { b.setAttribute(node, "AXMenuItemMarkChar", "✓") }
+            b.setChildren(menu, [leaf]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, parent])
+            b.setActionNames(root, [kAXCancelAction as String])
+            f.routingAction = { element, action in
+                if CFEqual(element, output), action == kAXPressAction as String {
+                    b.setChildren(f.mixer, f.strips + [root]); return true
+                }
+                if CFEqual(element, root), action == kAXCancelAction as String {
+                    f.renewedOutputCancels += 1
+                    b.setChildren(f.mixer, f.strips)
+                    if !["unchanged", "output", "known_output", "unclassified_output"].contains(profile) {
+                        b.setAttribute(peerInput, kAXDescriptionAttribute as String, "Bus 2")
+                        b.setAttribute(peerInput, kAXHelpAttribute as String, "Input slot. Choose the channel strip input.")
+                    }
+                    if ["output", "both", "known_output", "whole_project", "unclassified_output"].contains(profile) {
+                        b.setAttribute(peerOutput, kAXDescriptionAttribute as String, "Stereo Output")
+                    }
+                    if profile == "name" { b.setAttribute(b.element(1_965_710), kAXValueAttribute as String, "External Name") }
+                    return true
+                }
+                Issue.record("Only the held selected-source output popup and its own Cancel are allowed")
+                return false
+            }
+            f.routingRead = { element, attribute in
+                guard profile.hasPrefix("later_"), f.renewedOutputCancels == 1,
+                      CFEqual(element, peerInput), attribute == kAXDescriptionAttribute as String else { return }
+                f.routingClassifierHelpReads += 1
+                // Two cleanup reads and eight first-population reads precede
+                // this first deciding read of the corroborating population.
+                guard f.routingClassifierHelpReads == 11 else { return }
+                f.routingLateScopeInjected = true
+                switch profile {
+                case "later_input":
+                    b.setAttribute(peerInput, kAXDescriptionAttribute as String, "Bus 3")
+                case "later_owner":
+                    let replacement = b.element(1_291_929)
+                    b.setRole(replacement, kAXLayoutItemRole as String)
+                    b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                    b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                    b.setChildren(replacement, b.makeAXRuntime().children(f.strips[0]))
+                    f.routingOtherReplacement = replacement
+                    b.setChildren(f.mixer, [replacement, f.strips[1]])
+                case "later_slot":
+                    let replacement = b.element(1_291_930)
+                    b.setButton(replacement, description: "Bus 2", help: "Input slot. Choose the channel strip input.",
+                        x: 0, y: 0, width: 60, height: 20)
+                    b.setChildren(replacement, [])
+                    b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]).map {
+                        CFEqual($0, peerInput) ? replacement : $0
+                    })
+                case "later_project":
+                    b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                default: Issue.record("Unknown late corroboration fault")
+                }
+            }
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            let fresh = try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(request: .init(
+                    scope: profile == "whole_project" ? .wholeProject : .selection,
+                    domains: [.tracks, .strips, .associations, .routing], allowUINavigation: true),
+                    fileReader: .unavailable, stoppingWhen: { false })
+            }
+            #expect(f.renewedOutputCancels == 1, "Reach actual checked routing acquisition and cleanup")
+            #expect(f.routingDestinationPresses == 0)
+            let positive = ["unchanged", "input", "output", "both"].contains(profile)
+            let stable = fresh.stable
+            if positive {
+                #expect(stable)
+                #expect(fresh.checkedOutputs.count == 1)
+                #expect(fresh.checkedInputs.isEmpty, "Newly readable peer captions are not checked input edges")
+                if profile == "input" || profile == "both" {
+                    #expect(fresh.strips?.first?.inputObservation == .init(state: .observedSource, source: "Bus 2"))
+                }
+                if profile == "output" || profile == "both" { #expect(fresh.strips?.first?.output == "Stereo Output") }
+            } else {
+                #expect(!stable)
+                #expect(fresh.uiEffects.reason == "routing_population_moved")
+                #expect(fresh.checkedOutputs.isEmpty)
+                if profile.hasPrefix("later_") { #expect(f.routingLateScopeInjected) }
+            }
+        }
+    }
+
     @Test("A complete fresh track population qualifies only its fully observed physical associations",
           arguments: ["complete", "count_gap", "missing_pair", "hidden"])
     func completeFreshPopulationQualifiesAllObservedAssociations(fault: String) async throws {
