@@ -35,6 +35,31 @@ struct Issue993PluginRootMenuTests {
         #expect(AccessibilityChannel.isAudioPluginRootMenu(titles: titles))
     }
 
+    @Test("the root remains recognisable with no Recent plug-ins",
+          arguments: ["en", "ko", "ja", "de", "es", "fr", "it", "pt", "zh_CN", "zh_TW"])
+    func everyMeasuredMenuWithoutRecentPlugins(lproj: String) throws {
+        let measured = try #require(Self.measured[lproj])
+        let categories = Array(measured.drop(while: { !$0.isEmpty }).dropFirst())
+        #expect(!categories.contains("Channel EQ"))
+        #expect(AccessibilityChannel.isAudioPluginRootMenu(titles: categories))
+    }
+
+    @Test("the reported 12.4 root is recognised without a Recent Channel EQ")
+    func reported124RootWithoutRecentEQ() {
+        let titles = ["", "Activate Plug-ins", "", "Recent", "Compressor", "", "Amps and Pedals",
+                      "Delay", "Distortion", "Dynamics", "EQ", "Filter", "Imaging", "Metering",
+                      "Modulation", "Multi Effects", "Pitch", "Reverb", "Specialized", "Utility",
+                      "", "Audio Units", ""]
+        #expect(AccessibilityChannel.isAudioPluginRootMenu(titles: titles))
+    }
+
+    @Test("Recent names cannot replace independent root categories")
+    func incompleteRootSignaturesAreRefused() {
+        #expect(!AccessibilityChannel.isAudioPluginRootMenu(titles: ["Channel EQ", "Utility", "Audio Units"]))
+        #expect(!AccessibilityChannel.isAudioPluginRootMenu(titles: ["Channel EQ", "EQ", "Utility"]))
+        #expect(!AccessibilityChannel.isAudioPluginRootMenu(titles: ["Channel EQ", "EQ", "Audio Units"]))
+    }
+
     @Test("zh_TW is recognised by its manufacturer items, not by an Audio Units item")
     func zhTWHasNoAudioUnitsItem() throws {
         let titles = try #require(Self.measured["zh_TW"])
