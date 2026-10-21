@@ -1191,9 +1191,11 @@ struct SystemDispatcher: OperationTraceDispatching {
                             // plans still pass through their unchanged rejection below.
                             if let approval = approvedSessionRepair,
                                approval.verifiesMatchingNamesOnly || approval.verifiesReceiverKeepsOnly
-                                || approval.verifiesMatchingSendOnly || approval.verifiesMatchingInputOnly {
+                                || approval.verifiesMatchingSendOnly || approval.verifiesMatchingInputOnly
+                                || approval.verifiesMatchingSortOnly {
                                 let proposed: SagaJournal.StoredOutcome
-                                if approval.verifiesMatchingInputOnly { proposed = await approval.verifyMatchingInput() }
+                                if approval.verifiesMatchingSortOnly { proposed = await approval.verifyMatchingSort() }
+                                else if approval.verifiesMatchingInputOnly { proposed = await approval.verifyMatchingInput() }
                                 else if approval.verifiesMatchingSendOnly { proposed = await approval.verifyMatchingSend() }
                                 else if approval.verifiesReceiverKeepsOnly { proposed = await approval.verifyReceiverKeeps() }
                                 else { proposed = await approval.verifyMatchingNames() }

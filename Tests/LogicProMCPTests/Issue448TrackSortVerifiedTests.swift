@@ -320,7 +320,22 @@ struct Issue448TrackSortVerifiedTests {
         try await canonicalSort(cancelAfterSort: mode == "cancel_sort", composedMode: mode)
     }
 
-    private func canonicalSort(cancelAfterSort: Bool, composedMode: String? = nil) async throws {
+    @Test(arguments: ["clean", "order", "document", "transport", "recording", "hidden", "name", "selection", "window", "header"])
+    func canonicalMatchingSortFreshlyVerifiesWithoutPressingAnyLeaf(mode: String) async throws {
+        try await canonicalSort(cancelAfterSort: false, matchingMode: mode)
+    }
+
+    @Test
+    func canonicalMatchingSortStillAppliesItsRequestedFinalMixerView() async throws {
+        try await canonicalSort(cancelAfterSort: false, composedMode: "forward", matchingMode: "clean")
+    }
+
+    @Test(arguments: ["order", "document", "transport", "name"])
+    func canonicalMatchingSortRefusesDriftBeforeItsFinalMixerView(mode: String) async throws {
+        try await canonicalSort(cancelAfterSort: false, composedMode: "forward", matchingMode: mode)
+    }
+
+    private func canonicalSort(cancelAfterSort: Bool, composedMode: String? = nil, matchingMode: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             try await FeatureFlags.withAdr004MutationSagaForTests(true) {
                 // Logic's physical header CFs can stay at their rail indexes
@@ -392,7 +407,7 @@ struct Issue448TrackSortVerifiedTests {
                     json: String(decoding: try JSONEncoder().encode(report), as: UTF8.self),
                     capturedEpoch: capture.projectEpoch, capturedPath: project.filePath, capture: capture, request: request))
                 var presentation: [String: Value] = ["sort": .object(["criterion": .string("track_name"),
-                    "expected_order": .array([order[1], order[0], order[2]].map { .string($0.rawValue) }),
+                    "expected_order": .array((matchingMode == nil ? [order[1], order[0], order[2]] : order).map { .string($0.rawValue) }),
                     "inverse_criterion": .string("creation_date")])]
                 if composedMode != nil { presentation["mixer_visible"] = .bool(true) }
                 let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
@@ -405,6 +420,11 @@ struct Issue448TrackSortVerifiedTests {
                     names: [], capture: capture, request: request, snapshotCurrent: true)
                 let executable = try #require(sharedJSONObject(plan.json)?["executable"] as? Bool)
                 #expect(executable)
+                if matchingMode != nil {
+                    let planned = try #require(sharedJSONObject(plan.json))
+                    #expect(planned["unchanged_tasks"] as? [String] == ["track_sort"])
+                    #expect((planned["steps"] as? [[String: Any]])?.count == (composedMode == nil ? 0 : 1))
+                }
                 #expect(await cache.retainRepairPlan(plan, snapshotID: capture.captureID))
                 let key = "canonical-flat-name-sort"
                 let approval = try #require(await ApprovedSessionRepair.retained(id: plan.id, digest: plan.digest,
@@ -412,6 +432,23 @@ struct Issue448TrackSortVerifiedTests {
                 await router.register(TrackSortStateBChannel(runtime: f.runtime))
                 let generation = await registry.currentTopologyGeneration
                 let helpReads = f.actionProbe.helpReadCount
+                switch matchingMode {
+                case "order": f.builder.setChildren(f.headerRail, [f.initialHeaders[1], f.initialHeaders[0], f.initialHeaders[2]])
+                case "document": f.builder.setAttribute(f.arrangeWindow, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+                case "transport": f.builder.setAttribute(play, kAXValueAttribute as String, 1)
+                case "recording": f.builder.setAttribute(record, kAXValueAttribute as String, 1)
+                case "hidden": f.builder.setAttribute(showHidden, kAXValueAttribute as String, 0)
+                case "name": f.builder.setAttribute(f.initialHeaders[2], kAXTitleAttribute as String, "Human")
+                case "selection": f.builder.setAttribute(f.initialHeaders[2], kAXSelectedAttribute as String, true)
+                case "window":
+                    let other = f.builder.element(969_030)
+                    f.builder.setAttribute(f.app, kAXMainWindowAttribute as String, other)
+                    f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, other)
+                    f.builder.setAttribute(f.app, kAXWindowsAttribute as String, [other])
+                    #expect(!CFEqual(try #require(AXLogicProElements.mainWindow(runtime: f.runtime)), f.arrangeWindow))
+                case "header": f.builder.setChildren(f.headerRail, [f.initialHeaders[0], f.initialHeaders[1], f.builder.element(969_031)])
+                default: break
+                }
                 let result = await SystemDispatcher.handle(command: "saga_execute", params: [:], router: router,
                     cache: cache, targetRegistry: registry, dialogPresent: { false }, sagaJournal: journal,
                     mutationGate: LogicMutationGate(), sagaRefreshAfterWrite: {
@@ -433,6 +470,57 @@ struct Issue448TrackSortVerifiedTests {
                         }
                     }, sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if let matchingMode {
+                    let succeeds = matchingMode == "clean"
+                    #expect(body["state"] as? String == (succeeds ? "A" : "C"))
+                    #expect(body["verified"] as? Bool == succeeds)
+                    #expect(f.actionProbe.pressCount == 0)
+                    if composedMode == nil { #expect(f.actionProbe.helpReadCount == helpReads) }
+                    #expect(await registry.currentTopologyGeneration == generation)
+                    #expect(await registry.resolve(order[0]) != nil)
+                    #expect(f.actionProbe.mixerShowing == (composedMode != nil && succeeds))
+                    if composedMode == nil {
+                        #expect(body["write_attempted"] as? Bool == false)
+                        #expect(body["writes_performed"] as? Int == 0)
+                        #expect(f.actionProbe.actionOrder.isEmpty)
+                    } else {
+                        #expect(f.actionProbe.actionOrder == (succeeds ? ["show_mixer"] : []))
+                    }
+                    if succeeds {
+                        #expect(body["saga_state"] as? String == "completed")
+                        if composedMode == nil {
+                            let evidence = try #require(body["goal_evidence"] as? [[String: Any]])
+                            let read = try #require(evidence.first?["read"] as? [String: Any])
+                            #expect(read["read_source"] as? String == "ax_track_order")
+                            #expect(read["provenance"] as? String == "live_independent")
+                        }
+                    }
+                    let params: [String: Value] = ["plan_id": .string(plan.id), "digest": .string(plan.digest),
+                        "confirmed": .bool(true), "idempotency_key": .string(key)]
+                    let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
+                        poller: StatePoller(axChannel: AccessibilityChannel(), cache: cache, runtime: .init(hasVisibleWindow: { false })),
+                        dialogPresent: { false }, supportBundleExporter: nil, sagaJournal: journal, mutationGate: LogicMutationGate(),
+                        projectFileReader: .unavailable)
+                    if succeeds, composedMode == nil {
+                        f.builder.setAttribute(f.initialHeaders[2], kAXTitleAttribute as String, "Later human edit")
+                    }
+                    let replay = await ApprovedSessionRepair.apply(request: try #require(.parse(params)), dependencies: dependencies)
+                    let replayBody = try #require(sharedJSONObject(sharedToolText(replay)))
+                    #expect(replayBody["duplicate"] as? Bool == true)
+                    #expect(replayBody["state"] as? String == (succeeds ? "A" : "C"))
+                    #expect(f.actionProbe.pressCount == 0)
+                    #expect(await registry.currentTopologyGeneration == generation)
+                    if succeeds, composedMode == nil {
+                        var freshParams = params
+                        freshParams["idempotency_key"] = .string(key + "-new-attempt")
+                        let fresh = await ApprovedSessionRepair.apply(request: try #require(.parse(freshParams)), dependencies: dependencies)
+                        let freshBody = try #require(sharedJSONObject(sharedToolText(fresh)))
+                        #expect(freshBody["state"] as? String == "C")
+                        #expect(freshBody["write_attempted"] as? Bool == false)
+                        #expect(f.actionProbe.pressCount == 0)
+                    }
+                    return
+                }
                 if ["foreign_project", "unowned_name"].contains(composedMode) {
                     let verified = try #require(body["verified"] as? Bool)
                     #expect(!verified)
