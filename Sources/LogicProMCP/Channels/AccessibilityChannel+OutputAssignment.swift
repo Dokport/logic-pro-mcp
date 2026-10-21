@@ -640,6 +640,7 @@ extension AccessibilityChannel {
         _ originalPair: HeldSelectionAssociation.Pair, original: AXMixerStripBinding.Binding,
         runtime: AXLogicProElements.Runtime, selectedHeaderRequired: Bool = true,
         sourceDisposition: OriginalHeaderSourceDisposition = .retiredOriginal,
+        restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
         observingReadFocus: @Sendable (HeldSelectionAssociation) -> Void = { _ in }
     ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
@@ -650,11 +651,20 @@ extension AccessibilityChannel {
               observation.headers.filter({ CFEqual($0, originalPair.track.header) }).count == 1,
               !selectedHeaderRequired || CFEqual(observation.headers[observation.originalIndex], originalPair.track.header)
         else { return (nil, .init()) }
+        if let geometry = restoringMixerGeometry {
+            // Geometry restores presentation only; it cannot rebind a source.
+            // A caller's pre-popup duty must belong to this exact native scope.
+            guard CFEqual(geometry.window, original.window), CFEqual(geometry.mixer, original.mixer),
+                  geometry.document.utf8.elementsEqual(original.document.utf8),
+                  geometry.headers.count == observation.headers.count,
+                  zip(geometry.headers, observation.headers).allSatisfy({ CFEqual($0, $1) }),
+                  geometry.frames.count == observation.strips.count else { return (nil, .init()) }
+        }
         // The same fully qualified starting witness used by registered association
         // acquisition permits passive Help during this owned selection excursion.
         // Assignment authority still requires the actual pair and inverse below.
         observingReadFocus(observation)
-        let originalMixerGeometry = observation.observedMixerViewportGeometry()
+        let originalMixerGeometry = restoringMixerGeometry ?? observation.observedMixerViewportGeometry()
         let pairs = await observation.observe(referenceIsCurrent: {
             originalPair.track.currentIndex() != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil

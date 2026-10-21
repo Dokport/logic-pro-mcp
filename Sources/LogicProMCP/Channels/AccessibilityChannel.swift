@@ -540,6 +540,9 @@ actor AccessibilityChannel: Channel {
                 var population = original
                 guard request.allowUINavigation, request.domains.contains(.routing), population.stable,
                       !stackNavigationPerformed, !mixerNavigationPerformed else { return population }
+                // Retain the actual pre-popup restoration duty. Cancel may expose
+                // a transient new-strip layout before the existing renewal settles.
+                let inputRestorationGeometry = association?.observedMixerViewportGeometry()
                 var checked: [SessionPopulationObservation.HeldCheckedOutput] = []
                 var checkedInputs: [SessionPopulationObservation.HeldCheckedInput] = []
                 var renewals: [OriginalHeaderSourceRenewal] = []
@@ -601,10 +604,12 @@ actor AccessibilityChannel: Channel {
                                 return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
                                     if candidate.nonBusInput {
                                         return await Self.getCheckedInputObservation(runtime: runtime.logicRuntime,
+                                            restoringMixerGeometry: inputRestorationGeometry,
                                             observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
                                             observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
                                     }
                                     return await Self.getInputBusObservation(runtime: runtime.logicRuntime,
+                                        restoringMixerGeometry: inputRestorationGeometry,
                                         observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
                                         observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
                                 }
