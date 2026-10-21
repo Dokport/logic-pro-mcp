@@ -87,6 +87,17 @@ class LogicBounceSupportTests(unittest.TestCase):
                 artifact,
             )
 
+    def test_find_staged_artifact_matches_literal_filename_metacharacters(self):
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staged_name = "Song [alternate]*?--lpmcp-fixed"
+            artifact = os.path.join(staging_dir, staged_name + ".aif")
+            with open(artifact, "wb") as handle:
+                handle.write(b"literal")
+            self.assertEqual(
+                logic_bounce.find_staged_artifact(staging_dir, staged_name, time.time() - 1),
+                artifact,
+            )
+
     def test_find_staged_artifact_rejects_stale_same_basename_candidate(self):
         with tempfile.TemporaryDirectory() as staging_dir:
             staged_name = "bounce--lpmcp-1234"

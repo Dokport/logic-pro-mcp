@@ -37,6 +37,107 @@ def _ui_events_with_staged_artifact(staging_dir: str, typed_name):
 
 
 class LogicBounceMainTests(unittest.TestCase):
+    def _run_artifact_recovery(self, *, wrong_directory=False, delay=0, ambiguous=False):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as output_dir:
+            staging = os.path.join(home, "Downloads")
+            documents = os.path.join(home, "Documents")
+            os.mkdir(staging)
+            os.mkdir(documents)
+            staged_name = "Song--lpmcp-fixed"
+            clock = {"now": 1000.0, "fired": None, "created": False}
+            source_paths = []
+
+            def produce_if_ready():
+                if clock["fired"] is None or delay is None or clock["created"]:
+                    return
+                if clock["now"] - clock["fired"] < delay:
+                    return
+                clock["created"] = True
+                destinations = [documents if wrong_directory else staging]
+                if ambiguous:
+                    destinations = [staging, documents]
+                for directory in destinations:
+                    path = os.path.join(directory, staged_name + ".aif")
+                    with open(path, "wb") as artifact:
+                        artifact.write(b"bounce")
+                    os.utime(path, (clock["now"], clock["now"]))
+                    source_paths.append(path)
+
+            def send(*commands):
+                if "c:840,768" in commands:
+                    clock["fired"] = clock["now"]
+                    produce_if_ready()
+                return True
+
+            def sleep(seconds):
+                clock["now"] += seconds
+                produce_if_ready()
+
+            def expanduser(path):
+                return home if path == "~" else os.path.join(home, path.removeprefix("~/"))
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.object(sys, "argv", ["logic_bounce.py", "--target-path", os.path.join(output_dir, "Song.wav"), "--staging", staging]),
+                mock.patch.object(logic_bounce, "set_input_abc", return_value=True),
+                mock.patch.object(logic_bounce, "open_bounce_dialog", return_value=(True, ["key_command"])),
+                mock.patch.object(logic_bounce, "click_bounce_settings_confirm", return_value=True),
+                mock.patch.object(logic_bounce, "save_panel_present", return_value=True),
+                mock.patch.object(logic_bounce, "logic_process_osa", side_effect=_window_metrics_logic_process),
+                mock.patch.object(logic_bounce, "send_ui_events", side_effect=send),
+                mock.patch.object(logic_bounce, "unique_staging_name", return_value=staged_name),
+                mock.patch.object(logic_bounce.os.path, "expanduser", side_effect=expanduser),
+                mock.patch.object(logic_bounce.time, "sleep", side_effect=sleep),
+                mock.patch.object(logic_bounce.time, "time", side_effect=lambda: clock["now"]),
+                mock.patch.object(logic_bounce.time, "monotonic", side_effect=lambda: clock["now"]),
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = logic_bounce.main()
+            result = json.loads(stdout.getvalue().strip())
+            final = os.path.join(output_dir, "Song.aif")
+            final_bytes = None
+            if os.path.isfile(final):
+                with open(final, "rb") as artifact:
+                    final_bytes = artifact.read()
+            return exit_code, result, {
+                "final_exists": os.path.isfile(final),
+                "final_bytes": final_bytes,
+                "sources_remaining": sum(os.path.exists(path) for path in source_paths),
+                "elapsed": clock["now"] - 1000.0,
+                "staging": staging,
+                "documents": os.path.realpath(documents),
+            }
+
+    def test_main_recovers_its_fresh_artifact_when_sidebar_lands_in_documents(self):
+        code, result, observed = self._run_artifact_recovery(wrong_directory=True)
+        self.assertEqual(code, 0, result)
+        self.assertTrue(result["bounce_fired"])
+        self.assertEqual(result.get("staging_directory"), observed["documents"])
+        self.assertEqual(observed["final_bytes"], b"bounce")
+        self.assertEqual(observed["sources_remaining"], 0)
+
+    def test_main_waits_for_a_fifty_second_bounce(self):
+        code, result, observed = self._run_artifact_recovery(delay=50)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(observed["final_bytes"], b"bounce")
+        self.assertGreaterEqual(observed["elapsed"], 50)
+        self.assertLess(observed["elapsed"], 281)
+
+    def test_main_refuses_two_distinct_fresh_artifacts_without_moving_either(self):
+        code, result, observed = self._run_artifact_recovery(ambiguous=True)
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result.get("error"), "ambiguous_bounce_artifacts")
+        self.assertFalse(observed["final_exists"])
+        self.assertEqual(observed["sources_remaining"], 2)
+
+    def test_main_exhausts_one_bounded_helper_budget_without_an_artifact(self):
+        code, result, observed = self._run_artifact_recovery(delay=None)
+        self.assertEqual(code, 1, result)
+        self.assertTrue(result["bounce_fired"])
+        self.assertFalse(observed["final_exists"])
+        self.assertGreaterEqual(observed["elapsed"], 250)
+        self.assertLess(observed["elapsed"], 281)
+
     def test_main_fails_closed_when_save_panel_is_not_detected(self):
         with tempfile.TemporaryDirectory() as staging_dir, tempfile.TemporaryDirectory() as output_dir:
             argv = [
@@ -57,6 +158,7 @@ class LogicBounceMainTests(unittest.TestCase):
                 mock.patch.object(logic_bounce, "send_ui_events", return_value=None),
                 mock.patch.object(logic_bounce.time, "sleep", lambda _: None),
                 mock.patch.object(logic_bounce.time, "time", lambda: 1000.0),
+                mock.patch.object(logic_bounce.os.path, "expanduser", return_value=staging_dir),
                 contextlib.redirect_stdout(stdout),
             ):
                 exit_code = logic_bounce.main()
@@ -87,6 +189,7 @@ class LogicBounceMainTests(unittest.TestCase):
                 mock.patch.object(logic_bounce, "send_ui_events", side_effect=_ui_events_with_staged_artifact(staging_dir, typed_name)),
                 mock.patch.object(logic_bounce.time, "sleep", lambda _: None),
                 mock.patch.object(logic_bounce.time, "time", lambda: 1000.0),
+                mock.patch.object(logic_bounce.os.path, "expanduser", return_value=staging_dir),
                 mock.patch.object(logic_bounce, "unique_staging_name", return_value=staged_name),
                 contextlib.redirect_stdout(stdout),
             ):
@@ -118,6 +221,7 @@ class LogicBounceMainTests(unittest.TestCase):
                 mock.patch.object(logic_bounce, "send_ui_events", side_effect=_ui_events_with_staged_artifact(staging_dir, typed_name)),
                 mock.patch.object(logic_bounce.time, "sleep", lambda _: None),
                 mock.patch.object(logic_bounce.time, "time", lambda: 1000.0),
+                mock.patch.object(logic_bounce.os.path, "expanduser", return_value=staging_dir),
                 mock.patch.object(logic_bounce, "unique_staging_name", return_value=staged_name),
                 contextlib.redirect_stdout(stdout),
             ):
@@ -150,6 +254,7 @@ class LogicBounceMainTests(unittest.TestCase):
                 mock.patch.object(logic_bounce, "send_ui_events", side_effect=fake_ui_events),
                 mock.patch.object(logic_bounce.time, "sleep", lambda _: None),
                 mock.patch.object(logic_bounce.time, "time", lambda: 1000.0),
+                mock.patch.object(logic_bounce.os.path, "expanduser", return_value=staging_dir),
                 mock.patch.object(logic_bounce, "unique_staging_name", return_value="Song--lpmcp-fixed"),
                 contextlib.redirect_stdout(stdout),
             ):
