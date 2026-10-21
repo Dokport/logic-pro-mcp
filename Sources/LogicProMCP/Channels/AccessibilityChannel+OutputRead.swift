@@ -476,20 +476,24 @@ extension AccessibilityChannel {
     static func getInputBusObservation(runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming = .live,
         requiringOriginalInputControl: AXMixerInputSlotBinding? = nil,
+        restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in }) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
-            runtime: runtime, timing: timing, observingPopupFocus: observingPopupFocus,
+            runtime: runtime, timing: timing, restoringMixerGeometry: restoringMixerGeometry,
+            observingPopupFocus: observingPopupFocus,
             observingRenewedFocus: observingRenewedFocus,
             requiringOriginalInputControl: requiringOriginalInputControl)
     }
 
     static func getCheckedInputObservation(runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming = .live,
+        restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in }) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
             includingNonBusInputs: true, runtime: runtime, timing: timing,
+            restoringMixerGeometry: restoringMixerGeometry,
             observingPopupFocus: observingPopupFocus, observingRenewedFocus: observingRenewedFocus)
     }
 
@@ -509,6 +513,7 @@ extension AccessibilityChannel {
         params: [String: String], sendOrdinal: Int?, inputBusOnly: Bool = false,
         includingNonBusInputs: Bool = false, runtime: AXLogicProElements.Runtime,
         timing: OutputAssignmentTiming,
+        restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
         sendReplacement: SendReplacement? = nil, observingSendMode: Bool = false,
@@ -1520,7 +1525,8 @@ extension AccessibilityChannel {
                 // Only an actually re-observed original-header pair can renew it;
                 // the helper still inverses the selection it found on entry.
                 let observed = await renewSourceThroughOriginalHeader(originalPair, original: physical,
-                    runtime: runtime, selectedHeaderRequired: false, observingReadFocus: observingRenewedFocus)
+                    runtime: runtime, selectedHeaderRequired: false,
+                    restoringMixerGeometry: restoringMixerGeometry, observingReadFocus: observingRenewedFocus)
                 extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
                     "attempted": observed.effects.attempted, "changed": observed.effects.changed,
                     "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
