@@ -10,6 +10,7 @@ extension AccessibilityChannel {
     static func supportsOccupiedSendChange(before: OutputAssignment, after: OutputAssignment) -> Bool {
         switch (before, after) {
         case (.stereoOutput, .bus), (.stereoOutput, .physical), (.physical, .stereoOutput): true
+        case (.bus(let original), .bus(let requested)): original != requested
         default: false
         }
     }

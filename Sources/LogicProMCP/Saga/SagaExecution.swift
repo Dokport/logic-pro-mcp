@@ -222,6 +222,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
         // Preserve the existing Bus wire contract; the shared physical parser also
         // accepts exact floating-point integers, which Bus admission never allowed.
         if case .bus = after, rawAfter.objectValue?["number"]?.intValue == nil { return nil }
+        if case .bus = before, rawBefore.objectValue?["number"]?.intValue == nil { return nil }
         return (before, after)
     }
 

@@ -296,13 +296,15 @@ struct SystemDispatcher: OperationTraceDispatching {
             separate from approved value targets and bound into plan_hash. Host display verifies forward \
             engineering targets; fresh raw state owns the raw_ax_value inverse. Q is not applied, \
             no raw/engineering conversion or automatic recommendation mapping is inferred. \
-            Selected Send Saga: one exact occupied Stereo Output send, Post Fader, raw level 0 and bypass off, \
-            may be removed or replaced by one existing Bus 1..256 or a checked physical output pair. \
+            Selected Send Saga: one exact occupied Send, Post Fader, raw level 0 and bypass off. \
+            Stereo Output may be removed or changed to an existing Bus or checked physical output pair; \
+            a physical output may return to Stereo Output, and one existing Bus may change to a distinct existing Bus. \
+            Bus numbers are integer wire values 1..256 on both sides. \
             Physical pairs use the existing destination {kind:physical,ports:[a,b]} shape; offered availability \
             is checked by the native popup, not inferred from the numbers. Use its mix_ref and source-census ordinal, \
-            expected_current Stereo Output, replace_existing:true and confirmed_plan_hash. Native request-local \
+            the actual typed expected_current, replace_existing:true and confirmed_plan_hash. Native request-local \
             custody plus independent checked reads govern compensation; no canonical physical-slot mapping, \
-            Aux creation, fresh-empty creation or general Send reversibility is inferred. \
+            Aux creation or general Send reversibility is inferred. \
             saga_status/saga_cancel -> { idempotency_key: String }; \
             setup_arm_key -> { consent: "true" } (one-time consent-gated Key Commands GUI \
             drive that assigns the coordinate-free record-arm chord; no mouse); \
