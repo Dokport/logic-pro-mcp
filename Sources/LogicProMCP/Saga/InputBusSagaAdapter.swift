@@ -68,6 +68,12 @@ final class InputBusSagaAdapter: @unchecked Sendable {
         return await read(forward, cache: cache, registry: registry)
     }
 
+    /// Observation custody from this adapter's actual owned inverse, never from a plan or wire value.
+    func restoredInputForNamePresentation() -> AccessibilityChannel.ChangedInputObservation? {
+        guard approved != nil, inverseConsumed, let restored, restored.creation == nil else { return nil }
+        return restored
+    }
+
     func supports(_ step: SagaStep) -> Bool {
         if step == forward { return true }
         var inverse = forward.params

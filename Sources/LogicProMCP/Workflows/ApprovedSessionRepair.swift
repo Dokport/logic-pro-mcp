@@ -737,6 +737,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         var capturedRead: ExactTrackNameAdapter.CapturedCoupledRead?
         var inverse: ExactTrackNameAdapter.OwnedInverse?
         var restored: ExactTrackNameAdapter.OwnedInverse?
+        var restoredInputControl: AXMixerInputSlotBinding?
     }
     private var nameExecutions: [TargetReference: NameExecution] = [:]
     private let document: String
@@ -1478,8 +1479,24 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     ownedPeerEffects: step.params["name"] == .string(goal.before) ? [] : ownedNameEffects)
             }
             guard let name = observed,
-                  let index = goal.binding.currentIndex(),
+                  let initialIndex = goal.binding.currentIndex(),
                   await projectIsCurrent(allowPendingCancellation: true), originalSelectionHeld() else { return nil }
+            var index = initialIndex
+            if step.params["name"] == .string(goal.before), let original = execution?.restoredInputControl {
+                guard original.owner.currentIndex(runtime: goal.binding.runtime) != nil else { return nil }
+                // The deciding name read can itself redraw native controls.
+                // Corroborate the actual retained input after that final read.
+                let input = AXLogicProElements.inputSlotRead(in: original.owner.strip, runtime: goal.binding.runtime.ax)
+                guard case .source(let label) = input.reading, let control = input.control,
+                      original.matches(.init(owner: original.owner, control: control, source: label)),
+                      original.owner.currentIndex(runtime: goal.binding.runtime) != nil,
+                      let currentIndex = goal.binding.currentIndex(),
+                      await projectIsCurrent(allowPendingCancellation: true), originalSelectionHeld(),
+                      case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(
+                        original.owner.window, runtime: goal.binding.runtime),
+                      currentDocument.utf8.elementsEqual(document.utf8) else { return nil }
+                index = currentIndex
+            }
             let evidence = SagaReadEvidence(readSource: .axTrackName, provenance: .liveIndependent,
                 trackIndex: index, projectReference: projectRef.rawValue, field: "name",
                 observed: .string(name), sampledAt: ISO8601DateFormatter.cacheFormatter.string(from: Date()))
@@ -2108,7 +2125,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return evidence
     }
 
-    func performName(_ step: SagaStep, router: ChannelRouter) async -> CallTool.Result {
+    func performName(_ step: SagaStep, router: ChannelRouter,
+        restoredInput: AccessibilityChannel.ChangedInputObservation? = nil) async -> CallTool.Result {
         guard supports(step), let goal = changedNameGoals.first(where: { $0.reference == step.targetRef }),
               let capture = renameCapture else {
             return toolStateCResult(.unsupportedState, extras: ["write_attempted": false])
@@ -2174,11 +2192,117 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let receipt: ExactTrackNameAdapter.Receipt
         if restoring, let proof = execution?.inverse {
             nameExecutions[goal.reference, default: .init()].inverse = nil
+            nameExecutions[goal.reference, default: .init()].restoredInputControl = nil
             receipt = await ExactTrackNameAdapter.inverse(proof, router: router,
                 liveTrackName: { AXLogicProElements.trackName(at: $0, runtime: runtime) },
                 liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) }, preservingFootprint: preserving,
                 afterVerifiedWrite: afterVerifiedWrite)
+            Log.info("Restored-name inverse receipt: status=\(receipt.status),proof_present=\(receipt.inverse != nil)", subsystem: "saga")
             nameExecutions[goal.reference, default: .init()].restored = receipt.inverse
+            if receipt.status == .applied, let task = inputTask, let owned = restoredInput,
+               goal.reference == task.reference {
+                func unavailable(_ stage: String) -> CallTool.Result {
+                    Log.info("Restored-name presentation refused at \(stage)", subsystem: "saga")
+                    // A later scalar name read must not turn failed native
+                    // presentation/protection verification into full compensation.
+                    nameExecutions[goal.reference, default: .init()].restored = nil
+                    nameExecutions[goal.reference, default: .init()].restoredInputControl = nil
+                    return toolTextResult(HonestContract.encodeStateB(reason: .readbackUnavailable,
+                        extras: ["write_attempted": true,
+                            "hint": "The restored name's original input presentation could not be independently refreshed."]), isError: true)
+                }
+                let pair = owned.current
+                guard let proof = receipt.inverse,
+                      let effect = ExactTrackNameAdapter.recordedNameEffect(proof), effect.matches(pair),
+                      pair.track.matches(goal.binding), owned.after == task.before, owned.permits(),
+                      await projectIsCurrent(allowPendingCancellation: true) else { return unavailable("receipt_scope") }
+                func aliases() -> [String] {
+                    [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute in
+                        AXHelpers.getAttribute(pair.strip.strip, attribute as String, runtime: runtime.ax) as String?
+                    }
+                }
+                // Logic can retain the forward name on the physical group/focus
+                // after the inverse editor commit. Refresh only this observed
+                // stale alias; redundant popup cycles can retire unrelated peers.
+                if !effect.stripName.utf8.elementsEqual(goal.name.utf8),
+                   aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }) {
+                    // The inverse input was already independently checked. Try
+                    // the existing original-header presentation excursion first:
+                    // another input popup can retire that verified native control.
+                    let initial = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair,
+                        original: pair.strip, runtime: runtime, sourceDisposition: .survivingOriginal)
+                    guard let current = initial.source, current.pair.strip.matches(pair.strip),
+                          current.originalTrack.matches(pair.track), current.permits(runtime: runtime),
+                          let currentProof = await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: current)
+                    else { return unavailable("initial_header_observation") }
+                    nameExecutions[goal.reference, default: .init()].restored = currentProof
+                    outputPair = current.pair; outputRenewal = current; outputProof = current.observation
+                    guard outputFootprintHeld(pair: current.pair, assignment: task.sink),
+                          case .success(let trackName?) = AXValueExtractors.extractTrackNameResult(
+                            from: pair.track.header, runtime: runtime.ax),
+                          trackName.utf8.elementsEqual(goal.before.utf8),
+                          case .success(let stripName?) = AXPluginInstanceIdentity.stripNameResult(pair.strip.strip, runtime: runtime.ax),
+                          stripName.utf8.elementsEqual(effect.stripName.utf8)
+                    else { return unavailable("initial_header_footprint") }
+                    let currentAliases = aliases()
+                    let retainedInput = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
+                    guard case .source(let retainedLabel) = retainedInput.reading, let retainedControl = retainedInput.control,
+                          owned.control.matches(.init(owner: pair.strip, control: retainedControl, source: retainedLabel)),
+                          await projectIsCurrent(allowPendingCancellation: true), current.permits(runtime: runtime)
+                    else { return unavailable("initial_header_input_control") }
+                    if currentAliases.contains(where: { $0.utf8.elementsEqual(effect.stripName.utf8) }),
+                       !currentAliases.contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }) {
+                        nameExecutions[goal.reference, default: .init()].restoredInputControl = owned.control
+                        return receipt.result
+                    }
+                    guard currentAliases.contains(where: { $0.utf8.elementsEqual(goal.name.utf8) })
+                    else { return unavailable("initial_header_alias") }
+                    let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
+                        await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                            await AccessibilityChannel.getInputBusObservation(runtime: runtime,
+                                requiringOriginalInputControl: owned.control)
+                        }
+                    }
+                    let message = decodedJSONObject(read.result.message)
+                    Log.info("Restored-name input popup receipt: success=\(read.result.isSuccess),assignment_matches=\(read.assignment == .bus(task.before)),control_matches=\(read.inputSlot.map(owned.control.matches) == true),popup=\(message?["popup_menu_state"] as? String ?? "unknown"),focus=\(message?["focus_restoration"] as? String ?? "unknown"),error=\(message?["error"] as? String ?? "none")", subsystem: "saga")
+                    Log.info("Restored-name input popup detail: pressed=\(message?["popup_press_succeeded"] as? Bool ?? false),cancelled=\(message?["popup_cancel_succeeded"] as? Bool ?? false),hint=\(message?["hint"] as? String ?? "none")", subsystem: "saga")
+                    guard read.result.isSuccess, read.assignment == .bus(task.before),
+                          read.inputSlot.map(owned.control.matches) == true,
+                          let message,
+                          message["popup_menu_state"] as? String == "closed",
+                          message["focus_restoration"] as? String == "restored",
+                          pair.strip.currentIndex(runtime: runtime) != nil,
+                          await projectIsCurrent(allowPendingCancellation: true) else { return unavailable("input_popup") }
+                    // The exact source/control survived, but this owned popup can
+                    // retire a peer in the name receipt's census. Continue through
+                    // the existing original-header observer, never revive that
+                    // old census or adopt a replacement source by its name.
+                    let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair,
+                        original: pair.strip, runtime: runtime, sourceDisposition: .survivingOriginal)
+                    guard let source = observed.source, source.pair.strip.matches(pair.strip),
+                          source.originalTrack.matches(pair.track), source.permits(runtime: runtime),
+                          let renewed = await ExactTrackNameAdapter.renewingOwnedCoupledName(currentProof, through: source)
+                    else { return unavailable("original_header_observation") }
+                    nameExecutions[goal.reference, default: .init()].restored = renewed
+                    outputPair = source.pair; outputRenewal = source; outputProof = source.observation
+                    guard outputFootprintHeld(pair: source.pair, assignment: task.sink),
+                          case .success(let trackName?) = AXValueExtractors.extractTrackNameResult(
+                            from: pair.track.header, runtime: runtime.ax),
+                          trackName.utf8.elementsEqual(goal.before.utf8),
+                          case .success(let stripName?) = AXPluginInstanceIdentity.stripNameResult(pair.strip.strip, runtime: runtime.ax),
+                          stripName.utf8.elementsEqual(effect.stripName.utf8),
+                          aliases().contains(where: { $0.utf8.elementsEqual(effect.stripName.utf8) }),
+                          !aliases().contains(where: { $0.utf8.elementsEqual(goal.name.utf8) }),
+                          await projectIsCurrent(allowPendingCancellation: true), source.permits(runtime: runtime)
+                    else { return unavailable("restored_footprint") }
+                    let currentInput = AXLogicProElements.inputSlotRead(in: pair.strip.strip, runtime: runtime.ax)
+                    guard case .source(let label) = currentInput.reading, let control = currentInput.control,
+                          owned.control.matches(.init(owner: pair.strip, control: control, source: label)),
+                          await projectIsCurrent(allowPendingCancellation: true), source.permits(runtime: runtime)
+                    else { return unavailable("retained_input_control") }
+                    nameExecutions[goal.reference, default: .init()].restoredInputControl = owned.control
+                }
+            }
         } else {
             guard execution?.ran != true, step.params["name"] == .string(goal.name) else {
                 return toolStateCResult(.staleTargetReference, extras: ["write_attempted": false])
