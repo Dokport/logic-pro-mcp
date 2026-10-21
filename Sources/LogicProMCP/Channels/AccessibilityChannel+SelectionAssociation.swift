@@ -1430,6 +1430,13 @@ extension AccessibilityChannel {
                     restored = await select(originalIndex, referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
                         && CFEqual(expectedFocus, originalFocus) && selectedChildRestored()
                 } else { restored = false }
+                if !restored, !lost, expectedIndex == originalIndex, selectedChildRestored() {
+                    // As in whole-held collection, restore only our original
+                    // passive focus; the inverse itself is never a pair witness.
+                    if originalSelectedChild == nil { originalPairVerified = false }
+                    restored = await restoreOriginalFocus(referenceIsCurrent: referenceIsCurrent, stoppingWhen: stop)
+                        && selectedChildRestored()
+                }
                 // Each proof starts at the same original selection/focus. A
                 // previous challenge's passive focus cannot identify this header.
                 guard restored else { break }
@@ -1438,7 +1445,9 @@ extension AccessibilityChannel {
                 }
                 // A passive rail's selected-child hint becomes a pair only
                 // after this actual changed-strip challenge and exact return.
-                if CFEqual(associationStrip, originalAssociationStrip) { originalPairVerified = true }
+                if originalSelectedChild != nil, CFEqual(associationStrip, originalAssociationStrip) {
+                    originalPairVerified = true
+                }
                 observed.append((challenge, challengeStrip))
             }
             if allHeldHeaders {
