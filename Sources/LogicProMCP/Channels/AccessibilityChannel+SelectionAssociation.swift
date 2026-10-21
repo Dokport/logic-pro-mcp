@@ -1114,7 +1114,7 @@ extension AccessibilityChannel {
                     lost = true; return false
                 }
                 if selectionChanged {
-                    let selectedChild: AXUIElement?
+                    var selectedChild: AXUIElement?
                     if precedingSelectedChild != nil {
                         guard case .observed(let child) = selectedChildRead() else { lost = true; return false }
                         selectedChild = child
@@ -1145,11 +1145,13 @@ extension AccessibilityChannel {
                     }
                     if !CFEqual(settledFocus, focus) {
                         guard CFEqual(focus, precedingFocus),
-                              let selectedChild, let precedingSelectedChild,
-                              !CFEqual(selectedChild, precedingSelectedChild),
-                              CFEqual(settledFocus, selectedChild) else {
+                              let precedingSelectedChild,
+                              case .observed(let currentSelectedChild) = selectedChildRead(),
+                              !CFEqual(currentSelectedChild, precedingSelectedChild),
+                              CFEqual(settledFocus, currentSelectedChild) else {
                             lost = true; return false
                         }
+                        selectedChild = currentSelectedChild
                     }
                     // Logic can select our exact held header while retaining its
                     // original Mixer relationship. Retain that owned transition

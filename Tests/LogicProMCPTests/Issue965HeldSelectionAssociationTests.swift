@@ -9167,10 +9167,13 @@ struct Issue965HeldSelectionAssociationTests {
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
     }
 
-    @Test(arguments: ["healthy", "retained_focus", "own_landing", "foreign_editor", "foreign_held_strip"])
+    @Test(arguments: ["healthy", "retained_focus", "own_landing", "foreign_editor", "foreign_held_strip",
+                     "joint_landing", "foreign_joint_focus", "foreign_joint_child", "foreign_joint_document",
+                     "foreign_joint_parent", "foreign_joint_unreadable"])
     func wholeInspectionKeepsOnlyItsOwnLateSelectionFocus(fault: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true), b = f.builder
         f.useBulkReads = true
+        let jointLanding = fault == "joint_landing" || fault.hasPrefix("foreign_joint_")
         for (index, header) in f.headers.enumerated() {
             b.setAttribute(header, kAXSelectedAttribute as String, index == 3)
         }
@@ -9179,9 +9182,10 @@ struct Issue965HeldSelectionAssociationTests {
         f.thirdRetainsPreviousFocus = fault == "retained_focus"
         f.routingSelection = { index in
             let source = index == 0 ? 1 : index == 1 ? 0 : index == 2 ? 3 : 2
-            b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[source]])
+            b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                [f.strips[jointLanding && index == 2 ? 0 : source]])
         }
-        let inject = ["own_landing", "foreign_editor", "foreign_held_strip"].contains(fault)
+        let inject = jointLanding || ["own_landing", "foreign_editor", "foreign_held_strip"].contains(fault)
         let foreign = b.element(1_965_799)
         b.setRole(foreign, kAXTextFieldRole as String)
         b.setAttribute(foreign, kAXWindowAttribute as String, f.window)
@@ -9190,16 +9194,36 @@ struct Issue965HeldSelectionAssociationTests {
             if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
                !f.lateAssociationFocusSampled {
                 f.lateAssociationFocusSampled = true
-                // The selected child already identifies challenge 2; keyboard
-                // focus still reflects the preceding, completely held strip.
+                // Focus and, in the joint case, the selected-child relation
+                // still reflect the preceding, completely held strip.
                 b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[0])
             }
             if f.lateAssociationFocusSampled, !f.lateAssociationFocusLanded,
                CFEqual(element, f.scroll), attribute == kAXValueAttribute as String {
                 f.lateAssociationFocusLanded = true
-                let focus = fault == "own_landing" ? f.strips[3]
+                let focus = fault == "own_landing" || jointLanding ? f.strips[3]
                     : fault == "foreign_held_strip" ? f.strips[1] : foreign
-                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, focus)
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                    fault == "foreign_joint_focus" ? f.strips[1] : focus)
+                if jointLanding {
+                    b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                        [f.strips[fault == "foreign_joint_child" ? 0 : 3]])
+                    if fault == "foreign_joint_document" {
+                        b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    if fault == "foreign_joint_parent" {
+                        b.setAttribute(f.strips[3], kAXParentAttribute as String, f.rail)
+                    }
+                }
+            }
+        }
+        if fault == "foreign_joint_unreadable" {
+            f.routingReadResult = { element, attribute in
+                if f.lateAssociationFocusLanded, CFEqual(element, f.mixer),
+                   attribute == kAXSelectedChildrenAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return nil
             }
         }
         let body = try await inspect(f)
