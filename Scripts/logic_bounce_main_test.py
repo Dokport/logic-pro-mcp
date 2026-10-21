@@ -37,7 +37,7 @@ def _ui_events_with_staged_artifact(staging_dir: str, typed_name):
 
 
 class LogicBounceMainTests(unittest.TestCase):
-    def _run_artifact_recovery(self, *, wrong_directory=False, delay=0, ambiguous=False):
+    def _run_artifact_recovery(self, *, wrong_directory=False, delay=0, ambiguous=False, temporary=False):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as output_dir:
             staging = os.path.join(home, "Downloads")
             documents = os.path.join(home, "Documents")
@@ -46,6 +46,7 @@ class LogicBounceMainTests(unittest.TestCase):
             staged_name = "Song--lpmcp-fixed"
             clock = {"now": 1000.0, "fired": None, "created": False}
             source_paths = []
+            temporary_path = os.path.join(staging, staged_name + ".tmp")
 
             def produce_if_ready():
                 if clock["fired"] is None or delay is None or clock["created"]:
@@ -53,6 +54,8 @@ class LogicBounceMainTests(unittest.TestCase):
                 if clock["now"] - clock["fired"] < delay:
                     return
                 clock["created"] = True
+                if temporary and os.path.exists(temporary_path):
+                    os.unlink(temporary_path)
                 destinations = [documents if wrong_directory else staging]
                 if ambiguous:
                     destinations = [staging, documents]
@@ -66,6 +69,10 @@ class LogicBounceMainTests(unittest.TestCase):
             def send(*commands):
                 if "c:840,768" in commands:
                     clock["fired"] = clock["now"]
+                    if temporary:
+                        with open(temporary_path, "wb") as artifact:
+                            artifact.write(b"unfinished render")
+                        os.utime(temporary_path, (clock["now"], clock["now"]))
                     produce_if_ready()
                 return True
 
@@ -106,6 +113,8 @@ class LogicBounceMainTests(unittest.TestCase):
                 "elapsed": clock["now"] - 1000.0,
                 "staging": staging,
                 "documents": os.path.realpath(documents),
+                "temporary_remaining": os.path.isfile(temporary_path),
+                "temporary_output_exists": os.path.exists(os.path.join(output_dir, "Song.tmp")),
             }
 
     def test_main_recovers_its_fresh_artifact_when_sidebar_lands_in_documents(self):
@@ -122,6 +131,21 @@ class LogicBounceMainTests(unittest.TestCase):
         self.assertEqual(observed["final_bytes"], b"bounce")
         self.assertGreaterEqual(observed["elapsed"], 50)
         self.assertLess(observed["elapsed"], 281)
+
+    def test_main_leaves_in_flight_temporary_file_until_final_audio_appears(self):
+        code, result, observed = self._run_artifact_recovery(temporary=True, delay=50)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(observed["final_bytes"], b"bounce")
+        self.assertFalse(observed["temporary_output_exists"])
+        self.assertGreaterEqual(observed["elapsed"], 50)
+
+    def test_main_never_moves_or_reports_an_unfinished_temporary_render(self):
+        code, result, observed = self._run_artifact_recovery(temporary=True, delay=None)
+        self.assertEqual(code, 1, result)
+        self.assertTrue(result["bounce_fired"])
+        self.assertTrue(observed["temporary_remaining"])
+        self.assertFalse(observed["temporary_output_exists"])
+        self.assertFalse(observed["final_exists"])
 
     def test_main_refuses_two_distinct_fresh_artifacts_without_moving_either(self):
         code, result, observed = self._run_artifact_recovery(ambiguous=True)

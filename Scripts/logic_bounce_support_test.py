@@ -98,6 +98,19 @@ class LogicBounceSupportTests(unittest.TestCase):
                 artifact,
             )
 
+    def test_find_staged_artifact_ignores_temporary_and_unrecognized_suffixes(self):
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staged_name = "bounce--lpmcp-fixed"
+            for suffix in ("tmp", "aif.tmp", "part", "txt"):
+                with self.subTest(suffix=suffix):
+                    path = os.path.join(staging_dir, staged_name + "." + suffix)
+                    with open(path, "wb") as artifact:
+                        artifact.write(b"unfinished render")
+                    self.assertIsNone(logic_bounce.find_staged_artifact(
+                        staging_dir, staged_name, time.time() - 1,
+                    ))
+                    os.unlink(path)
+
     def test_find_staged_artifact_rejects_stale_same_basename_candidate(self):
         with tempfile.TemporaryDirectory() as staging_dir:
             staged_name = "bounce--lpmcp-1234"

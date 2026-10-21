@@ -42,6 +42,8 @@ from logic_bounce_ui import (
 _select_input_source = select_input_source
 # Leave time to report a truthful result before the executor's 300-second timeout.
 BOUNCE_HELPER_BUDGET_SECONDS = 280.0
+# Match the executor's eligible audio suffixes, never Logic's in-flight .tmp.
+BOUNCE_AUDIO_SUFFIXES = {".wav", ".wave", ".aif", ".aiff", ".aifc", ".m4a", ".mp3"}
 
 
 def unique_staging_name(name: str) -> str:
@@ -63,6 +65,8 @@ def fresh_staged_file(path: str, staging_dir: str, min_mtime: float) -> bool:
 def find_staged_artifact(staging_dir: str, staged_name: str, min_mtime: float) -> Optional[str]:
     scored = []
     for path in glob.glob(os.path.join(glob.escape(staging_dir), f"{glob.escape(staged_name)}.*")):
+        if os.path.splitext(path)[1].lower() not in BOUNCE_AUDIO_SUFFIXES:
+            continue
         if not fresh_staged_file(path, staging_dir, min_mtime):
             continue
         try:
