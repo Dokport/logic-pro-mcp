@@ -603,6 +603,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             if let desired = policy.mixerVisible {
                 guard let before = source.freshPopulation?.presentationObservation?.mixerVisible,
                       sort.binding.navigationBaseline != nil, sort.binding.focus != nil,
+                      before == desired || sort.binding.finalVisibilityFocusQualified,
                       !(before && !desired && sort.binding.mixerFocusWouldBeRetired) else { return nil }
                 mixer = .init(before: before, desired: desired, binding: sort.binding)
             }
@@ -673,6 +674,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               goals.allSatisfy({ CFEqual($0.binding.window, binding.window)
                   && $0.binding.document.utf8.elementsEqual(binding.document.utf8) }) else { return nil }
         if before, !desired, binding.mixerFocusWouldBeRetired { return nil }
+        if before != desired, !binding.finalVisibilityFocusQualified { return nil }
         return .init(projectRef: issued, document: binding.document,
             mixer: .init(before: before, desired: desired, binding: binding), names: goals, renameCapture: nil)
     }
@@ -1455,6 +1457,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         // Pending journal cancellation must not suppress the independent reads
         // needed to verify a forward effect or conditionally restore our own one.
         guard let navigation = await navigation(runtime: runtime, allowPendingCancellation: true) else { return nil }
+        if let task = mixerTask, task.before != task.desired,
+           !navigation.hasQualifiedFinalVisibilityFocus() { return nil }
         let observed = await navigation.approvedVisibility(expectedTransport: binding.transport,
             stoppingWhen: { [self] in stop(runtime: runtime) })
         if sortTask != nil {

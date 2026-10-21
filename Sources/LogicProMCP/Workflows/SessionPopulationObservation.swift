@@ -132,6 +132,7 @@ enum SessionPopulationObservation {
         let pid: pid_t?
         let app: AXUIElement?
         let focus: AXUIElement?
+        let finalVisibilityFocusQualified: Bool
         let navigationBaseline: AccessibilityChannel.OwnedMixerObservationNavigation?
         let uiLocale: String?
         init(window: AXUIElement, title: String, document: String, mixer: AXUIElement?,
@@ -144,6 +145,8 @@ enum SessionPopulationObservation {
             pid = runtime.logicProPID()
             app = AXLogicProElements.appRoot(runtime: runtime)
             focus = app.flatMap { AXHelpers.getAttribute($0, kAXFocusedUIElementAttribute as String, runtime: runtime.ax) }
+            finalVisibilityFocusQualified = AccessibilityChannel.OwnedMixerObservationNavigation.qualifiesFinalVisibilityFocus(
+                role: focus.flatMap { AXHelpers.getRole($0, runtime: runtime.ax) })
             navigationBaseline = .init(window: window, runtime: runtime, expectedProject: nil,
                 requiresProjectReference: false, referenceIsCurrent: { true })
         }

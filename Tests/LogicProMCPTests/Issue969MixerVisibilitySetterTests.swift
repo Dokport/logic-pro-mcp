@@ -45,6 +45,7 @@ struct Issue969MixerVisibilitySetterTests {
         var afterDecisiveMixerRead: (@Sendable () -> Void)?
         var afterCleanupActionNames: (@Sendable () -> Void)?
         var permitsCapturedFocusRestore = false
+        var additionalRestorableFocus: AXUIElement?
         var focusRestoreAcknowledged = true
         var focusRestoreChangesFocus = true
         var mixerContainer: AXUIElement?
@@ -103,7 +104,7 @@ struct Issue969MixerVisibilitySetterTests {
             }
         }
 
-        func channel() -> AccessibilityChannel {
+        func logicRuntime() -> AXLogicProElements.Runtime {
             let ax = builder.makeAXRuntime(appElement: app,
                 appElementProvider: { [self] _ in appRootResolutions += 1; return currentApp ?? app },
                 attributeValueHandler: { [self] element, attribute in
@@ -151,10 +152,11 @@ struct Issue969MixerVisibilitySetterTests {
                     return nil
                 },
                 setAttributeHandler: { [self] element, attribute, value in
-                    if permitsCapturedFocusRestore, CFEqual(element, rail),
+                    if permitsCapturedFocusRestore,
+                       CFEqual(element, rail) || additionalRestorableFocus.map({ CFEqual(element, $0) }) == true,
                        attribute == kAXFocusedAttribute as String, value as? Bool == true {
                         events.append("restore_captured_focus")
-                        if focusRestoreChangesFocus { builder.setAttribute(app, kAXFocusedUIElementAttribute as String, rail) }
+                        if focusRestoreChangesFocus { builder.setAttribute(app, kAXFocusedUIElementAttribute as String, element) }
                         afterFocusRestore?()
                         return focusRestoreAcknowledged
                     }
@@ -184,11 +186,15 @@ struct Issue969MixerVisibilitySetterTests {
                     }
                     events.append("unexpected_action"); Issue.record("unexpected visibility action"); return false
                 }, executeAppleScript: { _ in Issue.record("AppleScript forbidden"); return .error("forbidden") })
-            let logic = AXLogicProElements.Runtime(logicProPID: { [self] in logicPID }, ax: ax,
+            return AXLogicProElements.Runtime(logicProPID: { [self] in logicPID }, ax: ax,
                 executeAppleScript: { _ in Issue.record("AppleScript forbidden"); return .error("forbidden") },
                 onScreenWindowList: { [] },
                 postPopupMenuEscape: { Issue.record("global Escape forbidden") },
                 focusedApplicationPID: { [self] in logicPID }, observeFrontmost: nil)
+        }
+
+        func channel() -> AccessibilityChannel {
+            let logic = logicRuntime()
             // Every unrelated channel callback is inert; no axBacked/native ancillary defaults.
             return AccessibilityChannel(runtime: .init(
                 isTrusted: { true }, isLogicProRunning: { true }, hasVisibleWindow: { true }, appRoot: { [self] in app },
@@ -200,6 +206,98 @@ struct Issue969MixerVisibilitySetterTests {
                 projectInfo: { .error("unused") }, confirmNewTrackDialog: { Issue.record("Return forbidden") },
                 canPostEvents: { false }, logicRuntime: logic))
         }
+    }
+
+    @Test(arguments: ["AXLayoutArea", kAXLayoutItemRole as String, kAXButtonRole as String],
+          ["show", "hide", "already_shown", "already_hidden"])
+    func unsupportedWorkspaceFocusCannotAuthorizeAViewChange(role: String, profile: String) async throws {
+        let initial = profile == "hide" || profile == "already_shown"
+        let desired = profile == "show" || profile == "already_shown"
+        let fixture = Fixture(showing: initial)
+        let background = fixture.builder.element(969_084)
+        fixture.builder.setRole(background, role)
+        fixture.builder.setChildren(background, [])
+        fixture.extraWindowChildren = [background]
+        fixture.updateVisibility()
+        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, background)
+        fixture.builder.setAttributeSettable(background, kAXFocusedAttribute as String, true)
+        fixture.additionalRestorableFocus = background
+        fixture.permitsCapturedFocusRestore = true
+        fixture.focusRestoreChangesFocus = false
+        fixture.afterVisibilityChange = {
+            fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.mixer)
+        }
+        let body = try await set(fixture, visible: desired)
+        #expect(body["state"] as? String == (initial == desired ? "A" : "C"))
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!attempted)
+        #expect(fixture.events.isEmpty)
+        if initial { #expect(fixture.showing) }
+        else { #expect(!fixture.showing) }
+        if initial != desired {
+            #expect(body["navigation_reason"] as? String == "workspace_focus_restoration_unavailable")
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func focusQualificationIsRenewedBeforeTheVisibilityLeaf(initial: Bool) async throws {
+        let fixture = Fixture(showing: initial)
+        let background = fixture.builder.element(969_085)
+        fixture.builder.setRole(background, kAXGroupRole as String)
+        fixture.builder.setChildren(background, [])
+        fixture.extraWindowChildren = [background]
+        fixture.updateVisibility()
+        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, background)
+        fixture.attributeReadObserver = { element, attribute in
+            if CFEqual(element, fixture.toggle), attribute == kAXEnabledAttribute as String,
+               fixture.builder.attributeValue(fixture.view, kAXSelectedAttribute as String) as? Bool == true {
+                fixture.builder.setRole(background, "AXLayoutArea")
+            }
+        }
+        fixture.afterCancel = {
+            fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, background)
+        }
+        let body = try await set(fixture, visible: !initial)
+        #expect(body["state"] as? String == "B")
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        #expect(attempted, "The owned menu opening remains an attempted navigation effect")
+        #expect(fixture.events == ["open_view", "cancel_view"])
+        let menuRestored = try #require(body["menu_restored"] as? Bool)
+        #expect(menuRestored)
+        let restored = try #require(fixture.builder.attributeValue(
+            fixture.app, kAXFocusedUIElementAttribute as String))
+        #expect(CFEqual(restored as AnyObject, background))
+        if initial { #expect(fixture.showing) }
+        else { #expect(!fixture.showing) }
+    }
+
+    @Test(arguments: [false, true])
+    func finalFocusQualificationCannotOutliveTheBoundDocument(beforeLeaf: Bool) async throws {
+        let fixture = Fixture(showing: false)
+        fixture.attributeReadObserver = { element, attribute in
+            if fixture.finalFocusArmed, CFEqual(element, fixture.rail), attribute == kAXRoleAttribute as String {
+                fixture.finalFocusArmed = false
+                fixture.focusReadAtLoss = 1
+                fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+            }
+        }
+        let context = OperationTraceContext(mutationGateAcquired: true)
+        let result = try await OperationTraceContext.$current.withValue(context) {
+            let prepared = AccessibilityChannel.OwnedMixerObservationNavigation(
+                window: fixture.window, runtime: fixture.logicRuntime(), expectedProject: nil,
+                requiresProjectReference: false, referenceIsCurrent: { true })
+            let navigation = try #require(prepared)
+            return await navigation.setFinalVisibility(true, permittingVisibilityChange: {
+                fixture.postShowMenuReads += 1
+                if fixture.postShowMenuReads == (beforeLeaf ? 2 : 1) { fixture.finalFocusArmed = true }
+                return true
+            }, stoppingWhen: { false })
+        }
+        let body = try #require(sharedJSONObject(result.message))
+        #expect(fixture.focusReadAtLoss == 1, "The deciding role read must actually lose document custody")
+        #expect(body["state"] as? String == (beforeLeaf ? "B" : "C"))
+        #expect(fixture.events == (beforeLeaf ? ["open_view"] : []))
+        #expect(!fixture.showing)
     }
 
     @Test(arguments: [false, true])
