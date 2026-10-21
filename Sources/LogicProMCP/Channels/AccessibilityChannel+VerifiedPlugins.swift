@@ -1673,11 +1673,13 @@ extension AccessibilityChannel {
                           ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)))
             repeat {
                 guard await ownedAfterReveal() else {
+                    after = nil // The earlier sample no longer has current read custody.
                     menuRestored = !effects.navigationPerformed
                     return result(verified: false, reason: "navigation_ownership_lost")
                 }
                 let lookup = AXLogicProElements.mixerAreaLookup(in: window, runtime: runtime, requiresCompleteAbsence: true)
                 guard await ownedAfterReveal() else {
+                    after = nil
                     menuRestored = !effects.navigationPerformed
                     return result(verified: false, reason: "navigation_ownership_lost")
                 }
@@ -1688,11 +1690,13 @@ extension AccessibilityChannel {
             menuRestored = await dismissOwnedMenu(permittingActuation: { await owned() }, stoppingWhen: stop)
             guard menuRestored, await owned(), sameFocus(),
                   !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                after = nil
                 return result(verified: false, reason: "menu_restoration_failed")
             }
             let finalLookup = AXLogicProElements.mixerAreaLookup(in: window, runtime: runtime, requiresCompleteAbsence: true)
             guard await owned(), sameFocus(),
                   !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                after = nil
                 return result(verified: false, reason: "navigation_ownership_lost")
             }
             observe(finalLookup)

@@ -615,6 +615,34 @@ struct Issue969MixerVisibilitySetterTests {
         #expect(fixture.events.isEmpty)
     }
 
+    @Test(arguments: ["document", "gate", "cancel", "focus"])
+    func cleanupCustodyLossWithdrawsTheEarlierVisibilitySample(loss: String) async throws {
+        let fixture = Fixture(showing: false)
+        fixture.leafLeavesMenuOpen = true
+        fixture.afterCancel = {
+            fixture.events.append("invalidate_observation")
+            switch loss {
+            case "document": fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Other.logicx")
+            case "gate": fixture.gateOwned = false
+            case "cancel": fixture.cancelled = true
+            default:
+                let foreign = fixture.builder.element(969_030)
+                fixture.builder.setRole(foreign, kAXGroupRole as String)
+                fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, foreign)
+            }
+        }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { fixture.gateOwned },
+            deadline: ContinuousClock.now.advanced(by: .seconds(5)), cancellationRequested: { fixture.cancelled })
+        let body = try await set(fixture, visible: true, context: context)
+        #expect(body["state"] as? String == "B")
+        #expect(body["verified"] as? Bool == false)
+        #expect(body["write_attempted"] as? Bool == true)
+        #expect(body["before_visible"] as? Bool == false)
+        #expect(body["after_visible"] == nil, "A pre-cleanup sample cannot certify the result after custody is lost")
+        #expect(fixture.showing, "The completed visibility effect must not be erased by the refusal")
+        #expect(fixture.events == ["open_view", "show_mixer", "cancel_view", "invalidate_observation"])
+    }
+
     @Test func ownershipLossInsideTheDecidingMixerReadStopsTheLeaf() async throws {
         let fixture = Fixture(showing: true)
         let otherWindow = fixture.builder.element(969_008)
@@ -878,6 +906,8 @@ struct Issue969MixerVisibilitySetterTests {
         let attempted = try #require(body["write_attempted"] as? Bool)
         #expect(attempted)
         #expect(fixture.events == ["open_view", "show_mixer"])
+        if loss == "healthy" { #expect(body["after_visible"] as? Bool == true) }
+        else { #expect(body["after_visible"] == nil) }
     }
 
     @Test(arguments: [true, false])
