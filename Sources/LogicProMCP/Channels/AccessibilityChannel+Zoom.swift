@@ -61,13 +61,17 @@ extension AccessibilityChannel {
             guard windowHeld(),
                   case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime),
                   let header = headers.first, let headerPath = ancestors(header) else { return nil }
-            // Observed native structure: header rail -> scroll area -> split group
+            // Observed native structure: header rail -> scroll area -> split group(s)
             // -> body group -> area group; zoom -> toolbar group -> SAME area.
             // Neither a title match nor an arbitrary common ancestor proves this.
             var splitIndex: Int?
             for (index, ancestor) in headerPath.enumerated() {
                 guard let role: String = attribute(ancestor, kAXRoleAttribute as String) else { return nil }
-                if role == (kAXSplitGroupRole as String) { splitIndex = index; break }
+                if role == (kAXSplitGroupRole as String) {
+                    splitIndex = index
+                } else if splitIndex != nil {
+                    break
+                }
             }
             guard let splitIndex, splitIndex + 2 < headerPath.count,
                   let bodyRole: String = attribute(headerPath[splitIndex + 1], kAXRoleAttribute as String),

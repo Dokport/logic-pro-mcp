@@ -66,13 +66,13 @@ struct Issue109ZoomTests {
     }
 
     @Test("An explicit vertical zoom changes track height, not horizontal zoom")
-    func verticalZoomTargetsOnlyTheActualVerticalControl() async throws {
+    func verticalZoomTargetsOnlyTheActualVerticalControl() throws {
         let f = verticalFixture(), vertical = f.builder.element(7710)
         let gate = LogicMutationGate()
         let claim = try #require(gate.tryAcquire(operation: "vertical-zoom-test"))
         defer { gate.release(claim) }
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
-        try await OperationTraceContext.$current.withValue(context) {
+        try OperationTraceContext.$current.withValue(context) {
             let result = AccessibilityChannel.defaultSetZoomLevel(params: ["level": "8", "axis": "vertical"],
                 runtime: f.builder.makeLogicRuntime(appElement: f.app))
             let body = try #require(obj(result))
@@ -124,7 +124,8 @@ struct Issue109ZoomTests {
             let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
                 params: ["level": "8", "axis": "vertical"], runtime: b.makeLogicRuntime(appElement: f.app))))
             #expect(body["state"] as? String == "C")
-            #expect(body["write_attempted"] as? Bool == false)
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!attempted)
             #expect(b.setCalls.isEmpty)
             #expect(b.actionCalls.isEmpty)
         }
@@ -140,7 +141,8 @@ struct Issue109ZoomTests {
             let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
                 params: ["level": "8", "axis": "vertical"], runtime: runtime)))
             #expect(body["state"] as? String == "B")
-            #expect(body["write_attempted"] as? Bool == true)
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(attempted)
             #expect(body["observed"] as? Double == 0.1)
         }
     }
@@ -164,12 +166,13 @@ struct Issue109ZoomTests {
         await failedRouter.register(keys)
         let result = await NavigateDispatcher.handle(command: "set_zoom",
             params: ["level": .string("in"), "axis": .string("vertical")], router: failedRouter, cache: StateCache())
-        #expect(result.isError == true)
+        let failed = try #require(result.isError)
+        #expect(failed)
         #expect(await keys.executedOps.isEmpty)
     }
 
     @Test("Invalid axes and unsupported vertical fit never reach a channel")
-    func verticalZoomDispatcherRejectsMalformedAxis() async {
+    func verticalZoomDispatcherRejectsMalformedAxis() async throws {
         let router = ChannelRouter(), ax = MockChannel(id: .accessibility), keys = MockChannel(id: .midiKeyCommands)
         await router.register(ax)
         await router.register(keys)
@@ -182,7 +185,8 @@ struct Issue109ZoomTests {
         ]
         for params in cases {
             let result = await NavigateDispatcher.handle(command: "set_zoom", params: params, router: router, cache: StateCache())
-            #expect(result.isError == true)
+            let failed = try #require(result.isError)
+            #expect(failed)
         }
         #expect(await ax.executedOps.isEmpty)
         #expect(await keys.executedOps.isEmpty)
@@ -204,7 +208,8 @@ struct Issue109ZoomTests {
             let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
                 params: ["level": "8", "axis": "vertical"], runtime: runtime)))
             #expect(body["state"] as? String == "B")
-            #expect(body["write_attempted"] as? Bool == true)
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(attempted)
             #expect(b.actionCalls.isEmpty)
         }
     }
@@ -218,12 +223,13 @@ struct Issue109ZoomTests {
             let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
                 params: ["level": "8", "axis": "vertical"], runtime: f.builder.makeLogicRuntime(appElement: f.app))))
             #expect(body["state"] as? String == "A")
-            #expect(body["write_attempted"] as? Bool == false)
+            let attempted = try #require(body["write_attempted"] as? Bool)
+            #expect(!attempted)
             #expect(f.builder.setCalls.isEmpty)
         }
     }
 
-    @Test("R1: a common outer group does not turn an editor slider into a Tracks control")
+    @Test("A common outer group does not turn an editor slider into a Tracks control")
     func verticalZoomRefusesWrappedEditor() throws {
         let f = verticalFixture(), b = f.builder
         let window = b.element(7701), vertical = b.element(7710), tracks = b.element(7711)
@@ -243,7 +249,7 @@ struct Issue109ZoomTests {
         }
     }
 
-    @Test("R2: an unresolved matching competitor is not evidence of a unique slider")
+    @Test("An unresolved matching competitor is not evidence of a unique slider")
     func verticalZoomRefusesUnreadCompetitor() throws {
         let f = verticalFixture(), b = f.builder
         let duplicate = b.element(7720)
@@ -263,7 +269,24 @@ struct Issue109ZoomTests {
 
     private final class ZoomWriteFlag: @unchecked Sendable { var issued = false }
 
-    @Test("R3: final identity discovery cannot certify an earlier, now stale value")
+    @Test("Actual native nested split groups retain the same original Tracks area")
+    func verticalZoomAcceptsContiguousNativeSplitChain() throws {
+        let f = verticalFixture(), b = f.builder
+        let extraSplit = b.element(7718)
+        b.setRole(extraSplit, kAXSplitGroupRole as String)
+        b.setChildren(extraSplit, [b.element(7715)])
+        b.setChildren(b.element(7714), [extraSplit])
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: b.makeLogicRuntime(appElement: f.app))))
+            #expect(body["state"] as? String == "A")
+            #expect(b.setCalls.count == 1)
+            #expect(b.setCalls.allSatisfy { $0.elementID == b.elementID(b.element(7710)) })
+        }
+    }
+
+    @Test("Final identity discovery cannot certify an earlier, now stale value")
     func verticalZoomRejectsValueChangedDuringFinalDiscovery() throws {
         let f = verticalFixture(), b = f.builder, issued = ZoomWriteFlag()
         let runtime = b.makeLogicRuntime(appElement: f.app, attributeValueHandler: { element, attribute in
