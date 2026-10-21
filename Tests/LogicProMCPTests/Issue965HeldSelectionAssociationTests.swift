@@ -9290,11 +9290,15 @@ struct Issue965HeldSelectionAssociationTests {
 
     @Test(arguments: ["healthy", "retained_focus", "own_landing", "foreign_editor", "foreign_held_strip",
                      "joint_landing", "foreign_joint_focus", "foreign_joint_child", "foreign_joint_document",
-                     "foreign_joint_parent", "foreign_joint_unreadable"])
+                     "foreign_joint_parent", "foreign_joint_unreadable", "child_landing",
+                     "foreign_child_focus", "foreign_child_child", "foreign_child_document",
+                     "foreign_child_parent", "foreign_child_unreadable"])
     func wholeInspectionKeepsOnlyItsOwnLateSelectionFocus(fault: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true), b = f.builder
         f.useBulkReads = true
         let jointLanding = fault == "joint_landing" || fault.hasPrefix("foreign_joint_")
+        let childLanding = fault == "child_landing" || fault.hasPrefix("foreign_child_")
+        let delayedChild = jointLanding || childLanding
         for (index, header) in f.headers.enumerated() {
             b.setAttribute(header, kAXSelectedAttribute as String, index == 3)
         }
@@ -9304,9 +9308,9 @@ struct Issue965HeldSelectionAssociationTests {
         f.routingSelection = { index in
             let source = index == 0 ? 1 : index == 1 ? 0 : index == 2 ? 3 : 2
             b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
-                [f.strips[jointLanding && index == 2 ? 0 : source]])
+                [f.strips[delayedChild && index == 2 ? 0 : source]])
         }
-        let inject = jointLanding || ["own_landing", "foreign_editor", "foreign_held_strip"].contains(fault)
+        let inject = delayedChild || ["own_landing", "foreign_editor", "foreign_held_strip"].contains(fault)
         let foreign = b.element(1_965_799)
         b.setRole(foreign, kAXTextFieldRole as String)
         b.setAttribute(foreign, kAXWindowAttribute as String, f.window)
@@ -9316,29 +9320,31 @@ struct Issue965HeldSelectionAssociationTests {
                !f.lateAssociationFocusSampled {
                 f.lateAssociationFocusSampled = true
                 // Focus and, in the joint case, the selected-child relation
-                // still reflect the preceding, completely held strip.
-                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[0])
+                // still reflect the preceding, completely held strip. The
+                // child-only case already has this selection's actual focus.
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                    f.strips[childLanding ? 3 : 0])
             }
             if f.lateAssociationFocusSampled, !f.lateAssociationFocusLanded,
                CFEqual(element, f.scroll), attribute == kAXValueAttribute as String {
                 f.lateAssociationFocusLanded = true
-                let focus = fault == "own_landing" || jointLanding ? f.strips[3]
+                let focus = fault == "own_landing" || delayedChild ? f.strips[3]
                     : fault == "foreign_held_strip" ? f.strips[1] : foreign
                 b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
-                    fault == "foreign_joint_focus" ? f.strips[1] : focus)
-                if jointLanding {
+                    fault == "foreign_joint_focus" || fault == "foreign_child_focus" ? f.strips[1] : focus)
+                if delayedChild {
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
-                        [f.strips[fault == "foreign_joint_child" ? 0 : 3]])
-                    if fault == "foreign_joint_document" {
+                        [f.strips[fault == "foreign_joint_child" ? 0 : fault == "foreign_child_child" ? 1 : 3]])
+                    if fault == "foreign_joint_document" || fault == "foreign_child_document" {
                         b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                     }
-                    if fault == "foreign_joint_parent" {
+                    if fault == "foreign_joint_parent" || fault == "foreign_child_parent" {
                         b.setAttribute(f.strips[3], kAXParentAttribute as String, f.rail)
                     }
                 }
             }
         }
-        if fault == "foreign_joint_unreadable" {
+        if fault == "foreign_joint_unreadable" || fault == "foreign_child_unreadable" {
             f.routingReadResult = { element, attribute in
                 if f.lateAssociationFocusLanded, CFEqual(element, f.mixer),
                    attribute == kAXSelectedChildrenAttribute as String {

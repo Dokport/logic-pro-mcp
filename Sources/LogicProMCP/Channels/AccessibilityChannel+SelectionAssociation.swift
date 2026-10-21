@@ -1152,6 +1152,19 @@ extension AccessibilityChannel {
                             lost = true; return false
                         }
                         selectedChild = currentSelectedChild
+                    } else if let priorChild = selectedChild, let precedingSelectedChild,
+                              CFEqual(priorChild, precedingSelectedChild),
+                              !CFEqual(settledFocus, precedingFocus) {
+                        // Focus may settle before its selected-child relationship.
+                        // Renew a child that lands during the viewport read only
+                        // onto that already observed focus. Retaining the preceding
+                        // child is still not a new association witness.
+                        guard case .observed(let currentSelectedChild) = selectedChildRead(),
+                              CFEqual(currentSelectedChild, priorChild)
+                                || CFEqual(currentSelectedChild, settledFocus) else {
+                            lost = true; return false
+                        }
+                        selectedChild = currentSelectedChild
                     }
                     // Logic can select our exact held header while retaining its
                     // original Mixer relationship. Retain that owned transition
