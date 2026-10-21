@@ -116,7 +116,10 @@ extension AccessibilityChannel {
               scalar(slider, kAXMaxValueAttribute as String) == 1, windowHeld(), owned() else {
             return refused("Original vertical zoom control changed before the write")
         }
-        let alreadyAtTarget = Float(before) == Float(target)
+        // Native level 8 reads 0.7777777314186096: one Float step below
+        // Float(7/9), not the exact Double request. Larger discrepancies refuse.
+        let precision = Double(Float(target).ulp)
+        let alreadyAtTarget = abs(before - target) <= precision
         let acknowledged = alreadyAtTarget || AXValueExtractors.setSliderValue(slider, target, runtime: runtime.ax)
         if !alreadyAtTarget { usleep(120_000) }
         let controlHeld = locate().map { CFEqual($0, slider) } == true && windowHeld()
@@ -125,8 +128,9 @@ extension AccessibilityChannel {
         let extras: [String: Any] = ["operation": "nav.set_zoom", "axis": "vertical", "level": level,
             "requested": target, "observed_before": before, "observed": after ?? NSNull(),
             "observed_after": after ?? NSNull(), "verify_source": "ax_zoom_slider",
-            "write_attempted": !alreadyAtTarget, "write_acknowledged": acknowledged]
-        if acknowledged, held, let after, Float(after) == Float(target) {
+            "write_attempted": !alreadyAtTarget, "write_acknowledged": acknowledged,
+            "readback_tolerance": precision]
+        if acknowledged, held, let after, (0...1).contains(after), abs(after - target) <= precision {
             return .success(HonestContract.encodeStateA(extras: extras))
         }
         return .success(HonestContract.encodeStateB(

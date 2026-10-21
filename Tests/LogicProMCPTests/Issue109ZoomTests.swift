@@ -269,6 +269,25 @@ struct Issue109ZoomTests {
 
     private final class ZoomWriteFlag: @unchecked Sendable { var issued = false }
 
+    @Test("Native one-Float-unit readback rounding is bounded; a larger difference stays unverified", arguments: [1, 2])
+    func verticalZoomBoundsNativeFloatPrecision(units: Int) throws {
+        let f = verticalFixture(), b = f.builder
+        let runtime = b.makeLogicRuntime(appElement: f.app, setAttributeHandler: { element, attribute, _ in
+            var actual = Float(7.0 / 9.0)
+            for _ in 0..<units { actual = actual.nextDown }
+            b.setAttribute(element, attribute, Double(actual))
+            return true
+        }, performActionHandler: nil)
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: runtime)))
+            #expect(body["state"] as? String == (units == 1 ? "A" : "B"))
+            let actual = try #require(body["observed"] as? Double)
+            #expect(actual < 7.0 / 9.0)
+        }
+    }
+
     @Test("Actual native nested split groups retain the same original Tracks area")
     func verticalZoomAcceptsContiguousNativeSplitChain() throws {
         let f = verticalFixture(), b = f.builder
