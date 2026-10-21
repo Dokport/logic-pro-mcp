@@ -1374,7 +1374,8 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(renewed.source == nil)
                 #expect(renewed.effects.restoration != "restored")
             } else {
-                #expect(renewed.source?.pair.track.matches(original.track) == true)
+                let renewedSource = try #require(renewed.source)
+                #expect(renewedSource.pair.track.matches(original.track))
                 #expect(renewed.effects.restoration == "restored")
                 #expect((b.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25)
                 #expect(AXHelpers.getPosition(replacement, runtime: runtime.ax)?.x == 45)
