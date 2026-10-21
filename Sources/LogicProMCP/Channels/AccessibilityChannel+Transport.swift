@@ -969,6 +969,14 @@ extension AccessibilityChannel {
         params: [String: String],
         runtime: AXLogicProElements.Runtime = .production
     ) -> ChannelResult {
+        let axis = params["axis"] ?? "horizontal"
+        guard axis == "horizontal" || axis == "vertical" else {
+            return .error(HonestContract.encodeStateC(error: .invalidParams,
+                hint: "set_zoom axis must be horizontal or vertical"))
+        }
+        if axis == "vertical" {
+            return defaultSetVerticalZoomLevel(params: params, runtime: runtime)
+        }
         // Malformed input fails closed as terminal State C: a bad level must NOT
         // fall through to the key-command channel (which doesn't validate and
         // would fire a generic zoom). Mirrors gotoPositionViaBarSlider's guard.

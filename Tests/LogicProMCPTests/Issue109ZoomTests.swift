@@ -1,5 +1,6 @@
 import ApplicationServices
 import Foundation
+import MCP
 import Testing
 @testable import LogicProMCP
 
@@ -27,6 +28,189 @@ struct Issue109ZoomTests {
 
     private func obj(_ r: ChannelResult) -> [String: Any]? {
         (try? JSONSerialization.jsonObject(with: Data(r.message.utf8))) as? [String: Any]
+    }
+
+    private func verticalFixture() -> (builder: FakeAXRuntimeBuilder, app: AXUIElement, slider: AXUIElement) {
+        let f = zoomFixture(start: 0.18)
+        let window = f.builder.element(7701), vertical = f.builder.element(7710)
+        f.builder.setRole(window, kAXWindowRole as String)
+        f.builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/issue1384.logicx/")
+        let tracks = f.builder.element(7711), rail = f.builder.element(7712), header = f.builder.element(7713)
+        f.builder.setRole(tracks, kAXGroupRole as String)
+        f.builder.setRole(rail, kAXListRole as String)
+        f.builder.setAttribute(rail, kAXIdentifierAttribute as String, "Track Headers")
+        f.builder.setRole(header, kAXLayoutItemRole as String)
+        f.builder.setChildren(header, [])
+        f.builder.setChildren(rail, [header])
+        f.builder.setRole(vertical, kAXSliderRole as String)
+        f.builder.setAttribute(vertical, kAXDescriptionAttribute as String, "Vertical Zoom")
+        f.builder.setAttribute(vertical, kAXValueAttribute as String, 0.1)
+        f.builder.setAttribute(vertical, kAXMinValueAttribute as String, 0.0)
+        f.builder.setAttribute(vertical, kAXMaxValueAttribute as String, 1.0)
+        f.builder.setAttribute(vertical, kAXWindowAttribute as String, window)
+        f.builder.setAttributeSettable(vertical, kAXValueAttribute as String, true)
+        f.builder.setChildren(vertical, [])
+        f.builder.setChildren(tracks, [f.slider, vertical, rail])
+        f.builder.setChildren(window, [tracks])
+        return f
+    }
+
+    @Test("An explicit vertical zoom changes track height, not horizontal zoom")
+    func verticalZoomTargetsOnlyTheActualVerticalControl() async throws {
+        let f = verticalFixture(), vertical = f.builder.element(7710)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "vertical-zoom-test"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let result = AccessibilityChannel.defaultSetZoomLevel(params: ["level": "8", "axis": "vertical"],
+                runtime: f.builder.makeLogicRuntime(appElement: f.app))
+            let body = try #require(obj(result))
+            #expect(body["axis"] as? String == "vertical")
+            #expect(body["state"] as? String == "A")
+            #expect(f.builder.setCalls.count == 1)
+            #expect(f.builder.setCalls.allSatisfy { $0.elementID == f.builder.elementID(vertical) })
+            let horizontal = try #require((f.builder.attributeValue(f.slider, kAXValueAttribute as String) as? NSNumber)?.doubleValue)
+            let actual = try #require((f.builder.attributeValue(vertical, kAXValueAttribute as String) as? NSNumber)?.doubleValue)
+            #expect(horizontal == 0.18)
+            #expect(Float(actual) == Float(7.0 / 9.0))
+        }
+    }
+
+    @Test("A vertical-height request cannot fall back to an unrelated zoom key command")
+    func verticalZoomHasOnlyItsExpressibleNativeRoute() {
+        #expect(ChannelRouter.routingTable["nav.set_vertical_zoom_level"] == [.accessibility])
+    }
+
+    @Test("Vertical zoom refuses incomplete, ambiguous, foreign or malformed controls without writing",
+          arguments: ["missing", "duplicate", "editor", "parent", "document", "boolean", "nan", "range", "not_settable", "lease"])
+    func verticalZoomRefusesUnsafeTargets(fault: String) throws {
+        let f = verticalFixture(), b = f.builder
+        let window = b.element(7701), vertical = b.element(7710), tracks = b.element(7711), rail = b.element(7712)
+        switch fault {
+        case "missing": b.setChildren(tracks, [f.slider, rail])
+        case "duplicate":
+            let duplicate = b.element(7720)
+            b.setRole(duplicate, kAXSliderRole as String)
+            b.setAttribute(duplicate, kAXDescriptionAttribute as String, "Vertical Zoom")
+            b.setChildren(duplicate, [])
+            b.setChildren(tracks, [f.slider, vertical, duplicate, rail])
+        case "editor":
+            let editor = b.element(7720)
+            b.setRole(editor, kAXGroupRole as String)
+            b.setChildren(tracks, [f.slider, rail])
+            b.setChildren(editor, [vertical])
+            b.setChildren(window, [tracks, editor])
+        case "parent": b.setAttribute(vertical, kAXParentAttribute as String, f.app)
+        case "document": b.removeAttribute(window, kAXDocumentAttribute as String)
+        case "boolean": b.setAttribute(vertical, kAXValueAttribute as String, true)
+        case "nan": b.setAttribute(vertical, kAXValueAttribute as String, Double.nan)
+        case "range": b.setAttribute(vertical, kAXMaxValueAttribute as String, 100.0)
+        case "not_settable": b.setAttributeSettable(vertical, kAXValueAttribute as String, false)
+        default: break
+        }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { fault != "lease" })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: b.makeLogicRuntime(appElement: f.app))))
+            #expect(body["state"] as? String == "C")
+            #expect(body["write_attempted"] as? Bool == false)
+            #expect(b.setCalls.isEmpty)
+            #expect(b.actionCalls.isEmpty)
+        }
+    }
+
+    @Test("Vertical zoom does not infer success from a setter acknowledgment")
+    func verticalZoomRequiresActualReadback() throws {
+        let f = verticalFixture()
+        let runtime = f.builder.makeLogicRuntime(appElement: f.app,
+            setAttributeHandler: { _, _, _ in true }, performActionHandler: nil)
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: runtime)))
+            #expect(body["state"] as? String == "B")
+            #expect(body["write_attempted"] as? Bool == true)
+            #expect(body["observed"] as? Double == 0.1)
+        }
+    }
+
+    @Test("Vertical zoom dispatch preserves the axis and cannot use a horizontal fallback")
+    func verticalZoomDispatcherRoute() async throws {
+        let router = ChannelRouter(), ax = MockChannel(id: .accessibility), keys = MockChannel(id: .midiKeyCommands)
+        await router.register(ax)
+        await router.register(keys)
+        for (level, expected) in [("in", "8"), ("out", "2"), ("5", "5")] {
+            _ = await NavigateDispatcher.handle(command: "set_zoom",
+                params: ["level": .string(level), "axis": .string("vertical")], router: router, cache: StateCache())
+            let last = try #require(await ax.executedOps.last)
+            #expect(last.0 == "nav.set_vertical_zoom_level")
+            #expect(last.1 == ["level": expected, "axis": "vertical"])
+        }
+        #expect(await keys.executedOps.isEmpty)
+        let failedRouter = ChannelRouter()
+        let absentAX = MockChannel(id: .accessibility, failWith: "native slider unavailable")
+        await failedRouter.register(absentAX)
+        await failedRouter.register(keys)
+        let result = await NavigateDispatcher.handle(command: "set_zoom",
+            params: ["level": .string("in"), "axis": .string("vertical")], router: failedRouter, cache: StateCache())
+        #expect(result.isError == true)
+        #expect(await keys.executedOps.isEmpty)
+    }
+
+    @Test("Invalid axes and unsupported vertical fit never reach a channel")
+    func verticalZoomDispatcherRejectsMalformedAxis() async {
+        let router = ChannelRouter(), ax = MockChannel(id: .accessibility), keys = MockChannel(id: .midiKeyCommands)
+        await router.register(ax)
+        await router.register(keys)
+        let cases: [[String: Value]] = [
+            ["level": .string("8"), "axis": .bool(true)],
+            ["level": .string("8"), "axis": .string("diagonal")],
+            ["level": .string("fit"), "axis": .string("vertical")],
+            ["direction": .string("fit"), "axis": .string("vertical")],
+            ["axis": .string("vertical")],
+        ]
+        for params in cases {
+            let result = await NavigateDispatcher.handle(command: "set_zoom", params: params, router: router, cache: StateCache())
+            #expect(result.isError == true)
+        }
+        #expect(await ax.executedOps.isEmpty)
+        #expect(await keys.executedOps.isEmpty)
+    }
+
+    @Test("Vertical zoom never certifies a write after project loss or a negative native acknowledgment",
+          arguments: ["project", "ack"])
+    func verticalZoomPostWriteUncertainty(fault: String) throws {
+        let f = verticalFixture(), b = f.builder
+        let runtime = b.makeLogicRuntime(appElement: f.app, setAttributeHandler: { element, attribute, value in
+            b.setAttribute(element, attribute, value)
+            if fault == "project" {
+                b.setAttribute(b.element(7701), kAXDocumentAttribute as String, "file:///tmp/foreign.logicx/")
+            }
+            return fault != "ack"
+        }, performActionHandler: nil)
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: runtime)))
+            #expect(body["state"] as? String == "B")
+            #expect(body["write_attempted"] as? Bool == true)
+            #expect(b.actionCalls.isEmpty)
+        }
+    }
+
+    @Test("An already verified vertical level is a read-only no-op")
+    func verticalZoomAlreadyAtTargetDoesNotWrite() throws {
+        let f = verticalFixture()
+        f.builder.setAttribute(f.builder.element(7710), kAXValueAttribute as String, 7.0 / 9.0)
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: f.builder.makeLogicRuntime(appElement: f.app))))
+            #expect(body["state"] as? String == "A")
+            #expect(body["write_attempted"] as? Bool == false)
+            #expect(f.builder.setCalls.isEmpty)
+        }
     }
 
     // #904: fixed values read from the installed Logic 12.3 (6674)

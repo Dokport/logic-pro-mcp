@@ -87,7 +87,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `goto_bar` | `bar`: integer | `bar` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `goto_marker` | `index`: integer, `name` | `index` or `name` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `rename_marker` | `index`: integer, `name`: scalar | `index`; `name` | closed | mutating | none | none | readback_required | never_automatic | default_install |
-| `set_zoom` | `direction`, `level` | `level` or `direction` | closed | mutating | none | none | readback_required | never_automatic | default_install |
+| `set_zoom` | `axis`: string (horizontal, vertical), `direction`, `level` | `level` or `direction` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `toggle_view` | `view`, `visible`: boolean | `view` | closed | mutating | none | none | none | never_automatic | default_install |
 | `zoom_to_fit` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 

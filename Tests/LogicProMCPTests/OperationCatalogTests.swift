@@ -132,7 +132,7 @@ struct OperationCatalogTests {
         .navigateCaptureMarkers: [],
         .navigateCreateMarker: ["name"],
         .navigateRenameMarker: ["name"],
-        .navigateSetZoom: ["direction", "level"],
+        .navigateSetZoom: ["direction", "level", "axis"],
         .navigateToggleView: ["view", "visible"],
         .audioAnalyzeFile: [
             "expected_channel_count",

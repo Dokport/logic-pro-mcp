@@ -1693,6 +1693,9 @@ actor AccessibilityChannel: Channel {
                 params: params, runtime: runtime.logicRuntime
             )
 
+        case "nav.set_vertical_zoom_level":
+            return Self.defaultSetVerticalZoomLevel(params: params, runtime: runtime.logicRuntime)
+
         case "view.set_mixer_visibility":
             return await Self.defaultSetMixerVisibility(params: params, runtime: runtime.logicRuntime)
 
