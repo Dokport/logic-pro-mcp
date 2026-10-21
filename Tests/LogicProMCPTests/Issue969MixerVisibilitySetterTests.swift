@@ -635,9 +635,12 @@ struct Issue969MixerVisibilitySetterTests {
             deadline: ContinuousClock.now.advanced(by: .seconds(5)), cancellationRequested: { fixture.cancelled })
         let body = try await set(fixture, visible: true, context: context)
         #expect(body["state"] as? String == "B")
-        #expect(body["verified"] as? Bool == false)
-        #expect(body["write_attempted"] as? Bool == true)
-        #expect(body["before_visible"] as? Bool == false)
+        let verified = try #require(body["verified"] as? Bool)
+        let attempted = try #require(body["write_attempted"] as? Bool)
+        let before = try #require(body["before_visible"] as? Bool)
+        #expect(!verified)
+        #expect(attempted)
+        #expect(!before)
         #expect(body["after_visible"] == nil, "A pre-cleanup sample cannot certify the result after custody is lost")
         #expect(fixture.showing, "The completed visibility effect must not be erased by the refusal")
         #expect(fixture.events == ["open_view", "show_mixer", "cancel_view", "invalidate_observation"])
@@ -906,7 +909,10 @@ struct Issue969MixerVisibilitySetterTests {
         let attempted = try #require(body["write_attempted"] as? Bool)
         #expect(attempted)
         #expect(fixture.events == ["open_view", "show_mixer"])
-        if loss == "healthy" { #expect(body["after_visible"] as? Bool == true) }
+        if loss == "healthy" {
+            let after = try #require(body["after_visible"] as? Bool)
+            #expect(after)
+        }
         else { #expect(body["after_visible"] == nil) }
     }
 
