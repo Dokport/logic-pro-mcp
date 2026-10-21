@@ -1264,7 +1264,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           RoutingGraphPublication.classifyOutputLabel(slot.source).0 == .bus,
                           RoutingGraphPublication.classifyOutputLabel(slot.source).1 == bus,
                           slot.owner.currentIndex(runtime: runtime) != nil else { continue }
-                    let prior = task.capture.freshPopulation?.selectionAssociations.first { $0.strip.matches(slot.owner) }
+                    // Keep a current roster pair for this exact native owner
+                    // before deduplicating candidates. Its input read can retire
+                    // it even when the selected capture never associated it.
+                    let observed = roster?.observedPairs.filter { $0.strip.matches(slot.owner) } ?? []
+                    guard observed.count <= 1 else { return nil }
+                    let prior = observed.first
+                        ?? task.capture.freshPopulation?.selectionAssociations.first { $0.strip.matches(slot.owner) }
                     stage = "receiver_\(bus)_captured_control"
                     let native = AXLogicProElements.inputSlotRead(in: slot.owner.strip, runtime: runtime.ax)
                     guard case .source(let label) = native.reading, label.utf8.elementsEqual(slot.source.utf8),
