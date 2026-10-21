@@ -36,12 +36,21 @@ struct Issue109ZoomTests {
         f.builder.setRole(window, kAXWindowRole as String)
         f.builder.setAttribute(window, kAXDocumentAttribute as String, "file:///tmp/issue1384.logicx/")
         let tracks = f.builder.element(7711), rail = f.builder.element(7712), header = f.builder.element(7713)
+        let body = f.builder.element(7714), split = f.builder.element(7715), scroll = f.builder.element(7716)
         f.builder.setRole(tracks, kAXGroupRole as String)
+        f.builder.setRole(body, kAXGroupRole as String)
+        f.builder.setRole(split, kAXSplitGroupRole as String)
+        f.builder.setRole(scroll, kAXScrollAreaRole as String)
         f.builder.setRole(rail, kAXListRole as String)
         f.builder.setAttribute(rail, kAXIdentifierAttribute as String, "Track Headers")
         f.builder.setRole(header, kAXLayoutItemRole as String)
         f.builder.setChildren(header, [])
         f.builder.setChildren(rail, [header])
+        f.builder.setChildren(scroll, [rail])
+        f.builder.setChildren(split, [scroll])
+        f.builder.setChildren(body, [split])
+        let toolbar = f.builder.element(7717)
+        f.builder.setRole(toolbar, kAXGroupRole as String)
         f.builder.setRole(vertical, kAXSliderRole as String)
         f.builder.setAttribute(vertical, kAXDescriptionAttribute as String, "Vertical Zoom")
         f.builder.setAttribute(vertical, kAXValueAttribute as String, 0.1)
@@ -50,7 +59,8 @@ struct Issue109ZoomTests {
         f.builder.setAttribute(vertical, kAXWindowAttribute as String, window)
         f.builder.setAttributeSettable(vertical, kAXValueAttribute as String, true)
         f.builder.setChildren(vertical, [])
-        f.builder.setChildren(tracks, [f.slider, vertical, rail])
+        f.builder.setChildren(toolbar, [f.slider, vertical])
+        f.builder.setChildren(tracks, [toolbar, body])
         f.builder.setChildren(window, [tracks])
         return f
     }
@@ -86,19 +96,19 @@ struct Issue109ZoomTests {
           arguments: ["missing", "duplicate", "editor", "parent", "document", "boolean", "nan", "range", "not_settable", "lease"])
     func verticalZoomRefusesUnsafeTargets(fault: String) throws {
         let f = verticalFixture(), b = f.builder
-        let window = b.element(7701), vertical = b.element(7710), tracks = b.element(7711), rail = b.element(7712)
+        let window = b.element(7701), vertical = b.element(7710), tracks = b.element(7711), toolbar = b.element(7717)
         switch fault {
-        case "missing": b.setChildren(tracks, [f.slider, rail])
+        case "missing": b.setChildren(toolbar, [f.slider])
         case "duplicate":
             let duplicate = b.element(7720)
             b.setRole(duplicate, kAXSliderRole as String)
             b.setAttribute(duplicate, kAXDescriptionAttribute as String, "Vertical Zoom")
             b.setChildren(duplicate, [])
-            b.setChildren(tracks, [f.slider, vertical, duplicate, rail])
+            b.setChildren(toolbar, [f.slider, vertical, duplicate])
         case "editor":
             let editor = b.element(7720)
             b.setRole(editor, kAXGroupRole as String)
-            b.setChildren(tracks, [f.slider, rail])
+            b.setChildren(toolbar, [f.slider])
             b.setChildren(editor, [vertical])
             b.setChildren(window, [tracks, editor])
         case "parent": b.setAttribute(vertical, kAXParentAttribute as String, f.app)
@@ -210,6 +220,69 @@ struct Issue109ZoomTests {
             #expect(body["state"] as? String == "A")
             #expect(body["write_attempted"] as? Bool == false)
             #expect(f.builder.setCalls.isEmpty)
+        }
+    }
+
+    @Test("R1: a common outer group does not turn an editor slider into a Tracks control")
+    func verticalZoomRefusesWrappedEditor() throws {
+        let f = verticalFixture(), b = f.builder
+        let window = b.element(7701), vertical = b.element(7710), tracks = b.element(7711)
+        let editor = b.element(7720), outer = b.element(7721)
+        b.setRole(editor, kAXGroupRole as String)
+        b.setRole(outer, kAXGroupRole as String)
+        b.setChildren(b.element(7717), [f.slider])
+        b.setChildren(editor, [vertical])
+        b.setChildren(outer, [tracks, editor])
+        b.setChildren(window, [outer])
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: b.makeLogicRuntime(appElement: f.app))))
+            #expect(body["state"] as? String == "C")
+            #expect(b.setCalls.isEmpty)
+        }
+    }
+
+    @Test("R2: an unresolved matching competitor is not evidence of a unique slider")
+    func verticalZoomRefusesUnreadCompetitor() throws {
+        let f = verticalFixture(), b = f.builder
+        let duplicate = b.element(7720)
+        b.setRole(duplicate, kAXSliderRole as String)
+        b.setAttribute(duplicate, kAXDescriptionAttribute as String, "Vertical Zoom")
+        b.setChildren(duplicate, [])
+        b.setChildren(b.element(7717), [f.slider, b.element(7710), duplicate])
+        b.removeAttribute(duplicate, kAXParentAttribute as String)
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: b.makeLogicRuntime(appElement: f.app))))
+            #expect(body["state"] as? String == "C")
+            #expect(b.setCalls.isEmpty)
+        }
+    }
+
+    private final class ZoomWriteFlag: @unchecked Sendable { var issued = false }
+
+    @Test("R3: final identity discovery cannot certify an earlier, now stale value")
+    func verticalZoomRejectsValueChangedDuringFinalDiscovery() throws {
+        let f = verticalFixture(), b = f.builder, issued = ZoomWriteFlag()
+        let runtime = b.makeLogicRuntime(appElement: f.app, attributeValueHandler: { element, attribute in
+            if issued.issued, CFEqual(element, b.element(7710)), attribute == (kAXDescriptionAttribute as String) {
+                b.setAttribute(b.element(7710), kAXValueAttribute as String, 0.4)
+            }
+            return nil
+        }, setAttributeHandler: { element, attribute, value in
+            b.setAttribute(element, attribute, value)
+            issued.issued = true
+            return true
+        }, performActionHandler: nil)
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { true })
+        try OperationTraceContext.$current.withValue(context) {
+            let body = try #require(obj(AccessibilityChannel.defaultSetZoomLevel(
+                params: ["level": "8", "axis": "vertical"], runtime: runtime)))
+            #expect(issued.issued)
+            #expect(body["state"] as? String == "B")
+            #expect(body["observed"] as? Double == 0.4)
         }
     }
 

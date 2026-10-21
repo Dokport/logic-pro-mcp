@@ -3,8 +3,8 @@ import Foundation
 
 extension AccessibilityChannel {
     /// Explicit track-height control. Never substitute a horizontal zoom key command.
-    /// The slider must share a non-window ancestor with a positively read track header;
-    /// an identically named control in a separate editor is not an Arrange witness.
+    /// The original header's split-view body and the slider toolbar must be direct
+    /// siblings in the same Tracks area. A shared outer group is not Arrange identity.
     static func defaultSetVerticalZoomLevel(
         params: [String: String],
         runtime: AXLogicProElements.Runtime = .production
@@ -60,10 +60,24 @@ extension AccessibilityChannel {
         func locate() -> AXUIElement? {
             guard windowHeld(),
                   case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime),
-                  let header = headers.first, let headerPath = ancestors(header),
+                  let header = headers.first, let headerPath = ancestors(header) else { return nil }
+            // Observed native structure: header rail -> scroll area -> split group
+            // -> body group -> area group; zoom -> toolbar group -> SAME area.
+            // Neither a title match nor an arbitrary common ancestor proves this.
+            var splitIndex: Int?
+            for (index, ancestor) in headerPath.enumerated() {
+                guard let role: String = attribute(ancestor, kAXRoleAttribute as String) else { return nil }
+                if role == (kAXSplitGroupRole as String) { splitIndex = index; break }
+            }
+            guard let splitIndex, splitIndex + 2 < headerPath.count,
+                  let bodyRole: String = attribute(headerPath[splitIndex + 1], kAXRoleAttribute as String),
+                  bodyRole == (kAXGroupRole as String),
+                  let areaRole: String = attribute(headerPath[splitIndex + 2], kAXRoleAttribute as String),
+                  areaRole == (kAXGroupRole as String),
                   case .success(let census) = AXHelpers.censusDescendantResult(of: window, role: kAXSliderRole,
                     maxDepth: 24, runtime: runtime.ax, requiresCompleteTraversal: true, permittingRead: owned)
             else { return nil }
+            let area = headerPath[splitIndex + 2]
             var metadataReadable = true
             let candidates = census.matches.filter { slider in
                 let description: String?
@@ -73,13 +87,14 @@ extension AccessibilityChannel {
                 case .failure(let error) where error.isDefinitiveAbsence: return false
                 case .failure: metadataReadable = false; return false
                 }
-                guard owned(), let description,
-                      AXLocalePolicy.verticalZoomSlider.matches(description),
-                      let path = ancestors(slider) else { return false }
-                return path.contains { ancestor in
-                    let role: String? = attribute(ancestor, kAXRoleAttribute as String)
-                    return role == (kAXGroupRole as String) && headerPath.contains { CFEqual($0, ancestor) }
+                guard owned(), let description, AXLocalePolicy.verticalZoomSlider.matches(description) else { return false }
+                guard let path = ancestors(slider) else { metadataReadable = false; return false }
+                guard path.count >= 2 else { return false }
+                guard let toolbarRole: String = attribute(path[0], kAXRoleAttribute as String) else {
+                    metadataReadable = false
+                    return false
                 }
+                return toolbarRole == (kAXGroupRole as String) && CFEqual(path[1], area)
             }
             guard metadataReadable, candidates.count == 1, windowHeld() else { return nil }
             return candidates[0]
@@ -100,8 +115,9 @@ extension AccessibilityChannel {
         let alreadyAtTarget = Float(before) == Float(target)
         let acknowledged = alreadyAtTarget || AXValueExtractors.setSliderValue(slider, target, runtime: runtime.ax)
         if !alreadyAtTarget { usleep(120_000) }
-        let after = scalar(slider, kAXValueAttribute as String)
-        let held = locate().map { CFEqual($0, slider) } == true && windowHeld()
+        let controlHeld = locate().map { CFEqual($0, slider) } == true && windowHeld()
+        let after = controlHeld ? scalar(slider, kAXValueAttribute as String) : nil
+        let held = controlHeld && windowHeld()
         let extras: [String: Any] = ["operation": "nav.set_zoom", "axis": "vertical", "level": level,
             "requested": target, "observed_before": before, "observed": after ?? NSNull(),
             "observed_after": after ?? NSNull(), "verify_source": "ax_zoom_slider",
