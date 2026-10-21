@@ -1263,6 +1263,125 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer_intermediate_viewport")
     }
 
+    @Test("Original-header renewal restores its observed Mixer position before retaining an input source",
+          arguments: ["owned", "stable_frames", "stable_recovery_frames", "ack_only", "unread_geometry", "foreign_bar", "vertical_bar"])
+    func originalHeaderRenewalRestoresItsObservedMixerViewport(profile: String) async throws {
+        final class Probe: @unchecked Sendable { var leaves = 0; var writes = 0; var injected = false }
+        let f = try Fixture(), b = f.builder, gate = LogicMutationGate(), probe = Probe()
+        let owner = b.element(1_291_900), controls = b.element(1_291_901), toolbar = b.element(1_291_902)
+        let view = b.element(1_291_903), root = b.element(1_291_904), scroll = b.element(1_291_905)
+        let submenu = b.element(1_291_906), output = b.element(1_291_907), audio = b.element(1_291_908)
+        let horizontal = b.element(1_291_909), thumb = b.element(1_291_910), replacement = b.element(1_291_911)
+        for node in [owner, controls, toolbar] { b.setRole(node, kAXGroupRole as String) }
+        b.setFrame(f.window, x: 0, y: 30, width: 1000, height: 800)
+        b.setFrame(owner, x: 0, y: 300, width: 1000, height: 530)
+        b.setFrame(f.mixer, x: 0, y: 300, width: 2000, height: 600)
+        b.setChildren(toolbar, [view]); b.setChildren(controls, [toolbar]); b.setChildren(owner, [f.mixer, controls])
+        b.setChildren(f.window, [f.rail, owner, b.element(1_965_720)])
+        for (node, role, title) in [(view, kAXMenuButtonRole, AXLocalePolicy.viewMenuBar.canonical),
+            (root, kAXMenuRole, ""), (scroll, kAXMenuItemRole, AXLocalePolicy.mixerScrollToMenuItem.canonical),
+            (submenu, kAXMenuRole, ""), (output, kAXMenuItemRole, AXLocalePolicy.mixerScrollToOutputsMenuItem.canonical),
+            (audio, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterAudio.canonical)] {
+            b.setRole(node, role as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+            b.setAttribute(node, kAXEnabledAttribute as String, true); b.setAttribute(node, kAXWindowAttribute as String, f.window)
+            b.setActionNames(node, [kAXPressAction as String, kAXCancelAction as String])
+        }
+        b.setChildren(output, []); b.setChildren(audio, []); b.setChildren(submenu, [output, audio])
+        b.setChildren(scroll, [submenu]); b.setChildren(root, [scroll]); b.setChildren(view, [])
+        b.setRole(horizontal, kAXScrollBarRole as String)
+        b.setAttribute(horizontal, kAXOrientationAttribute as String, kAXHorizontalOrientationValue as String)
+        b.setAttribute(horizontal, kAXWindowAttribute as String, f.window); b.setAttribute(horizontal, kAXParentAttribute as String, owner)
+        b.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.25))
+        b.setAttributeSettable(horizontal, kAXValueAttribute as String, true)
+        b.setFrame(horizontal, x: 0, y: 813, width: 1000, height: 17)
+        b.setRole(thumb, kAXValueIndicatorRole as String); b.setAttribute(thumb, kAXWindowAttribute as String, f.window)
+        b.setFrame(thumb, x: 75, y: 814, width: 700, height: 15); b.setChildren(horizontal, [thumb]); b.setChildren(thumb, [])
+        f.routingFocusHit = { _, _ in .success(thumb) }
+        f.routingRead = { element, attribute in
+            if profile == "unread_geometry", f.selections.count >= 4,
+               CFEqual(element, replacement), attribute == kAXPositionAttribute as String {
+                probe.injected = true
+                b.removeAttribute(replacement, attribute)
+            }
+        }
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, horizontal), attribute == kAXValueAttribute as String {
+                return .success(b.attributeValue(horizontal, attribute) as? NSNumber)
+            }
+            return nil
+        }
+        for (index, strip) in f.strips.enumerated() { b.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300) }
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let before = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let pairs = await before.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let original = try #require(pairs.first { CFEqual($0.track.header, f.headers[0]) })
+            #expect(before.effects.restoration == "restored")
+            b.setRole(replacement, kAXLayoutItemRole as String)
+            b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+            b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+            b.setChildren(replacement, b.makeAXRuntime().children(f.strips[1]))
+            b.setFrame(replacement, x: 45, y: 350, width: 100, height: 300)
+            f.routingReplacement = replacement; b.setChildren(f.mixer, [f.strips[0], replacement])
+            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+            f.routingSelection = { _ in
+                b.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.75))
+                if profile == "foreign_bar" { b.setAttribute(horizontal, kAXParentAttribute as String, controls) }
+                if profile == "vertical_bar" { b.setAttribute(horizontal, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String) }
+                if profile != "stable_frames" {
+                    for (index, strip) in [f.strips[0], replacement].enumerated() {
+                        b.setFrame(strip, x: CGFloat(index) * 100 - 255, y: 350, width: 100, height: 300)
+                    }
+                }
+            }
+            f.routingSetter = { element, attribute, value in
+                guard CFEqual(element, horizontal), attribute == kAXValueAttribute as String,
+                      let number = value as? NSNumber else { return nil }
+                probe.writes += 1
+                if profile != "ack_only" {
+                    b.setAttribute(horizontal, attribute, number)
+                    for (index, strip) in [f.strips[0], replacement].enumerated() {
+                        b.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                    }
+                }
+                return true
+            }
+            f.routingAction = { element, action in
+                if CFEqual(element, view), action == kAXPressAction as String { b.setChildren(view, [root]); return true }
+                if CFEqual(element, root), action == kAXCancelAction as String { b.setChildren(view, []); return true }
+                if (CFEqual(element, output) || CFEqual(element, audio)), action == kAXPressAction as String {
+                    probe.leaves += 1
+                    let offset: CGFloat = CFEqual(element, audio) ? (profile == "stable_recovery_frames" ? -55 : 0) : -600
+                    b.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: CFEqual(element, audio) ? 0 : 1))
+                    for (index, strip) in [f.strips[0], replacement].enumerated() {
+                        b.setFrame(strip, x: CGFloat(index) * 100 + offset, y: 350, width: 100, height: 300)
+                    }
+                    b.setChildren(view, []); return true
+                }
+                Issue.record("Only the existing owned Scroll To and native viewport inverse are allowed"); return false
+            }
+            let renewed = await AccessibilityChannel.renewSourceThroughOriginalHeader(original,
+                original: original.strip, runtime: runtime)
+            let positive = ["owned", "stable_frames", "stable_recovery_frames"].contains(profile)
+            if positive || profile == "ack_only" { #expect(probe.leaves == 2 && probe.writes == 1) }
+            else { #expect(probe.writes == 0) }
+            if profile == "unread_geometry" { #expect(probe.injected, "Reach the actual deciding native geometry read") }
+            if !positive {
+                #expect(renewed.source == nil)
+                #expect(renewed.effects.restoration != "restored")
+            } else {
+                #expect(renewed.source?.pair.track.matches(original.track) == true)
+                #expect(renewed.effects.restoration == "restored")
+                #expect((b.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25)
+                #expect(AXHelpers.getPosition(replacement, runtime: runtime.ax)?.x == 45)
+            }
+        }
+    }
+
     @Test("Explicitly scoped native Mixer Scroll To preserves its original physical viewport",
           .enabled(if: ProcessInfo.processInfo.environment["LOGIC_MCP_NATIVE_MIXER_RECOVERY_PROJECT"] != nil))
     func nativeMixerScrollToRetainsItsObservedOwners() async throws {
