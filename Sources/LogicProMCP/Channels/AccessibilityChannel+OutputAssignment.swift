@@ -654,10 +654,32 @@ extension AccessibilityChannel {
         // acquisition permits passive Help during this owned selection excursion.
         // Assignment authority still requires the actual pair and inverse below.
         observingReadFocus(observation)
+        let originalMixerGeometry = observation.observedMixerViewportGeometry()
         let pairs = await observation.observe(referenceIsCurrent: {
             originalPair.track.currentIndex() != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
         }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil }, allHeldHeaders: true)
+        if let originalMixerGeometry, observation.effects.restoration == "restored" {
+            // The hidden Mixer bar is absent from the ordinary viewport census.
+            // An original-header inverse must not retain a source after leaving
+            // its controls offscreen. Reuse the existing owned native recovery;
+            // an acknowledgement without exact layout readback is not restoration.
+            let mixerRestored: Bool
+            if let currentGeometry = observation.observedMixerViewportGeometry() {
+                if currentGeometry.hasSameViewportPosition(as: originalMixerGeometry) { mixerRestored = true }
+                else {
+                    mixerRestored = await observation.recoverMixerReadability(restoring: originalMixerGeometry,
+                        referenceIsCurrent: { originalPair.track.currentIndex() != nil },
+                        stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil })
+                }
+            } else { mixerRestored = false }
+            guard mixerRestored else {
+                var effects = observation.effects
+                effects.restoration = "not_restored"
+                effects.reason = "association_mixer_viewport_restoration_unverified"
+                return (nil, effects)
+            }
+        }
         let candidates = pairs.filter { $0.track.matches(originalPair.track) }
         guard candidates.count == 1, let pair = candidates.first,
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,

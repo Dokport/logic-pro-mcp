@@ -756,6 +756,16 @@ extension AccessibilityChannel {
             let document: String
             let frames: [CGRect]
             let horizontal: HorizontalViewportPosition?
+
+            func hasSameViewportPosition(as other: Self) -> Bool {
+                guard frames == other.frames else { return false }
+                switch (horizontal, other.horizontal) {
+                case (.none, .none): return true
+                case (.some(let lhs), .some(let rhs)):
+                    return lhs.sameControlAndLayout(as: rhs) && lhs.value == rhs.value
+                default: return false
+                }
+            }
         }
 
         struct HorizontalViewportPosition: @unchecked Sendable {
@@ -1020,7 +1030,7 @@ extension AccessibilityChannel {
             }
             recoveryStage = "final_geometry_read"
             guard var final = observedMixerViewportGeometry() else { return false }
-            if final.frames != original.frames, let before = original.horizontal, let after = final.horizontal,
+            if let before = original.horizontal, let after = final.horizontal,
                before.sameControlAndLayout(as: after), before.value != after.value,
                let first = original.frames.first, let currentFirst = final.frames.first {
                 recoveryStage = "horizontal_viewport_inverse"
@@ -1043,7 +1053,7 @@ extension AccessibilityChannel {
                 final = restored
             }
             recoveryStage = "final_strip_frames"
-            guard final.frames == original.frames else {
+            guard final.hasSameViewportPosition(as: original) else {
                 let changed = zip(original.frames, final.frames).enumerated().compactMap { index, pair in
                     pair.0 == pair.1 ? nil : "\(index):\(pair.0)->\(pair.1)"
                 }.joined(separator: ";")
@@ -1104,7 +1114,7 @@ extension AccessibilityChannel {
                     lost = true; return false
                 }
                 if selectionChanged {
-                    let selectedChild: AXUIElement?
+                    var selectedChild: AXUIElement?
                     if precedingSelectedChild != nil {
                         guard case .observed(let child) = selectedChildRead() else { lost = true; return false }
                         selectedChild = child
@@ -1135,11 +1145,13 @@ extension AccessibilityChannel {
                     }
                     if !CFEqual(settledFocus, focus) {
                         guard CFEqual(focus, precedingFocus),
-                              let selectedChild, let precedingSelectedChild,
-                              !CFEqual(selectedChild, precedingSelectedChild),
-                              CFEqual(settledFocus, selectedChild) else {
+                              let precedingSelectedChild,
+                              case .observed(let currentSelectedChild) = selectedChildRead(),
+                              !CFEqual(currentSelectedChild, precedingSelectedChild),
+                              CFEqual(settledFocus, currentSelectedChild) else {
                             lost = true; return false
                         }
+                        selectedChild = currentSelectedChild
                     }
                     // Logic can select our exact held header while retaining its
                     // original Mixer relationship. Retain that owned transition

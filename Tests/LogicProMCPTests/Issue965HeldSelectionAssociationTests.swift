@@ -1263,6 +1263,126 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertCanonicalPhysicalOutput(mode: "bus_departure_execute_arrival_replacement_offscreen_peer_intermediate_viewport")
     }
 
+    @Test("Original-header renewal restores its observed Mixer position before retaining an input source",
+          arguments: ["owned", "stable_frames", "stable_recovery_frames", "ack_only", "unread_geometry", "foreign_bar", "vertical_bar"])
+    func originalHeaderRenewalRestoresItsObservedMixerViewport(profile: String) async throws {
+        final class Probe: @unchecked Sendable { var leaves = 0; var writes = 0; var injected = false }
+        let f = try Fixture(), b = f.builder, gate = LogicMutationGate(), probe = Probe()
+        let owner = b.element(1_291_900), controls = b.element(1_291_901), toolbar = b.element(1_291_902)
+        let view = b.element(1_291_903), root = b.element(1_291_904), scroll = b.element(1_291_905)
+        let submenu = b.element(1_291_906), output = b.element(1_291_907), audio = b.element(1_291_908)
+        let horizontal = b.element(1_291_909), thumb = b.element(1_291_910), replacement = b.element(1_291_911)
+        for node in [owner, controls, toolbar] { b.setRole(node, kAXGroupRole as String) }
+        b.setFrame(f.window, x: 0, y: 30, width: 1000, height: 800)
+        b.setFrame(owner, x: 0, y: 300, width: 1000, height: 530)
+        b.setFrame(f.mixer, x: 0, y: 300, width: 2000, height: 600)
+        b.setChildren(toolbar, [view]); b.setChildren(controls, [toolbar]); b.setChildren(owner, [f.mixer, controls])
+        b.setChildren(f.window, [f.rail, owner, b.element(1_965_720)])
+        for (node, role, title) in [(view, kAXMenuButtonRole, AXLocalePolicy.viewMenuBar.canonical),
+            (root, kAXMenuRole, ""), (scroll, kAXMenuItemRole, AXLocalePolicy.mixerScrollToMenuItem.canonical),
+            (submenu, kAXMenuRole, ""), (output, kAXMenuItemRole, AXLocalePolicy.mixerScrollToOutputsMenuItem.canonical),
+            (audio, kAXMenuItemRole, AXLocalePolicy.mixerTypeFilterAudio.canonical)] {
+            b.setRole(node, role as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+            b.setAttribute(node, kAXEnabledAttribute as String, true); b.setAttribute(node, kAXWindowAttribute as String, f.window)
+            b.setActionNames(node, [kAXPressAction as String, kAXCancelAction as String])
+        }
+        b.setChildren(output, []); b.setChildren(audio, []); b.setChildren(submenu, [output, audio])
+        b.setChildren(scroll, [submenu]); b.setChildren(root, [scroll]); b.setChildren(view, [])
+        b.setRole(horizontal, kAXScrollBarRole as String)
+        b.setAttribute(horizontal, kAXOrientationAttribute as String, kAXHorizontalOrientationValue as String)
+        b.setAttribute(horizontal, kAXWindowAttribute as String, f.window); b.setAttribute(horizontal, kAXParentAttribute as String, owner)
+        b.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.25))
+        b.setAttributeSettable(horizontal, kAXValueAttribute as String, true)
+        b.setFrame(horizontal, x: 0, y: 813, width: 1000, height: 17)
+        b.setRole(thumb, kAXValueIndicatorRole as String); b.setAttribute(thumb, kAXWindowAttribute as String, f.window)
+        b.setFrame(thumb, x: 75, y: 814, width: 700, height: 15); b.setChildren(horizontal, [thumb]); b.setChildren(thumb, [])
+        f.routingFocusHit = { _, _ in .success(thumb) }
+        f.routingRead = { element, attribute in
+            if profile == "unread_geometry", f.selections.count >= 4,
+               CFEqual(element, replacement), attribute == kAXPositionAttribute as String {
+                probe.injected = true
+                b.removeAttribute(replacement, attribute)
+            }
+        }
+        f.routingReadResult = { element, attribute in
+            if CFEqual(element, horizontal), attribute == kAXValueAttribute as String {
+                return .success(b.attributeValue(horizontal, attribute) as? NSNumber)
+            }
+            return nil
+        }
+        for (index, strip) in f.strips.enumerated() { b.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300) }
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let before = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let pairs = await before.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let original = try #require(pairs.first { CFEqual($0.track.header, f.headers[0]) })
+            #expect(before.effects.restoration == "restored")
+            b.setRole(replacement, kAXLayoutItemRole as String)
+            b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+            b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+            b.setChildren(replacement, b.makeAXRuntime().children(f.strips[1]))
+            b.setFrame(replacement, x: 45, y: 350, width: 100, height: 300)
+            f.routingReplacement = replacement; b.setChildren(f.mixer, [f.strips[0], replacement])
+            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+            f.routingSelection = { _ in
+                b.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.75))
+                if profile == "foreign_bar" { b.setAttribute(horizontal, kAXParentAttribute as String, controls) }
+                if profile == "vertical_bar" { b.setAttribute(horizontal, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String) }
+                if profile != "stable_frames" {
+                    for (index, strip) in [f.strips[0], replacement].enumerated() {
+                        b.setFrame(strip, x: CGFloat(index) * 100 - 255, y: 350, width: 100, height: 300)
+                    }
+                }
+            }
+            f.routingSetter = { element, attribute, value in
+                guard CFEqual(element, horizontal), attribute == kAXValueAttribute as String,
+                      let number = value as? NSNumber else { return nil }
+                probe.writes += 1
+                if profile != "ack_only" {
+                    b.setAttribute(horizontal, attribute, number)
+                    for (index, strip) in [f.strips[0], replacement].enumerated() {
+                        b.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                    }
+                }
+                return true
+            }
+            f.routingAction = { element, action in
+                if CFEqual(element, view), action == kAXPressAction as String { b.setChildren(view, [root]); return true }
+                if CFEqual(element, root), action == kAXCancelAction as String { b.setChildren(view, []); return true }
+                if (CFEqual(element, output) || CFEqual(element, audio)), action == kAXPressAction as String {
+                    probe.leaves += 1
+                    let offset: CGFloat = CFEqual(element, audio) ? (profile == "stable_recovery_frames" ? -55 : 0) : -600
+                    b.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: CFEqual(element, audio) ? 0 : 1))
+                    for (index, strip) in [f.strips[0], replacement].enumerated() {
+                        b.setFrame(strip, x: CGFloat(index) * 100 + offset, y: 350, width: 100, height: 300)
+                    }
+                    b.setChildren(view, []); return true
+                }
+                Issue.record("Only the existing owned Scroll To and native viewport inverse are allowed"); return false
+            }
+            let renewed = await AccessibilityChannel.renewSourceThroughOriginalHeader(original,
+                original: original.strip, runtime: runtime)
+            let positive = ["owned", "stable_frames", "stable_recovery_frames"].contains(profile)
+            if positive || profile == "ack_only" { #expect(probe.leaves == 2 && probe.writes == 1) }
+            else { #expect(probe.writes == 0) }
+            if profile == "unread_geometry" { #expect(probe.injected, "Reach the actual deciding native geometry read") }
+            if !positive {
+                #expect(renewed.source == nil)
+                #expect(renewed.effects.restoration != "restored")
+            } else {
+                let renewedSource = try #require(renewed.source)
+                #expect(renewedSource.pair.track.matches(original.track))
+                #expect(renewed.effects.restoration == "restored")
+                #expect((b.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25)
+                #expect(AXHelpers.getPosition(replacement, runtime: runtime.ax)?.x == 45)
+            }
+        }
+    }
+
     @Test("Explicitly scoped native Mixer Scroll To preserves its original physical viewport",
           .enabled(if: ProcessInfo.processInfo.environment["LOGIC_MCP_NATIVE_MIXER_RECOVERY_PROJECT"] != nil))
     func nativeMixerScrollToRetainsItsObservedOwners() async throws {
@@ -3131,6 +3251,127 @@ struct Issue965HeldSelectionAssociationTests {
             } else {
                 #expect(f.routingClassifierHelpReads > 0)
                 #expect(strips.allSatisfy { $0.output == "Stereo Output" && $0.input == "Bus 1" && $0.inputObservation?.state == .observedSource && $0.sendSlots != nil })
+            }
+        }
+    }
+
+    @Test("Selected routing can corroborate newly readable peer displays without accepting changed known values",
+          arguments: ["unchanged", "input", "output", "both", "known_input", "known_output",
+                      "no_slot", "selected_input", "name", "whole_project", "later_input",
+                      "later_owner", "later_slot", "later_project", "unclassified_output"])
+    func selectedRoutingCorroboratesOnlyMonotonePeerObservations(profile: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = try Fixture(withViewport: true), b = f.builder
+            let outer = b.element(1_291_928)
+            b.setRole(outer, kAXGroupRole as String); b.setAttribute(outer, kAXDescriptionAttribute as String, "Mixer")
+            b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
+            b.setChildren(outer, [f.mixer])
+            b.setChildren(f.window, [f.rail, outer, b.element(1_965_720), f.scroll])
+            let output = b.element(1_291_920), peerInput = b.element(1_291_921), peerOutput = b.element(1_291_922)
+            let root = b.element(1_291_923), parent = b.element(1_291_924), menu = b.element(1_291_925)
+            let echo = b.element(1_291_926), leaf = b.element(1_291_927)
+            b.setButton(output, description: "Stereo Output", help: "Output slot. Choose the channel strip output.",
+                x: 0, y: 0, width: 60, height: 20)
+            b.setChildren(output, []); b.setActionNames(output, [kAXPressAction as String])
+            b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [output])
+            let inputOwner = profile == "selected_input" ? f.strips[1] : f.strips[0]
+            b.setButton(peerInput, description: profile == "known_input" ? "Bus 1" : profile == "no_slot" ? "Settings" : "Input",
+                help: profile == "known_input" ? "Input slot. Choose the channel strip input." : "",
+                x: 0, y: 0, width: 60, height: 20)
+            b.setChildren(peerInput, [])
+            b.setChildren(inputOwner, b.makeAXRuntime().children(inputOwner) + [peerInput])
+            b.setButton(peerOutput, description: profile == "known_output" ? "Bus 1"
+                : profile == "unclassified_output" ? "External Destination" : "Output",
+                help: "Output slot. Choose the channel strip output.", x: 0, y: 0, width: 60, height: 20)
+            b.setChildren(peerOutput, [])
+            b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]) + [peerOutput])
+            for node in [root, menu] { b.setRole(node, kAXMenuRole as String) }
+            for (node, title) in [(echo, "Stereo Output"), (parent, "Output"), (leaf, "Stereo Output")] {
+                b.setRole(node, kAXMenuItemRole as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+                b.setChildren(node, [])
+            }
+            for node in [echo, leaf] { b.setAttribute(node, "AXMenuItemMarkChar", "✓") }
+            b.setChildren(menu, [leaf]); b.setChildren(parent, [menu]); b.setChildren(root, [echo, parent])
+            b.setActionNames(root, [kAXCancelAction as String])
+            f.routingAction = { element, action in
+                if CFEqual(element, output), action == kAXPressAction as String {
+                    b.setChildren(f.mixer, f.strips + [root]); return true
+                }
+                if CFEqual(element, root), action == kAXCancelAction as String {
+                    f.renewedOutputCancels += 1
+                    b.setChildren(f.mixer, f.strips)
+                    if !["unchanged", "output", "known_output", "unclassified_output"].contains(profile) {
+                        b.setAttribute(peerInput, kAXDescriptionAttribute as String, "Bus 2")
+                        b.setAttribute(peerInput, kAXHelpAttribute as String, "Input slot. Choose the channel strip input.")
+                    }
+                    if ["output", "both", "known_output", "whole_project", "unclassified_output"].contains(profile) {
+                        b.setAttribute(peerOutput, kAXDescriptionAttribute as String, "Stereo Output")
+                    }
+                    if profile == "name" { b.setAttribute(b.element(1_965_710), kAXValueAttribute as String, "External Name") }
+                    return true
+                }
+                Issue.record("Only the held selected-source output popup and its own Cancel are allowed")
+                return false
+            }
+            f.routingRead = { element, attribute in
+                guard profile.hasPrefix("later_"), f.renewedOutputCancels == 1,
+                      CFEqual(element, peerInput), attribute == kAXDescriptionAttribute as String else { return }
+                f.routingClassifierHelpReads += 1
+                // Two cleanup reads and eight first-population reads precede
+                // this first deciding read of the corroborating population.
+                guard f.routingClassifierHelpReads == 11 else { return }
+                f.routingLateScopeInjected = true
+                switch profile {
+                case "later_input":
+                    b.setAttribute(peerInput, kAXDescriptionAttribute as String, "Bus 3")
+                case "later_owner":
+                    let replacement = b.element(1_291_929)
+                    b.setRole(replacement, kAXLayoutItemRole as String)
+                    b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                    b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                    b.setChildren(replacement, b.makeAXRuntime().children(f.strips[0]))
+                    f.routingOtherReplacement = replacement
+                    b.setChildren(f.mixer, [replacement, f.strips[1]])
+                case "later_slot":
+                    let replacement = b.element(1_291_930)
+                    b.setButton(replacement, description: "Bus 2", help: "Input slot. Choose the channel strip input.",
+                        x: 0, y: 0, width: 60, height: 20)
+                    b.setChildren(replacement, [])
+                    b.setChildren(f.strips[0], b.makeAXRuntime().children(f.strips[0]).map {
+                        CFEqual($0, peerInput) ? replacement : $0
+                    })
+                case "later_project":
+                    b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                default: Issue.record("Unknown late corroboration fault")
+                }
+            }
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            let fresh = try await OperationTraceContext.$current.withValue(context) {
+                try await f.channel().readFreshSessionPopulation(request: .init(
+                    scope: profile == "whole_project" ? .wholeProject : .selection,
+                    domains: [.tracks, .strips, .associations, .routing], allowUINavigation: true),
+                    fileReader: .unavailable, stoppingWhen: { false })
+            }
+            #expect(f.renewedOutputCancels == 1, "Reach actual checked routing acquisition and cleanup")
+            #expect(f.routingDestinationPresses == 0)
+            let positive = ["unchanged", "input", "output", "both"].contains(profile)
+            let stable = fresh.stable
+            if positive {
+                #expect(stable)
+                #expect(fresh.checkedOutputs.count == 1)
+                #expect(fresh.checkedInputs.isEmpty, "Newly readable peer captions are not checked input edges")
+                if profile == "input" || profile == "both" {
+                    #expect(fresh.strips?.first?.inputObservation == .init(state: .observedSource, source: "Bus 2"))
+                }
+                if profile == "output" || profile == "both" { #expect(fresh.strips?.first?.output == "Stereo Output") }
+            } else {
+                #expect(!stable)
+                #expect(fresh.uiEffects.reason == "routing_population_moved")
+                #expect(fresh.checkedOutputs.isEmpty)
+                if profile.hasPrefix("later_") { #expect(f.routingLateScopeInjected) }
             }
         }
     }
@@ -9047,10 +9288,13 @@ struct Issue965HeldSelectionAssociationTests {
         #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
     }
 
-    @Test(arguments: ["healthy", "retained_focus", "own_landing", "foreign_editor", "foreign_held_strip"])
+    @Test(arguments: ["healthy", "retained_focus", "own_landing", "foreign_editor", "foreign_held_strip",
+                     "joint_landing", "foreign_joint_focus", "foreign_joint_child", "foreign_joint_document",
+                     "foreign_joint_parent", "foreign_joint_unreadable"])
     func wholeInspectionKeepsOnlyItsOwnLateSelectionFocus(fault: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true), b = f.builder
         f.useBulkReads = true
+        let jointLanding = fault == "joint_landing" || fault.hasPrefix("foreign_joint_")
         for (index, header) in f.headers.enumerated() {
             b.setAttribute(header, kAXSelectedAttribute as String, index == 3)
         }
@@ -9059,9 +9303,10 @@ struct Issue965HeldSelectionAssociationTests {
         f.thirdRetainsPreviousFocus = fault == "retained_focus"
         f.routingSelection = { index in
             let source = index == 0 ? 1 : index == 1 ? 0 : index == 2 ? 3 : 2
-            b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[source]])
+            b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                [f.strips[jointLanding && index == 2 ? 0 : source]])
         }
-        let inject = ["own_landing", "foreign_editor", "foreign_held_strip"].contains(fault)
+        let inject = jointLanding || ["own_landing", "foreign_editor", "foreign_held_strip"].contains(fault)
         let foreign = b.element(1_965_799)
         b.setRole(foreign, kAXTextFieldRole as String)
         b.setAttribute(foreign, kAXWindowAttribute as String, f.window)
@@ -9070,16 +9315,36 @@ struct Issue965HeldSelectionAssociationTests {
             if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
                !f.lateAssociationFocusSampled {
                 f.lateAssociationFocusSampled = true
-                // The selected child already identifies challenge 2; keyboard
-                // focus still reflects the preceding, completely held strip.
+                // Focus and, in the joint case, the selected-child relation
+                // still reflect the preceding, completely held strip.
                 b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[0])
             }
             if f.lateAssociationFocusSampled, !f.lateAssociationFocusLanded,
                CFEqual(element, f.scroll), attribute == kAXValueAttribute as String {
                 f.lateAssociationFocusLanded = true
-                let focus = fault == "own_landing" ? f.strips[3]
+                let focus = fault == "own_landing" || jointLanding ? f.strips[3]
                     : fault == "foreign_held_strip" ? f.strips[1] : foreign
-                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, focus)
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                    fault == "foreign_joint_focus" ? f.strips[1] : focus)
+                if jointLanding {
+                    b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                        [f.strips[fault == "foreign_joint_child" ? 0 : 3]])
+                    if fault == "foreign_joint_document" {
+                        b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    if fault == "foreign_joint_parent" {
+                        b.setAttribute(f.strips[3], kAXParentAttribute as String, f.rail)
+                    }
+                }
+            }
+        }
+        if fault == "foreign_joint_unreadable" {
+            f.routingReadResult = { element, attribute in
+                if f.lateAssociationFocusLanded, CFEqual(element, f.mixer),
+                   attribute == kAXSelectedChildrenAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                return nil
             }
         }
         let body = try await inspect(f)
