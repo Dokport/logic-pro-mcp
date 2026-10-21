@@ -373,15 +373,21 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 let result = await AccessibilityChannel.removeCreatedSendObservation(created, runtime: held.track.runtime)
                 self.creationRemoval = result.removedSend
                 response = toolTextResult(result.result)
-            } else if let changed = self.change {
+            } else if var changed = self.change {
                 guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime) else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
                 }
                 if let approved = self.approved {
                     guard let custody = await approved.sendBusInputsCurrent(at: changed.source.pair,
                         control: changed.control, expected: changed.checkedAfter,
-                        priorSource: changed.source), custody.renewal == nil else {
+                        ownedChange: changed) else {
                         return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed Send read continuity is unavailable")
+                    }
+                    if custody.renewal != nil {
+                        guard let continued = custody.continuedChange else {
+                            return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed Send effect continuity is unavailable")
+                        }
+                        changed = continued; self.change = continued; self.pair = custody.pair
                     }
                 }
                 guard changed.permits(runtime: held.track.runtime) else {

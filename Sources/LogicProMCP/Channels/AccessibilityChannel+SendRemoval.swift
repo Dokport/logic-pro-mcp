@@ -26,14 +26,35 @@ extension AccessibilityChannel {
         let nonRoutingChecks: [String]
         let population: [AXUIElement]
 
-        func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil) -> Bool {
-            func protected(_ slots: [SendSlotObservation]) -> [SendSlotObservation] {
-                slots.map { slot in
-                    var result = slot
-                    if result.ordinal == control.ordinal { result.destinationDisplay = nil }
-                    return result
-                }
+        static func protectedSlots(_ slots: [SendSlotObservation], ordinal: Int) -> [SendSlotObservation] {
+            slots.map { slot in
+                var result = slot
+                if result.ordinal == ordinal { result.destinationDisplay = nil }
+                return result
             }
+        }
+
+        /// Continue this actual effect through its owned prerequisite read, not
+        /// a fresh request or a replacement found by label/ordinal. The caller
+        /// must retain this current capsule before starting that read.
+        func continuing(after renewal: OriginalHeaderSourceRenewal, reading: CheckedOutputReading,
+                        slots: [SendSlotObservation], runtime: AXLogicProElements.Runtime) -> Self? {
+            guard case .bus = checkedBefore, case .bus = checkedAfter, checkedBefore != checkedAfter,
+                  renewal.original.matches(source.pair.strip), renewal.originalTrack.matches(source.pair.track),
+                  renewal.observation.effects.restoration == "restored", renewal.permits(runtime: runtime),
+                  reading.assignment == checkedAfter, reading.sendNonRoutingChecks == nonRoutingChecks,
+                  let current = reading.sendControl, current.ordinal == control.ordinal,
+                  slots.count == 2, slots.filter({ $0.state == .occupiedUnknownDestination }).count == 1,
+                  slots.filter({ $0.state == .observedEmpty }).count == 1,
+                  Self.protectedSlots(slots, ordinal: control.ordinal)
+                    == Self.protectedSlots(footprint, ordinal: control.ordinal) else { return nil }
+            let continued = Self(source: renewal, control: current, footprint: slots,
+                checkedBefore: checkedBefore, checkedAfter: checkedAfter, nonRoutingChecks: nonRoutingChecks,
+                population: renewal.observation.strips)
+            return continued.permits(runtime: runtime) ? continued : nil
+        }
+
+        func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil) -> Bool {
             // Role/Children samples inside the control scan can observe scope
             // loss. Its later bookend cannot authorize intervening Help reads.
             let outer = AXHelpers.HelpReadGuard.current
@@ -46,7 +67,8 @@ extension AccessibilityChannel {
                       let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
                         ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
                       let slots = AXLogicProElements.sendSlotObservations(in: source.pair.strip.strip, runtime: runtime.ax),
-                      protected(slots) == protected(footprint),
+                      Self.protectedSlots(slots, ordinal: control.ordinal)
+                        == Self.protectedSlots(footprint, ordinal: control.ordinal),
                       let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
                       zip(census, population).allSatisfy({ CFEqual($0, $1) }) else { return false }
                 return source.permits(runtime: runtime, ownedPopup: ownedPopup)

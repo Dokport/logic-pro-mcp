@@ -1159,18 +1159,26 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let pair: AccessibilityChannel.HeldSelectionAssociation.Pair
         let control: AXLogicProElements.AssignedSendMenuControl
         let renewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
+        var continuedChange: AccessibilityChannel.ChangedSendObservation? = nil
     }
 
     func sendBusInputsCurrent(at originalPair: AccessibilityChannel.HeldSelectionAssociation.Pair,
         control: AXLogicProElements.AssignedSendMenuControl,
         expected: OutputAssignment,
-        priorSource: AccessibilityChannel.OriginalHeaderSourceRenewal? = nil) async -> SendReadCustody? {
+        ownedChange: AccessibilityChannel.ChangedSendObservation? = nil) async -> SendReadCustody? {
         guard let task = sendTask, case .bus(let before) = task.before,
               case .bus(let after)? = task.desired, before != after else {
             return .init(pair: originalPair, control: control, renewal: nil)
         }
         var stage = "initial_custody", accepted = false
         defer { if !accepted { Log.info("Canonical Send input read refused at \(stage)", subsystem: "saga") } }
+        let priorSource = ownedChange?.source
+        guard ownedChange.map({ $0.permits(runtime: originalPair.track.runtime)
+            && $0.control.matches(control) && $0.checkedBefore == task.before && $0.checkedAfter == expected
+            && expected == task.desired
+            && AccessibilityChannel.ChangedSendObservation.protectedSlots($0.footprint, ordinal: task.ordinal)
+                == AccessibilityChannel.ChangedSendObservation.protectedSlots(task.footprint, ordinal: task.ordinal)
+        }) ?? true else { return nil }
         guard priorSource.map({ $0.pair.strip.matches(originalPair.strip)
                 && $0.pair.track.matches(originalPair.track) && $0.originalTrack.matches(task.pair.track)
                 && $0.permits(runtime: originalPair.track.runtime) }) ?? true,
@@ -1332,6 +1340,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             }
             guard sourceCurrent() else { return nil }
             let finalControl: AXLogicProElements.AssignedSendMenuControl
+            var continuedChange: AccessibilityChannel.ChangedSendObservation?
             if let renewal {
                 stage = "renewed_footprint"
                 // The actual whole-census renewal authenticates new physical owners;
@@ -1340,11 +1349,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 guard let label = capturedSource.output, let sink = OutputAssignment.observed(slotLabel: label),
                       outputFootprintHeld(pair: pair, assignment: sink,
                         taskOverride: .init(reference: task.reference, mixerRef: task.mixerRef, pair: task.pair,
-                            before: sink, desired: sink, capture: task.capture, handle: task.handle)),
+                            before: sink, desired: sink, capture: task.capture, handle: task.handle),
+                        ownedSendChange: ownedChange),
                       let current = AXLogicProElements.assignedSendMenuControl(in: pair.strip.strip,
                         ordinal: task.ordinal, runtime: runtime.ax),
                       let slots = AXLogicProElements.sendSlotObservations(in: pair.strip.strip, runtime: runtime.ax),
-                      slots == task.footprint,
+                      slots == (ownedChange?.footprint ?? task.footprint),
                       slots.count == 2, slots.filter({ $0.state == .occupiedUnknownDestination }).count == 1,
                       slots.filter({ $0.state == .observedEmpty }).count == 1 else { return nil }
                 let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
@@ -1362,11 +1372,17 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                       AXLogicProElements.sendSlotObservations(in: pair.strip.strip, runtime: runtime.ax) == slots,
                       sourceCurrent() else { return nil }
                 finalControl = final
+                if let ownedChange {
+                    stage = "continued_native_effect"
+                    guard let continued = ownedChange.continuing(after: renewal, reading: read,
+                        slots: slots, runtime: runtime) else { return nil }
+                    continuedChange = continued
+                }
             } else { finalControl = control }
             stage = "final_custody"
             guard await projectIsCurrent(allowPendingCancellation: true), sourceCurrent() else { return nil }
             accepted = true
-            return .init(pair: pair, control: finalControl, renewal: renewal)
+            return .init(pair: pair, control: finalControl, renewal: renewal, continuedChange: continuedChange)
         })
     }
 
@@ -1774,7 +1790,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                      ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil,
                                      ownedStripNamePreview: [String]? = nil,
                                      verifiedNameEffect: ExactTrackNameAdapter.VerifiedNameEffect? = nil,
-                                     taskOverride: OutputTask? = nil) -> Bool {
+                                     taskOverride: OutputTask? = nil,
+                                     ownedSendChange: AccessibilityChannel.ChangedSendObservation? = nil) -> Bool {
         outputPeerReadbackUnavailable = false
         var stage = "retained_task", accepted = false
         defer {
@@ -1864,6 +1881,26 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         var expected = task.capture.channelStrips
         if assignment != task.before { expected[index].output = strips[index].output }
+        if let ownedSendChange {
+            stage = "owned_send_effect"
+            guard taskOverride != nil, let sendTask,
+                  ownedSendChange.checkedBefore == sendTask.before,
+                  ownedSendChange.checkedAfter == sendTask.desired,
+                  ownedSendChange.source.pair.track.matches(pair.track),
+                  let captured = expected[index].sendSlots, let current = strips[index].sendSlots,
+                  AccessibilityChannel.ChangedSendObservation.protectedSlots(captured, ordinal: sendTask.ordinal)
+                    == AccessibilityChannel.ChangedSendObservation.protectedSlots(ownedSendChange.footprint, ordinal: sendTask.ordinal),
+                  current == ownedSendChange.footprint else { return false }
+            // Only the already-owned destination display can differ. All
+            // scalars, slots, peer fields and the fresh checked menu stay exact.
+            expected[index].sendSlots = captured.map { slot in
+                var value = slot
+                if slot.ordinal == sendTask.ordinal {
+                    value.destinationDisplay = current.first { $0.ordinal == slot.ordinal }?.destinationDisplay
+                }
+                return value
+            }
+        }
         var expectedTrackRows = task.capture.tracks
         func effectMatchesSource(_ effect: ExactTrackNameAdapter.VerifiedNameEffect) -> Bool {
             if effect.matches(pair) { return true }

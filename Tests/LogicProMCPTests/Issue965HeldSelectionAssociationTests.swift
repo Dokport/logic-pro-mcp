@@ -4727,6 +4727,16 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("An owned changed Send retains only its effect through inverse input-read renewal",
+          arguments: ["healthy", "peer_volume", "level", "mode", "destination", "project"])
+    func canonicalExistingBusSendRetainsItsEffectThroughInverseInputReadRenewal(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_inverse_read_renewal" + (fault == "healthy" ? "" : "_" + fault))
+        }
+    }
+
     @Test("An occupied Send retains the actual pre-popup geometry through post-press source renewal")
     func occupiedSendRenewalRetainsPrePopupMixerGeometry() async throws {
         try await assertOccupiedSingleSendRenewal(sendGeometry: true)
@@ -4786,6 +4796,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                sendGeometry: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
+            let inverseInputReadRenewal = canonicalBusReceiverFault?.hasPrefix("physical_source_inverse_read_renewal") == true
+            let sourceInputReadRenewal = canonicalBusReceiverFault == "physical_source_read_renewal" || inverseInputReadRenewal
             if stableDestinationBulkReads { f.useBulkReads = true }
             let nameField = b.element(1_971_400)
             let inverseEditor = b.element(1_971_402), renameItem = b.element(1_971_406)
@@ -5541,7 +5553,7 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(busTwo, []); b.setActionNames(busTwo, [kAXPressAction as String])
                 b.setChildren(b.element(1_965_2682), [destination, busTwo])
                 b.setChildren(f.mixer, f.strips + [receiver])
-                if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                if sourceInputReadRenewal {
                     // Read renewal must preserve independently observed scalars,
                     // inserts and the unchanged main output, not just Send values.
                     for (index, owner) in (f.strips + [receiver]).enumerated() {
@@ -5597,7 +5609,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 f.routingAction = { element, action in
-                    if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                    if sourceInputReadRenewal {
                         if action == kAXPressAction as String,
                            [1_971_532, 1_971_535, 1_971_538].contains(where: { CFEqual(element, b.element($0)) }) {
                             b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [mainRoot])
@@ -5632,11 +5644,16 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, inputRoot), action == kAXCancelAction as String {
                         b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, inputRoot) })
-                        if canonicalBusReceiverFault == "physical_source_read_renewal",
-                           f.routingInputReadRenewalArmed, !f.routingInputReadRenewed {
+                        if sourceInputReadRenewal, f.routingInputReadRenewalArmed, !f.routingInputReadRenewed,
+                           canonicalBusReceiverFault == "physical_source_read_renewal" || f.routingDestinationPresses == 1 {
                             f.routingInputReadRenewed = true
-                            f.routingReplacement = replacement
-                            b.setChildren(replacement, [name] + renewedSend + [sourceInput]
+                            let readSource = canonicalBusReceiverFault == "physical_source_read_renewal"
+                                ? replacement : b.element(1_971_570)
+                            b.setRole(readSource, kAXLayoutItemRole as String)
+                            b.setAttribute(readSource, kAXNumberOfCharactersAttribute as String, 0)
+                            b.setAttribute(readSource, kAXInsertionPointLineNumberAttribute as String, 0)
+                            f.routingReplacement = readSource
+                            b.setChildren(readSource, [name] + renewedSend + [sourceInput]
                                 + [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)])
                             let peer = b.element(1_971_560)
                             b.setRole(peer, kAXLayoutItemRole as String)
@@ -5644,8 +5661,23 @@ struct Issue965HeldSelectionAssociationTests {
                             b.setAttribute(peer, kAXInsertionPointLineNumberAttribute as String, 0)
                             b.setChildren(peer, b.makeAXRuntime().children(f.strips[0]))
                             f.routingOtherReplacement = peer
-                            b.setChildren(f.mixer, [peer, replacement, receiver])
-                            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
+                            b.setChildren(f.mixer, [peer, readSource, receiver])
+                            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, readSource)
+                            switch canonicalBusReceiverFault {
+                            case "physical_source_inverse_read_renewal_peer_volume":
+                                b.setAttribute(b.element(1_971_530), kAXValueAttribute as String, NSNumber(value: 101.0))
+                            case "physical_source_inverse_read_renewal_level":
+                                b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1)
+                            case "physical_source_inverse_read_renewal_mode":
+                                b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader")
+                            case "physical_source_inverse_read_renewal_destination":
+                                b.setAttribute(echo, kAXTitleAttribute as String, "Bus 1 → Existing")
+                                b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
+                                b.setAttribute(busTwo, "AXMenuItemMarkChar", "")
+                            case "physical_source_inverse_read_renewal_project":
+                                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                            default: break
+                            }
                         }
                         return true
                     }
@@ -5654,7 +5686,7 @@ struct Issue965HeldSelectionAssociationTests {
                     if forward || inverse { f.routingBusLeafPresses.append(forward ? 2 : 1) }
                     // Reuse the source redraw model while retaining this untouched receiver.
                     let acknowledged = originalAction(forward ? destination : inverse ? stereo : element, action)
-                    if canonicalBusReceiverFault == "physical_source_read_renewal", let peer = f.routingOtherReplacement {
+                    if sourceInputReadRenewal, let peer = f.routingOtherReplacement {
                         b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).map {
                             CFEqual($0, f.strips[0]) ? peer : $0
                         })
@@ -5665,7 +5697,7 @@ struct Issue965HeldSelectionAssociationTests {
                         if !currentChildren.contains(where: { CFEqual($0, sourceInput) }) {
                             b.setChildren(currentSource, currentChildren + [sourceInput])
                         }
-                        if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                        if sourceInputReadRenewal {
                             let fields = [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)]
                             let observed = b.makeAXRuntime().children(currentSource)
                             b.setChildren(currentSource, observed + fields.filter { control in
@@ -6045,7 +6077,7 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 }
                 if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
-                if canonicalBusReceiverFault == "physical_source_read_renewal" { f.routingInputReadRenewalArmed = true }
+                if sourceInputReadRenewal { f.routingInputReadRenewalArmed = true }
                 let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let arguments: [String: Value] = ["plan_id": .string(planID),
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
@@ -6057,8 +6089,15 @@ struct Issue965HeldSelectionAssociationTests {
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
-                if canonicalBusReceiverFault == "physical_source_read_renewal" {
+                if sourceInputReadRenewal {
                     #expect(f.routingInputReadRenewed, "Reach actual post-menu retirement before routing")
+                }
+                if inverseInputReadRenewal, canonicalBusReceiverFault != "physical_source_inverse_read_renewal" {
+                    #expect(f.routingBusLeafPresses == [2], "Read renewal must not adopt any changed protected value")
+                    #expect(f.routingDestinationPresses == 1)
+                    #expect(body["saga_state"] as? String != "fullyCompensated")
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
                 }
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     #expect(f.routingChangedSendPublished)
