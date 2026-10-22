@@ -229,6 +229,7 @@ extension ChannelRouter {
         // zoom level instead of an unmappable, unverifiable key command. Keeps
         // the key-command + CGEvent fallbacks for when the slider isn't found.
         "nav.set_zoom_level":         [.accessibility, .midiKeyCommands, .cgEvent],
+        "nav.set_vertical_zoom_level": [.accessibility],
 
         // Editing — MIDIKeyCommands primary, CGEvent fallback
         // #864 — AX FIRST. The MIDI key-command rung sends CC 30/31 on channel 16, which does
