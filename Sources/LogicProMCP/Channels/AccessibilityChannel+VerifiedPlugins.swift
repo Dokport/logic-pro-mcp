@@ -683,9 +683,11 @@ extension AccessibilityChannel {
         }
 
         private func stillOwned(stoppingWhen stop: @Sendable () -> Bool,
+                                afterReferenceCheck: (() -> Bool)? = nil,
                                 isolation: isolated (any Actor)? = #isolation) async -> Bool {
             guard !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   await referenceIsCurrent() else { return false }
+            guard afterReferenceCheck?() ?? true else { return false }
             return originalNativeScopeIsOwned(stoppingWhen: stop)
         }
 
@@ -1234,14 +1236,25 @@ extension AccessibilityChannel {
             func selectionReadFocusOwned() -> Bool {
                 (sameFocus() && passive.permits()) || ownedFirstSelectionFocus()
             }
+            func renewAcceptedSelectionFocus() -> Bool {
+                guard !(hardStop ?? stop)() else { return false }
+                // An awaited reference renewal may cross the native focus
+                // transition. Pending focus returns to bounded observation
+                // before the generic editing guard can retire this read.
+                return !selectionWasAccepted || sameFocus() || ownedFirstSelectionFocus()
+            }
             func held(ownedSelectionFocus: AXUIElement? = nil) async -> Bool {
+                // Inverse observation has its own exact original-subset focus
+                // proof; forward Select All renewal must not replace it.
+                let renewForwardFocus: (() -> Bool)? = ownedSelectionFocus == nil ? renewAcceptedSelectionFocus : nil
                 let selectionFocus = ownedSelectionFocus.map { expected in
                     guard original.filter({ CFEqual($0, expected) }).count == 1,
                           let current: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedUIElementAttribute as String, runtime: runtime.ax)
                     else { return false }
                     return CFEqual(current, expected)
                 } ?? false
-                guard await stillOwned(stoppingWhen: stop), runtime.focusedApplicationPID() == acquiredPID,
+                guard await stillOwned(stoppingWhen: stop, afterReferenceCheck: renewForwardFocus),
+                      runtime.focusedApplicationPID() == acquiredPID,
                       ownedMenuFocus() || selectionFocus || ownedFirstSelectionFocus(),
                       let currentPath = Self.retainedPath(binding.mixer, in: window, runtime: runtime.ax), same(originalPath, currentPath),
                       let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: runtime.ax),
@@ -1255,7 +1268,7 @@ extension AccessibilityChannel {
                         checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
                       CFEqual(currentActivity.controlBar, activity.controlBar), CFEqual(currentActivity.play, activity.play),
                       CFEqual(currentActivity.record, activity.record), !currentActivity.isPlaying, !currentActivity.isRecording,
-                      await stillOwned(stoppingWhen: stop)
+                      await stillOwned(stoppingWhen: stop, afterReferenceCheck: renewForwardFocus)
                 else { return false }
                 return true
             }
@@ -1307,29 +1320,31 @@ extension AccessibilityChannel {
                 // beyond 50ms; retain the original request deadline and never
                 // retry the leaf or manufacture its selected children.
                 for attempt in 0..<3 {
-                    if !sameFocus(), !ownedFirstSelectionFocus() {
+                    let focusOwned = sameFocus() || ownedFirstSelectionFocus()
+                    let heldState = focusOwned ? await held() : false
+                    if !heldState {
                         // The accepted leaf may move focus before its selection
-                        // settles. Spend only the existing two waits on Help-free
+                        // settles, including during the awaited custody check.
+                        // Spend only the existing two waits on Help-free
                         // observations of the retained first strip. This passive
                         // witness is NOT installed as general read custody: that
                         // still requires the exact complete selected population.
                         let stopPendingRead = hardStop ?? stop
-                        guard attempt < 2, !stopPendingRead(), await referenceIsCurrent(), !stopPendingRead(),
+                        if attempt < 2, !stopPendingRead(), await referenceIsCurrent(), !stopPendingRead(),
                               let first = strips.first,
                               let pending = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(
                                 window: window, logic: runtime),
                               CFEqual(pending.focus, first), CFEqual(pending.binding.mixer, binding.mixer),
                               let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: runtime.ax),
                               same(current.strips, strips),
-                              let selection = elements(kAXSelectedChildrenAttribute as String), sameSet(selection, original),
-                              pending.permits(), !stopPendingRead() else {
-                            effects.reason = "mixer_global_selection_unverified"; return nil
+                              let selection = elements(kAXSelectedChildrenAttribute as String),
+                              pending.permits(),
+                              (sameSet(selection, original) || (sameSet(selection, strips) && ownedFirstSelectionFocus())),
+                              !stopPendingRead() {
+                            do { try await Task.sleep(for: .milliseconds(100)) }
+                            catch { effects.reason = "navigation_cancelled"; return nil }
+                            continue
                         }
-                        do { try await Task.sleep(for: .milliseconds(100)) }
-                        catch { effects.reason = "navigation_cancelled"; return nil }
-                        continue
-                    }
-                    guard await held() else {
                         _ = await dismissOwnedMenu(stoppingWhen: stop)
                         effects.reason = "mixer_global_selection_unverified"; return nil
                     }
