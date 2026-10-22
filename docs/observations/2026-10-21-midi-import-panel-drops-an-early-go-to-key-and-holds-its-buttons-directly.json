@@ -1,0 +1,80 @@
+{
+  "id": "2026-10-21-midi-import-panel-drops-an-early-go-to-key-and-holds-its-buttons-directly",
+  "date": "2026-10-21",
+  "schema": 3,
+  "subject": "midi.import_file against the MIDI file Open panel on an Intel Mac",
+  "question": "record_sequence failed at midi.import_file on every attempt with Accessibility and Automation granted. Which stage of the import script fails, and why?",
+  "verdict": "works",
+  "issues": [
+    1084
+  ],
+  "surface": "project.lifecycle",
+  "host": {
+    "app": "Logic Pro",
+    "version": "12.4",
+    "build": "6707",
+    "locale": "en-US",
+    "os": "macOS 15.7.4 (24G517)"
+  },
+  "reverify": {
+    "kind": "manual",
+    "command": "On an Intel Mac with Logic 12.4, open a project and call logic_tracks record_sequence {notes: \"60,0,500,100\"} on the release binary of main b49663f8, then on this branch.",
+    "expected": "main fails with DIALOG_NOT_FOUND (go-to-folder field did not accept the path) and, once the path stage is passed, IMPORT_BTN_ERROR (panel appeared but exposed no commit button); this branch reaches the tempo prompt and creates the lane."
+  },
+  "depends": [
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+MIDIImport.swift"
+  ],
+  "evidence": [],
+  "method": "The failing call was traced with logic_system get_trace, then each stage of the import script was reproduced by hand through System Events against the same Logic session: open the panel from the menu bar, send the go-to key after a delay, walk the panel's windows, sheets and buttons, set the path field, and close the panel with Escape. Each code change was then rebuilt and re-run through the MCP tool.",
+  "observations": [
+    {
+      "operation": "tracks.record_sequence (main b49663f8)",
+      "trace": "one AppleScript segment of 18834 ms, then import_failure",
+      "error": "DIALOG_NOT_FOUND: go-to-folder field did not accept the path",
+      "note": "18.8 s is the 15 s path budget plus the earlier stages: the go-to sheet never opened"
+    },
+    {
+      "probe": "panel opened from the menu bar, go-to key sent after 2.0 s",
+      "windows": "one AXDialog with 0 sheets, then 1 AXSheet holding 1 AXTextField",
+      "note": "the topology the script expects; the only difference from the script is the 2.0 s wait before the key"
+    },
+    {
+      "probe": "set value of that text field to a directory path, read back after 0.5 s and 1.5 s",
+      "result": "both reads return the path unchanged",
+      "note": "assignment works; the field is not the problem"
+    },
+    {
+      "conclusion_of_probes": "the key sent about 0.35 s after the panel appears is dropped while the panel loads",
+      "change": "re-send it at most once a second while the dialog has no sheet"
+    },
+    {
+      "operation": "tracks.record_sequence after that change",
+      "error": "IMPORT_BTN_ERROR: the Import panel appeared but exposed no Import button",
+      "note": "the path stage now passes"
+    },
+    {
+      "probe": "buttons of the AXDialog itself, and buttons of each of its UI elements",
+      "direct_buttons": 2,
+      "ui_element_1_role": "AXSplitGroup",
+      "ui_element_1_buttons": 0,
+      "note": "both script walks read only UI element 1; the cancel and commit buttons are direct children of the dialog"
+    },
+    {
+      "operation": "tracks.record_sequence after both changes",
+      "result": "region imported, track count 1 -> 2, tempo prompt seen and declined",
+      "state": "B",
+      "reason": "imported_as_gm_device",
+      "note": "the import itself now completes; the GM Device downgrade is a separate record"
+    }
+  ],
+  "conclusion": "On this host two timing/topology assumptions in the import script fail: the go-to key is lost when sent before the Open panel accepts input, and the panel's buttons are its direct children rather than children of its first element. Re-sending the key only while no sheet exists, and walking the dialog's own buttons in the fallback, makes the import complete.",
+  "limits": [
+    "Measured on one Intel Mac (Logic 12.4 build 6707, macOS 15.7.4, en-US). Apple Silicon and other macOS versions were not measured here.",
+    "The primary button walk is left unchanged, so hosts where it already worked keep their path; the fallback change is only exercised when the primary walk finds nothing.",
+    "No unit test drives the AppleScript itself; the evidence is the live run above."
+  ],
+  "supersedes": null,
+  "canon_not_applicable": {
+    "reason": "This record states a fact about Logic's BEHAVIOUR -- when the MIDI file Open panel accepts a key, where its buttons sit in the AX tree, what kind of lane an import creates -- not about a string Logic ships. There is no key to cite and nothing to prove absent. Rule 13 checks the claim: if any reading here resolved in the corpus the declaration would be refused."
+  }
+}
