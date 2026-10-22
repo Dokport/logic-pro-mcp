@@ -43,6 +43,32 @@
     "independent_native_selection": {"selected_indices": [5], "focus_strip_indices": [5]},
     "later_native_state_proves_deciding_read": false
   },
+  "original_passive_return_refusal": {
+    "source_commit": "54bff4bbc70d2e80589c389e80d7b74a03d97a55",
+    "raw_sha256": "c63ac99fae3ef786d71e240ef05935823125ffec5e2139c4445ecc625878952e",
+    "response": {"error": "readback_unavailable", "write_attempted": false, "ui_effects": {"restoration": "not_restored", "reason": "mixer_selection_restoration_unverified"}},
+    "independent_ui": {"complete_ui_equal_before_after_request": true},
+    "independent_native_selection": {"selected_indices": [5], "focus_strip_indices": [5]},
+    "later_native_state_proves_deciding_read": false
+  },
+  "original_passive_return_repaired": {
+    "source_commit": "4ede830b20ab1efddbbb35e10123a2a4f4ca0a03",
+    "binary_sha256": "5d1a6cc1334a430b6ad805e78faa3d99af1361e6997bd67a307945e90a4ed1ea",
+    "raw_sha256": "5c629aa12fc2c51bea34b70c02fbc8422b7b6632a34621ef91f568034e969d25",
+    "seconds": 6.436880459,
+    "response": {
+      "ui_effects": {"attempted": ["track_selection", "edit_menu", "mixer_select_all", "mixer_selection_restoration"], "changed": ["track_selection", "edit_menu", "mixer_selection", "mixer_selection_restoration"], "navigation_performed": true, "restoration": "restored"},
+      "tracks": {"coverage": "complete", "row_count": 8},
+      "hierarchy": {"coverage": "complete"},
+      "strips": {"coverage": "complete", "row_count": 14},
+      "associations": {"coverage": "complete", "row_count": 8},
+      "overall": {"complete": true, "incomplete_domains": []}
+    },
+    "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "manual_cleanup": false},
+    "independent_native_selection": {"selected_indices": [5], "focus_strip_indices": [5]},
+    "normal_process_exit": 0,
+    "process_gone": true
+  },
   "inverse_settlement_repaired": {
     "source_commit": "a8cc7485253042004878176306757e8ba2f6aaf6",
     "binary_sha256": "2f8ada1a2bfeab8ade3e2792bae6df913d1fe6d8f25d8a6f01166b1630ae3180",
