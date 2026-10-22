@@ -346,11 +346,13 @@ struct Issue448TrackSortVerifiedTests {
                 "expected_order": .array(requested.map(Value.string)), "confirmed": .bool(true)],
                 router: router, cache: StateCache(), targetRegistry: registry)
             let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let isError = try #require(result.isError)
+            let writeAttempted = try #require(body["write_attempted"] as? Bool)
             if mode == "stale_ref" {
-                #expect(result.isError == true)
+                #expect(isError)
                 #expect(body["state"] as? String == "C")
                 #expect(body["error"] as? String == "stale_target_reference")
-                #expect(body["write_attempted"] as? Bool == false)
+                #expect(!writeAttempted)
                 #expect(fixture.actionProbe.pressCount == 0)
                 #expect(await channel.calls.isEmpty)
                 #expect(await registry.currentTopologyGeneration == generation)
@@ -358,8 +360,9 @@ struct Issue448TrackSortVerifiedTests {
             }
             #expect(fixture.actionProbe.pressCount == 1)
             #expect(await channel.calls.count == 1)
-            #expect(body["write_attempted"] as? Bool == true)
-            #expect(body["menu_press_reported_success"] as? Bool == true)
+            #expect(writeAttempted)
+            let menuPressReportedSuccess = try #require(body["menu_press_reported_success"] as? Bool)
+            #expect(menuPressReportedSuccess)
             #expect(body["actuated_criterion"] as? String == "track_name")
             #expect(body["actuated_menu_item_label"] as? String == "트랙 이름")
             #expect(body["before_order"] as? [String] == references.map(\.rawValue))
@@ -367,16 +370,18 @@ struct Issue448TrackSortVerifiedTests {
             #expect(before.compactMap { $0["name"] as? String } == names)
             #expect(body["expected_order"] as? [String] == expected)
             #expect(body["before_track_count"] as? Int == names.count)
+            let verified = try #require(body["verified"] as? Bool)
             if mode == "sorted" {
-                #expect(result.isError != true)
+                #expect(!isError)
                 #expect(body["state"] as? String == "A")
-                #expect(body["verified"] as? Bool == true)
+                #expect(verified)
                 #expect(body["after_order"] as? [String] == expected)
             } else {
-                #expect(result.isError == true)
+                #expect(isError)
                 #expect(body["state"] as? String == "B")
-                #expect(body["verified"] as? Bool == false)
-                #expect(body["safe_to_retry"] as? Bool == false)
+                #expect(!verified)
+                let safeToRetry = try #require(body["safe_to_retry"] as? Bool)
+                #expect(!safeToRetry)
                 #expect(body["reason"] as? String == (mode == "unreadable"
                     ? "readback_unavailable" : "readback_mismatch"))
             }
