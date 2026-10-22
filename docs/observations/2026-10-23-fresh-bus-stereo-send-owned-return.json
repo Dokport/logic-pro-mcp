@@ -1,0 +1,74 @@
+{
+  "schema": 3,
+  "id": "2026-10-23-fresh-bus-stereo-send-owned-return",
+  "date": "2026-10-23",
+  "subject": "Fresh occupied Bus-to-Stereo Send completion and request-owned compensation",
+  "question": "Can one confirmed noncanonical Send change complete or compensate its own native effect without extending canonical repair authority?",
+  "verdict": "partial",
+  "surface": "mixer.routing",
+  "issues": [291, 971],
+  "host": {"app": "Logic Pro", "version": "12.3", "build": "6674", "locale": "en-US", "os": "macOS 26.3 (25D125)"},
+  "reverify": {
+    "kind": "manual",
+    "command": "Use a stopped disposable four-track project with nine visible Mixer strips. Select a source with physical Input 1, main Stereo output and one occupied Bus 1 Send in Post Fader mode, raw level zero and bypass off. Keep an existing separate Bus 1 receiver. Capture the selected track/strip association and routing through inspect_session, then build a singleton mixer.set_send_output_verified Saga with typed expected_current bus 1, destination stereo_output, replace_existing true and the matching expected inverse. Verify wrong-target, wrong-project and wrong-confirmation controls before confirming the valid preflight hash. For cancellation, observe the child operation verification event and the exact key still in progress, cancel that key, and inspect the terminal journal and same-key replay. Separately execute a fresh valid singleton to completion, replay its key, then freshly capture and confirm a distinct Stereo-to-Bus request to return. Independently compare the complete native UI at the prepared baseline and terminal checkpoints.",
+    "expected": "The valid forward reads back stereo_output. Cancellation compensates only its own effect to bus:1 and prevents cancelled-key execution. The independent completion run and fresh return both complete with verified readback, while completed-key replay returns the cached outcome. Source, protected state and the complete final UI are restored. Canonical Bus-to-Stereo plans remain unsupported. Graph edges use the current capture's physical source reference and retain partial coverage."
+  },
+  "depends": [
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+SendRemoval.swift",
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+OutputRead.swift",
+    "Sources/LogicProMCP/Saga/SagaExecution.swift",
+    "Sources/LogicProMCP/Workflows/ApprovedSessionRepair.swift"
+  ],
+  "evidence": [],
+  "method": "Registered public MCP calls against the sealed candidate, public trace/journal observations for event-bound cancellation, and independent native Accessibility UI comparisons before acquisition, after negative controls, after completion/replay and after each terminal return. Only one mutation caller ran at a time; both candidate processes stopped normally after their bounded runs.",
+  "canon_not_applicable": {
+    "reason": "This measures native action custody, typed destination readback, journal replay and UI restoration. It makes no assertion about Apple's canonical label vocabulary or translations."
+  },
+  "observations": [
+    {
+      "candidate_source": "097325de9c26b576764cd492546aabd07fd6fd10",
+      "candidate_sha256": "e5b6b5309cb7830b058bfe9e37017a03ffcc1c01fd8b8f22b0a4f6b80a03d5e4",
+      "controls": "Wrong target and project preflights report zero writes; a wrong confirmation hash refuses with write_attempted false. Complete independent UI remains identical after acquisition and these controls."
+    },
+    {
+      "case": "event-bound cancellation",
+      "elapsed_seconds": 72.047654041,
+      "forward": "A; checked bus:1 before, stereo_output after; live-independent menu readback",
+      "cancel_basis": "One verified child operation and the same key observed in progress; no timer-derived authority",
+      "terminal": "C / fullyCompensated; one forward boundary and one verified compensation boundary, zero failed or uncertain compensations",
+      "inverse": "bus:1; exact comparison equal; live-independent menu readback",
+      "journal": "cancelled",
+      "replay": "C / unsupported_state; no additional write",
+      "independent_ui": "Complete terminal native UI exactly equals all 54717 characters of the prepared baseline, including focus, receiver/source inputs, Send level/bypass, main output, fader and stopped transport",
+      "raw_transcript_sha256": "b844d8fd0a3d75369413fff20263f64103ea63af14d1860f6376ce557d58b332"
+    },
+    {
+      "case": "normal completion and distinct fresh-request return",
+      "forward_seconds": 30.363162875,
+      "forward": "A / completed / verified; one forward boundary",
+      "forward_replay_seconds": 0.003295834,
+      "forward_replay": "duplicate true; all non-trace response fields retained",
+      "independent_forward_ui": "Only the occupied Send destination display line differs from the prepared baseline",
+      "fresh_return_seconds": 32.444643708,
+      "fresh_return": "A / completed / verified, stereo_output to bus:1; a newly captured source, separate key and confirmation hash, not the preceding request's owned inverse",
+      "return_replay_seconds": 0.003015375,
+      "return_replay": "duplicate true; both journals completed",
+      "independent_final_ui": "Complete native UI exactly equals the 54717-character prepared baseline",
+      "raw_transcript_sha256": "521c8fe0cd9a4e9831596633465270349b17465ad0ace026b954cfc608457ae0"
+    },
+    {
+      "case": "capture-bound graph observation",
+      "checked_send_vector": ["bus:1", "bus:1", "stereo_output"],
+      "result": "Each selected Send edge uses that capture's associated physical source ref, ordinal 1 and axSendMenuCheckmark provenance; typed destinations are bus_1 or output_stereo, all edge endpoints exist, and routing coverage remains partial"
+    }
+  ],
+  "conclusion": "The fresh scalar Send direction completes and compensates through existing native effect custody. A distinct fresh request can return the completed change. Replay does not grant renewed write authority, canonical repair remains unavailable, and graph coverage remains partial.",
+  "limits": [
+    "One English four-track/nine-strip stopped fixture; this does not qualify other locales, hidden/shared strips or arbitrary topology.",
+    "Canonical Bus-to-Stereo repair, native receiver-conflict injection and mixed-Saga atomicity are not qualified by this measurement.",
+    "Raw transport contains project identities and is not published; the hashes identify the retained readings, not externally retrievable evidence.",
+    "Injected receiver-conflict and authority tests are separate from these native observations. Earlier test failures and the initially masked canonical negative were retained, not promoted to native successes.",
+    "No complete routing-graph, whole R3 or whole session-repair acceptance is claimed."
+  ],
+  "supersedes": null
+}
