@@ -14,5 +14,19 @@
     "response": {"ui_effects": {"attempted": ["view_menu", "mixer_visibility"], "changed": ["view_menu", "mixer_visibility"], "navigation_performed": true, "restoration": "restored"}, "overall": {"complete": false, "incomplete_domains": ["tracks", "strips", "associations"]}},
     "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "selected_track": "Audio 6", "focus": "Tracks", "mixer_visible": false, "playing": false, "recording": false}
   },
-  "separate_unqualified_select_all_profile": {"source_commit": "819a9f147450e25ebc329524339aec0f1e39f3d1", "raw_sha256": "f8eabfa8a0322ea99ae708a3a499402d05da34f641dbc334504baf7caf7383ef", "error": "readback_unavailable", "reason": "mixer_global_selection_unverified", "restoration": "not_restored", "manual_cleanup_is_automatic_inverse": false}
+  "separate_unqualified_select_all_profile": {"source_commit": "819a9f147450e25ebc329524339aec0f1e39f3d1", "raw_sha256": "f8eabfa8a0322ea99ae708a3a499402d05da34f641dbc334504baf7caf7383ef", "error": "readback_unavailable", "reason": "mixer_global_selection_unverified", "restoration": "not_restored", "manual_cleanup_is_automatic_inverse": false},
+  "select_all_repaired": {
+    "source_commit": "caff1f53f545f5079c137a2f44b6f85ae0bc56b6",
+    "raw_sha256": "21c94cafe958c810ef5bef44bc856f5ac9deee309f7f31c9a154cc80cdddcb49",
+    "response": {
+      "ui_effects": {"attempted": ["track_selection", "edit_menu", "mixer_select_all", "mixer_selection_restoration"], "changed": ["track_selection", "edit_menu", "mixer_selection", "mixer_selection_restoration"], "navigation_performed": true, "restoration": "restored"},
+      "strips": {"coverage": "complete", "reasons": [], "witnesses": {"count": 14, "expected_count": 14, "population_end_source": "ax_owned_mixer_select_all", "presentation": {"mode": "all", "type_filters": {"audio": true, "aux": true, "bus": true, "input": true, "instrument": true, "master_vca": true, "midi": true, "output": true}}}},
+      "tracks": {"coverage": "partial", "reasons": ["count_is_the_only_end_witness"]},
+      "hierarchy": {"coverage": "unavailable", "reasons": ["parent_depth_not_observed"]},
+      "associations": {"coverage": "partial", "reasons": ["association_population_not_observed"]},
+      "overall": {"complete": false, "incomplete_domains": ["tracks", "hierarchy", "associations"]}
+    },
+    "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "selected_track": "Audio 6", "focus": "ordinary Audio 6 physical Mixer strip", "mixer_visible": true, "playing": false, "recording": false, "manual_cleanup": false},
+    "independent_native_selection": {"selected_status": 0, "selected_is_element_array": true, "selected_indices": [5], "focus_strip_indices": [5]}
+  }
 }
