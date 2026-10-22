@@ -1312,6 +1312,7 @@ extension AccessibilityChannel {
             let accepted = AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax)
             menuOpen = AXHelpers.getAttribute(edit, kAXSelectedAttribute as String, runtime: runtime.ax) as Bool? != false
             selectionWasAccepted = accepted
+            if accepted { readFocusScope?.retainOriginalMixerReadFocus(passive) }
             _ = ownedFirstSelectionFocus()
             if accepted {
                 // A successful dispatch can settle after its ACK. Observe at

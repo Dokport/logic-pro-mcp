@@ -157,6 +157,12 @@ extension AccessibilityChannel {
             func retainMixerInverseFocus(_ proof: PassiveMixerReadFocus?) {
                 lock.withLock { mixerInverseFocus = proof }
             }
+            func retainOriginalMixerReadFocus(_ proof: PassiveMixerReadFocus) {
+                // The owned selection excursion may retire association custody.
+                // Keep its independently captured original read witness, without
+                // reacquiring association actions or replacing header witnesses.
+                lock.withLock { passiveMixer = proof }
+            }
             func retainAssociation(_ observation: HeldSelectionAssociation) {
                 lock.withLock { association = observation }
             }

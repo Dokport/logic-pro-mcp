@@ -4344,6 +4344,11 @@ struct Issue965FreshPopulationAcquisitionTests {
             fault: "select_all_first_focus_inverse_only_dispatch")
     }
 
+    @Test func registeredOriginalMixerReadFocusSurvivesOwnedSelectionReturn() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "full_population_shared_original_mixer_focus_return")
+    }
+
     @Test(arguments: ["subset", "foreign", "document", "focus", "transport", "unread", "cancel", "census"])
     func registeredSelectAllLateInverseFocusCannotReplaceCompleteSelectionOrCustody(fault: String) async throws {
         try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
@@ -4411,6 +4416,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/MixerPopulation.logicx")
         fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, true)
         let fullPopulation = fault.hasPrefix("full_population_")
+        let originalMixerReturn = fault == "full_population_shared_original_mixer_focus_return"
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-mixer-selection-\(UUID().uuidString).logicx")
         if fullPopulation {
             try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
@@ -4488,7 +4494,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         if fault == "duplicate_original" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [strips[3], strips[3]]) }
         let earlyFirstFocus = fault.hasPrefix("timed_dispatch_early_first_focus")
         let heldFirstFocus = fault.hasPrefix("timed_dispatch_held_first_focus")
-        let firstFocusTransition = fault.hasPrefix("select_all_first_focus") || earlyFirstFocus || heldFirstFocus
+        let firstFocusTransition = fault.hasPrefix("select_all_first_focus") || earlyFirstFocus || heldFirstFocus || originalMixerReturn
         let initialFocus = firstFocusTransition ? original[0] : strips[0]
         fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initialFocus)
         fixture.builder.setAttribute(fixture.app, kAXFocusedWindowAttribute as String, fixture.window)
@@ -4531,6 +4537,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         fixture.builder.setChildren(transport, controls)
         fixture.builder.setChildren(fixture.window, roots + [owner, transport])
         let selectionReads = Reads()
+        let originalMixerGuardReads = Reads()
         let selectionClock = SelectionDispatchClock()
         let inverseClock = SelectionDispatchClock()
         let inverseOnlyFirstFocus = fault.hasPrefix("select_all_first_focus_inverse_only_dispatch")
@@ -4546,8 +4553,14 @@ struct Issue965FreshPopulationAcquisitionTests {
         let result = try await inspect(fixture: fixture,
             domains: fullPopulation ? ["tracks", "hierarchy", "strips", "associations"] : ["tracks", "strips"], navigation: fault != "no_navigation",
             targetReferences: fullPopulation,
-            keyboardFocus: { selectionReturnsFocus
-                ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing },
+            keyboardFocus: {
+                if originalMixerReturn, fixture.events.recorded.contains("select_all"),
+                   !fixture.events.recorded.contains("restore_mixer_selection") {
+                    originalMixerGuardReads.record("editing_guard")
+                }
+                return selectionReturnsFocus
+                    ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing
+            },
             observationAction: { element, action in
                 if CFEqual(element, edit) {
                     fixture.events.record(action == kAXPressAction as String ? "open_edit" : "cancel_edit")
@@ -4606,7 +4619,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                     fixture.builder.setAttribute(otherHeader, kAXSelectedAttribute as String, !initial)
                     fixture.builder.setAttribute(fixture.rail, attribute, value)
                     fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, initial ? original : [strips[1]])
-                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initial ? strips[0] : strips[1])
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
+                        initial ? (originalMixerReturn ? initialFocus : strips[0]) : strips[1])
                     return true
                 }
                 if CFEqual(element, initialFocus), attribute == kAXFocusedAttribute as String {
@@ -4670,6 +4684,18 @@ struct Issue965FreshPopulationAcquisitionTests {
                 if fault == "restore_visible" { fixture.builder.setAttribute(mixer, kAXVisibleChildrenAttribute as String, [strips[3]]) }
                 return fault != "restore_false"
             }, readingAttribute: { element, attribute in
+                if originalMixerReturn, CFEqual(element, strips[0]), attribute == kAXNumberOfCharactersAttribute as String,
+                   fixture.events.recorded.contains("select_all"), !fixture.events.recorded.contains("restore_mixer_selection") {
+                    selectionReads.record("owned_first_focus_metadata_read")
+                    if originalMixerGuardReads.count > 0,
+                       !selectionReads.recorded.contains("owned_first_focus_metadata_unread") {
+                        // One unavailable read of the temporary first-focus
+                        // witness must not retire the separately captured
+                        // original passive strip when our inverse returns it.
+                        selectionReads.record("owned_first_focus_metadata_unread")
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                }
                 if delayedInverse, (!inverseOnlyFirstFocus || healthyDelayedInverse),
                    fixture.events.recorded.contains("restore_mixer_selection"),
                    inverseClock.settled, !selectionReads.recorded.contains("inverse_dispatch_settled") {
@@ -4822,6 +4848,17 @@ struct Issue965FreshPopulationAcquisitionTests {
                 return nativeRead(element, attribute)
             })
         let body = try #require(sharedJSONObject(sharedToolText(result)))
+        if originalMixerReturn {
+            #expect(selectionReads.recorded.contains("owned_first_focus_metadata_unread"))
+            #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)
+            #expect(fixture.events.recorded.filter { $0 == "restore_mixer_selection" }.count == 1)
+            let returned = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+            #expect(CFEqual(returned as CFTypeRef, initialFocus))
+            #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored",
+                "Retiring association authority must not erase our independently verified inverse: \(body)")
+            return
+        }
         if delayedInverse {
             if !inverseOnlyFirstFocus || healthyDelayedInverse {
                 #expect(selectionReads.recorded.contains("inverse_dispatch_settled"))
