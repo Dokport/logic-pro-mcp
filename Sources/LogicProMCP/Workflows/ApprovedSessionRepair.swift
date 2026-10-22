@@ -1564,6 +1564,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             stage = "scope_process"
             guard runtime.logicProPID() == binding.pid else { return false }
             stage = "scope_foreground"
+            // The system-wide AX focus read needs this execution path's
+            // WindowServer connection; an earlier request may run elsewhere.
+            _ = runtime.onScreenWindowList()
             guard runtime.focusedApplicationPID() == binding.pid else { return false }
             stage = "scope_application"
             guard let app = AXLogicProElements.appRoot(runtime: runtime),
