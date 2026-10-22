@@ -717,8 +717,17 @@ struct Issue965OwnedMixerNavigationTests {
         }
     }
 
-    @Test(arguments: [8, 9, 12])
+    @Test(arguments: [121, 122, 125])
     func postChannelOwnershipLossRetainsRestorationReceipt(refuseAt: Int) async throws {
+        try await postHideOwnershipLoss(refuseAt: refuseAt, expectedRestoration: "restored")
+    }
+
+    @Test(arguments: [8, 9, 12])
+    func ownershipLossDuringHideAbsenceCannotClaimRestoration(refuseAt: Int) async throws {
+        try await postHideOwnershipLoss(refuseAt: refuseAt, expectedRestoration: "not_restored")
+    }
+
+    private func postHideOwnershipLoss(refuseAt: Int, expectedRestoration: String) async throws {
         let fixture = Fixture()
         let cache = StateCache()
         let poller = StatePoller(axChannel: fixture.channel(), cache: cache,
@@ -740,7 +749,7 @@ struct Issue965OwnedMixerNavigationTests {
         #expect(fixture.pressed == ["open_view", "show_mixer", "open_view", "hide_mixer"])
         let navigated = try #require(body["navigation_performed"] as? Bool)
         #expect(navigated)
-        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == expectedRestoration)
     }
 
     private final class RestorationChecks: @unchecked Sendable {
@@ -754,8 +763,10 @@ struct Issue965OwnedMixerNavigationTests {
             lock.lock(); defer { lock.unlock() }
             guard armed else { return true }
             checks += 1
-            // Runtime calibration records checks 1–7 in the channel, 8 before cache
-            // acceptance, 9 inside acceptance, and 12 after capture (no registry).
+            // The two complete native-absence checks now keep 1–120 in the
+            // channel; 121 is before cache acceptance, 122 inside acceptance,
+            // and 125 after capture (no registry). Loss at old 8/9/12 is still
+            // inside absence verification and must not claim restoration.
             return checks < refuseAt
         }
     }
