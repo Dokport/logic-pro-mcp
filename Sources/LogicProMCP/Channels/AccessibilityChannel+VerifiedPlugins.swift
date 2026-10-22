@@ -1029,6 +1029,7 @@ extension AccessibilityChannel {
             association: HeldSelectionAssociation, pair: HeldSelectionAssociation.Pair,
             readFocusScope: OwnedTrackStackObservationNavigation.ReadFocusScope?,
             mouse: AXMouseHelper.Runtime? = nil,
+            stoppingBeforeAXRead hardStop: (@Sendable () -> Bool)? = nil,
             stoppingWhen stop: @escaping @Sendable () -> Bool
         ) async -> [AXMixerStripBinding.Binding]? {
             guard !effects.navigationPerformed, await stillOwned(stoppingWhen: stop), sameFocus(),
@@ -1086,7 +1087,8 @@ extension AccessibilityChannel {
             if focusAcquired, let nested, CFEqual(nested.focus, source.focus),
                nested.document.utf8.elementsEqual(document.utf8),
                nested.headers.count == headers.count, zip(nested.headers, headers).allSatisfy({ CFEqual($0, $1) }) {
-                selected = await nested.observeWholeStripSelection(readFocusScope: readFocusScope, stoppingWhen: stop)
+                selected = await nested.observeWholeStripSelection(readFocusScope: readFocusScope,
+                    stoppingBeforeAXRead: hardStop, stoppingWhen: stop)
                 effects.attempted += nested.effects.attempted.filter { !effects.attempted.contains($0) }
                 effects.changed += nested.effects.changed.filter { !effects.changed.contains($0) }
                 if nested.effects.navigationPerformed && nested.effects.restoration != "restored" {
@@ -1152,6 +1154,7 @@ extension AccessibilityChannel {
         }
 
         func observeWholeStripSelection(readFocusScope: OwnedTrackStackObservationNavigation.ReadFocusScope? = nil,
+                                       stoppingBeforeAXRead hardStop: (@Sendable () -> Bool)? = nil,
                                        stoppingWhen stop: @escaping @Sendable () -> Bool) async -> [AXMixerStripBinding.Binding]? {
             guard !effects.navigationPerformed, await stillOwned(stoppingWhen: stop), sameFocus(),
                   let passive = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(window: window, logic: runtime),
@@ -1304,6 +1307,28 @@ extension AccessibilityChannel {
                 // beyond 50ms; retain the original request deadline and never
                 // retry the leaf or manufacture its selected children.
                 for attempt in 0..<3 {
+                    if !sameFocus(), !ownedFirstSelectionFocus() {
+                        // The accepted leaf may move focus before its selection
+                        // settles. Spend only the existing two waits on Help-free
+                        // observations of the retained first strip. This passive
+                        // witness is NOT installed as general read custody: that
+                        // still requires the exact complete selected population.
+                        let stopPendingRead = hardStop ?? stop
+                        guard attempt < 2, !stopPendingRead(), await referenceIsCurrent(), !stopPendingRead(),
+                              let first = strips.first,
+                              let pending = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(
+                                window: window, logic: runtime),
+                              CFEqual(pending.focus, first), CFEqual(pending.binding.mixer, binding.mixer),
+                              let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: runtime.ax),
+                              same(current.strips, strips),
+                              let selection = elements(kAXSelectedChildrenAttribute as String), sameSet(selection, original),
+                              pending.permits(), !stopPendingRead() else {
+                            effects.reason = "mixer_global_selection_unverified"; return nil
+                        }
+                        do { try await Task.sleep(for: .milliseconds(100)) }
+                        catch { effects.reason = "navigation_cancelled"; return nil }
+                        continue
+                    }
                     guard await held() else {
                         _ = await dismissOwnedMenu(stoppingWhen: stop)
                         effects.reason = "mixer_global_selection_unverified"; return nil
