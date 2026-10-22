@@ -1,0 +1,35 @@
+{
+  "format": "public-command-response-excerpts.v1",
+  "date": "2026-10-22",
+  "method": "Selected fields copied from actual serial MCP responses. Opaque request and reference tokens are omitted. Complete source recordings are identified by their SHA-256 digests. Independent UI findings are recorded separately, not inferred from these responses.",
+  "original": {
+    "source_commit": "e1012f7d4e0a4f38098031500d2df053049e4f9a",
+    "raw_sha256": "8de3d9ac5e0cf29dd6b1cc2de9a98cda0689da19b400ed96ad524a0178dfcc16",
+    "outside_reference": {"state": "A", "success": true, "requested": 0, "observed": 0, "selected": 0, "verified": true},
+    "old_child_reference": {"state": "A", "success": true, "requested": 5, "observed": 5, "selected": 5, "verified": true},
+    "independent_ui": {"old_child_request_selected_replacement_folder": true}
+  },
+  "repaired": {
+    "source_commit": "46f6bdd93fc5ab6ba8d5e5066a1c1c07858852f5",
+    "raw_sha256": "2059125f62120867cdefbc372d0911dc5df16f2f9247ca870647f7fce150f9f2",
+    "outside_reference": {"state": "A", "success": true, "requested": 0, "observed": 0, "selected": 0, "verified": true},
+    "old_child_reference": {"state": "C", "success": false, "error": "stale_target_reference", "operation": "track.select", "write_attempted": false},
+    "independent_ui": {"complete_ui_unchanged_by_refusal": true, "complete_ui_matches_initial_after_manual_cleanup": true}
+  },
+  "same_name_ordinary_insertion_original": {
+    "source_commit": "6bd695cafb724ad48dd9df7d66befc4b85598b98",
+    "raw_sha256": "3631e32d49e613bbc3004559cc43042ab99ef936b68e50d20942a37a3096b05a",
+    "reference_issuance": {"overall_complete": true, "tracks": 8, "strips": 14, "associations": 8},
+    "old_reference_rename": {"state": "A", "success": true, "verified": true, "write_attempted": true, "track_index": 5, "before": "Audio 6", "observed": "Stale-shape sentinel"},
+    "independent_ui": {"new_sixth_track_wrongly_renamed": true, "original_seventh_track_unchanged": true}
+  },
+  "same_name_ordinary_insertion_membership_repair": {
+    "source_commit": "54bff4bbc70d2e80589c389e80d7b74a03d97a55",
+    "raw_sha256": "6e5e45abe96077833f04d1b2d972ae8a1f701e1592e73c0e2bbaa34d75d80eb6",
+    "reference_issuance": {"resource": "logic://tracks", "source": "ax_live", "readable": true, "complete": false, "tracks": 8},
+    "old_reference_rename": {"state": "C", "success": false, "error": "stale_target_reference", "operation": "track.rename", "write_attempted": false},
+    "fresh_reference_rename": {"state": "A", "success": true, "verified": true, "write_attempted": true, "track_index": 5, "before": "Audio 6", "observed": "Fresh current target"},
+    "independent_ui": {"entire_ui_unchanged_by_refusal": true, "only_new_sixth_track_renamed_by_fresh_reference": true, "original_seventh_track_unchanged": true, "entire_ui_matches_initial_after_manual_cleanup": true}
+  },
+  "limits": ["These excerpts are not a headless native replay.", "The Folder outside-reference success is historical shape-only behavior; observed unowned membership changes now retire outside references too.", "The same-name repaired issuance is readable partial tracks-resource issuance, not matched complete four-domain qualification.", "Manual cleanup is not product compensation; same-count unobserved recycling remains unqualified."]
+}

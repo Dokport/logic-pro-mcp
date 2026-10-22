@@ -179,19 +179,16 @@ enum RoutingGraphPublication {
                         observedInputSlot: input, observedTypeLabel: typeLabel
                     )
                     if capture.freshPopulation?.stable == true {
-                        let inputs = capture.freshPopulation?.checkedInputs.filter {
-                            $0.receiver.matches(owner)
-                        } ?? []
-                        if input != nil, inputs.count == 1, let number = inputs[0].busNumber,
-                           OutputAssignment.busNumbers.contains(number) {
+                        let checkedInput = SessionPopulationObservation.reportedCheckedInput(
+                            of: strip, capture: capture, qualified: true)
+                        if let number = checkedInput?.number {
                             let busID = "bus_\(number)"
                             nodesByID[busID] = RoutingNode(id: busID, kind: .bus,
                                 displayName: "Bus \(number)", busNumber: number, targetRef: nil)
                             edges.append(RoutingEdge(kind: .inputAssignment, source: busID,
                                 destination: reference.rawValue, send: nil, provenance: .axInputMenuCheckmark))
                         }
-                        if let checked = SessionPopulationObservation.reportedCheckedInput(
-                            of: strip, capture: capture, qualified: true), let ports = checked.ports {
+                        if let ports = checkedInput?.ports {
                             let inputID = "input_physical_" + ports.map { String($0) }.joined(separator: "_")
                             nodesByID[inputID] = RoutingNode(id: inputID, kind: .input,
                                 displayName: "Input " + ports.map { String($0) }.joined(separator: "-"),

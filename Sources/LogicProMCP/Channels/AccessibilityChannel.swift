@@ -467,7 +467,8 @@ actor AccessibilityChannel: Channel {
                     sharedPairs = await association.observe(referenceIsCurrent: navigationReferenceIsCurrent,
                         stoppingWhen: stop, allHeldHeaders: true, populationReadDuration: firstReadDuration)
                     if association.effects.reason == nil {
-                        sharedSelected = await navigation.observeWholeStripSelection(readFocusScope: readFocusScope, stoppingWhen: stop)
+                        sharedSelected = await navigation.observeWholeStripSelection(readFocusScope: readFocusScope,
+                            stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                     }
                 }
                 population = try finishBookend(sharedAcquisitionPerformed)
@@ -906,7 +907,8 @@ actor AccessibilityChannel: Channel {
                         selectedMixerPopulation = await owner.observeWholeStripSelectionFromRetainedHeader(
                             headerFocus: heldFocus, association: association, pair: pair,
                             readFocusScope: readFocusScope,
-                            mouse: runtime.canPostEvents() ? runtime.observationMouseRuntime : nil, stoppingWhen: stop)
+                            mouse: runtime.canPostEvents() ? runtime.observationMouseRuntime : nil,
+                            stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                         exposedMixerEndEffects = owner.effects
                         population.uiEffects = mergedEffects(population.uiEffects, owner.effects)
                         if owner.effects.reason != nil
@@ -916,7 +918,7 @@ actor AccessibilityChannel: Channel {
                     }
                 } else if let navigation {
                     selectedMixerPopulation = await navigation.observeWholeStripSelection(
-                        readFocusScope: readFocusScope, stoppingWhen: stop)
+                        readFocusScope: readFocusScope, stoppingBeforeAXRead: stopBeforeAXRead ?? stop, stoppingWhen: stop)
                 }
             }
             if population.stable, let selected = selectedMixerPopulation {
@@ -1692,6 +1694,9 @@ actor AccessibilityChannel: Channel {
             return AccessibilityChannel.defaultSetZoomLevel(
                 params: params, runtime: runtime.logicRuntime
             )
+
+        case "nav.set_vertical_zoom_level":
+            return Self.defaultSetVerticalZoomLevel(params: params, runtime: runtime.logicRuntime)
 
         case "view.set_mixer_visibility":
             return await Self.defaultSetMixerVisibility(params: params, runtime: runtime.logicRuntime)

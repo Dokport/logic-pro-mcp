@@ -1,0 +1,90 @@
+{
+  "format": "native-response-and-independent-ui-excerpts.v1",
+  "method": "Actual response fields and independent UI findings, with opaque tokens and private fixture paths omitted. Complete native recordings are identified by SHA-256; this is not a headless replay.",
+  "original": {
+    "source_commit": "c0949317037f1377b79692ce5a4dcfd92c0b9a10",
+    "response_raw_sha256": "e5e953e7d0d1bd09e06e22099067b4f4d5d0f841a3e0fe7968ae6ffb8d368b0a",
+    "independent_observer_raw_sha256": "ce33f82ddf24e5abbbf003e6d8b27c68abd5d964dda19fd6caafd85efcf1f33e",
+    "response": {"ui_effects": {"restoration": "not_restored", "reason": "mixer_restoration_unverified"}},
+    "independent_transitions_seconds": [{"at": 9.19319200515747, "original_focus": true, "mixer_present": true}, {"at": 10.119408011436462, "original_focus": true, "mixer_present": false}]
+  },
+  "repaired": {
+    "source_commit": "819a9f147450e25ebc329524339aec0f1e39f3d1",
+    "raw_sha256": "56b4234156716e20f1e77ebe2c63153a92410e16496ad5643d4a4f17433acb79",
+    "response": {"ui_effects": {"attempted": ["view_menu", "mixer_visibility"], "changed": ["view_menu", "mixer_visibility"], "navigation_performed": true, "restoration": "restored"}, "overall": {"complete": false, "incomplete_domains": ["tracks", "strips", "associations"]}},
+    "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "selected_track": "Audio 6", "focus": "Tracks", "mixer_visible": false, "playing": false, "recording": false}
+  },
+  "separate_unqualified_select_all_profile": {"source_commit": "819a9f147450e25ebc329524339aec0f1e39f3d1", "raw_sha256": "f8eabfa8a0322ea99ae708a3a499402d05da34f641dbc334504baf7caf7383ef", "error": "readback_unavailable", "reason": "mixer_global_selection_unverified", "restoration": "not_restored", "manual_cleanup_is_automatic_inverse": false},
+  "select_all_repaired": {
+    "source_commit": "caff1f53f545f5079c137a2f44b6f85ae0bc56b6",
+    "raw_sha256": "21c94cafe958c810ef5bef44bc856f5ac9deee309f7f31c9a154cc80cdddcb49",
+    "response": {
+      "ui_effects": {"attempted": ["track_selection", "edit_menu", "mixer_select_all", "mixer_selection_restoration"], "changed": ["track_selection", "edit_menu", "mixer_selection", "mixer_selection_restoration"], "navigation_performed": true, "restoration": "restored"},
+      "strips": {"coverage": "complete", "reasons": [], "witnesses": {"count": 14, "expected_count": 14, "population_end_source": "ax_owned_mixer_select_all", "presentation": {"mode": "all", "type_filters": {"audio": true, "aux": true, "bus": true, "input": true, "instrument": true, "master_vca": true, "midi": true, "output": true}}}},
+      "tracks": {"coverage": "partial", "reasons": ["count_is_the_only_end_witness"]},
+      "hierarchy": {"coverage": "unavailable", "reasons": ["parent_depth_not_observed"]},
+      "associations": {"coverage": "partial", "reasons": ["association_population_not_observed"]},
+      "overall": {"complete": false, "incomplete_domains": ["tracks", "hierarchy", "associations"]}
+    },
+    "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "selected_track": "Audio 6", "focus": "ordinary Audio 6 physical Mixer strip", "mixer_visible": true, "playing": false, "recording": false, "manual_cleanup": false},
+    "independent_native_selection": {"selected_status": 0, "selected_is_element_array": true, "selected_indices": [5], "focus_strip_indices": [5]}
+  },
+  "prehold_focus_refusal": {
+    "source_commit": "ec461e86cb2bec2550859a6ed83d040b56532d92",
+    "raw_sha256": "67c1396a049019b0ecc761c4e18e500f7404e71ff0ab72f1820169d0ee2c22cd",
+    "response": {"error": "readback_unavailable", "ui_effects": {"reason": "mixer_global_selection_unverified", "restoration": "not_restored"}, "write_attempted": false},
+    "manual_cleanup_is_automatic_inverse": false
+  },
+  "inverse_settlement_refusal": {
+    "source_commit": "f91bb01113034b8ebabefbebbc40bee989903a2a",
+    "raw_sha256": "337fda12fa77ad2c25c0aa69902fab1f7381d55acecdb7f63c500324fefb2531",
+    "response": {"error": "readback_unavailable", "ui_effects": {"attempted": ["track_selection", "edit_menu", "mixer_select_all", "mixer_selection_restoration"], "changed": ["track_selection", "edit_menu", "mixer_selection"], "reason": "mixer_selection_restoration_unverified", "restoration": "not_restored"}, "write_attempted": false},
+    "independent_ui": {"complete_ui_equal_before_after_request": true},
+    "independent_native_selection": {"selected_indices": [5], "focus_strip_indices": [5]},
+    "later_native_state_proves_deciding_read": false
+  },
+  "original_passive_return_refusal": {
+    "source_commit": "54bff4bbc70d2e80589c389e80d7b74a03d97a55",
+    "raw_sha256": "c63ac99fae3ef786d71e240ef05935823125ffec5e2139c4445ecc625878952e",
+    "response": {"error": "readback_unavailable", "write_attempted": false, "ui_effects": {"restoration": "not_restored", "reason": "mixer_selection_restoration_unverified"}},
+    "independent_ui": {"complete_ui_equal_before_after_request": true},
+    "independent_native_selection": {"selected_indices": [5], "focus_strip_indices": [5]},
+    "later_native_state_proves_deciding_read": false
+  },
+  "original_passive_return_repaired": {
+    "source_commit": "4ede830b20ab1efddbbb35e10123a2a4f4ca0a03",
+    "binary_sha256": "5d1a6cc1334a430b6ad805e78faa3d99af1361e6997bd67a307945e90a4ed1ea",
+    "raw_sha256": "5c629aa12fc2c51bea34b70c02fbc8422b7b6632a34621ef91f568034e969d25",
+    "seconds": 6.436880459,
+    "response": {
+      "ui_effects": {"attempted": ["track_selection", "edit_menu", "mixer_select_all", "mixer_selection_restoration"], "changed": ["track_selection", "edit_menu", "mixer_selection", "mixer_selection_restoration"], "navigation_performed": true, "restoration": "restored"},
+      "tracks": {"coverage": "complete", "row_count": 8},
+      "hierarchy": {"coverage": "complete"},
+      "strips": {"coverage": "complete", "row_count": 14},
+      "associations": {"coverage": "complete", "row_count": 8},
+      "overall": {"complete": true, "incomplete_domains": []}
+    },
+    "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "manual_cleanup": false},
+    "independent_native_selection": {"selected_indices": [5], "focus_strip_indices": [5]},
+    "normal_process_exit": 0,
+    "process_gone": true
+  },
+  "inverse_settlement_repaired": {
+    "source_commit": "a8cc7485253042004878176306757e8ba2f6aaf6",
+    "binary_sha256": "2f8ada1a2bfeab8ade3e2792bae6df913d1fe6d8f25d8a6f01166b1630ae3180",
+    "raw_sha256": "99ba53f8fe99073ee94b2c74d5b46606bf02f18e2f8809c862d8219db5b8a15d",
+    "seconds": 6.4442885,
+    "response": {
+      "ui_effects": {"attempted": ["track_selection", "edit_menu", "mixer_select_all", "mixer_selection_restoration"], "changed": ["track_selection", "edit_menu", "mixer_selection", "mixer_selection_restoration"], "navigation_performed": true, "restoration": "restored"},
+      "tracks": {"coverage": "complete", "witnesses": {"count": 8, "expected_count": 8, "population_end_source": "ax_all_shown_single_page"}},
+      "hierarchy": {"coverage": "complete"},
+      "strips": {"coverage": "complete", "witnesses": {"count": 14, "expected_count": 14, "population_end_source": "ax_owned_mixer_select_all"}},
+      "associations": {"coverage": "complete", "row_count": 8},
+      "overall": {"complete": true, "incomplete_domains": []}
+    },
+    "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "selected_track": "Audio 6", "focus": "ordinary Audio 6 physical Mixer strip", "mixer_visible": true, "playing": false, "recording": false, "manual_cleanup": false},
+    "independent_native_selection": {"selected_status": 0, "selected_indices": [5], "focus_strip_indices": [5]},
+    "normal_process_exit": 0,
+    "process_gone": true
+  }
+}

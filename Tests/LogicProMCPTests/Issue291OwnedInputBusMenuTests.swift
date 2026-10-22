@@ -891,7 +891,8 @@ struct Issue291OwnedInputBusMenuTests {
     }
 
     @Test("Input publication keeps exact owner, source census and unique typed evidence",
-        arguments: ["held", "absent", "other_owner", "conflict", "unstable", "invalid_bus", "missing_slot"])
+        arguments: ["held", "absent", "other_owner", "conflict", "unstable", "invalid_bus", "missing_slot",
+                    "missing_observation", "different_fresh_slot", "duplicate_fresh_owner", "wrong_fresh_project"])
     func checkedInputPublicationRefusesUnsupportedEvidence(_ fault: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let p = try prepare(), f = p.f
@@ -900,6 +901,7 @@ struct Issue291OwnedInputBusMenuTests {
                 runtime: f.logic, stoppingWhen: { false }).states)
             let owner = try #require(states[0].physicalBinding)
             if fault == "missing_slot" { states[0].inputSlotBinding = nil }
+            if fault == "missing_observation" { states[0].inputObservation = nil }
             let cache = StateCache(), registry = TargetRegistry()
             await cache.updateProject(.init(name: "Session", filePath: f.bundle.path, source: "fixture"))
             await cache.updateDocumentState(true)
@@ -907,8 +909,13 @@ struct Issue291OwnedInputBusMenuTests {
             let base = await SessionPopulationObservation.capture(cache: cache,
                 targetRegistry: registry, fileReader: .unavailable)
             let receiver = try #require(base.mixerReference(at: 0))
-            var fresh = SessionPopulationObservation.FreshPopulation(project: base.project,
-                tracks: base.tracks, strips: states, fileTrackCount: nil,
+            var freshStates = states
+            if fault == "different_fresh_slot" { freshStates[0].inputSlotBinding = nil }
+            if fault == "duplicate_fresh_owner" { freshStates.append(states[0]) }
+            let freshProject = fault == "wrong_fresh_project"
+                ? ProjectInfo(name: "Other", filePath: "/tmp/Other.logicx", source: "fixture") : base.project
+            var fresh = SessionPopulationObservation.FreshPopulation(project: freshProject,
+                tracks: base.tracks, strips: freshStates, fileTrackCount: nil,
                 beganAt: base.beganAt, endedAt: base.endedAt, stable: fault != "unstable")
             if fault != "absent" {
                 fresh.checkedInputs = [.init(receiver: fault == "other_owner"
@@ -917,6 +924,10 @@ struct Issue291OwnedInputBusMenuTests {
                 if fault == "conflict" { fresh.checkedInputs.append(.init(receiver: owner, busNumber: 2)) }
             }
             let capture = inputCapture(base, fresh: fresh)
+            let checked = SessionPopulationObservation.reportedCheckedInput(of: states[0],
+                capture: capture, qualified: true)
+            if fault == "held" { #expect(checked?.number == 1) }
+            else { #expect(checked == nil) }
             let graph = SessionPopulationObservation.routingGraph(capture: capture)
             let inputs = graph.edges.filter { $0.kind == .inputAssignment }
             if fault == "held" {

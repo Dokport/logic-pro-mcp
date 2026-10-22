@@ -165,6 +165,16 @@ actor TargetRegistry {
             currentProjectDescriptor = descriptor
             bindings = bindings.filter { $0.value.kind != .project }
         }
+        if kind == .track, let physicalTrack {
+            // A fresh population can observe a recycled header before anyone
+            // resolves its old reference. Retire every contradicted old alias,
+            // even when a matching newer alias is found first below.
+            for binding in bindings.values where binding.kind == .track
+                && binding.serverSessionID == serverSessionID && binding.projectEpoch == projectEpoch
+                && binding.topologyGeneration == topologyGeneration {
+                binding.physicalTrack?.observeNewerBinding(physicalTrack)
+            }
+        }
         if let binding = bindings.values.first(where: { binding in
             if let physicalTrack {
                 return kind == .track && binding.kind == .track

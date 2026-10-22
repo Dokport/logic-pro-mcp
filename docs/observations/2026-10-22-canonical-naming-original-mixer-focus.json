@@ -1,0 +1,44 @@
+{
+  "schema": 3,
+  "id": "2026-10-22-canonical-naming-original-mixer-focus",
+  "date": "2026-10-22",
+  "subject": "Canonical naming retains its original captured passive Mixer read focus",
+  "question": "Can one retained approved two-name plan execute from an original passive Mixer strip without accepting an editor or arbitrary new focus?",
+  "verdict": "partial",
+  "surface": "arrange.track_headers",
+  "issues": [971],
+  "host": {"app": "Logic Pro", "version": "12.3", "build": "6674", "locale": "en-US", "os": "macOS 26.3 (25D125)"},
+  "reverify": {
+    "kind": "manual",
+    "command": "Use a stopped disposable flat eight-track project, all headers shown on one non-scrolling page, only its sixth ordinary Audio track selected and focused in its physical Mixer strip. Retain a complete tracks/hierarchy/strips/associations inspection. Create one executable plan with two distinct literal names for its sixth and seventh tracks; inspect that its only steps are those names, then confirm that exact plan and digest within the original snapshot lifetime. Compare the independently observed track and Mixer names, selection and complete UI. After the source snapshot expires, repeat the same plan/digest/key and compare the stored result and complete UI. Stop the candidate before separately resetting only the owned fixture changes. Separately qualify the already-matching zero-step name plan and the same-name ordinary-insertion stale-plan refusal with fresh snapshots; an expired-snapshot refusal does not qualify target drift.",
+    "expected": "Both approved names and their independent final goals verify; original selection is restored. The measured final focus is Tracks rather than the original Mixer strip, so global focus restoration is not qualified. Same-key replay reuses the stored completed result after snapshot expiry without additional observed UI change. The intact-name plan makes zero writes; the changed-target plan refuses before writing within its original lifetime.",
+    "cost": "Two approved development-only name writes in the positive case, independent UI reads and a separate fixture reset. The negative insertion profile uses one owned test duplication and name preparation; the no-change profile has no musical write. No project save or product-owned inverse is qualified by manual cleanup."
+  },
+  "depends": [
+    "Sources/LogicProMCP/Workflows/ExactTrackNameAdapter.swift:applySelecting",
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+Tracks.swift:PassiveMixerReadFocus",
+    "Sources/LogicProMCP/Workflows/ApprovedSessionRepair.swift",
+    "Tests/LogicProMCPTests/Issue968ExactTrackNameAdapterTests.swift:canonicalDistinctNamesShareOrderedReceiptsAndOwnedCompensation"
+  ],
+  "method": "Actual public MCP requests used content-sealed executables carrying their source commits. The earlier and corrected two-name runs used the same independently observed fixture and original UI. The correction retains only the first strict nonediting Mixer witness whose exact native strip belongs uniquely to the retained capture; it does not infer identity from names or ordinals. Independent complete UI comparisons distinguish approved name changes, selection restoration and the remaining focus difference. Runtime-injected tests are separate evidence, not native qualification.",
+  "evidence": ["evidence/2026-10-22-canonical-naming-original-mixer-focus.json"],
+  "canon_not_applicable": {"reason": "The observed names are literal approved test inputs. This measures captured native custody, passive-focus classification and execution, not canonical label vocabulary, translation or a keyboard binding."},
+  "observations": [
+    {"what": "Same two-name first-step refusal before the new population guard", "source_commit": "6bd695cafb724ad48dd9df7d66befc4b85598b98", "binary_sha256": "23910416269079de4e20806cd9ab9ebde8b2f0e7dd684fe044d419503ff43696", "raw_sha256": "fd06d32282623d49cb98be274fc8cec2f9a5d2423d84d85836a0353f72f42ad2", "seconds": 19.410219167, "state": "C", "first_step_error": "stale_target_reference", "write_boundary_count": 0, "independent_complete_ui_unchanged": true},
+    {"what": "Same two-name first-step refusal on the later restoration and custody source", "source_commit": "94bf2758ab42a9fac9d6242eaacea8a2e61464ab", "raw_sha256": "50534b03bee4ae9df51af899967464de24e1e257a8f7d8ef9d7d321cee97729e", "seconds": 19.065917917, "state": "C", "first_step_error": "stale_target_reference", "write_boundary_count": 0, "within_source_snapshot_lifetime": true, "independent_complete_ui_unchanged": true},
+    {"what": "Causal passive-Mixer guard regression and refusal controls", "source_commit": "9c625d483025af261273a0a59d5edf9467d48605", "causal_red_source_commit": "94bf2758ab42a9fac9d6242eaacea8a2e61464ab", "causal_red_issues": 5, "strict_passive_mixer_proof_passes_before_execution": true, "generic_keyboard_guard_classifies_it_as_text_editing": true, "refusal_profiles": ["editor", "settable", "value", "unread", "window", "document", "retired", "unheld_focus"], "affected_tests_passed": 182, "affected_seconds": 35.506, "synthetic_tests_are_native_qualification": false},
+    {"what": "Actual two-step canonical name execution and expired-snapshot journal replay", "source_commit": "9c625d483025af261273a0a59d5edf9467d48605", "binary_sha256": "c700bf24742aa922ae110cc0c2c8330758f5a203ea7c48cd0ffe095dc3bfc4a9", "raw_sha256": "82dcbd39836d026722ba0b9c5aee13575634d0e8cd9c5f70092d92d1432e1b7b", "seconds": 80.976048875, "state": "A", "verified": true, "saga_state": "completed", "applied_name_steps": 2, "independent_final_goals_match": true, "original_selected_strip_index_after": 5, "selection_restoration_in_both_receipts": "restored", "independent_ui_differences_after_normalizing_only_approved_names": ["Focused UI element changed from the original Mixer strip to Tracks"], "global_focus_restoration_qualified": false, "same_key_replay_after_source_snapshot_expiry": true, "replay_duplicate": true, "replay_seconds": 0.010679708, "independent_complete_ui_unchanged_by_replay": true, "normal_process_exit": 0, "process_gone": true, "independent_complete_ui_equals_original_after_manual_cleanup": true},
+    {"what": "Already-matching exact-name subset", "source_commit": "94bf2758ab42a9fac9d6242eaacea8a2e61464ab", "raw_sha256": "2f5a0d4156fe16e5dd578975f74cf98f2ff765aa316ba345488134f6d503b15b", "executable_steps": 0, "seconds": 0.660081458, "state": "A", "verified": true, "write_attempted": false, "writes_performed": 0, "independent_before_and_final_name_match": true, "same_key_replay_duplicate": true, "independent_complete_ui_unchanged": true},
+    {"what": "Same-name ordinary insertion invalidates an executable original plan before expiry", "source_commit": "94bf2758ab42a9fac9d6242eaacea8a2e61464ab", "raw_sha256": "bc3fb9ab9301e3255692045a9c5ef83eb1048af2c99a03114799b0912b546818", "seconds_from_capture_dispatch_to_apply": 35.365581709, "state": "C", "error": "stale_target_reference", "goal_verification_failure": "approved_name_set_unverified", "write_attempted": false, "writes_performed": 0, "same_key_replay_duplicate": true, "independent_complete_ui_unchanged_by_refusal_and_replay": true}
+  ],
+  "conclusion": "The bounded canonical two-name plan now executes from the original captured passive Mixer focus and independently verifies both goals. Its original selection returns, but keyboard focus ends in Tracks. Session-local duplicate replay survives source-snapshot expiry. Already-matching and stale-target profiles retain their separate zero-write results. These are distinct bounded naming, no-change and stale-plan claims, not full session-repair acceptance.",
+  "limits": [
+    "Only the measured English flat eight-track fixture and two distinct approved name changes are qualified; no large mixed project, 32/128-track workload or other locale is qualified.",
+    "Global focus restoration remains unqualified: the final focus difference is observed, not normalized away or repaired. Manual fixture reset is not a product-owned inverse.",
+    "This does not qualify complete routing, aux allocation or destruction, grouping, arbitrary order, colors, hidden region or plug-in state, or audio preservation.",
+    "No deadline or wait budget was increased. The measured 80.976-second execution is one result, not a latency guarantee.",
+    "The eight injected refusal profiles do not substitute for separate native fault receipts. The older expired-snapshot stale-plan attempt is not target-drift qualification.",
+    "Replay is in one still-running process and session journal. Cross-restart durability, cancellation, inverse failure and full F1/F3/F5 acceptance remain unqualified."
+  ],
+  "supersedes": null
+}

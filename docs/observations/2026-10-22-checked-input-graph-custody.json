@@ -1,0 +1,39 @@
+{
+  "schema": 3,
+  "id": "2026-10-22-checked-input-graph-custody",
+  "date": "2026-10-22",
+  "subject": "Bus graph edges retain the same captured input custody as physical inputs",
+  "question": "Does checked Bus graph publication reject unsupported captures while retaining an actual valid selected input edge?",
+  "verdict": "partial",
+  "surface": "mixer.routing",
+  "issues": [291],
+  "host": {"app": "Logic Pro", "version": "12.3", "build": "6674", "locale": "en-US", "os": "macOS 26.3 (25D125)"},
+  "reverify": {
+    "kind": "manual",
+    "command": "Use a stopped disposable four-track project with a visible nine-strip Mixer and one selected track receiving Bus 1. Keep focus in Tracks. Run registered inspect_session with selection scope, tracks/strips/associations/routing and allowed temporary UI navigation. Match its checked input to its inputAssignment graph edge through the issued physical strip reference. Compare the complete independent UI before candidate acquisition and after capture. Send another inspection with a well-formed unissued project_ref, compare the complete UI again, then stop the candidate. Run the injected projection matrix separately; those are not native fault injections.",
+    "expected": "The selected physical strip reports checked Bus 1 and one matching inputAssignment edge with checked-menu provenance; coverage remains partial. The wrong-project request refuses before writing and the complete independent UI remains identical. Missing fresh control, duplicate fresh owner and foreign fresh project captures publish neither the checked Bus edge nor its provenance.",
+    "cost": "An exclusively owned development fixture, temporary selection and routing-popup reads, one rejected request and independent full UI reads. No musical setter, auxiliary lifecycle action or project save is required."
+  },
+  "depends": [
+    "Sources/LogicProMCP/Routing/RoutingGraphPublication.swift:publish",
+    "Sources/LogicProMCP/Workflows/SessionPopulationObservation.swift:reportedCheckedInput",
+    "Tests/LogicProMCPTests/Issue291OwnedInputBusMenuTests.swift:checkedInputPublicationRefusesUnsupportedEvidence"
+  ],
+  "method": "The unchanged Bus-only filter emitted an edge from three captures for which the existing checked-input projection withheld the fact. The correction consumes that same pure projection for both Bus and physical endpoints. A source-attested executable then serves the real public inspection request on an independently observed selected track. The request-layer project refusal is not a native reproduction of the injected internal capture faults.",
+  "evidence": ["evidence/2026-10-22-checked-input-graph-custody.json"],
+  "canon_not_applicable": {"reason": "This measures captured native custody and typed endpoint publication, not Apple label vocabulary. The selected track's display name identifies the fixture observation, not its semantic strip kind."},
+  "observations": [
+    {"what": "Causal projection counterexamples", "source_commit": "ae2ab96bb785572bf39b034b96715de7e1c553fd", "raw_sha256": "66eaff00534a84d29ce9b6dba7044a8a671b5bc01f17a4fe7d5c4c09cc7d6969", "faults": ["different_fresh_slot", "duplicate_fresh_owner", "wrong_fresh_project"], "issues": 6, "reported_checked_input_withheld": true, "old_graph_incorrectly_published_bus_edge_and_provenance": true, "native_fault_injection": false},
+    {"what": "Corrected projection and regression controls", "source_commit": "043094bbb6fbc64266bf09e510fc07978d187025", "matrix_profiles_passed": 11, "matrix_seconds": 0.031, "related_tests_passed": 185, "related_seconds": 17.343, "related_raw_sha256": "01fa0e1d751c8e77e5d48847f92aff0767111c03c65d3fc6b4335e1eeafd4275", "tests_used_same_source_and_test_bytes_later_committed": true},
+    {"what": "Actual selected Bus graph and request-layer wrong-project refusal", "source_commit": "043094bbb6fbc64266bf09e510fc07978d187025", "binary_sha256": "bb4a4a6516326b5e2eab06b1b2ae7dea496bc0cad9f83b02dafdf0748a2c370a", "raw_sha256": "6df110c69954b3b9859bca77bc7633dca6d8c66a8b91105844020894880ca4f9", "seconds": 13.19186125, "checked_bus": 1, "matching_input_edges": 1, "edge_destination_matches_checked_physical_reference": true, "published_receiver_node_kind": "physical_strip", "routing_coverage": "partial", "restoration": "restored", "independent_complete_ui_equal_before_acquisition_and_after_capture": true, "independent_ui_string_length": 53056, "wrong_project_seconds": 0.003822, "wrong_project_state": "C", "wrong_project_error": "stale_target_reference", "wrong_project_write_attempted": false, "independent_complete_ui_unchanged_by_refusal": true, "normal_process_exit": 0, "process_gone": true}
+  ],
+  "conclusion": "Bus input publication now consumes the same capture-bound qualification as physical inputs. Three deterministic unsupported captures refuse; the measured valid inspection retains its actual selected Bus edge and exact independent UI. This is one partial graph observation, not complete routing or population qualification.",
+  "limits": [
+    "Only the measured English four-track/nine-strip profile and one selected Bus input are qualified. Cold, clipped, large, hidden and shared-strip entry profiles remain separate requirements.",
+    "The selected track is named Aux 1, but the graph correctly retains physical_strip: a display name does not establish semantic Aux identity or an exhaustive receiving population.",
+    "Strips, associations and routing remain partial. One checked input edge establishes neither hardware or Bus namespace completeness, allocation permission nor write authority.",
+    "The internal foreign-project, missing-control and duplicate-owner cases are injected data tests. The actual unissued project_ref refusal exercises a separate public request boundary.",
+    "No native musical setter, creation/destruction, inverse, audio preservation, other locale or whole R1-R3 acceptance is established. The private live recording is not a headless CI replay."
+  ],
+  "supersedes": null
+}

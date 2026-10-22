@@ -281,8 +281,9 @@ extension OperationRegistry {
             "navigate.rename_marker": .init(params: ["index": index(), "name": .enforced(.scalar, .string("Verse"))],
                                        required: [["index"], ["name"]]),
             "navigate.set_zoom": .init(params: [
-                "level": .unconstrained("read as text with fit as the default", sample: .string("fit")),
-                "direction": .unconstrained("read as text with fit as the default", sample: .string("fit")),
+                "axis": .enforced(.string, .string("horizontal"), allowed: ["horizontal", "vertical"]),
+                "level": .unconstrained("read as text with fit as the default; vertical fit is refused", sample: .string("8")),
+                "direction": .unconstrained("read as text with fit as the default; vertical fit is refused", sample: .string("8")),
             ], required: [["level", "direction"]]),
             "navigate.toggle_view": .init(params: [
                 "view": .unconstrained("read as text with mixer as the default", sample: .string("mixer")),

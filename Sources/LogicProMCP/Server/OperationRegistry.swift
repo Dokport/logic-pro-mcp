@@ -645,7 +645,7 @@ enum OperationRegistry {
         (.navigateDeleteMarker, "delete_marker", .readbackRequired, .defaultInstall, ["index"]),
         (.navigateRenameMarker, "rename_marker", .readbackRequired, .defaultInstall, ["index", "name"]),
         (.navigateZoomToFit, "zoom_to_fit", .readbackRequired, .defaultInstall, []),
-        (.navigateSetZoom, "set_zoom", .readbackRequired, .defaultInstall, ["direction", "level"]),
+        (.navigateSetZoom, "set_zoom", .readbackRequired, .defaultInstall, ["direction", "level", "axis"]),
         (.navigateToggleView, "toggle_view", .none, .defaultInstall, ["view", "visible"]),
     ] as [(OperationID, String, VerificationPolicy, AvailabilityPolicy, Set<String>)]).map { entry in
         OperationSpec(
