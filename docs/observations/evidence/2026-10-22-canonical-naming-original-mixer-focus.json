@@ -1,0 +1,28 @@
+{
+  "format": "actual-canonical-response-excerpts.v1",
+  "method": "Selected fields from actual public responses; opaque reference, trace, plan and key tokens and private fixture paths are omitted. Native recordings are identified by their SHA-256 digests. Independent UI findings are not inferred from response status.",
+  "original_two_names": {
+    "source_commit": "94bf2758ab42a9fac9d6242eaacea8a2e61464ab",
+    "raw_sha256": "50534b03bee4ae9df51af899967464de24e1e257a8f7d8ef9d7d321cee97729e",
+    "response": {"state": "C", "error": "saga_execution_failed", "saga_state": "partiallyApplied", "success": false, "verified": false},
+    "first_step": {"operation_id": "tracks.rename", "result": {"detail": "tracks.rename: error=stale_target_reference", "state": "C", "write_boundary_crossed": false}},
+    "journal_summary": {"forward_write_boundary_count": 0, "write_boundary_count": 0},
+    "independent_complete_ui_unchanged": true
+  },
+  "repaired_two_names": {
+    "source_commit": "9c625d483025af261273a0a59d5edf9467d48605",
+    "binary_sha256": "c700bf24742aa922ae110cc0c2c8330758f5a203ea7c48cd0ffe095dc3bfc4a9",
+    "raw_sha256": "82dcbd39836d026722ba0b9c5aee13575634d0e8cd9c5f70092d92d1432e1b7b",
+    "seconds": 80.976048875,
+    "response": {"state": "A", "success": true, "verified": true, "duplicate": false, "saga_state": "completed"},
+    "step_results": [{"state": "A", "detail": "tracks.rename: verified=true; track_selection_restoration=restored", "write_boundary_crossed": true}, {"state": "A", "detail": "tracks.rename: verified=true; track_selection_restoration=restored", "write_boundary_crossed": true}],
+    "independent_goal_reads": [{"track_index": 6, "observed": "Approved target seven", "provenance": "live_independent"}, {"track_index": 5, "observed": "Approved target six", "provenance": "live_independent"}],
+    "replay_after_source_snapshot_expiry": {"state": "A", "success": true, "verified": true, "duplicate": true, "saga_state": "completed", "seconds": 0.010679708},
+    "independent_ui": {"sixth_track_name": "Approved target six", "seventh_track_name": "Approved target seven", "original_selection_restored": true, "only_remaining_difference_after_approved_name_normalization": "Focus ends in Tracks rather than the original Mixer strip", "complete_ui_unchanged_by_replay": true, "complete_ui_equals_original_after_separate_manual_cleanup": true},
+    "normal_process_exit": 0,
+    "process_gone": true
+  },
+  "intact_name": {"source_commit": "94bf2758ab42a9fac9d6242eaacea8a2e61464ab", "raw_sha256": "2f5a0d4156fe16e5dd578975f74cf98f2ff765aa316ba345488134f6d503b15b", "response": {"state": "A", "success": true, "verified": true, "write_attempted": false, "writes_performed": 0, "steps": []}, "independent_complete_ui_unchanged": true},
+  "stale_plan_within_lifetime": {"source_commit": "94bf2758ab42a9fac9d6242eaacea8a2e61464ab", "raw_sha256": "bc3fb9ab9301e3255692045a9c5ef83eb1048af2c99a03114799b0912b546818", "response": {"state": "C", "error": "stale_target_reference", "goal_verification_failure": "approved_name_set_unverified", "write_attempted": false, "writes_performed": 0}, "replay_duplicate": true, "independent_complete_ui_unchanged_by_refusal_and_replay": true},
+  "limits": ["The replay retains the original two applied-step records; it does not relabel them as fresh writes or new readback.", "The measured focus difference and manual-reset boundary remain explicit.", "These excerpts are not a headless native replay or whole-session acceptance."]
+}
