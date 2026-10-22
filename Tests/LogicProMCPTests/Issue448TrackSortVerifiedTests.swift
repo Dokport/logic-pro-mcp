@@ -349,6 +349,7 @@ struct Issue448TrackSortVerifiedTests {
             if mode == "stale_ref" {
                 #expect(result.isError == true)
                 #expect(body["state"] as? String == "C")
+                #expect(body["error"] as? String == "stale_target_reference")
                 #expect(body["write_attempted"] as? Bool == false)
                 #expect(fixture.actionProbe.pressCount == 0)
                 #expect(await channel.calls.isEmpty)
@@ -360,7 +361,10 @@ struct Issue448TrackSortVerifiedTests {
             #expect(body["write_attempted"] as? Bool == true)
             #expect(body["menu_press_reported_success"] as? Bool == true)
             #expect(body["actuated_criterion"] as? String == "track_name")
+            #expect(body["actuated_menu_item_label"] as? String == "트랙 이름")
             #expect(body["before_order"] as? [String] == references.map(\.rawValue))
+            let before = try #require(body["before_tracks"] as? [[String: Any]])
+            #expect(before.compactMap { $0["name"] as? String } == names)
             #expect(body["expected_order"] as? [String] == expected)
             #expect(body["before_track_count"] as? Int == names.count)
             if mode == "sorted" {
@@ -383,6 +387,10 @@ struct Issue448TrackSortVerifiedTests {
                 #expect(body["after_track_count"] as? Int == names.count)
                 let after = try #require(body["after_tracks"] as? [[String: Any]])
                 #expect(after.compactMap { $0["name"] as? String } == observedNames)
+                let referenceByName = Dictionary(uniqueKeysWithValues: zip(names, references.map(\.rawValue)))
+                let observedOrder = try observedNames.map { try #require(referenceByName[$0]) }
+                #expect(body["after_order"] as? [String] == observedOrder,
+                    "A failed goal still has to report the complete actual reference permutation")
             }
             #expect(await registry.currentTopologyGeneration == generation + 1)
             #expect(await registry.resolve(references[0]) == nil)
