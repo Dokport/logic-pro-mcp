@@ -183,6 +183,9 @@ enum AXLogicProElements {
                 // deletion even though no arrange tree was read.
                 return .absent
             }
+            // With one candidate both the rail preference and the fallback
+            // choose this exact window; no descendant search can change it.
+            if nonDialogs.count == 1 { return .found(nonDialogs[0]) }
             if let arrange = nonDialogs.first(where: {
                 hasTrackHeadersGroup($0, runtime: runtime.ax)
             }) {
@@ -216,6 +219,7 @@ enum AXLogicProElements {
         case .success(.some(let windows)) where !windows.isEmpty:
             let nonDialogs = windows.filter { !isDialogWindow($0, runtime: runtime.ax) }
             guard !nonDialogs.isEmpty else { return .absent }
+            if nonDialogs.count == 1 { return .found(nonDialogs[0]) }
             if let arrange = nonDialogs.first(where: {
                 hasTrackHeadersGroup($0, runtime: runtime.ax)
             }) {
