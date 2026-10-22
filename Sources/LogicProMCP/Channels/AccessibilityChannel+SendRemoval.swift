@@ -40,7 +40,8 @@ extension AccessibilityChannel {
         /// must retain this current capsule before starting that read.
         func continuing(after renewal: OriginalHeaderSourceRenewal, reading: CheckedOutputReading,
                         slots: [SendSlotObservation], runtime: AXLogicProElements.Runtime) -> Self? {
-            guard case .bus = checkedBefore, case .bus = checkedAfter, checkedBefore != checkedAfter,
+            guard case .bus = checkedBefore,
+                  AccessibilityChannel.supportsOccupiedSendChange(before: checkedBefore, after: checkedAfter),
                   renewal.original.matches(source.pair.strip), renewal.originalTrack.matches(source.pair.track),
                   renewal.observation.effects.restoration == "restored", renewal.permits(runtime: runtime),
                   reading.assignment == checkedAfter, reading.sendNonRoutingChecks == nonRoutingChecks,

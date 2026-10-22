@@ -516,6 +516,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDocumentReadsAtFirstNameConfirm: Int?
         var routingDestinationPresses = 0
         var routingBusLeafPresses: [Int] = []
+        var routingCanonicalInputBuses: [Int] = []
+        var routingCanonicalContradictedInputs: [Int] = []
         var routingChangedSendPublished = false
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
@@ -4731,6 +4733,53 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: ["forward", "cancel"])
+    func canonicalBusStereoDepartureUsesCapturedInputsAndOwnEffect(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true,
+                canonicalBusReceiverFault: "physical_source")
+        }
+    }
+
+    @Test func canonicalBusStereoDepartureDoesNotRequireAnUnrelatedBusReceiver() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true, canonicalBusReceiverFault: "missing_after")
+        }
+    }
+
+    @Test func canonicalBusStereoDepartureRetainsItsEffectThroughInputReadRenewal() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true,
+                canonicalBusReceiverFault: "physical_source_inverse_read_renewal")
+        }
+    }
+
+    @Test(arguments: ["missing_before", "checked_before_at_capture", "checked_before_after_preview",
+                      "checked_before_after_forward", "checked_source_after_preview", "checked_source_after_forward"])
+    func canonicalBusStereoDepartureRefusesMissingOrChangedInputProof(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true, canonicalBusReceiverFault: fault)
+        }
+    }
+
+    @Test(arguments: ["physical_source_inverse_read_renewal_peer_volume", "physical_source_inverse_read_renewal_mode",
+                      "physical_source_inverse_read_renewal_project"])
+    func canonicalBusStereoDepartureCannotRenewChangedProtectedState(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true, canonicalBusReceiverFault: fault)
+        }
+    }
+
     @Test(arguments: ["missing_before", "missing_after"])
     func canonicalExistingBusSendRequiresBothReturnAndForwardReceivers(fault: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -4823,6 +4872,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                canonicalPhysical: Bool = false,
                                                canonicalBus: Bool = false,
                                                canonicalBusChange: Bool = false,
+                                               canonicalBusStereoReturn: Bool = false,
                                                canonicalBusReceiverFault: String? = nil,
                                                inverseHelpRole: Int = 1,
                                                canonicalName: Bool = false,
@@ -5677,11 +5727,13 @@ struct Issue965HeldSelectionAssociationTests {
                        CFEqual(element, input) || CFEqual(element, b.element(1_965_2680)) || CFEqual(element, sourceInput) {
                         let ownInput = CFEqual(element, sourceInput)
                         let bus = CFEqual(element, input) ? 2 : 1
+                        f.routingCanonicalInputBuses.append(ownInput ? 0 : bus)
                         let appliesToReceiver = canonicalBusReceiverFault?.hasPrefix(ownInput ? "checked_source_"
                             : bus == 1 ? "checked_before_" : "checked_after_") == true
                         let contradicted = appliesToReceiver && (canonicalBusReceiverFault?.hasSuffix("at_capture") == true
                             || f.routingLateScopeInjected
                             || (canonicalBusReceiverFault?.hasSuffix("after_forward") == true && f.routingDestinationPresses > 0))
+                        if contradicted { f.routingCanonicalContradictedInputs.append(ownInput ? 0 : bus) }
                         // The original caption and native owner stay unchanged. Only the actual
                         // checked input differs, which a caption-only guard cannot observe.
                         b.setAttribute(inputEcho, kAXTitleAttribute as String, ownInput ? "Input 1" : "Bus \(bus)")
@@ -5734,9 +5786,11 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         return true
                     }
-                    let forward = CFEqual(element, busTwo) && action == kAXPressAction as String
+                    let forward = CFEqual(element, canonicalBusStereoReturn ? stereo : busTwo) && action == kAXPressAction as String
                     let inverse = CFEqual(element, destination) && action == kAXPressAction as String
-                    if forward || inverse { f.routingBusLeafPresses.append(forward ? 2 : 1) }
+                    if (forward && !canonicalBusStereoReturn) || inverse {
+                        f.routingBusLeafPresses.append(forward ? 2 : 1)
+                    }
                     // Reuse the source redraw model while retaining this untouched receiver.
                     let acknowledged = originalAction(forward ? destination : inverse ? stereo : element, action)
                     if sourceInputReadRenewal, let peer = f.routingOtherReplacement {
@@ -5759,11 +5813,12 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                     }
                     if forward || inverse {
-                        b.setAttribute(echo, kAXTitleAttribute as String, forward ? "Bus 2 → Existing" : "Bus 1 → Existing")
+                        b.setAttribute(echo, kAXTitleAttribute as String, forward
+                            ? (canonicalBusStereoReturn ? "Stereo Output" : "Bus 2 → Existing") : "Bus 1 → Existing")
                         b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
-                        b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", forward && canonicalBusStereoReturn ? "✓" : "")
                         b.setAttribute(destination, "AXMenuItemMarkChar", forward ? "" : "✓")
-                        b.setAttribute(busTwo, "AXMenuItemMarkChar", forward ? "✓" : "")
+                        b.setAttribute(busTwo, "AXMenuItemMarkChar", forward && !canonicalBusStereoReturn ? "✓" : "")
                     }
                     let children = b.makeAXRuntime().children(f.mixer)
                     if !children.contains(where: { CFEqual($0, receiver) }) {
@@ -5856,7 +5911,9 @@ struct Issue965HeldSelectionAssociationTests {
                 let planHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
                 var sendIntent: [String: Value] = ["target": .string("source"),
                     canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1)]
-                if canonicalBus {
+                if canonicalBusStereoReturn {
+                    sendIntent["output"] = .object(["kind": .string("stereo_output")])
+                } else if canonicalBus {
                     sendIntent["bus"] = .int(canonicalBusChange || canonicalSend == "nonmatching_bus" ? 2 : 1)
                 } else if canonicalPhysical {
                     sendIntent["output"] = (freshBusStereoReturn || (canonicalMatching ? !freshPhysicalReturn : freshPhysicalReturn && canonicalSend != "unsupported_pair")) ? .object(["kind": .string("stereo_output")])
@@ -5911,7 +5968,8 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 let plannedText = sharedToolText(await planHandler(dependencies, planArguments))
                 let planned = try #require(sharedJSONObject(plannedText))
-                if canonicalBusReceiverFault?.hasPrefix("missing_") == true {
+                if canonicalBusReceiverFault?.hasPrefix("missing_") == true
+                    && !(canonicalBusStereoReturn && canonicalBusReceiverFault == "missing_after") {
                     let executable = try #require(planned["executable"] as? Bool)
                     #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
@@ -5926,7 +5984,7 @@ struct Issue965HeldSelectionAssociationTests {
                     return
                 }
                 let executable = try #require(planned["executable"] as? Bool)
-                #expect(executable, "Actual plan: \(plannedText)")
+                try #require(executable, "Actual plan: \(plannedText)")
                 let planID = try #require(planned["plan_id"] as? String)
                 let digest = try #require(planned["digest"] as? String)
                 let preview = try #require(planned["steps"] as? [[String: Any]])
@@ -6136,6 +6194,8 @@ struct Issue965HeldSelectionAssociationTests {
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
                     "confirmed": .bool(true), "idempotency_key": .string(key)]
                 let result: CallTool.Result
+                let inputReadsBeforeApply = f.routingCanonicalInputBuses.count
+                let contradictionsBeforeApply = f.routingCanonicalContradictedInputs.count
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     result = await AccessibilityChannel.$sendChangeObserver.withValue({ _ in
                         f.routingChangedSendPublished = true
@@ -6146,7 +6206,7 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.routingInputReadRenewed, "Reach actual post-menu retirement before routing")
                 }
                 if inverseInputReadRenewal, canonicalBusReceiverFault != "physical_source_inverse_read_renewal" {
-                    #expect(f.routingBusLeafPresses == [2], "Read renewal must not adopt any changed protected value")
+                    #expect(f.routingBusLeafPresses == (canonicalBusStereoReturn ? [] : [2]), "Read renewal must not adopt any changed protected value")
                     #expect(f.routingDestinationPresses == 1)
                     #expect(body["saga_state"] as? String != "fullyCompensated")
                     #expect(!gate.isHeldByEntitledHolder())
@@ -6162,8 +6222,13 @@ struct Issue965HeldSelectionAssociationTests {
                     return
                 }
                 if canonicalBusReceiverFault?.hasPrefix("checked_") == true {
+                    if canonicalBusStereoReturn {
+                        #expect(f.routingCanonicalContradictedInputs.count > contradictionsBeforeApply,
+                            "Refusal must reach the actual changed input proof, not an earlier unsupported path")
+                        #expect(f.routingDestinationPresses == (canonicalBusReceiverFault?.hasSuffix("after_forward") == true ? 1 : 0))
+                    }
                     if canonicalBusReceiverFault?.hasSuffix("after_forward") == true {
-                        #expect(f.routingBusLeafPresses == [2], "An invalid original receiver must prevent the owned inverse")
+                        #expect(f.routingBusLeafPresses == (canonicalBusStereoReturn ? [] : [2]), "An invalid original receiver must prevent the owned inverse")
                         #expect(body["saga_state"] as? String != "fullyCompensated")
                     } else {
                         #expect(body["state"] as? String == "C", "Actual refusal: \(sharedToolText(result))")
@@ -6185,12 +6250,20 @@ struct Issue965HeldSelectionAssociationTests {
                         "Actual apply: \(sharedToolText(result))")
                     #expect(f.routingDestinationPresses == (canonicalSend == "cancel" ? 2 : 1))
                     if canonicalBusChange {
-                        #expect(f.routingBusLeafPresses == (canonicalSend == "cancel" ? [2, 1] : [2]))
+                        let expectedBusLeaves = canonicalBusStereoReturn
+                            ? (canonicalSend == "cancel" ? [1] : []) : (canonicalSend == "cancel" ? [2, 1] : [2])
+                        #expect(f.routingBusLeafPresses == expectedBusLeaves)
+                        if canonicalBusStereoReturn {
+                            let checkedInputs = f.routingCanonicalInputBuses.dropFirst(inputReadsBeforeApply)
+                            #expect(checkedInputs.filter { $0 == 1 }.count >= (canonicalSend == "cancel" ? 2 : 1))
+                            #expect(!checkedInputs.contains(2), "An unrelated Bus receiver is not a routing prerequisite")
+                            if canonicalBusReceiverFault?.contains("source") == true { #expect(checkedInputs.contains(0)) }
+                        }
                         let steps = try #require(body["steps"] as? [[String: Any]])
                         let evidence = try #require(steps.first?["evidence"] as? [String: Any])
                         let verification = try #require(evidence["verification"] as? [String: Any])
                         let readback = try #require(verification["readback"] as? [String: Any])
-                        #expect(readback["observed"] as? String == OutputAssignment.bus(2).token)
+                        #expect(readback["observed"] as? String == (canonicalBusStereoReturn ? .stereoOutput : OutputAssignment.bus(2)).token)
                         if canonicalSend == "cancel" {
                             let compensation = try #require(steps.first?["compensation"] as? [String: Any])
                             let restored = try #require(compensation["readback"] as? [String: Any])

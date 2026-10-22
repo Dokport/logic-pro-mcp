@@ -444,8 +444,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
 
     private static func capturedExistingSendBusChange(before: OutputAssignment, desired: OutputAssignment?,
         source: SessionPopulationObservation.Capture, sourceIndex: Int) -> Bool {
-        guard case .bus(let original) = before, case .bus(let requested)? = desired,
-              original != requested, OutputAssignment.busNumbers.contains(original),
+        guard case .bus(let original) = before,
+              OutputAssignment.busNumbers.contains(original) else { return false }
+        if desired == .stereoOutput {
+            return capturedExistingBusPrerequisites(original, source: source, sourceIndex: sourceIndex)
+        }
+        guard case .bus(let requested)? = desired, original != requested,
               OutputAssignment.busNumbers.contains(requested) else { return false }
         return capturedExistingBusPrerequisites(original, source: source, sourceIndex: sourceIndex)
             && capturedExistingBusPrerequisites(requested, source: source, sourceIndex: sourceIndex)
@@ -490,13 +494,17 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let checked = fresh.checkedOutputs.filter { $0.source.matches(pair.strip) && $0.sendOrdinal == ordinal }
         let desired = intent.localOutput ?? intent.bus.map(OutputAssignment.bus)
         guard rows.count == 1, let row = rows.first, let mixerRef = source.mixerReference(at: row),
-              checked.count == 1, let reading = checked.first,
-              // A changed Bus goal remains one Send-only task, with positive existing
-              // receiver prerequisites for both its forward and owned return destinations.
+              checked.count == 1, let reading = checked.first else { return nil }
+        let capturedBusChange = names.isEmpty && policy.inputs.isEmpty
+            && capturedExistingSendBusChange(before: reading.assignment, desired: desired,
+                source: source, sourceIndex: row)
+        guard
+              // A captured Bus change remains one Send-only task, with positive
+              // existing receiver prerequisites for every involved Bus destination.
               intent.bus == nil || (names.isEmpty && policy.inputs.isEmpty
-                && (reading.assignment == desired || capturedExistingSendBusChange(before: reading.assignment,
-                    desired: desired, source: source, sourceIndex: row))),
-              desired.map({ reading.assignment == $0 || supportsCapturedSendDirection(before: reading.assignment, after: $0) })
+                && (reading.assignment == desired || capturedBusChange)),
+              desired.map({ reading.assignment == $0 || supportsCapturedSendDirection(before: reading.assignment, after: $0)
+                || capturedBusChange })
                 ?? (intent.isRemoval && reading.assignment == .stereoOutput),
               reading.sendNonRoutingChecks == ["Post Fader"] || reading.sendNonRoutingChecks == ["포스트 페이더"],
               let control = reading.sendControl, control.ordinal == ordinal,
@@ -1156,7 +1164,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return (task.pair, task.control)
     }
 
-    /// A caption admits only a candidate. Both Bus endpoints and the source's
+    /// A caption admits only a candidate. All involved Bus endpoints and the source's
     /// loop-safety input must be independently checked before either route press.
     /// A read may retire native controls. Only its actual original-header
     /// renewal plus complete singleton correspondence can carry read custody;
@@ -1172,10 +1180,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         control: AXLogicProElements.AssignedSendMenuControl,
         expected: OutputAssignment,
         ownedChange: AccessibilityChannel.ChangedSendObservation? = nil) async -> SendReadCustody? {
-        guard let task = sendTask, case .bus(let before) = task.before,
-              case .bus(let after)? = task.desired, before != after else {
+        guard let task = sendTask, case .bus(let before) = task.before else {
             return .init(pair: originalPair, control: control, renewal: nil)
         }
+        let buses: [Int]
+        if case .bus(let after)? = task.desired, before != after { buses = [before, after] }
+        else if task.desired == .stereoOutput { buses = [before] }
+        else { return .init(pair: originalPair, control: control, renewal: nil) }
         var stage = "initial_custody", accepted = false
         defer { if !accepted { Log.info("Canonical Send input read refused at \(stage)", subsystem: "saga") } }
         let priorSource = ownedChange?.source
@@ -1267,7 +1278,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 }
                 guard sourceCurrent() else { return nil }
             }
-            for bus in [before, after] {
+            for bus in buses {
                 stage = "receiver_\(bus)"
                 var checked = false
                 var candidates: [(AccessibilityChannel.HeldSelectionAssociation.Pair?, AXMixerInputSlotBinding)] = []
