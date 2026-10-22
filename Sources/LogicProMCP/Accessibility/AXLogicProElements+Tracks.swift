@@ -95,16 +95,41 @@ enum AXTrackBinding {
     }
 
     struct Binding: @unchecked Sendable {
+        /// Logic can recycle a child's header for a newly created Folder. CFEqual,
+        /// ordinal and even an unchanged name therefore do not preserve its identity.
+        /// Keep the observed ordinary/stack distinction; a sampled change is terminal.
+        /// This corroborates custody, not a general logical-track identity provider.
+        private final class ShapeContinuity: @unchecked Sendable {
+            let stackHeader: Bool?
+            private let lock = NSLock()
+            private var retired = false
+            init(_ stackHeader: Bool?) { self.stackHeader = stackHeader }
+            var isCurrent: Bool { stackHeader != nil && !lock.withLock { retired } }
+            func observe(_ current: Bool?) -> Bool {
+                guard let current, let stackHeader else { return false }
+                return lock.withLock {
+                    if current != stackHeader { retired = true }
+                    return !retired
+                }
+            }
+        }
+
         let window: AXUIElement
         let header: AXUIElement
         let document: String
         let runtime: AXLogicProElements.Runtime
         let exposure: Exposure?
+        private let shape: ShapeContinuity
 
         init(window: AXUIElement, header: AXUIElement, document: String, runtime: AXLogicProElements.Runtime,
-             exposure: Exposure? = nil) {
+             exposure: Exposure? = nil, observedStackHeader: Bool? = nil) {
             self.window = window; self.header = header; self.document = document
             self.runtime = runtime; self.exposure = exposure
+            // The ordinary population reader already sampled this without Help.
+            // Other internal constructors take their own read-only baseline.
+            let observed = observedStackHeader ?? (ExactTrackNameAdapter.operationPermitted()
+                ? AXValueExtractors.extractTrackStackState(from: header, runtime: runtime.ax).isStackHeader : nil)
+            shape = ShapeContinuity(observed)
         }
 
         var projectPath: String? {
@@ -113,15 +138,50 @@ enum AXTrackBinding {
             return url.standardizedFileURL.path
         }
 
-        func matches(_ other: Binding) -> Bool {
+        private func sharesCarrier(with other: Binding) -> Bool {
             CFEqual(window, other.window) && CFEqual(header, other.header)
                 && document.utf8.elementsEqual(other.document.utf8)
                 && exposure === other.exposure
         }
 
+        /// The registry calls this only with a newer population observation,
+        /// before de-duplication can return any existing alias. Matching itself
+        /// remains symmetric and never retires the newer observation.
+        func observeNewerBinding(_ newer: Binding) {
+            guard sharesCarrier(with: newer), newer.shape.isCurrent else { return }
+            _ = shape.observe(newer.shape.stackHeader)
+        }
+
+        func matches(_ other: Binding) -> Bool {
+            sharesCarrier(with: other) && shape.isCurrent && other.shape.isCurrent
+                && shape.stackHeader == other.shape.stackHeader
+        }
+
         func currentIndex() -> Int? {
-            guard ExactTrackNameAdapter.operationPermitted(), exposure?.isCurrent ?? true,
-                  projectPath != nil,
+            guard let index = currentScopeIndex(), ExactTrackNameAdapter.operationPermitted(),
+                  shape.observe(AXValueExtractors.extractTrackStackState(
+                    from: header, runtime: runtime.ax).isStackHeader),
+                  // The deciding child-role reads may outlive the first scope
+                  // proof. Renew the same window/document/unique membership.
+                  currentScopeIndex() == index else { return nil }
+            return index
+        }
+
+        private func currentScopeIndex() -> Int? {
+            guard ExactTrackNameAdapter.operationPermitted(), shape.isCurrent, exposure?.isCurrent ?? true,
+                  projectPath != nil, currentWindowAndDocumentMatch(),
+                  case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime),
+                  ExactTrackNameAdapter.operationPermitted(),
+                  exposure?.isCurrent ?? true,
+                  // The census can itself outlive the preceding scope proof.
+                  currentWindowAndDocumentMatch(),
+                  ExactTrackNameAdapter.operationPermitted() else { exposure?.end(); return nil }
+            let matches = headers.indices.filter { CFEqual(headers[$0], header) }
+            return matches.count == 1 ? matches[0] : nil
+        }
+
+        private func currentWindowAndDocumentMatch() -> Bool {
+            guard ExactTrackNameAdapter.operationPermitted(),
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
                   CFEqual(window, currentWindow),
                   let app = AXLogicProElements.appRoot(runtime: runtime),
@@ -130,12 +190,8 @@ enum AXTrackBinding {
                   windows.filter({ CFEqual($0, window) }).count == 1,
                   case .success(let currentDocument?) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime),
                   document.utf8.elementsEqual(currentDocument.utf8),
-                  case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime),
-                  ExactTrackNameAdapter.operationPermitted(),
-                  exposure?.isCurrent ?? true,
-                  ExactTrackNameAdapter.operationPermitted() else { exposure?.end(); return nil }
-            let matches = headers.indices.filter { CFEqual(headers[$0], header) }
-            return matches.count == 1 ? matches[0] : nil
+                  ExactTrackNameAdapter.operationPermitted() else { return false }
+            return true
         }
     }
 

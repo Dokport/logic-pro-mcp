@@ -75,7 +75,8 @@ extension AccessibilityChannel {
                 let scope = exposure.flatMap { value in
                     value.originalHeaders.contains(where: { CFEqual($0, header) }) ? nil : value
                 }
-                let binding = AXTrackBinding.Binding(window: window, header: header, document: document, runtime: runtime, exposure: scope)
+                let binding = AXTrackBinding.Binding(window: window, header: header, document: document, runtime: runtime,
+                    exposure: scope, observedStackHeader: state.isStackHeader)
                 if binding.projectPath != nil { state.physicalBinding = binding }
             }
             states.append(state)

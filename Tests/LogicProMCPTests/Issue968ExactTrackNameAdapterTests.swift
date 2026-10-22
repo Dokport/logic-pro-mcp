@@ -3101,14 +3101,17 @@ struct Issue968ExactTrackNameAdapterTests {
             // Only legacy role reads are intercepted: the status-preserving physical
             // and expected-name result reads remain healthy. The recorded actual
             // producer/dispatcher/writer path reaches its first selection setter
-            // after legacy role read 21. Fail that final filter once, then keep
+            // after legacy role read 45 with the retained-shape scope bookends.
+            // Call-site measurement distinguishes it from the later permission
+            // checks, which finish at read 59 before the healthy selection write.
+            // Fail that same final filter once, then keep
             // the original unselected A and selected B readable for settle.
-            f.legacyHeaderRoleFailureRead = 21
+            f.legacyHeaderRoleFailureRead = 45
             let (project, target) = try await f.prepare(typedProducer: true)
             let result = await f.rename(project: project, target: target, expected: nil, desired: "C")
             let body = try #require(sharedJSONObject(sharedToolText(result)))
             #expect(f.legacyHeaderRoleFailures == 1)
-            #expect(f.legacyHeaderRoleReads > 21)
+            #expect(f.legacyHeaderRoleReads > 45)
             #expect(body["state"] as? String == "C")
             let attempted = try #require(body["write_attempted"] as? Bool)
             #expect(!attempted)
@@ -3131,7 +3134,7 @@ struct Issue968ExactTrackNameAdapterTests {
             let (other, otherField) = f.appendTrack(name: "B", selected: true)
             f.builder.setAttribute(f.header, kAXSelectedAttribute as String, false)
             f.permitsSelection = true
-            f.legacyHeaderRoleObservedRead = 21
+            f.legacyHeaderRoleObservedRead = 45
             let (project, target) = try await f.prepare(typedProducer: true)
             let deadline = loss == "deadline" ? ContinuousClock.now.advanced(by: .seconds(1)) : nil
             f.onLegacyHeaderRoleRead = {
@@ -3159,6 +3162,7 @@ struct Issue968ExactTrackNameAdapterTests {
                 #expect(body["state"] as? String == "A")
                 #expect(attempted)
                 #expect(f.selectionWrites.count == 1)
+                #expect(f.legacyHeaderReadsAtSelection == [59], "the healthy path includes its post-filter permission checks")
                 #expect(f.selectionWrites.allSatisfy { CFEqual($0, f.header) })
                 #expect(f.writes == ["C"])
                 #expect(selected)
