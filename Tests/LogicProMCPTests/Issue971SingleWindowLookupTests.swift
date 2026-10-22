@@ -20,7 +20,7 @@ struct Issue971SingleWindowLookupTests {
     }
 
     @Test(arguments: [false, true], ["sole", "dialog", "system_dialog"])
-    func aSoleNonDialogWindowNeedsNoDescendantSearch(verified: Bool, profile: String) {
+    func aSoleNonDialogWindowNeedsNoDescendantSearch(verified: Bool, profile: String) throws {
         let b = FakeAXRuntimeBuilder(), reads = Reads()
         let app = b.element(971_510), window = b.element(971_511), dialog = b.element(971_512)
         let descendants = (0..<32).map { b.element(971_520 + $0) }
@@ -37,13 +37,14 @@ struct Issue971SingleWindowLookupTests {
             reads.record()
             return nil
         }, setAttributeHandler: nil, performActionHandler: nil)
-        #expect(resolve(runtime, verified: verified).map { CFEqual($0, window) } == true)
+        let resolved = try #require(resolve(runtime, verified: verified))
+        #expect(CFEqual(resolved, window))
         #expect(reads.count == 0, "The sole non-dialog is already the exact legacy fallback; its descendants cannot change that choice")
         #expect(b.actionCalls.isEmpty && b.setCalls.isEmpty)
     }
 
     @Test(arguments: [false, true])
-    func multipleNonDialogWindowsStillRequireTheExistingTrackRailPreference(verified: Bool) {
+    func multipleNonDialogWindowsStillRequireTheExistingTrackRailPreference(verified: Bool) throws {
         let b = FakeAXRuntimeBuilder(), reads = Reads()
         let app = b.element(971_610), other = b.element(971_611), arrange = b.element(971_612), rail = b.element(971_613)
         b.setChildren(other, [])
@@ -59,7 +60,8 @@ struct Issue971SingleWindowLookupTests {
             reads.record()
             return nil
         }, setAttributeHandler: nil, performActionHandler: nil)
-        #expect(resolve(runtime, verified: verified).map { CFEqual($0, arrange) } == true)
+        let resolved = try #require(resolve(runtime, verified: verified))
+        #expect(CFEqual(resolved, arrange))
         #expect(reads.count > 0, "Do not select the first window when another owns the native rail")
     }
 
