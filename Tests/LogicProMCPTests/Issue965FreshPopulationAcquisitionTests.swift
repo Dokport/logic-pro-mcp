@@ -1934,12 +1934,13 @@ struct Issue965FreshPopulationAcquisitionTests {
         let exposure = AXTrackBinding.Exposure(header: fixture.header, disclosure: disclosure, runtime: logic)
         let binding = AXTrackBinding.Binding(window: fixture.window, header: fixture.header,
             document: "file:///tmp/Stopped.logicx", runtime: logic, exposure: exposure)
+        let readsBeforeCutoff = fixture.reads.count
         let context = OperationTraceContext(ownsGate: { cutoff != "gate" },
             deadline: cutoff == "deadline" ? ContinuousClock.now : nil,
             cancellationRequested: { cutoff == "cancel" })
         let index = OperationTraceContext.$current.withValue(context) { binding.currentIndex() }
         #expect(index == nil)
-        #expect(fixture.reads.count == 0, "a live exposure must not read disclosure custody after the operation cutoff")
+        #expect(fixture.reads.count == readsBeforeCutoff, "a live exposure must not read disclosure custody after the operation cutoff")
     }
 
     @Test("known ended exposure cannot publish writable authority for recycled duplicate-name headers")

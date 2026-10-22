@@ -1,0 +1,85 @@
+{
+  "schema": 3,
+  "id": "2026-10-22-retained-track-header-shape-refusal",
+  "date": "2026-10-22",
+  "subject": "An old child reference refuses its same-named replacement Folder",
+  "question": "Does observed ordinary-to-stack replacement invalidate the original reference despite an unchanged name, ordinal and recycled header?",
+  "verdict": "partial",
+  "surface": "arrange.track_headers",
+  "issues": [969],
+  "host": {"app": "Logic Pro", "version": "12.3", "build": "6674", "locale": "en-US", "os": "macOS 26.3 (25D125)"},
+  "reverify": {
+    "kind": "manual",
+    "command": "On a stopped disposable eight-track project, issue references for the original flat tracks. Independently create one Folder containing the final three tracks and give its parent the original first child's name. Keep the same MCP process. Select an unchanged outside track through its original reference, then request selection through the original hidden child's reference. Compare the complete independent UI state immediately before and after the latter request. Flatten only the freshly identified test Folder for manual cleanup.",
+    "expected": "The unchanged outside reference remains usable. The old child reference refuses before writing and leaves the complete observed UI unchanged. A fresh population must not give the replacement parent its hidden child's old reference.",
+    "cost": "One development-only Folder creation, one explicit parent-name preparation, one outside-track selection and manual flattening; the stale selection must perform no write."
+  },
+  "depends": [
+    "Sources/LogicProMCP/Accessibility/AXLogicProElements+Tracks.swift:currentIndex",
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+Tracks.swift:readTrackStates",
+    "Sources/LogicProMCP/State/TargetReference.swift:bind",
+    "Tests/LogicProMCPTests/Issue969RetainedHeaderIdentityTests.swift",
+    "Tests/LogicProMCPTests/Issue968ExactTrackNameAdapterTests.swift"
+  ],
+  "method": "Independent native UI observations were compared with serial calls to the actual public MCP commands. The original and repaired executables carried their source commits and were content-sealed. Neither the native driver nor the repair substitutes labels or ordinals for a lost reference. Group creation and cleanup were explicit manual fixture operations, not product grouping or compensation.",
+  "evidence": ["evidence/2026-10-22-retained-track-header-shape-refusal.json"],
+  "canon_not_applicable": {"reason": "This reading concerns transient Accessibility-object reuse, source-reference custody and action readback. It makes no claim about a shipped canonical label, menu translation or keyboard binding."},
+  "observations": [
+    {
+      "what": "Independent retained-header observation across manual grouping",
+      "raw_sha256": "1c1527ed9e007f27274e402319827011f4927a3dd3a155b048409334e9581ecc",
+      "original_header_count": 8,
+      "grouped_visible_header_count": 6,
+      "original_first_child_header_cf_equal_to_new_parent": true,
+      "original_outside_headers_still_present": 5,
+      "logical_track_identity_proved_by_cf_equal_alone": false
+    },
+    {
+      "what": "Original public selection selected the replacement parent and reported verified success",
+      "source_commit": "e1012f7d4e0a4f38098031500d2df053049e4f9a",
+      "binary_sha256": "92694c14688c02a5f955951a05694381f5bd1629e51ce3c5e81c3e7a1c64c4e5",
+      "raw_sha256": "8de3d9ac5e0cf29dd6b1cc2de9a98cda0689da19b400ed96ad524a0178dfcc16",
+      "unchanged_outside_reference_state": "A",
+      "old_child_reference_state": "A",
+      "reported_verified": true,
+      "independent_selected_object_was_replacement_parent": true
+    },
+    {
+      "what": "Repaired public selection refuses the old child and preserves the complete observed UI",
+      "source_commit": "46f6bdd93fc5ab6ba8d5e5066a1c1c07858852f5",
+      "binary_sha256": "ad01c1b6fdf3225dc7cb4ad6f3943398c8160422c44cc2d002ded0bee122bf4a",
+      "raw_sha256": "2059125f62120867cdefbc372d0911dc5df16f2f9247ca870647f7fce150f9f2",
+      "parent_name_preparation_state": "A",
+      "unchanged_outside_reference_state": "A",
+      "unchanged_outside_reference_seconds": 0.890907084,
+      "old_child_reference_state": "C",
+      "old_child_reference_error": "stale_target_reference",
+      "old_child_reference_write_attempted": false,
+      "old_child_reference_seconds": 0.072600292,
+      "independent_whole_ui_unchanged_after_refusal": true,
+      "independent_whole_ui_matches_initial_after_manual_cleanup": true,
+      "process_exit": 0,
+      "automatic_inverse_qualified": false
+    },
+    {
+      "what": "Injected reference, late-scope and existing name-writer regressions",
+      "initial_runtime_red_issues": 10,
+      "additional_runtime_scope_and_revival_red_issues": 4,
+      "final_name_and_reference_tests": 166,
+      "final_name_and_reference_seconds": 2.187,
+      "fresh_issuance_retires_original_in_test": true,
+      "late_document_window_and_membership_faults_refuse_in_test": true,
+      "ordinary_name_final_filter_refuses_without_ui_or_value_write_in_test": true,
+      "synthetic_tests_are_native_qualification": false
+    }
+  ],
+  "conclusion": "The reproduced ordinary-to-stack replacement now refuses the original child reference before selecting the replacement parent. The unchanged outside reference remains usable. Independent UI comparison confirms the refusal is nonmutating. Manual cleanup is not an owned inverse.",
+  "limits": [
+    "Only the measured English interface and ordinary/stack shape discontinuity are qualified here; same-shape header recycling remains unqualified.",
+    "The fresh-issuance retirement and late-scope variants have injected runtime evidence, not separate native receipts.",
+    "This does not qualify arbitrary ordering, automatic grouping, complete hierarchy, physical Folder destruction, audio-routing preservation or automatic compensation.",
+    "A separate whole-project inspection on this fixture remained unstable with mixer_restoration_unverified. No executable canonical naming plan or integrated stale-plan outcome is claimed from that failed capture.",
+    "No Korean-interface or hosted final-head result is claimed by this observation."
+  ],
+  "supersedes": null
+}
