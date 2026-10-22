@@ -65,6 +65,9 @@ private final class ExactNameFixture: @unchecked Sendable {
     var boundaryCancellation = false
     var adapterPermissionReads = 0
     var passiveHeaderNameLabel = false
+    var passiveMixerStripFocus: AXUIElement?
+    var unreadPassiveMixerMetadata = false
+    var passiveMixerHasValue = false
     var menuEditorValueWrites: [String] = []
     var menuEditorSetterAcknowledgesOnly = false
     var onMenuEditorValueSet: (@Sendable () -> Void)?
@@ -148,6 +151,16 @@ private final class ExactNameFixture: @unchecked Sendable {
                     return nil
                 },
                 attributeValueResultHandler: { [self] element, attribute in
+                    if let passiveMixerStripFocus, CFEqual(element, passiveMixerStripFocus) {
+                        if [kAXValueAttribute as String, kAXSelectedTextAttribute as String].contains(attribute) {
+                            if passiveMixerHasValue, attribute == kAXValueAttribute as String { return .success("editing" as AnyObject) }
+                            return .failure(.init(raw: AXError.noValue.rawValue))
+                        }
+                        if [kAXNumberOfCharactersAttribute as String, kAXInsertionPointLineNumberAttribute as String].contains(attribute) {
+                            if unreadPassiveMixerMetadata { return .failure(.init(raw: AXError.cannotComplete.rawValue)) }
+                            return .success(builder.attributeValue(element, attribute) as AnyObject?)
+                        }
+                    }
                     guard passiveHeaderNameLabel, CFEqual(element, field),
                           attribute == kAXValueAttribute as String else { return nil }
                     // Preserve the actual stored CFNumber: the generic fixture bridge
@@ -385,7 +398,8 @@ private final class ExactNameFixture: @unchecked Sendable {
 
     func coupledCapture(link: String = "observed", peerStripName: String? = nil,
                         includePeerAssociation: Bool = false, extraMixerPeerNames: [String] = [],
-                        peerExposure: AXTrackBinding.Exposure? = nil) async throws -> (SessionPopulationObservation.Capture, TargetReference, TargetReference, AXUIElement, AXUIElement) {
+                        peerExposure: AXTrackBinding.Exposure? = nil,
+                        passiveMixerFocus: Bool = false) async throws -> (SessionPopulationObservation.Capture, TargetReference, TargetReference, AXUIElement, AXUIElement) {
         let mixer = builder.element(968_170)
         let strip = builder.element(968_171)
         let name = builder.element(968_172)
@@ -419,7 +433,21 @@ private final class ExactNameFixture: @unchecked Sendable {
             builder.setChildren(field, []); builder.setChildren(peer, [field])
             builder.setChildren(mixer, builder.makeAXRuntime().children(mixer) + [peer])
         }
-        builder.setChildren(window, [rail, mixer])
+        if passiveMixerFocus {
+            let owner = builder.element(968_175)
+            builder.setRole(owner, kAXGroupRole as String)
+            builder.setAttribute(owner, kAXDescriptionAttribute as String, "Mixer")
+            builder.setRole(mixer, kAXLayoutAreaRole as String)
+            builder.setAttribute(mixer, kAXDescriptionAttribute as String, "Mixer")
+            builder.setChildren(owner, [mixer])
+            builder.setChildren(window, [rail, owner])
+            passiveMixerStripFocus = strip
+            builder.setAttributeSettable(strip, kAXValueAttribute as String, false)
+            builder.setAttribute(strip, kAXNumberOfCharactersAttribute as String, NSNumber(value: 0))
+            builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, NSNumber(value: 0))
+            builder.setAttribute(app, kAXFocusedUIElementAttribute as String, strip)
+            builder.setAttribute(app, kAXFrontmostAttribute as String, true)
+        } else { builder.setChildren(window, [rail, mixer]) }
         await cache.updateProject(.init(name: "ExactName", filePath: "/tmp/ExactName.logicx"))
         let (project, target) = try await prepare(typedProducer: true)
         var tracks = await cache.getTracks()
@@ -991,7 +1019,7 @@ struct Issue968ExactTrackNameAdapterTests {
         }
     }
 
-    @Test(arguments: ["healthy", "passive_name", "refuse_second", "cancel_second", "newer_first", "selection_ack_only", "peer_after_first", "editing_after_first", "project_after_first",
+    @Test(arguments: ["healthy", "passive_name", "passive_mixer", "passive_mixer_editor", "passive_mixer_settable", "passive_mixer_value", "passive_mixer_unread", "passive_mixer_window", "passive_mixer_document", "passive_mixer_retired", "passive_mixer_unheld_focus", "refuse_second", "cancel_second", "newer_first", "selection_ack_only", "peer_after_first", "editing_after_first", "project_after_first",
         "swap", "duplicate", "swap_refuse_second", "duplicate_cancel_second", "swap_cancel_after_both", "duplicate_cancel_after_both", "swap_newer_first", "duplicate_peer_after_first"])
     func canonicalDistinctNamesShareOrderedReceiptsAndOwnedCompensation(_ scenario: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
@@ -1008,7 +1036,16 @@ struct Issue968ExactTrackNameAdapterTests {
                 f.permitsSelection = true
                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.header)
                 let (capture, project, first, _, mirror) = try await f.coupledCapture(
-                    peerStripName: "B", includePeerAssociation: true)
+                    peerStripName: "B", includePeerAssociation: true, passiveMixerFocus: change.hasPrefix("passive_mixer"))
+                if change.hasPrefix("passive_mixer") {
+                    let observed = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(
+                        window: f.window, logic: f.runtime, acquisitionPermitted: { true })
+                    let proof = try #require(observed)
+                    #expect(proof.permits())
+                    if case .textEditing = AccessibilityChannel.readLogicKeyboardFocus(runtime: f.runtime) {} else {
+                        Issue.record("The native-shaped passive Mixer still reaches the generic editing guard")
+                    }
+                }
                 let second = try #require(capture.issued?.byRow[1])
                 let otherMirror = try #require(f.coupledPeerNameField)
                 let request = SessionPopulationObservation.Request(domains: [.tracks, .strips, .associations])
@@ -1078,6 +1115,27 @@ struct Issue968ExactTrackNameAdapterTests {
                         f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
                     }
                 }
+                if change.hasPrefix("passive_mixer_") {
+                    let focus = try #require(f.passiveMixerStripFocus)
+                    switch change {
+                    case "passive_mixer_editor": f.builder.setAttribute(focus, kAXNumberOfCharactersAttribute as String, NSNumber(value: 1))
+                    case "passive_mixer_settable": f.builder.setAttributeSettable(focus, kAXValueAttribute as String, true)
+                    case "passive_mixer_value": f.passiveMixerHasValue = true
+                    case "passive_mixer_unread": f.unreadPassiveMixerMetadata = true
+                    case "passive_mixer_window": f.builder.setAttribute(f.app, kAXFocusedWindowAttribute as String, f.builder.element(968_299))
+                    case "passive_mixer_document": f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "passive_mixer_retired":
+                        let mixer = try #require(capture.channelStrips.first?.physicalBinding?.mixer)
+                        f.builder.setChildren(mixer, capture.channelStrips.dropFirst().compactMap { $0.physicalBinding?.strip })
+                    case "passive_mixer_unheld_focus":
+                        let stranger = f.builder.element(968_299)
+                        f.builder.setRole(stranger, kAXLayoutItemRole as String)
+                        f.builder.setAttribute(stranger, kAXNumberOfCharactersAttribute as String, NSNumber(value: 0))
+                        f.builder.setAttribute(stranger, kAXInsertionPointLineNumberAttribute as String, NSNumber(value: 0))
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, stranger)
+                    default: Issue.record("Unknown passive Mixer refusal fixture")
+                    }
+                }
                 f.onPress = {
                     let secondPress = f.actedNameFields.last.map { CFEqual($0, otherName) } == true
                     f.pressReportsFailure = secondPress && ["refuse_second", "newer_first"].contains(outcome)
@@ -1120,7 +1178,12 @@ struct Issue968ExactTrackNameAdapterTests {
                         sagaLiveReadback: .unavailable, approvedSessionRepair: approval)
                 }
                 let body = try #require(sharedJSONObject(sharedToolText(await run())))
-                if ["healthy", "passive_name"].contains(outcome) {
+                if change.hasPrefix("passive_mixer_") {
+                    #expect(body["saga_state"] as? String != "completed")
+                    #expect(f.writes.isEmpty && f.menuEditorValueWrites.isEmpty && f.selectionWrites.isEmpty)
+                    #expect(f.builder.attributeValue(mirror, kAXValueAttribute as String) as? String == "A")
+                    #expect(f.builder.attributeValue(otherMirror, kAXValueAttribute as String) as? String == "B")
+                } else if ["healthy", "passive_name", "passive_mixer"].contains(outcome) {
                     #expect(body["saga_state"] as? String == "completed")
                     let verified = try #require(body["verified"] as? Bool)
                     #expect(verified)

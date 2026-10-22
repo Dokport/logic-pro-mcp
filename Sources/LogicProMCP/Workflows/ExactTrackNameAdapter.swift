@@ -668,16 +668,39 @@ enum ExactTrackNameAdapter {
         }
         var allowWrittenName = false
         var passiveFocusProofs: [AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus] = []
+        var originalMixerFocus: AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus?
+        var sampledOriginalFocus = false
+        var originalMixerFocusLost = false
         func focusPermitted() -> Bool {
+            var permitted = false
+            defer { if !permitted { originalMixerFocusLost = true } }
             guard let pid = source.runtime.logicProPID(),
                   source.runtime.focusedApplicationPID() == pid else { return false }
             switch AccessibilityChannel.readLogicKeyboardFocus(runtime: source.runtime) {
-            case .notTextEditing: break
+            case .notTextEditing: sampledOriginalFocus = true
             case .textEditing:
                 guard let app = AXLogicProElements.appRoot(runtime: source.runtime),
                       let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
                         runtime: source.runtime.ax) else { return false }
-                if let proof = passiveFocusProofs.first(where: { CFEqual($0.focus, focus) }) {
+                if !sampledOriginalFocus {
+                    sampledOriginalFocus = true
+                    let captured = [mirror.pair.strip] + mirror.preservedStrips.compactMap(\.physicalBinding)
+                    if captured.filter({ CFEqual($0.strip, focus) && CFEqual($0.window, source.window)
+                        && CFEqual($0.mixer, mirror.pair.strip.mixer)
+                        && $0.document.utf8.elementsEqual(source.document.utf8) }).count == 1,
+                       let observed = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(
+                        window: source.window, logic: source.runtime, acquisitionPermitted: { operationPermitted() }),
+                       CFEqual(observed.focus, focus), CFEqual(observed.binding.mixer, mirror.pair.strip.mixer),
+                       observed.document.utf8.elementsEqual(source.document.utf8) {
+                        originalMixerFocus = observed
+                    }
+                }
+                // Zero insertion metadata on the original immutable Mixer strip
+                // is not an editor. Reuse only that captured read witness; target,
+                // pair, selection and writer authority still come from held().
+                if let proof = originalMixerFocus, CFEqual(proof.focus, focus) {
+                    guard !originalMixerFocusLost, proof.permits() else { return false }
+                } else if let proof = passiveFocusProofs.first(where: { CFEqual($0.focus, focus) }) {
                     guard proof.permits() else { return false }
                 } else {
                     guard let proof = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus(
@@ -687,7 +710,8 @@ enum ExactTrackNameAdapter {
                 }
             case .unreadable: return false
             }
-            return source.runtime.logicProPID() == pid && source.runtime.focusedApplicationPID() == pid
+            permitted = source.runtime.logicProPID() == pid && source.runtime.focusedApplicationPID() == pid
+            return permitted
         }
         func held() -> Bool {
             origin.currentIndex() != nil && source.currentIndex() != nil
