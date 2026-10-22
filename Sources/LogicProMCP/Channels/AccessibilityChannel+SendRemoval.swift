@@ -9,7 +9,8 @@ extension AccessibilityChannel {
     /// A typed pair alone grants no action or ownership; the native boundary proves both.
     static func supportsOccupiedSendChange(before: OutputAssignment, after: OutputAssignment) -> Bool {
         switch (before, after) {
-        case (.stereoOutput, .bus), (.stereoOutput, .physical), (.physical, .stereoOutput): true
+        case (.stereoOutput, .bus), (.stereoOutput, .physical), (.physical, .stereoOutput),
+             (.bus, .stereoOutput): true
         case (.bus(let original), .bus(let requested)): original != requested
         default: false
         }
