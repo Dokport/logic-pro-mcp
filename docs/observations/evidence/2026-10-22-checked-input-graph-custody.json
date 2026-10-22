@@ -1,0 +1,29 @@
+{
+  "format": "actual-checked-input-graph-excerpts.v1",
+  "method": "Selected actual public response fields; private paths and opaque reference and trace tokens are omitted. Reference-equality and independent UI findings are separate from response fields. Raw recordings are identified by their digests.",
+  "source_commit": "043094bbb6fbc64266bf09e510fc07978d187025",
+  "binary_sha256": "bb4a4a6516326b5e2eab06b1b2ae7dea496bc0cad9f83b02dafdf0748a2c370a",
+  "raw_sha256": "6df110c69954b3b9859bca77bc7633dca6d8c66a8b91105844020894880ca4f9",
+  "actual_capture": {
+    "seconds": 13.19186125,
+    "selected_response_fields": {
+      "checked_input": {"kind": "bus", "number": 1, "source": "ax_input_menu_checkmark"},
+      "input_edge": {"kind": "inputAssignment", "source": "bus_1", "provenance": "axInputMenuCheckmark"},
+      "receiver_node_kind": "physical_strip",
+      "routing_coverage": "partial",
+      "input_coverage_state": "partial",
+      "ui_effects": {"attempted": ["track_selection", "routing_popup"], "changed": ["track_selection", "routing_popup"], "navigation_performed": true, "restoration": "restored"}
+    },
+    "bindings": {"input_edge_count": 1, "edge_destination_equals_checked_strip_reference": true},
+    "independent_ui": {"complete_ui_equal_before_and_after_acquisition": true, "complete_ui_equal_after_capture": true, "original_selection_and_tracks_focus_preserved": true, "string_length": 53056}
+  },
+  "actual_wrong_project_request": {
+    "seconds": 0.003822,
+    "selected_response_fields": {"state": "C", "error": "stale_target_reference", "operation": "logic_project.inspect_session", "success": false, "write_attempted": false},
+    "independent_complete_ui_equals_original": true,
+    "same_as_internal_capture_fault_injection": false
+  },
+  "shutdown": {"returncode": 0, "pid_gone": true, "reader_finished": true},
+  "synthetic_counterexamples": {"old_source_commit": "ae2ab96bb785572bf39b034b96715de7e1c553fd", "raw_sha256": "66eaff00534a84d29ce9b6dba7044a8a671b5bc01f17a4fe7d5c4c09cc7d6969", "profiles": ["different_fresh_slot", "duplicate_fresh_owner", "wrong_fresh_project"], "shared_projection_withholds_fact": true, "old_graph_published_edge_and_provenance": true, "red_issues": 6, "corrected_matrix_profiles_passed": 11, "related_tests_passed": 185},
+  "limits": ["One partial selected-input graph, not a complete routing or receiving inventory.", "The selected display name is not semantic Aux identity.", "The three injected capture faults are not native fault receipts."]
+}
