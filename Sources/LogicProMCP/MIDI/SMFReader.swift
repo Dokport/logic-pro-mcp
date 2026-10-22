@@ -113,13 +113,29 @@ struct SMFReader {
     }
 
     /// Exact file-metadata selection only, never a Logic target-identity proof.
-    /// The supported layout has one meta-only conductor followed by tracks with
+    /// The supported format-1 layout has one meta-only conductor followed by tracks with
     /// one UTF-8 instrument-name event before any channel or SysEx event. The
     /// initial region offset may precede its metadata. Original chunks (including
     /// controllers, programs, SysEx and unknown metadata) are copied, not encoded
     /// from the notes projection. A caller still needs independent host binding.
+    ///
+    /// Logic writes a format-0 file when the project has a single MIDI track
+    /// (observed in Logic 12.4): one chunk carrying that track's instrument name
+    /// at tick 0, its conductor metadata and its notes. That chunk is accepted
+    /// under the same ownership rule as a format-1 track, and the file is
+    /// returned unchanged, since it already holds only the target and its conductor.
     static func extractTracks(namedInstrument name: String, from data: Data) throws -> Data {
         let document = try parseDocument(data)
+        if document.format == 0 {
+            guard !name.isEmpty, document.fileTracks.count == 1, let only = document.fileTracks.first,
+                  only.instrumentNames.count == 1, let observed = only.instrumentNames.first,
+                  !only.hasUnownedEvents, !observed.bytes.isEmpty,
+                  String(data: observed.bytes, encoding: .utf8) != nil else {
+                throw TrackExtractionError.unsupportedFileLayout
+            }
+            guard observed.bytes == Data(name.utf8) else { throw TrackExtractionError.instrumentNotFound }
+            return data
+        }
         guard !name.isEmpty, document.format == 1, document.fileTracks.count >= 2,
               let conductor = document.fileTracks.first,
               !conductor.hasNonMetaEvents, conductor.instrumentNames.isEmpty else {
