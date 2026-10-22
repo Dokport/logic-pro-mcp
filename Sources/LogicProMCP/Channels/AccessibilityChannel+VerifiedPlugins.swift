@@ -685,7 +685,12 @@ extension AccessibilityChannel {
         private func stillOwned(stoppingWhen stop: @Sendable () -> Bool,
                                 isolation: isolated (any Actor)? = #isolation) async -> Bool {
             guard !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
-                  await referenceIsCurrent(),
+                  await referenceIsCurrent() else { return false }
+            return originalNativeScopeIsOwned(stoppingWhen: stop)
+        }
+
+        private func originalNativeScopeIsOwned(stoppingWhen stop: @Sendable () -> Bool) -> Bool {
+            guard !stop(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   runtime.logicProPID() == acquiredPID,
                   let app = AXLogicProElements.appRoot(runtime: runtime),
                   CFEqual(app, acquiredApp),
@@ -1414,13 +1419,39 @@ extension AccessibilityChannel {
                 }
                 menuOpen = false
             }
-            if revealedMixer != nil {
+            if let revealedMixer {
                 guard sameFocus(), await toggle(stoppingWhen: stop) else {
                     _ = await dismissOwnedMenu(stoppingWhen: stop)
                     effects.reason = "mixer_restoration_conflict"; return effects
                 }
-                guard await stillOwned(stoppingWhen: stop), sameFocus(),
-                      case .notFound = AXLogicProElements.mixerAreaLookup(in: window, runtime: runtime) else {
+                // Hide can return the original focus before its retained Mixer
+                // leaves the native tree. Observe only that one accepted action;
+                // neither its ACK nor a replacement Mixer proves restoration.
+                let end = min(OperationTraceContext.current?.deadline
+                    ?? ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)),
+                    ContinuousClock.now.advanced(by: .milliseconds(mixerRevealPollTimeoutMs)))
+                var hidden = false
+                repeat {
+                    guard await stillOwned(stoppingWhen: stop), sameFocus(), ContinuousClock.now < end,
+                          let observed = try? AXLogicProElements.mixerPopulationAreaLookup(
+                            in: window, runtime: runtime, requiresCompleteAbsence: true,
+                            checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                          await stillOwned(stoppingWhen: stop), sameFocus() else { break }
+                    if case .notFound = observed.lookup {
+                        // The awaited reference renewal can change the native
+                        // view. Decide absence afterward, with synchronous scope
+                        // bookends rather than promoting its pre-await sample.
+                        guard let deciding = try? AXLogicProElements.mixerPopulationAreaLookup(
+                            in: window, runtime: runtime, requiresCompleteAbsence: true,
+                            checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                              case .notFound = deciding.lookup,
+                              originalNativeScopeIsOwned(stoppingWhen: stop), sameFocus() else { break }
+                        hidden = true; break
+                    }
+                    guard let pending = observed.lookup.mixer, CFEqual(pending, revealedMixer) else { break }
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { break }
+                } while ContinuousClock.now < end
+                guard hidden else {
                     effects.reason = "mixer_restoration_unverified"; return effects
                 }
             } else if effects.attempted.contains("mixer_visibility") {
