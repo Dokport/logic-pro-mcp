@@ -75,8 +75,14 @@ extension AccessibilityChannel {
                 let scope = exposure.flatMap { value in
                     value.originalHeaders.contains(where: { CFEqual($0, header) }) ? nil : value
                 }
+                // Original rows return to the owned navigation's original
+                // population. Newly exposed rows instead retain its lifetime.
+                let population: [AXUIElement]
+                if scope == nil, let exposure, !exposure.originalHeaders.isEmpty {
+                    population = exposure.originalHeaders
+                } else { population = headers }
                 let binding = AXTrackBinding.Binding(window: window, header: header, document: document, runtime: runtime,
-                    exposure: scope, observedStackHeader: state.isStackHeader)
+                    exposure: scope, observedStackHeader: state.isStackHeader, observedHeaders: population)
                 if binding.projectPath != nil { state.physicalBinding = binding }
             }
             states.append(state)
