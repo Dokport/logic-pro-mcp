@@ -1396,6 +1396,42 @@ extension AccessibilityChannel {
             }
             effects.attempted.append("mixer_selection_restoration")
             let restored = AXHelpers.setAttribute(binding.mixer, kAXSelectedChildrenAttribute as String, original as CFArray, runtime: runtime.ax)
+            if restored, let firstSelectionFocus {
+                // The one accepted inverse can return before its selection and
+                // focus settle. Observe only the original or issued complete
+                // set under the retained passive witnesses; never retry a setter.
+                let stopInverseRead = hardStop ?? stop
+                let inverseEnd = min(OperationTraceContext.current?.deadline
+                    ?? ContinuousClock.now.advanced(by: .milliseconds(200)),
+                    ContinuousClock.now.advanced(by: .milliseconds(200)))
+                for attempt in 0..<3 {
+                    guard !stopInverseRead(), await stillOwned(stoppingWhen: stopInverseRead),
+                          let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: runtime.ax),
+                          same(current.strips, strips), frames() == originalFrames,
+                          let currentHidden = AXLogicProElements.hiddenTrackViewRead(headers: headers, in: window, runtime: runtime),
+                          CFEqual(currentHidden.control, hidden.control), currentHidden.shown,
+                          let currentPresentation = try? AXLogicProElements.mixerPresentationRead(binding: binding, runtime: runtime.ax,
+                            checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                          same(currentPresentation.elements, presentation.elements), currentPresentation.presentation == presentation.presentation,
+                          let currentActivity = try? AXLogicProElements.observedTransportActivity(in: window, runtime: runtime,
+                            checking: { try SessionPopulationObservation.requireOwnedAcquisition() }),
+                          CFEqual(currentActivity.controlBar, activity.controlBar), CFEqual(currentActivity.play, activity.play),
+                          CFEqual(currentActivity.record, activity.record), !currentActivity.isPlaying, !currentActivity.isRecording,
+                          let after = elements(kAXSelectedChildrenAttribute as String),
+                          sameSet(after, original) || sameSet(after, selectionAtInverse),
+                          !stopInverseRead(),
+                          let returned: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedUIElementAttribute as String, runtime: runtime.ax)
+                    else { effects.reason = "mixer_selection_restoration_unverified"; return nil }
+                    if sameSet(after, original), original.filter({ CFEqual($0, returned) }).count == 1 { break }
+                    guard attempt < 2, ContinuousClock.now < inverseEnd,
+                          firstSelectionFocus.permits() || (sameFocus() && passive.permits()),
+                          !stopInverseRead() else {
+                        effects.reason = "mixer_selection_restoration_unverified"; return nil
+                    }
+                    do { try await Task.sleep(for: .milliseconds(100)) }
+                    catch { effects.reason = "navigation_cancelled"; return nil }
+                }
+            }
             if restored, !sameFocus() {
                 // The inverse setter can focus an original selected strip. This exact
                 // owned return is read custody, never adoption of arbitrary foreign focus.
