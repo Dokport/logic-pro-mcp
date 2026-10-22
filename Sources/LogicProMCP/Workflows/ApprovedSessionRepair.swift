@@ -1561,12 +1561,21 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard let sort = sortTask, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
         let binding = sort.binding, runtime = binding.runtime
         func scopeHeld() -> Bool {
-            guard runtime.logicProPID() == binding.pid, runtime.focusedApplicationPID() == binding.pid,
-                  let app = AXLogicProElements.appRoot(runtime: runtime), binding.app.map({ CFEqual($0, app) }) == true,
-                  let window = AXLogicProElements.mainWindow(runtime: runtime), CFEqual(window, binding.window),
-                  AXHelpers.getTitle(window, runtime: runtime.ax)?.utf8.elementsEqual(binding.title.utf8) == true,
-                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime)
-            else { return false }
+            stage = "scope_process"
+            guard runtime.logicProPID() == binding.pid else { return false }
+            stage = "scope_foreground"
+            guard runtime.focusedApplicationPID() == binding.pid else { return false }
+            stage = "scope_application"
+            guard let app = AXLogicProElements.appRoot(runtime: runtime),
+                  binding.app.map({ CFEqual($0, app) }) == true else { return false }
+            stage = "scope_window"
+            guard let window = AXLogicProElements.mainWindow(runtime: runtime),
+                  CFEqual(window, binding.window) else { return false }
+            stage = "scope_title"
+            guard AXHelpers.getTitle(window, runtime: runtime.ax)?.utf8.elementsEqual(binding.title.utf8) == true else { return false }
+            stage = "scope_document_read"
+            guard case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime) else { return false }
+            stage = "scope_document_value"
             return document.utf8.elementsEqual(binding.document.utf8)
         }
         stage = "scope"
