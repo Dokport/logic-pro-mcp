@@ -4319,6 +4319,60 @@ struct Issue965FreshPopulationAcquisitionTests {
             fault: "timed_dispatch_healthy")
     }
 
+    @Test func registeredSelectAllWaitsForItsEarlyFirstFocusBeforeSelectionCompletes() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "timed_dispatch_early_first_focus")
+    }
+
+    @Test func registeredSelectAllFirstFocusCanArriveAfterItsPreHoldRead() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "timed_dispatch_held_first_focus")
+    }
+
+    @Test func registeredSelectAllFirstFocusCanArriveDuringPostReferenceFocusRead() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "timed_dispatch_held_first_focus_after_reference")
+    }
+
+    @Test func registeredSelectAllInverseWaitsForItsOriginalSelectionAndFocus() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "select_all_first_focus_inverse_dispatch")
+    }
+
+    @Test func registeredSelectAllFirstFocusCanArriveAtItsInverseAcknowledgement() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "select_all_first_focus_inverse_only_dispatch")
+    }
+
+    @Test func registeredOriginalMixerReadFocusSurvivesOwnedSelectionReturn() async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "full_population_shared_original_mixer_focus_return")
+    }
+
+    @Test(arguments: ["subset", "foreign", "document", "focus", "transport", "unread", "cancel", "census"])
+    func registeredSelectAllLateInverseFocusCannotReplaceCompleteSelectionOrCustody(fault: String) async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "select_all_first_focus_inverse_only_dispatch_" + fault)
+    }
+
+    @Test(arguments: ["noop", "subset", "foreign", "document", "focus", "transport", "unread", "cancel", "census", "geometry"])
+    func registeredSelectAllInverseSettlementCannotReplaceOriginalCustody(fault: String) async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "select_all_first_focus_inverse_dispatch_" + fault)
+    }
+
+    @Test(arguments: ["noop", "subset", "foreign", "document", "focus", "transport", "unread", "cancel"])
+    func registeredHeldFirstFocusCannotReplaceCompleteSelectionOrCustody(fault: String) async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "timed_dispatch_held_first_focus_" + fault)
+    }
+
+    @Test(arguments: ["noop", "subset", "foreign", "document", "focus", "transport", "unread", "cancel"])
+    func registeredEarlyFirstFocusCannotReplaceCompleteSelectionOrCustody(fault: String) async throws {
+        try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
+            fault: "timed_dispatch_early_first_focus_" + fault)
+    }
+
     @Test(arguments: ["noop", "subset", "foreign", "document", "focus", "transport", "unread", "cancel"])
     func registeredDelayedSelectionCannotSupplyMissingCustody(fault: String) async throws {
         try await registeredOwnedMixerSelectAllProvesPopulationAndRestoresSelection(originalCount: 1,
@@ -4362,6 +4416,7 @@ struct Issue965FreshPopulationAcquisitionTests {
         fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/MixerPopulation.logicx")
         fixture.builder.setAttribute(fixture.header, kAXSelectedAttribute as String, true)
         let fullPopulation = fault.hasPrefix("full_population_")
+        let originalMixerReturn = fault == "full_population_shared_original_mixer_focus_return"
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("965-mixer-selection-\(UUID().uuidString).logicx")
         if fullPopulation {
             try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
@@ -4437,7 +4492,9 @@ struct Issue965FreshPopulationAcquisitionTests {
         if fault == "filter_off" { fixture.builder.setAttribute(filterControls[2], kAXValueAttribute as String, 0) }
         if fault == "not_settable" { fixture.builder.setAttributeSettable(mixer, kAXSelectedChildrenAttribute as String, false) }
         if fault == "duplicate_original" { fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [strips[3], strips[3]]) }
-        let firstFocusTransition = fault.hasPrefix("select_all_first_focus")
+        let earlyFirstFocus = fault.hasPrefix("timed_dispatch_early_first_focus")
+        let heldFirstFocus = fault.hasPrefix("timed_dispatch_held_first_focus")
+        let firstFocusTransition = fault.hasPrefix("select_all_first_focus") || earlyFirstFocus || heldFirstFocus || originalMixerReturn
         let initialFocus = firstFocusTransition ? original[0] : strips[0]
         fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initialFocus)
         fixture.builder.setAttribute(fixture.app, kAXFocusedWindowAttribute as String, fixture.window)
@@ -4480,8 +4537,15 @@ struct Issue965FreshPopulationAcquisitionTests {
         fixture.builder.setChildren(transport, controls)
         fixture.builder.setChildren(fixture.window, roots + [owner, transport])
         let selectionReads = Reads()
+        let originalMixerGuardReads = Reads()
         let selectionClock = SelectionDispatchClock()
+        let inverseClock = SelectionDispatchClock()
+        let inverseOnlyFirstFocus = fault.hasPrefix("select_all_first_focus_inverse_only_dispatch")
+        let delayedInverse = fault.hasPrefix("select_all_first_focus_inverse_dispatch") || inverseOnlyFirstFocus
+        let healthyDelayedInverse = ["select_all_first_focus_inverse_dispatch", "select_all_first_focus_inverse_only_dispatch"].contains(fault)
         let timedDispatch = fault.hasPrefix("timed_dispatch_")
+        let dispatchFault = fault.replacingOccurrences(of: "timed_dispatch_early_first_focus", with: "timed_dispatch")
+            .replacingOccurrences(of: "timed_dispatch_held_first_focus", with: "timed_dispatch")
         let sharedRead = fault.hasPrefix("full_population_shared")
         let snapshotReads = Reads()
         let nativeRead = passiveMixerAttributeRead(initialFocus)
@@ -4489,8 +4553,14 @@ struct Issue965FreshPopulationAcquisitionTests {
         let result = try await inspect(fixture: fixture,
             domains: fullPopulation ? ["tracks", "hierarchy", "strips", "associations"] : ["tracks", "strips"], navigation: fault != "no_navigation",
             targetReferences: fullPopulation,
-            keyboardFocus: { selectionReturnsFocus
-                ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing },
+            keyboardFocus: {
+                if originalMixerReturn, fixture.events.recorded.contains("select_all"),
+                   !fixture.events.recorded.contains("restore_mixer_selection") {
+                    originalMixerGuardReads.record("editing_guard")
+                }
+                return selectionReturnsFocus
+                    ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing
+            },
             observationAction: { element, action in
                 if CFEqual(element, edit) {
                     fixture.events.record(action == kAXPressAction as String ? "open_edit" : "cancel_edit")
@@ -4509,6 +4579,10 @@ struct Issue965FreshPopulationAcquisitionTests {
                         // background task writes the fixture, even after return.
                         selectionClock.accept()
                         fixture.builder.setAttribute(edit, kAXSelectedAttribute as String, false)
+                        if earlyFirstFocus {
+                            fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, strips[0])
+                            selectionReads.record("early_first_focus")
+                        }
                         return true
                     }
                     if fault != "noop_selection" && !fault.hasPrefix("late_deciding_") {
@@ -4521,7 +4595,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                     if fault == "late_document" { fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
                     if fault == "late_focus" { fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header) }
                     if fault == "replaced_census" { fixture.builder.setChildren(mixer, Array(strips.dropLast())) }
-                    if firstFocusTransition {
+                    if firstFocusTransition, !inverseOnlyFirstFocus {
                         fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
                             fault == "select_all_first_focus_foreign" ? fixture.header : strips[0])
                         if fault == "select_all_first_focus_partial" {
@@ -4545,7 +4619,8 @@ struct Issue965FreshPopulationAcquisitionTests {
                     fixture.builder.setAttribute(otherHeader, kAXSelectedAttribute as String, !initial)
                     fixture.builder.setAttribute(fixture.rail, attribute, value)
                     fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, initial ? original : [strips[1]])
-                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initial ? strips[0] : strips[1])
+                    fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String,
+                        initial ? (originalMixerReturn ? initialFocus : strips[0]) : strips[1])
                     return true
                 }
                 if CFEqual(element, initialFocus), attribute == kAXFocusedAttribute as String {
@@ -4568,6 +4643,31 @@ struct Issue965FreshPopulationAcquisitionTests {
                 }
                 guard CFEqual(element, mixer), attribute == kAXSelectedChildrenAttribute as String else { return false }
                 fixture.events.record("restore_mixer_selection")
+                if delayedInverse {
+                    if inverseOnlyFirstFocus {
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, strips[0])
+                        selectionReads.record("inverse_only_first_focus")
+                        switch fault {
+                        case "select_all_first_focus_inverse_only_dispatch_subset":
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.prefix(2)))
+                        case "select_all_first_focus_inverse_only_dispatch_foreign":
+                            fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips + [fixture.header])
+                        case "select_all_first_focus_inverse_only_dispatch_document":
+                            fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        case "select_all_first_focus_inverse_only_dispatch_focus":
+                            fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header)
+                        case "select_all_first_focus_inverse_only_dispatch_transport":
+                            fixture.builder.setAttribute(controls[0], kAXValueAttribute as String, 1)
+                        case "select_all_first_focus_inverse_only_dispatch_cancel":
+                            withUnsafeCurrentTask { $0?.cancel() }
+                        case "select_all_first_focus_inverse_only_dispatch_census":
+                            fixture.builder.setChildren(mixer, Array(strips.dropLast()))
+                        default: break
+                        }
+                    }
+                    inverseClock.accept()
+                    return true
+                }
                 if fault != "restore_ack_only" { fixture.builder.setAttribute(mixer, attribute, value) }
                 if selectionReturnsFocus {
                     let returned = ["restore_focus_foreign", "full_population_foreign_focus"].contains(fault) ? fixture.header
@@ -4584,6 +4684,70 @@ struct Issue965FreshPopulationAcquisitionTests {
                 if fault == "restore_visible" { fixture.builder.setAttribute(mixer, kAXVisibleChildrenAttribute as String, [strips[3]]) }
                 return fault != "restore_false"
             }, readingAttribute: { element, attribute in
+                if originalMixerReturn, CFEqual(element, strips[0]), attribute == kAXNumberOfCharactersAttribute as String,
+                   fixture.events.recorded.contains("select_all"), !fixture.events.recorded.contains("restore_mixer_selection") {
+                    selectionReads.record("owned_first_focus_metadata_read")
+                    if originalMixerGuardReads.count > 0,
+                       !selectionReads.recorded.contains("owned_first_focus_metadata_unread") {
+                        // One unavailable read of the temporary first-focus
+                        // witness must not retire the separately captured
+                        // original passive strip when our inverse returns it.
+                        selectionReads.record("owned_first_focus_metadata_unread")
+                        return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                    }
+                }
+                if delayedInverse, (!inverseOnlyFirstFocus || healthyDelayedInverse),
+                   fixture.events.recorded.contains("restore_mixer_selection"),
+                   inverseClock.settled, !selectionReads.recorded.contains("inverse_dispatch_settled") {
+                    selectionReads.record("inverse_dispatch_settled")
+                    if fault != "select_all_first_focus_inverse_dispatch_noop" {
+                        fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, original)
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, initialFocus)
+                    }
+                    switch fault {
+                    case "select_all_first_focus_inverse_dispatch_subset":
+                        fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.prefix(2)))
+                    case "select_all_first_focus_inverse_dispatch_foreign":
+                        fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, original + [fixture.header])
+                    case "select_all_first_focus_inverse_dispatch_document":
+                        fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    case "select_all_first_focus_inverse_dispatch_focus":
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header)
+                    case "select_all_first_focus_inverse_dispatch_transport":
+                        fixture.builder.setAttribute(controls[0], kAXValueAttribute as String, 1)
+                    case "select_all_first_focus_inverse_dispatch_cancel":
+                        withUnsafeCurrentTask { $0?.cancel() }
+                    case "select_all_first_focus_inverse_dispatch_census":
+                        fixture.builder.setChildren(mixer, Array(strips.dropLast()))
+                    case "select_all_first_focus_inverse_dispatch_geometry":
+                        var moved = CGPoint(x: 7, y: 440)
+                        fixture.builder.setAttribute(mixer, kAXPositionAttribute as String, AXValueCreate(.cgPoint, &moved)!)
+                    default: break
+                    }
+                }
+                if fault == "select_all_first_focus_inverse_dispatch_unread",
+                   selectionReads.recorded.contains("inverse_dispatch_settled"), CFEqual(element, mixer),
+                   attribute == kAXSelectedChildrenAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                if fault == "select_all_first_focus_inverse_only_dispatch_unread",
+                   fixture.events.recorded.contains("restore_mixer_selection"), CFEqual(element, mixer),
+                   attribute == kAXSelectedChildrenAttribute as String {
+                    return .failure(.init(raw: AXError.cannotComplete.rawValue))
+                }
+                if heldFirstFocus, CFEqual(element, fixture.app), attribute == kAXFocusedUIElementAttribute as String,
+                   fixture.events.recorded.contains("select_all"), !fixture.events.recorded.contains("restore_mixer_selection") {
+                    let before = fixture.builder.attributeValue(element, attribute)
+                    selectionReads.record("post_leaf_focus_read")
+                    let boundary = fault == "timed_dispatch_held_first_focus_after_reference" ? 3 : 2
+                    if selectionReads.recorded.filter({ $0 == "post_leaf_focus_read" }).count == boundary {
+                        // The loop's pre-hold read still observes the original
+                        // focus; native focus moves before held custody renews.
+                        fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, strips[0])
+                        selectionReads.record("held_first_focus")
+                    }
+                    return .success(before.map { $0 as AnyObject })
+                }
                 if fault == "delayed_dispatch", CFEqual(element, edit), attribute == kAXSelectedAttribute as String,
                    fixture.events.recorded.contains("select_all"), !fixture.events.recorded.contains("cancel_edit"),
                    !selectionReads.recorded.contains("delayed_dispatch_settled") {
@@ -4613,7 +4777,7 @@ struct Issue965FreshPopulationAcquisitionTests {
                     if timedDispatch, selected, selectionClock.settled,
                        !selectionReads.recorded.contains("timed_dispatch_settled") {
                         selectionReads.record("timed_dispatch_settled")
-                        switch fault {
+                        switch dispatchFault {
                         case "timed_dispatch_noop": break
                         case "timed_dispatch_subset":
                             fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, Array(strips.prefix(2)))
@@ -4622,16 +4786,16 @@ struct Issue965FreshPopulationAcquisitionTests {
                         case "timed_dispatch_unread": return .failure(.init(raw: AXError.cannotComplete.rawValue))
                         default:
                             fixture.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, strips)
-                            if fault == "timed_dispatch_document" {
+                            if dispatchFault == "timed_dispatch_document" {
                                 fixture.builder.setAttribute(fixture.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                             }
-                            if fault == "timed_dispatch_focus" {
+                            if dispatchFault == "timed_dispatch_focus" {
                                 fixture.builder.setAttribute(fixture.app, kAXFocusedUIElementAttribute as String, fixture.header)
                             }
-                            if fault == "timed_dispatch_transport" {
+                            if dispatchFault == "timed_dispatch_transport" {
                                 fixture.builder.setAttribute(controls[0], kAXValueAttribute as String, 1)
                             }
-                            if fault == "timed_dispatch_cancel" { withUnsafeCurrentTask { $0?.cancel() } }
+                            if dispatchFault == "timed_dispatch_cancel" { withUnsafeCurrentTask { $0?.cancel() } }
                         }
                     }
                     if fault == "before_leaf_transport_document", opened, !selected {
@@ -4684,21 +4848,52 @@ struct Issue965FreshPopulationAcquisitionTests {
                 return nativeRead(element, attribute)
             })
         let body = try #require(sharedJSONObject(sharedToolText(result)))
+        if originalMixerReturn {
+            #expect(selectionReads.recorded.contains("owned_first_focus_metadata_unread"))
+            #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)
+            #expect(fixture.events.recorded.filter { $0 == "restore_mixer_selection" }.count == 1)
+            let returned = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
+            #expect(CFEqual(returned as CFTypeRef, initialFocus))
+            #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored",
+                "Retiring association authority must not erase our independently verified inverse: \(body)")
+            return
+        }
+        if delayedInverse {
+            if !inverseOnlyFirstFocus || healthyDelayedInverse {
+                #expect(selectionReads.recorded.contains("inverse_dispatch_settled"))
+            }
+            #expect(fixture.events.recorded.filter({ $0 == "restore_mixer_selection" }).count == 1)
+            if !healthyDelayedInverse {
+                #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "not_restored")
+                #expect(!fixture.events.recorded.contains("restore_captured_focus"))
+            }
+            if ["select_all_first_focus_inverse_dispatch_cancel", "select_all_first_focus_inverse_only_dispatch_cancel"].contains(fault) {
+                #expect(body["state"] as? String == "C" && body["error"] as? String == "cancelled")
+                return
+            }
+            if inverseOnlyFirstFocus { #expect(selectionReads.recorded.contains("inverse_only_first_focus")) }
+        }
         if timedDispatch {
             #expect(selectionReads.recorded.contains("timed_dispatch_settled"),
                 "Actually observe the delayed native result, not merely an ACK or early refusal")
             #expect(fixture.events.recorded.filter({ $0 == "select_all" }).count == 1)
-            if ["timed_dispatch_noop", "timed_dispatch_subset"].contains(fault) {
+            if (earlyFirstFocus || heldFirstFocus)
+                && !["timed_dispatch_early_first_focus", "timed_dispatch_held_first_focus", "timed_dispatch_held_first_focus_after_reference"].contains(fault) {
+                #expect(!fixture.events.recorded.contains("restore_mixer_selection"))
+            } else if ["timed_dispatch_noop", "timed_dispatch_subset"].contains(fault) {
                 #expect(fixture.events.recorded.filter({ $0 == "restore_mixer_selection" }).count == 1)
                 let restored = try #require(fixture.builder.attributeValue(mixer,
                     kAXSelectedChildrenAttribute as String) as? [AXUIElement])
                 #expect(restored.count == original.count && zip(restored, original).allSatisfy { CFEqual($0, $1) })
                 #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
-            } else if fault != "timed_dispatch_healthy" {
+            } else if !["timed_dispatch_healthy", "timed_dispatch_early_first_focus", "timed_dispatch_held_first_focus", "timed_dispatch_held_first_focus_after_reference"].contains(fault) {
                 #expect(!fixture.events.recorded.contains("restore_mixer_selection"))
             }
+            if earlyFirstFocus { #expect(selectionReads.recorded.contains("early_first_focus")) }
+            if heldFirstFocus { #expect(selectionReads.recorded.contains("held_first_focus")) }
         }
-        if fault == "late_deciding_cancel" || fault == "timed_dispatch_cancel" {
+        if fault == "late_deciding_cancel" || dispatchFault == "timed_dispatch_cancel" {
             #expect(body["state"] as? String == "C")
             #expect(body["error"] as? String == "cancelled")
             #expect(selectionReads.recorded.contains(fault == "late_deciding_cancel" ? "late_deciding_transition" : "timed_dispatch_settled"))
@@ -4711,7 +4906,7 @@ struct Issue965FreshPopulationAcquisitionTests {
             #expect(body["state"] as? String == "C" && body["snapshot_id"] == nil)
             section = body["strips"] as? [String: Any] ?? [:]
         } else { section = try #require(body["strips"] as? [String: Any]) }
-        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch", "late_deciding_settlement", "select_all_first_focus", "timed_dispatch_healthy"].contains(fault)
+        let completeExpected = ["healthy", "restore_selected_focus", "delayed_dispatch", "late_deciding_settlement", "select_all_first_focus", "select_all_first_focus_inverse_dispatch", "select_all_first_focus_inverse_only_dispatch", "timed_dispatch_healthy", "timed_dispatch_early_first_focus", "timed_dispatch_held_first_focus", "timed_dispatch_held_first_focus_after_reference"].contains(fault)
             || (["full_population_restore_focus", "full_population_shared"].contains(fault) && originalCount == 1)
             || (originalCount == strips.count && ["noop_selection", "restore_ack_only", "restore_focus_false",
                 "restore_focus_ack_only", "restore_focus_unselected", "restore_focus_selection_drift"].contains(fault))
@@ -4731,7 +4926,7 @@ struct Issue965FreshPopulationAcquisitionTests {
             if completeExpected {
                 let actual = try #require(fixture.builder.attributeValue(fixture.app, kAXFocusedUIElementAttribute as String))
                 #expect(CFEqual(actual as AnyObject, initialFocus))
-            } else { #expect(!fixture.events.recorded.contains("restore_mixer_selection")) }
+            } else if !delayedInverse { #expect(!fixture.events.recorded.contains("restore_mixer_selection")) }
         }
         if fault == "delayed_dispatch" {
             #expect(fixture.events.recorded.filter { $0 == "select_all" }.count == 1)

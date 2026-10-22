@@ -101,10 +101,27 @@ enum AXTrackBinding {
         /// This corroborates custody, not a general logical-track identity provider.
         private final class ShapeContinuity: @unchecked Sendable {
             let stackHeader: Bool?
+            let headers: [AXUIElement]?
             private let lock = NSLock()
             private var retired = false
-            init(_ stackHeader: Bool?) { self.stackHeader = stackHeader }
-            var isCurrent: Bool { stackHeader != nil && !lock.withLock { retired } }
+            init(_ stackHeader: Bool?, headers: [AXUIElement]?) {
+                self.stackHeader = stackHeader; self.headers = headers
+            }
+            var isCurrent: Bool { stackHeader != nil && headers?.isEmpty == false && !lock.withLock { retired } }
+            func matchesPopulation(_ current: [AXUIElement]?) -> Bool {
+                guard let headers, let current else { return false }
+                return headers.count == current.count && headers.allSatisfy { expected in
+                    headers.filter({ CFEqual($0, expected) }).count == 1
+                        && current.filter({ CFEqual($0, expected) }).count == 1
+                }
+            }
+            func observePopulation(_ current: [AXUIElement]) -> Bool {
+                let matches = matchesPopulation(current)
+                return lock.withLock {
+                    if !matches { retired = true }
+                    return !retired
+                }
+            }
             func observe(_ current: Bool?) -> Bool {
                 guard let current, let stackHeader else { return false }
                 return lock.withLock {
@@ -122,14 +139,24 @@ enum AXTrackBinding {
         private let shape: ShapeContinuity
 
         init(window: AXUIElement, header: AXUIElement, document: String, runtime: AXLogicProElements.Runtime,
-             exposure: Exposure? = nil, observedStackHeader: Bool? = nil) {
+             exposure: Exposure? = nil, observedStackHeader: Bool? = nil,
+             observedHeaders: [AXUIElement]? = nil) {
             self.window = window; self.header = header; self.document = document
             self.runtime = runtime; self.exposure = exposure
             // The ordinary population reader already sampled this without Help.
             // Other internal constructors take their own read-only baseline.
             let observed = observedStackHeader ?? (ExactTrackNameAdapter.operationPermitted()
                 ? AXValueExtractors.extractTrackStackState(from: header, runtime: runtime.ax).isStackHeader : nil)
-            shape = ShapeContinuity(observed)
+            let population: [AXUIElement]?
+            if let observedHeaders { population = observedHeaders }
+            else if ExactTrackNameAdapter.operationPermitted(),
+                    case .read(let current) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime) {
+                population = current
+            } else { population = nil }
+            // An ordinary header can also be recycled for an ordinary track.
+            // A changed population ends old custody; names and ordinals cannot
+            // prove which logical track survived that structural edit.
+            shape = ShapeContinuity(observed, headers: population)
         }
 
         var projectPath: String? {
@@ -150,11 +177,13 @@ enum AXTrackBinding {
         func observeNewerBinding(_ newer: Binding) {
             guard sharesCarrier(with: newer), newer.shape.isCurrent else { return }
             _ = shape.observe(newer.shape.stackHeader)
+            if let headers = newer.shape.headers { _ = shape.observePopulation(headers) }
         }
 
         func matches(_ other: Binding) -> Bool {
             sharesCarrier(with: other) && shape.isCurrent && other.shape.isCurrent
                 && shape.stackHeader == other.shape.stackHeader
+                && shape.matchesPopulation(other.shape.headers)
         }
 
         func currentIndex() -> Int? {
@@ -172,6 +201,7 @@ enum AXTrackBinding {
                   projectPath != nil, currentWindowAndDocumentMatch(),
                   case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime),
                   ExactTrackNameAdapter.operationPermitted(),
+                  shape.observePopulation(headers),
                   exposure?.isCurrent ?? true,
                   // The census can itself outlive the preceding scope proof.
                   currentWindowAndDocumentMatch(),
