@@ -22,6 +22,7 @@
     "Tests/LogicProMCPTests/Issue968ExactTrackNameAdapterTests.swift"
   ],
   "method": "Independent native UI observations were compared with serial calls to the actual public MCP commands. The original and repaired executables carried their source commits and were content-sealed. Neither the native driver nor the repair substitutes labels or ordinals for a lost reference. Group creation and cleanup were explicit manual fixture operations, not product grouping or compensation.",
+  "evidence": ["evidence/2026-10-22-retained-track-header-shape-refusal.json"],
   "canon_not_applicable": {"reason": "This reading concerns transient Accessibility-object reuse, source-reference custody and action readback. It makes no claim about a shipped canonical label, menu translation or keyboard binding."},
   "observations": [
     {

@@ -1,0 +1,20 @@
+{
+  "format": "public-command-response-excerpts.v1",
+  "date": "2026-10-22",
+  "method": "Selected fields copied from actual serial MCP responses. Opaque request and reference tokens are omitted. Complete source recordings are identified by their SHA-256 digests. Independent UI findings are recorded separately, not inferred from these responses.",
+  "original": {
+    "source_commit": "e1012f7d4e0a4f38098031500d2df053049e4f9a",
+    "raw_sha256": "8de3d9ac5e0cf29dd6b1cc2de9a98cda0689da19b400ed96ad524a0178dfcc16",
+    "outside_reference": {"state": "A", "success": true, "requested": 0, "observed": 0, "selected": 0, "verified": true},
+    "old_child_reference": {"state": "A", "success": true, "requested": 5, "observed": 5, "selected": 5, "verified": true},
+    "independent_ui": {"old_child_request_selected_replacement_folder": true}
+  },
+  "repaired": {
+    "source_commit": "46f6bdd93fc5ab6ba8d5e5066a1c1c07858852f5",
+    "raw_sha256": "2059125f62120867cdefbc372d0911dc5df16f2f9247ca870647f7fce150f9f2",
+    "outside_reference": {"state": "A", "success": true, "requested": 0, "observed": 0, "selected": 0, "verified": true},
+    "old_child_reference": {"state": "C", "success": false, "error": "stale_target_reference", "operation": "track.select", "write_attempted": false},
+    "independent_ui": {"complete_ui_unchanged_by_refusal": true, "complete_ui_matches_initial_after_manual_cleanup": true}
+  },
+  "limits": ["These excerpts are not a headless native replay.", "Manual cleanup is not product compensation; same-shape recycling is not qualified."]
+}
