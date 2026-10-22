@@ -1421,11 +1421,15 @@ extension AccessibilityChannel {
                           sameSet(after, original) || sameSet(after, selectionAtInverse),
                           !stopInverseRead(),
                           let returned: AXUIElement = AXHelpers.getAttribute(acquiredApp, kAXFocusedUIElementAttribute as String, runtime: runtime.ax)
-                    else { effects.reason = "mixer_selection_restoration_unverified"; return nil }
+                    else {
+                        Log.info("Mixer selection inverse refused: settlement scope or native readback", subsystem: "ax")
+                        effects.reason = "mixer_selection_restoration_unverified"; return nil
+                    }
                     if sameSet(after, original), original.filter({ CFEqual($0, returned) }).count == 1 { break }
                     guard attempt < 2, ContinuousClock.now < inverseEnd,
                           firstSelectionFocus.permits() || (sameFocus() && passive.permits()),
                           !stopInverseRead() else {
+                        Log.info("Mixer selection inverse refused: pending focus or settlement bound", subsystem: "ax")
                         effects.reason = "mixer_selection_restoration_unverified"; return nil
                     }
                     do { try await Task.sleep(for: .milliseconds(100)) }
@@ -1442,6 +1446,7 @@ extension AccessibilityChannel {
                       let after = elements(kAXSelectedChildrenAttribute as String), sameSet(after, original),
                       let inverseFocus = OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(window: window, logic: runtime),
                       CFEqual(inverseFocus.focus, returned), inverseFocus.permits() else {
+                    Log.info("Mixer selection inverse refused: returned original-subset focus proof", subsystem: "ax")
                     effects.reason = "mixer_selection_restoration_unverified"; return nil
                 }
                 // Keep the original read witness. The existing scoped exception is
@@ -1449,6 +1454,7 @@ extension AccessibilityChannel {
                 readFocusScope?.retainMixerInverseFocus(inverseFocus)
                 defer { readFocusScope?.retainMixerInverseFocus(nil) }
                 guard await held(ownedSelectionFocus: returned) else {
+                    Log.info("Mixer selection inverse refused: original-subset custody", subsystem: "ax")
                     effects.reason = "mixer_selection_restoration_unverified"; return nil
                 }
                 effects.attempted.append("mixer_focus_restoration")
@@ -1459,6 +1465,7 @@ extension AccessibilityChannel {
                             else { return false }
                             return await held(ownedSelectionFocus: returned)
                         }, stoppingWhen: stop) else {
+                    Log.info("Mixer selection inverse refused: captured-focus restoration", subsystem: "ax")
                     effects.reason = "mixer_selection_restoration_unverified"; return nil
                 }
                 effects.changed.append("mixer_focus_restoration")
@@ -1467,6 +1474,7 @@ extension AccessibilityChannel {
                   let after = elements(kAXSelectedChildrenAttribute as String), sameSet(after, original),
                   let afterVisible = elements(kAXVisibleChildrenAttribute as String), same(visible, afterVisible),
                   frames() == originalFrames, await held() else {
+                Log.info("Mixer selection inverse refused: final original focus, selection or viewport", subsystem: "ax")
                 effects.reason = "mixer_selection_restoration_unverified"; return nil
             }
             if !sameSet(selectionAtInverse, original) { effects.changed.append("mixer_selection_restoration") }
