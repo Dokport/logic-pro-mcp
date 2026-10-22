@@ -1,0 +1,18 @@
+{
+  "format": "native-response-and-independent-ui-excerpts.v1",
+  "method": "Actual response fields and independent UI findings, with opaque tokens and private fixture paths omitted. Complete native recordings are identified by SHA-256; this is not a headless replay.",
+  "original": {
+    "source_commit": "c0949317037f1377b79692ce5a4dcfd92c0b9a10",
+    "response_raw_sha256": "e5e953e7d0d1bd09e06e22099067b4f4d5d0f841a3e0fe7968ae6ffb8d368b0a",
+    "independent_observer_raw_sha256": "ce33f82ddf24e5abbbf003e6d8b27c68abd5d964dda19fd6caafd85efcf1f33e",
+    "response": {"ui_effects": {"restoration": "not_restored", "reason": "mixer_restoration_unverified"}},
+    "independent_transitions_seconds": [{"at": 9.19319200515747, "original_focus": true, "mixer_present": true}, {"at": 10.119408011436462, "original_focus": true, "mixer_present": false}]
+  },
+  "repaired": {
+    "source_commit": "819a9f147450e25ebc329524339aec0f1e39f3d1",
+    "raw_sha256": "56b4234156716e20f1e77ebe2c63153a92410e16496ad5643d4a4f17433acb79",
+    "response": {"ui_effects": {"attempted": ["view_menu", "mixer_visibility"], "changed": ["view_menu", "mixer_visibility"], "navigation_performed": true, "restoration": "restored"}, "overall": {"complete": false, "incomplete_domains": ["tracks", "strips", "associations"]}},
+    "independent_ui": {"complete_ui_equal_before_after_acquisition": true, "complete_ui_equal_before_after_request": true, "selected_track": "Audio 6", "focus": "Tracks", "mixer_visible": false, "playing": false, "recording": false}
+  },
+  "separate_unqualified_select_all_profile": {"source_commit": "819a9f147450e25ebc329524339aec0f1e39f3d1", "raw_sha256": "f8eabfa8a0322ea99ae708a3a499402d05da34f641dbc334504baf7caf7383ef", "error": "readback_unavailable", "reason": "mixer_global_selection_unverified", "restoration": "not_restored", "manual_cleanup_is_automatic_inverse": false}
+}

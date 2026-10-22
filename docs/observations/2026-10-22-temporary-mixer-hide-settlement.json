@@ -1,0 +1,34 @@
+{
+  "schema": 3,
+  "id": "2026-10-22-temporary-mixer-hide-settlement",
+  "date": "2026-10-22",
+  "subject": "Temporary Mixer Hide can restore focus before removing its native subtree",
+  "question": "Can temporary Mixer inspection verify its original closed view after the accepted Hide settles, without repeating the action or accepting a changed target?",
+  "verdict": "partial",
+  "surface": "mixer.channel_strips",
+  "issues": [971],
+  "host": {"app": "Logic Pro", "version": "12.3", "build": "6674", "locale": "en-US", "os": "macOS 26.3 (25D125)"},
+  "reverify": {
+    "kind": "manual",
+    "command": "Use a stopped disposable eight-track project with only its sixth ordinary track selected, original Tracks focus and the Mixer closed. Call logic_project inspect_session with scope whole_project, domains tracks/strips/associations and allow_ui_navigation true. Independently compare the complete observed UI before acquisition, after acquisition and after the response. Stop the candidate normally.",
+    "expected": "The temporary Show/Hide returns restoration restored and leaves the complete independently observed UI unchanged. Incomplete population or association domains remain incomplete; they are not a restoration failure or a complete project report.",
+    "cost": "One temporary Mixer Show/Hide; no parameter write, playback, recording, project save or automatic repair plan."
+  },
+  "depends": ["Sources/LogicProMCP/Channels/AccessibilityChannel+VerifiedPlugins.swift:restore", "Tests/LogicProMCPTests/Issue971TemporaryMixerRestorationTests.swift"],
+  "evidence": ["evidence/2026-10-22-temporary-mixer-hide-settlement.json"],
+  "canon_not_applicable": {"reason": "This is a native Accessibility lifetime, custody and restoration measurement, not a claim about a canonical menu label, translation or key binding."},
+  "method": "Serial public MCP calls used content-sealed executables carrying their source commits. Independent read-only native observation sampled retained identity and focus during the original failure. Independent CUA observations compared the repaired request's entire UI before acquisition, after acquisition and after restoration. Synthetic custody tests are reported separately.",
+  "observations": [
+    {"source_commit": "c0949317037f1377b79692ce5a4dcfd92c0b9a10", "seconds": 4.333715917, "restoration": "not_restored", "reason": "mixer_restoration_unverified", "original_focus_returned_while_retained_mixer_still_present": true, "mixer_disappeared_in_later_independent_sample": true, "retained_app_window_document_headers_and_selection_unchanged_in_observer": true},
+    {"source_commit": "819a9f147450e25ebc329524339aec0f1e39f3d1", "binary_sha256": "fa6a71e6efcdfb420769b7900a7f19dab3482e6162bfd0abafac516569ca4a9e", "seconds": 4.65281125, "restoration": "restored", "independent_complete_ui_unchanged_after_acquisition": true, "independent_complete_ui_unchanged_after_request": true, "normal_process_exit": 0, "process_gone": true, "track_count": 8, "strip_count": 14, "overall_complete": false},
+    {"synthetic_initial_red_issues": 12, "synthetic_post_await_reappearance_red_issues": 2, "final_visibility_and_settlement_tests": 46, "final_affected_tests": 440, "final_affected_seconds": 454.556, "synthetic_tests_are_native_qualification": false}
+  ],
+  "conclusion": "The measured temporary Hide now waits for complete native absence and restores the complete independently observed UI. A reappearing Mixer after an awaited custody renewal cannot be accepted from the earlier absence sample. Population completeness remains a separate requirement.",
+  "limits": [
+    "The native restoration profile is English-only and bounded to the measured ordinary-track fixture; universal viewport or locale restoration is not claimed.",
+    "The repaired three-domain report still had partial track and strip populations and unavailable associations. No executable naming plan or whole-issue completion follows from this reading.",
+    "A separate four-domain physical-strip profile reached Select All but refused with mixer_global_selection_unverified and left focus on the first strip. Explicit manual fixture cleanup was required; that path is not qualified by this restoration repair.",
+    "The independent observer can affect timing; its samples do not identify the exact original product deciding read. The synthetic RED/GREEN establishes the causal deciding-order repairs."
+  ],
+  "supersedes": null
+}
