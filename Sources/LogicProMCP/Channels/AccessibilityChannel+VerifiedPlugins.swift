@@ -1396,6 +1396,12 @@ extension AccessibilityChannel {
             }
             effects.attempted.append("mixer_selection_restoration")
             let restored = AXHelpers.setAttribute(binding.mixer, kAXSelectedChildrenAttribute as String, original as CFArray, runtime: runtime.ax)
+            // Select All's first-focus transition can arrive at the inverse ACK.
+            // Renew only the existing exact complete-selection proof, not a
+            // partial return or an arbitrary newly focused strip.
+            if restored, firstSelectionFocus == nil, !(hardStop ?? stop)() {
+                _ = ownedFirstSelectionFocus()
+            }
             if restored, let firstSelectionFocus {
                 // The one accepted inverse can return before its selection and
                 // focus settle. Observe only the original or issued complete
