@@ -1555,37 +1555,18 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     private func sortReading() -> (rows: [TrackState], order: [String])? {
-        var stage = "entry"
-        var accepted = false
-        defer { if !accepted { Log.info("Canonical sort read refused at \(stage)", subsystem: "saga") } }
         guard let sort = sortTask, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
         let binding = sort.binding, runtime = binding.runtime
         func scopeHeld() -> Bool {
-            stage = "scope_process"
-            guard runtime.logicProPID() == binding.pid else { return false }
-            stage = "scope_foreground"
-            let foreground = runtime.focusedApplicationPID()
-            guard foreground == binding.pid else {
-                stage = foreground == nil ? "scope_foreground_unread" : "scope_foreground_foreign"
-                return false
-            }
-            stage = "scope_application"
-            guard let app = AXLogicProElements.appRoot(runtime: runtime),
-                  binding.app.map({ CFEqual($0, app) }) == true else { return false }
-            stage = "scope_window"
-            guard let window = AXLogicProElements.mainWindow(runtime: runtime),
-                  CFEqual(window, binding.window) else { return false }
-            stage = "scope_title"
-            guard AXHelpers.getTitle(window, runtime: runtime.ax)?.utf8.elementsEqual(binding.title.utf8) == true else { return false }
-            stage = "scope_document_read"
-            guard case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime) else { return false }
-            stage = "scope_document_value"
+            guard runtime.logicProPID() == binding.pid, runtime.focusedApplicationPID() == binding.pid,
+                  let app = AXLogicProElements.appRoot(runtime: runtime), binding.app.map({ CFEqual($0, app) }) == true,
+                  let window = AXLogicProElements.mainWindow(runtime: runtime), CFEqual(window, binding.window),
+                  AXHelpers.getTitle(window, runtime: runtime.ax)?.utf8.elementsEqual(binding.title.utf8) == true,
+                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime)
+            else { return false }
             return document.utf8.elementsEqual(binding.document.utf8)
         }
-        stage = "scope"
-        guard scopeHeld() else { return nil }
-        stage = "population_transport_locale"
-        guard case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: binding.window, runtime: runtime),
+        guard scopeHeld(), case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: binding.window, runtime: runtime),
               headers.count == sort.rows.count,
               sort.rows.allSatisfy({ row in row.physicalBinding.map { original in
                   headers.filter { CFEqual($0, original.header) }.count == 1
@@ -1613,46 +1594,22 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         var order: [String] = []
         for row in rows {
-            stage = "row_name"
             let matches = sort.rows.indices.filter { sort.rows[$0].name.utf8.elementsEqual(row.name.utf8) }
-            guard matches.count == 1, let index = matches.first else { return nil }
-            stage = "row_encoding"
-            guard let before = footprint(sort.rows[index]), let after = footprint(row) else { return nil }
-            stage = "row_footprint"
-            guard before == after else {
-                let lhs = (try? JSONSerialization.jsonObject(with: before)) as? [String: Any] ?? [:]
-                let rhs = (try? JSONSerialization.jsonObject(with: after)) as? [String: Any] ?? [:]
-                let changed = Set(lhs.keys).union(rhs.keys).filter { key in
-                    (lhs[key] as? NSObject)?.isEqual(rhs[key]) != true
-                }.sorted()
-                Log.info("Canonical sort footprint fields changed: \(changed.joined(separator: ","))", subsystem: "saga")
-                return nil
-            }
+            guard matches.count == 1, let index = matches.first,
+                  let before = footprint(sort.rows[index]), let after = footprint(row), before == after else { return nil }
             order.append(sort.before[index])
         }
-        stage = "final_scope"
         guard scopeHeld(), (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
-        accepted = true
         return (rows, order)
     }
 
     private func sortRegistryHeld() async -> Bool {
-        var stage = "sort_task"
-        var accepted = false
-        defer { if !accepted { Log.info("Canonical sort registry refused at \(stage)", subsystem: "saga") } }
-        guard let sort = sortTask else { return false }
-        stage = "snapshot"
-        guard await registry.currentSnapshot == (sortSnapshot ?? sort.snapshot) else { return false }
-        stage = "cache_epoch"
-        guard await cache.currentProjectIdentity()?.epoch == cacheProjectEpoch else { return false }
-        stage = "project_binding"
-        guard let project = await registry.resolveCurrentProject(sortProject ?? projectRef) else { return false }
-        stage = "document_path"
-        guard let url = URL(string: document), url.isFileURL,
-              project.descriptor.projectFilePath?.utf8.elementsEqual(url.path.utf8) == true else { return false }
-        stage = "cache_path"
-        guard await cache.getProject().filePath?.utf8.elementsEqual(url.path.utf8) == true else { return false }
-        accepted = true
+        guard let sort = sortTask, await registry.currentSnapshot == (sortSnapshot ?? sort.snapshot),
+              await cache.currentProjectIdentity()?.epoch == cacheProjectEpoch,
+              let project = await registry.resolveCurrentProject(sortProject ?? projectRef),
+              let url = URL(string: document), url.isFileURL,
+              project.descriptor.projectFilePath?.utf8.elementsEqual(url.path.utf8) == true,
+              await cache.getProject().filePath?.utf8.elementsEqual(url.path.utf8) == true else { return false }
         return true
     }
 
@@ -1674,16 +1631,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     private func readSortState(_ step: SagaStep) async -> ObservedState? {
-            guard supports(step), !sortAttempted || sortApplied else {
-                Log.info("Canonical sort state refused at step_shape", subsystem: "saga"); return nil
-            }
-            guard await sortRegistryHeld() else {
-                Log.info("Canonical sort state refused at registry_before", subsystem: "saga"); return nil
-            }
-            guard let reading = sortReading() else { return nil }
-            guard await sortRegistryHeld() else {
-                Log.info("Canonical sort state refused at registry_after", subsystem: "saga"); return nil
-            }
+            guard supports(step), !sortAttempted || sortApplied, await sortRegistryHeld(),
+                  let reading = sortReading(), await sortRegistryHeld() else { return nil }
             guard let value = Self.sortOrderValue(reading.order) else { return nil }
             let evidence = SagaReadEvidence(readSource: .axTrackOrder, provenance: .liveIndependent,
                 trackIndex: nil, projectReference: (sortProject ?? projectRef).rawValue, field: "track_order_json",
