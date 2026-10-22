@@ -1,0 +1,166 @@
+{
+  "schema": 3,
+  "id": "2026-10-22-single-window-canonical-naming",
+  "date": "2026-10-22",
+  "subject": "A sole native window avoids redundant discovery during canonical naming",
+  "question": "Can a provably redundant single-window descendant search be skipped without changing approved naming, target custody or restoration?",
+  "verdict": "partial",
+  "surface": "arrange.track_headers",
+  "issues": [
+    971
+  ],
+  "host": {
+    "app": "Logic Pro",
+    "version": "12.3",
+    "build": "6674",
+    "locale": "en-US",
+    "os": "macOS 26.3 (25D125)"
+  },
+  "reverify": {
+    "kind": "manual",
+    "command": "Use an exclusively owned stopped flat 32-track project with 38 observed Mixer strips, all track headers physically fitting on one page, a visible Mixer, hidden Inspector and original Tracks focus. Independently observe exactly one non-dialog window. Capture tracks/hierarchy/strips/associations with permitted temporary navigation. Require complete tracks and actual track-to-strip associations, while retaining the honest partial strip census. Bind two approved literal name goals to the exact issued track references and their captured native strip pairs, plan immediately after the capture, then confirm that exact plan and digest. Independently compare the complete UI, original selection and musical controls. Reconcile a caller timeout through the original late reply and the same completed-key journal, never another write. In a separate fresh process capture the changed names and approve a new plan returning their original names. Verify full original UI equality, completed-key replay and an unissued project-reference refusal; stop each candidate normally.",
+    "expected": "Both approved names and both fresh return goals verify with two actual name boundaries per direction and restored original selection. The final complete UI equals the prepared original, and completed-key replay and the wrong-project refusal change no UI. One measured candidate run is shorter than the earlier same-profile run, but still exceeds the caller's 120-second wait. The unchanged 300-second product deadline and all target, document, population and permission checks remain. The 38-strip census stays partial.",
+    "cost": "Four approved development-only name writes across separate forward and fresh-return processes, native selection observations, read-only replay/project refusal and independent complete UI reads. No routing/parameter setter, auxiliary lifecycle action or project save is required."
+  },
+  "depends": [
+    "Sources/LogicProMCP/Accessibility/AXLogicProElements.swift:arrangeWindowRead",
+    "Sources/LogicProMCP/Accessibility/AXLogicProElements.swift:arrangeWindowVerifiedRead",
+    "Sources/LogicProMCP/Workflows/ExactTrackNameAdapter.swift:applySelecting",
+    "Tests/LogicProMCPTests/Issue971SingleWindowLookupTests.swift",
+    "Tests/LogicProMCPTests/Issue968ExactTrackNameAdapterTests.swift:ordinaryRenameFinalSelectionReadFailureHasNoWriteAttemptOrUIEvent"
+  ],
+  "method": "With exactly one non-dialog candidate, both the existing track-rail preference and its fallback select that same window. The correction skips only that descendant search in the two status-preserving readers. Multi-window preference, dialog exclusion and every downstream native document/header/target proof remain unchanged. Source-attested executables serve the actual public capture, plan, apply and completed-key requests. Independent UI comparisons normalize only the two explicitly approved names after forward and normalize nothing after return. The native timings are separate single-profile observations, not an injected latency test or a general benchmark.",
+  "evidence": [
+    "evidence/2026-10-22-single-window-canonical-naming.json"
+  ],
+  "canon_not_applicable": {
+    "reason": "No Apple label vocabulary or translation changes. The literal name strings are approved test input; the measurement concerns window-choice equivalence, native custody and bounded execution cost."
+  },
+  "observations": [
+    {
+      "what": "Causal redundant-work matrix and unchanged safety controls",
+      "source_commit": "4338a3ff29162c3165e0494daaec54f61ad17996",
+      "causal_red_source_commit": "0399922fbcf095fc233c39d1b9938dfc5da59e35",
+      "causal_red_issues": 6,
+      "causal_red_raw_sha256": "a52736f45c507418a2f3d6a5cfff52fc3c56b8663753308fed811f6079428130",
+      "sole_window_profiles": 6,
+      "fixture_child_callbacks_before": 65,
+      "fixture_child_callbacks_after": 0,
+      "total_new_profiles_passed": 10,
+      "related_tests_passed": 203,
+      "related_seconds": 18.771,
+      "related_raw_sha256": "08d366faf32bb140a92441d06764fcff6ef29f29b04943cad8226c392754f2be",
+      "population_tests_passed": 404,
+      "population_seconds": 288.763,
+      "population_raw_sha256": "fdf5d9e48a7d0fd3c1a860b9269b684c1057df6e6232ec660ac112090903b9f6",
+      "final_selection_failure_injection_reaches_same_production_filter": true,
+      "no_write_and_original_selection_assertions_retained": true,
+      "synthetic_tests_are_native_measurements": false
+    },
+    {
+      "what": "Measured native profile",
+      "track_count": 32,
+      "observed_strip_count": 38,
+      "track_coverage": "complete",
+      "hierarchy_coverage": "complete",
+      "association_coverage": "complete",
+      "association_count": 32,
+      "strip_coverage": "partial",
+      "strip_reason": "count_is_the_only_end_witness",
+      "original_focus": "Tracks",
+      "transport_playing": false,
+      "transport_recording": false,
+      "non_dialog_window_count": 1,
+      "independent_original_ui_string_length": 263223,
+      "independent_musical_control_lines": 205
+    },
+    {
+      "what": "Earlier same-profile forward and fresh return",
+      "source_commit": "043094bbb6fbc64266bf09e510fc07978d187025",
+      "binary_sha256": "bb4a4a6516326b5e2eab06b1b2ae7dea496bc0cad9f83b02dafdf0748a2c370a",
+      "forward": {
+        "seconds": 265.04272725,
+        "raw_sha256": "0178f236857f4bdf15433bb122b7893ab45599a6fa4a518e5d63961aca4293d4",
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "client_wait_timed_out": true,
+        "completed_reply_recovered_from_original_transcript": true,
+        "independent_ui_equals_original_with_only_approved_names": true
+      },
+      "fresh_return": {
+        "seconds": 264.133983458,
+        "raw_sha256": "9474aa061491784da37ca38355485967f1b547ab0b089c1ee60dfa233b17263b",
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "client_wait_timed_out": true,
+        "independent_complete_ui_equals_original": true,
+        "replay_duplicate": true,
+        "replay_seconds": 0.010310709
+      }
+    },
+    {
+      "what": "Single-window candidate forward, fresh return, replay and wrong-project refusal",
+      "source_commit": "4338a3ff29162c3165e0494daaec54f61ad17996",
+      "binary_sha256": "ed65ac310102f27f3eafef264942e0d4e20d87ff72cf6749380c5ade34a3627f",
+      "forward": {
+        "seconds": 140.777117834,
+        "capture_seconds": 17.888084291,
+        "raw_sha256": "949aa7f1fcffe7b3a5838b61c3d9e3dbc0ef86018ccdf5858ea628d774e16ce0",
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "name_steps": 2,
+        "write_boundaries": 2,
+        "independent_goal_reads_per_name": 2,
+        "selection_restoration": "restored",
+        "client_wait_timed_out": true,
+        "late_original_reply_and_completed_journal_agree": true,
+        "independent_ui_equals_original_with_only_approved_names": true,
+        "replay_duplicate": true,
+        "replay_seconds": 0.009055875,
+        "independent_complete_ui_unchanged_by_replay": true,
+        "normal_exit": 0,
+        "process_gone": true
+      },
+      "fresh_return": {
+        "seconds": 142.098924208,
+        "capture_seconds": 16.007781208,
+        "raw_sha256": "3796ade4d781f39d5de6e1b0744e76a57ec77a209a0f0ee0a18af37d9a632ae6",
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "name_steps": 2,
+        "write_boundaries": 2,
+        "independent_goal_reads_per_name": 2,
+        "selection_restoration": "restored",
+        "client_wait_timed_out": true,
+        "late_original_reply_and_completed_journal_agree": true,
+        "independent_complete_ui_equals_original": true,
+        "replay_duplicate": true,
+        "replay_seconds": 0.011821042,
+        "independent_complete_ui_unchanged_by_replay": true,
+        "normal_exit": 0,
+        "process_gone": true
+      },
+      "wrong_project": {
+        "seconds": 0.006471459,
+        "state": "C",
+        "error": "stale_target_reference",
+        "write_attempted": false,
+        "independent_complete_ui_equals_original": true
+      }
+    }
+  ],
+  "conclusion": "The two single-window readers retain their existing selected window without a redundant descendant search. Both measured directions complete sooner in this English flat-32 profile, with verified goals, original selection and exact independent final UI restoration; their exact sample durations remain in the observations. Caller timeouts remain real and require late-reply/journal reconciliation; no deadline or acceptance rule is relaxed.",
+  "limits": [
+    "Only this English Logic 12.3 flat-32 prepared profile and two literal names are qualified. These single measurements establish no latency guarantee, statistical speedup, other-locale behavior or arbitrary-topology acceptance.",
+    "The 120-second caller waits time out in both earlier and optimized runs. Late original replies, completed-key outcomes and independent UI reconcile completion without repeating the writes; this is not a caller-timeout fix.",
+    "The return uses a new independently captured and approved plan in a separate process. It is not an owned compensating inverse, same-process roundtrip or cross-restart journal durability.",
+    "All 32 track associations are observed, but the 38-strip census remains partial. No complete routing, hardware namespace, receiver fanout, protected path or allocation authority follows.",
+    "No missing subgroup creation/destruction, hidden/nested/shared-strip F1, arbitrary ordering, colors, unobserved plug-in parameters or audio preservation is qualified; whole #971 remains open.",
+    "The window-choice and refusal matrix is synthetic, not native multi-window or fault-injection qualification. The final no-write safety assertions are unchanged."
+  ],
+  "supersedes": null
+}

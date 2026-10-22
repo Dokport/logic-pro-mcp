@@ -1,0 +1,134 @@
+{
+  "format": "actual-single-window-naming-excerpts.v1",
+  "method": "Selected actual public response facts with private paths and opaque reference/trace tokens omitted. Exact captured-reference matching and independent UI comparisons are reported separately from response fields. Both original late replies and completed journal outcomes are retained in the raw recordings named by their digests.",
+  "profile": {
+    "track_count": 32,
+    "observed_strip_count": 38,
+    "track_coverage": "complete",
+    "hierarchy_coverage": "complete",
+    "association_coverage": "complete",
+    "association_count": 32,
+    "strip_coverage": "partial",
+    "strip_reason": "count_is_the_only_end_witness",
+    "original_focus": "Tracks",
+    "transport_playing": false,
+    "transport_recording": false,
+    "non_dialog_window_count": 1
+  },
+  "unchanged_limits": {
+    "client_wait_seconds": 120,
+    "product_deadline_seconds": 300,
+    "source_snapshot_ttl_seconds": 60
+  },
+  "baseline": {
+    "source_commit": "043094bbb6fbc64266bf09e510fc07978d187025",
+    "binary_sha256": "bb4a4a6516326b5e2eab06b1b2ae7dea496bc0cad9f83b02dafdf0748a2c370a",
+    "forward": {
+      "seconds": 265.04272725,
+      "raw_sha256": "0178f236857f4bdf15433bb122b7893ab45599a6fa4a518e5d63961aca4293d4",
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "client_wait_timed_out": true,
+      "completed_reply_recovered_from_original_transcript": true,
+      "independent_ui_equals_original_with_only_approved_names": true
+    },
+    "fresh_return": {
+      "seconds": 264.133983458,
+      "raw_sha256": "9474aa061491784da37ca38355485967f1b547ab0b089c1ee60dfa233b17263b",
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "client_wait_timed_out": true,
+      "independent_complete_ui_equals_original": true,
+      "replay_duplicate": true,
+      "replay_seconds": 0.010310709
+    }
+  },
+  "candidate": {
+    "source_commit": "4338a3ff29162c3165e0494daaec54f61ad17996",
+    "binary_sha256": "ed65ac310102f27f3eafef264942e0d4e20d87ff72cf6749380c5ade34a3627f",
+    "forward": {
+      "seconds": 140.777117834,
+      "capture_seconds": 17.888084291,
+      "raw_sha256": "949aa7f1fcffe7b3a5838b61c3d9e3dbc0ef86018ccdf5858ea628d774e16ce0",
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "name_steps": 2,
+      "write_boundaries": 2,
+      "independent_goal_reads_per_name": 2,
+      "selection_restoration": "restored",
+      "client_wait_timed_out": true,
+      "late_original_reply_and_completed_journal_agree": true,
+      "independent_ui_equals_original_with_only_approved_names": true,
+      "replay_duplicate": true,
+      "replay_seconds": 0.009055875,
+      "independent_complete_ui_unchanged_by_replay": true,
+      "normal_exit": 0,
+      "process_gone": true
+    },
+    "fresh_return": {
+      "seconds": 142.098924208,
+      "capture_seconds": 16.007781208,
+      "raw_sha256": "3796ade4d781f39d5de6e1b0744e76a57ec77a209a0f0ee0a18af37d9a632ae6",
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "name_steps": 2,
+      "write_boundaries": 2,
+      "independent_goal_reads_per_name": 2,
+      "selection_restoration": "restored",
+      "client_wait_timed_out": true,
+      "late_original_reply_and_completed_journal_agree": true,
+      "independent_complete_ui_equals_original": true,
+      "replay_duplicate": true,
+      "replay_seconds": 0.011821042,
+      "independent_complete_ui_unchanged_by_replay": true,
+      "normal_exit": 0,
+      "process_gone": true
+    },
+    "wrong_project": {
+      "seconds": 0.006471459,
+      "state": "C",
+      "error": "stale_target_reference",
+      "write_attempted": false,
+      "independent_complete_ui_equals_original": true
+    }
+  },
+  "synthetic_controls": {
+    "causal_red_source_commit": "0399922fbcf095fc233c39d1b9938dfc5da59e35",
+    "causal_red_issues": 6,
+    "causal_red_raw_sha256": "a52736f45c507418a2f3d6a5cfff52fc3c56b8663753308fed811f6079428130",
+    "sole_window_profiles": 6,
+    "fixture_child_callbacks_before": 65,
+    "fixture_child_callbacks_after": 0,
+    "total_new_profiles_passed": 10,
+    "related_tests_passed": 203,
+    "related_seconds": 18.771,
+    "related_raw_sha256": "08d366faf32bb140a92441d06764fcff6ef29f29b04943cad8226c392754f2be",
+    "population_tests_passed": 404,
+    "population_seconds": 288.763,
+    "population_raw_sha256": "fdf5d9e48a7d0fd3c1a860b9269b684c1057df6e6232ec660ac112090903b9f6",
+    "final_selection_failure_injection_reaches_same_production_filter": true,
+    "no_write_and_original_selection_assertions_retained": true,
+    "synthetic_tests_are_native_measurements": false
+  },
+  "independent_ui": {
+    "before_candidate_acquisition_equals_original": true,
+    "after_candidate_acquisition_equals_original": true,
+    "after_capture_equals_original": true,
+    "forward_equals_original_with_only_two_approved_names": true,
+    "return_equals_original_without_normalization": true,
+    "after_completed_key_replay_equals_original": true,
+    "after_wrong_project_refusal_equals_original": true,
+    "original_selection_and_tracks_focus_restored": true,
+    "musical_control_lines_equal": 205,
+    "original_string_length": 263223
+  },
+  "limits": [
+    "Separate forward and fresh-return processes, not an owned inverse or durable journal.",
+    "Caller timeouts are not suppressed or relabelled as timely responses.",
+    "One prepared flat-32 English profile; strip and graph completeness are not inferred."
+  ]
+}
