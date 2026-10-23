@@ -2,16 +2,16 @@
   "schema": 3,
   "id": "2026-10-23-canonical-bus-stereo-send-owned-return",
   "date": "2026-10-23",
-  "subject": "Captured existing-Bus Send completion and owned cancellation from Tracks focus",
-  "question": "Can captured singleton Bus-to-Stereo and existing-Bus replacement Send goals check native input prerequisites, complete or compensate their own changes, and restore the prepared Tracks state?",
+  "subject": "Captured existing-Bus Send goals and protected bypass roundtrips from prepared native focus",
+  "question": "Can captured singleton Bus-to-Stereo and existing-Bus replacement Send goals check native input prerequisites and compensate their own changes, and can the public bypass setter corroborate its declared bit while preserving the prepared native state?",
   "verdict": "partial",
   "surface": "mixer.routing",
   "issues": [291, 971],
   "host": {"app": "Logic Pro", "version": "12.3", "build": "6674", "locale": "en-US", "os": "macOS 26.3 (25D125)"},
   "reverify": {
     "kind": "manual",
-    "command": "Prepare a stopped disposable four-track/nine-strip project. Select a source with physical Input 1, main Stereo output and exactly one occupied Bus 1 Send in Post Fader mode, raw level zero and bypass off; retain a separate existing Bus 1 receiver. Start with Tracks-container focus and the fully visible leftmost viewport. Capture selection/tracks/strips/associations/routing through inspect_session. Plan one confirmed canonical Send output goal with the issued project/track references and observed ordinal 1. Check wrong-target planning and wrong-digest application without changing the independent native UI. Apply the valid plan within its existing lifetime. For cancellation, observe a newly verified child and that exact key still in progress before cancelling it. Inspect compensation, terminal journal and same-key replay. In a separate execution, let the canonical goal complete, verify its cached completed-key replay and independently inspect the actual Send change. Freshly capture the changed source and use a separately preflighted generic Stereo-to-Bus 1 singleton to return the fixture. Compare complete independent native UI states at each terminal checkpoint. For the separately labelled large cancellation, use a prepared warm stopped 32-track/38-strip Korean fixture with independently existing Bus 1 and Bus 2 receivers, retain the same singleton source shape, and plan Bus 1 to Bus 2. Keep checkpoint handling within the unchanged capture lifetime and compare the complete independent AX, protected scalar tuple and window image before and after its verified owned return.",
-    "expected": "Cancellation reports one verified forward and one verified owned inverse, fullyCompensated and a cancelled journal, with checked bus:1 restored. Normal canonical completion reports A/completed/verified and independently checked stereo_output. Its distinct generic return reports A/completed/verified and checked bus:1; that fresh request is not a canonical return or the preceding request's owned inverse. Same-key replay returns retained results. The complete terminal AX state equals the prepared Tracks baseline. Existing custody, protected-state, deadline and ambiguity refusals remain intact. The large existing-Bus cancellation independently verifies bus:2 forward and bus:1 owned return, with the prepared AX/scalars/window image exactly preserved."
+    "command": "Prepare a stopped disposable four-track/nine-strip project. Select a source with physical Input 1, main Stereo output and exactly one occupied Bus 1 Send in Post Fader mode, raw level zero and bypass off; retain a separate existing Bus 1 receiver. Start with Tracks-container focus and the fully visible leftmost viewport. Capture selection/tracks/strips/associations/routing through inspect_session. Plan one confirmed canonical Send output goal with the issued project/track references and observed ordinal 1. Check wrong-target planning and wrong-digest application without changing the independent native UI. Apply the valid plan within its existing lifetime. For cancellation, observe a newly verified child and that exact key still in progress before cancelling it. Inspect compensation, terminal journal and same-key replay. In a separate execution, let the canonical goal complete, verify its cached completed-key replay and independently inspect the actual Send change. Freshly capture the changed source and use a separately preflighted generic Stereo-to-Bus 1 singleton to return the fixture. Compare complete independent native UI states at each terminal checkpoint. For the separately labelled large cancellation, use a prepared warm stopped 32-track/38-strip Korean fixture with independently existing Bus 1 and Bus 2 receivers, retain the same singleton source shape, and plan Bus 1 to Bus 2. Keep checkpoint handling within the unchanged capture lifetime and compare the complete independent AX, protected scalar tuple and window image before and after its verified owned return. Repeat the large case separately in English after preparing passive selected Mixer-strip focus; preserve any cold/incomplete acquisition as a separate outcome. For the public bypass case in either locale, reject a different empty source and wrong project, then get/set/get false-to-true, freshly capture while retaining the original track reference, get/set/get true-to-false, and take a final capture. Compare the actual bypass checkbox and all protected values independently at each checkpoint.",
+    "expected": "Cancellation reports one verified forward and one verified owned inverse, fullyCompensated and a cancelled journal, with checked bus:1 restored. Normal canonical completion reports A/completed/verified and independently checked stereo_output. Its distinct generic return reports A/completed/verified and checked bus:1; that fresh request is not a canonical return or the preceding request's owned inverse. Same-key replay returns retained results. The complete terminal AX state equals the prepared native entry baseline. Existing custody, protected-state, deadline and ambiguity refusals remain intact. The large existing-Bus cancellation independently verifies bus:2 forward and bus:1 owned return, with the prepared AX/scalars exactly preserved. Window-image equality is claimed only for the Korean warm cancellation. Each bypass direction reports A and the separately issued getter agrees; only the declared bypass bit changes forward and the entire final AX/protected values match the baseline."
   },
   "depends": [
     "Sources/LogicProMCP/Channels/AccessibilityChannel+OutputAssignment.swift",
@@ -144,18 +144,101 @@
       },
       "raw_transcript_sha256": "c0316d1b23bdbf1ba44fa201abcbd301465a22aa96853f48ef24c5cd36f3558b",
       "scope": "This warm Korean selected-source cancellation does not qualify cold acquisition, other locales on the large fixture, arbitrary viewport restoration, shared strips, or normal large-fixture completion and fresh return."
+    },
+    {
+      "case": "English warm flat session: event-bound existing-Bus Send cancellation",
+      "locale": "en-US",
+      "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+      "binary_sha256": "40837c41dc893bb9bac16d63a7539898181ea1f220c1bb2622c424bfeadf0c39",
+      "fixture": {
+        "arrange_tracks": 32,
+        "mixer_strips": 38,
+        "warm": true,
+        "entry": "Prepared passive Audio 2 Mixer-strip focus after explicit non-editing focus acquisition"
+      },
+      "capture_seconds": 73.857655708,
+      "elapsed_seconds": 179.31348329099998,
+      "capture_to_apply_seconds": 15.966607542000006,
+      "forward": "A; bus:1 to bus:2; live-independent ax_send_menu_checkmark",
+      "cancel_basis": "One newly verified child and the exact key still in progress; no timer-derived authority",
+      "terminal": "C / fullyCompensated; cancelled journal; one forward and one verified owned inverse, zero failed or uncertain compensations",
+      "inverse": "bus:1; exact comparison equal; live-independent ax_send_menu_checkmark",
+      "replay": "Retained duplicate cancelled outcome; no new execution",
+      "independent_ui": {
+        "ax_characters": 271017,
+        "ax_exact": true,
+        "protected_scalar_values": 151,
+        "protected_scalars_exact": true,
+        "window_png_bytes_before": 1150756,
+        "window_png_bytes_after": 1150775,
+        "window_png_byte_exact": false,
+        "popup_present": false,
+        "manual_recovery": false
+      },
+      "raw_transcript_sha256": "5e01e069f2c7612790bed1cad9bf48680249e805e688685e0c1742a3956fccdb",
+      "scope": "This separately prepared warm English Mixer-focus case does not qualify the earlier cold entry, arbitrary viewport restoration, shared strips or normal large-fixture completion and fresh return."
+    },
+    {
+      "case": "ko-KR warm flat session: public Send bypass roundtrip",
+      "locale": "ko-KR",
+      "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+      "binary_sha256": "40837c41dc893bb9bac16d63a7539898181ea1f220c1bb2622c424bfeadf0c39",
+      "raw_transcript_sha256": "4744f7833938eb9758cd48426835fadde055b4555b912570299690cf050673fc",
+      "result": "A in both directions; public getter before each setter and separately issued getter afterward agree with independent native AX. Wrong existing empty source and wrong project refuse without writing.",
+      "setter_seconds": [
+        17.470004833000004,
+        17.473852249999993
+      ],
+      "independent_ui": {
+        "ax_characters": 178408,
+        "forward_only_declared_bypass_bit_changed": true,
+        "return_and_final_capture_ax_exact": true,
+        "protected_scalar_values": 151,
+        "protected_scalars_exact": true,
+        "window_png_bytes_before": 1122265,
+        "window_png_bytes_after_final_capture": 1157175,
+        "window_png_byte_exact": false,
+        "popup_present": false,
+        "manual_recovery": false
+      },
+      "scope": "Two bypass setters, no routing-destination setter. The original track reference is retained across fresh capture; the fresh return is not an owned cancellation inverse. Native healthy-path qualification does not reproduce the injected late-census edit on a live host or qualify arbitrary viewport restoration."
+    },
+    {
+      "case": "en-US warm flat session: public Send bypass roundtrip",
+      "locale": "en-US",
+      "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+      "binary_sha256": "40837c41dc893bb9bac16d63a7539898181ea1f220c1bb2622c424bfeadf0c39",
+      "raw_transcript_sha256": "16128be36fb3905442ecdd2a04fd20c4412e1a40abd28a535fe1d3f0ef49958e",
+      "result": "A in both directions; public getter before each setter and separately issued getter afterward agree with independent native AX. Wrong existing empty source and wrong project refuse without writing.",
+      "setter_seconds": [
+        17.771262291,
+        17.66254345799996
+      ],
+      "independent_ui": {
+        "ax_characters": 271017,
+        "forward_only_declared_bypass_bit_changed": true,
+        "return_and_final_capture_ax_exact": true,
+        "protected_scalar_values": 151,
+        "protected_scalars_exact": true,
+        "window_png_bytes_before": 1150720,
+        "window_png_bytes_after_final_capture": 1150703,
+        "window_png_byte_exact": false,
+        "popup_present": false,
+        "manual_recovery": false
+      },
+      "scope": "Two bypass setters, no routing-destination setter. The original track reference is retained across fresh capture; the fresh return is not an owned cancellation inverse. Native healthy-path qualification does not reproduce the injected late-census edit on a live host or qualify arbitrary viewport restoration."
     }
   ],
-  "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry; a separate generic request returns its normally completed change. The corrected Korean existing-Bus replacement also completes, compensates its owned change and supports a separate fresh canonical return on this fixture. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair. A separately labelled Korean warm flat session also verifies existing-Bus owned cancellation with exact independent AX, protected-scalar and window-image preservation.",
+  "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry; a separate generic request returns its normally completed change. The corrected Korean existing-Bus replacement also completes, compensates its owned change and supports a separate fresh canonical return on this fixture. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair. A separately labelled Korean warm flat session also verifies existing-Bus owned cancellation with exact independent AX, protected-scalar and window-image preservation. A separately prepared English warm flat Mixer-focus cancellation also verifies its owned return and exact AX/protected-scalar preservation, with no pixel-equality claim. Both locales separately verify the public Send bypass roundtrip on the warm flat fixture; these fresh-request returns do not establish owned bypass compensation.",
   "limits": [
-    "English and Korean four-track/nine-strip profiles, plus the separately labelled Korean warm 32-track/38-strip cancellation. Hidden/shared strips, arbitrary topology, other large-fixture locales, cold acquisition and Logic 12.4 are unqualified.",
+    "English and Korean four-track/nine-strip profiles, plus separately labelled warm 32-track/38-strip cancellation and bypass cases in both locales. Hidden/shared strips, arbitrary topology, cold acquisition and Logic 12.4 remain unqualified.",
     "This fully visible leftmost viewport does not qualify automatic restoration of arbitrary scrolled/offscreen layouts. The separate opt-in native Scroll To test was skipped, not promoted to native evidence.",
     "The earlier source checkpoint 7b58b901 refused checked input acquisition before writing with a stopped Help guard. Its immutable recording is retained separately; the source-attested abef1bcb runs establish the repaired bounded profile.",
     "The earlier abef1bcb executable in context fa22296e still refused Korean Tracks-focus Bus-to-Bus source-input acquisition before writing. The later source-attested e6ab9175 runs qualify its corrected bounded counterpart; earlier English Mixer-focus evidence is not relabelled Korean Tracks evidence.",
     "An initial normal-completion attempt waited 117 seconds between planning and application and was refused without writing. That retained plan-expiry failure is not a product regression or a passing normal execution; no lifetime or deadline was extended.",
     "An initial Korean caller had no interactive stdin and stopped before refresh with independent_continuation_missing. Its raw recording is retained; the separate PTY-backed execution, not that launch failure, supplies the Korean cancellation evidence.",
     "Native receiver-conflict injection, mixed-Saga atomicity, namespace/allocation and full R1-R4/F1-F5 acceptance are not established.",
-    "Raw recordings contain private project identities and are not published. Attached excerpts and hashes are not a headless native replay or independent per-AX-action instrumentation. Pixel equality is claimed only for the explicitly labelled warm flat cancellation."
+    "Raw recordings contain private project identities and are not published. Attached excerpts and hashes are not a headless native replay or independent per-AX-action instrumentation. Pixel equality is claimed only for the explicitly labelled Korean warm flat cancellation."
   ],
   "supersedes": null
 }

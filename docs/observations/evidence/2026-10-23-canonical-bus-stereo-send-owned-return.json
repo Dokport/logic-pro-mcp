@@ -216,6 +216,298 @@
       "The original capture/operation deadlines and lifetime remain unchanged. The successful window is actively prepared; separate inactive-entry and delayed-capture refusals remain unqualified positive executions."
     ]
   },
+  "english_flat32_existing_bus": {
+    "locale": "en-US",
+    "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+    "binary_sha256": "40837c41dc893bb9bac16d63a7539898181ea1f220c1bb2622c424bfeadf0c39",
+    "fixture": {
+      "arrange_tracks": 32,
+      "mixer_strips": 38,
+      "warm": true,
+      "entry": "Prepared passive Audio 2 Mixer-strip focus after explicit non-editing focus acquisition"
+    },
+    "controls": {
+      "wrong_target_plan_executable": false,
+      "wrong_digest": {
+        "state": "C",
+        "error": "stale_target_reference",
+        "write_attempted": false
+      },
+      "independent_after_controls_exactly_matches_prepared": true
+    },
+    "cancelled": {
+      "raw_sha256": "5e01e069f2c7612790bed1cad9bf48680249e805e688685e0c1742a3956fccdb",
+      "elapsed_seconds": 179.31348329099998,
+      "capture_to_apply_seconds": 15.966607542000006,
+      "state": "C",
+      "verified": false,
+      "saga_state": "fullyCompensated",
+      "cancel_basis": {
+        "operation_trace_id": "lpmcp_9977A7F3-3227-46AF-A494-F1B83BBFD013",
+        "dispatcher_verified_operation": "mixer.set_send_output_verified",
+        "single_valid_execution_caller": true,
+        "exact_key_in_progress": true,
+        "timer_authority": false,
+        "independent_CUA_intermediate_change_claimed": false
+      },
+      "forward": {
+        "state": "A",
+        "write_boundary_crossed": true,
+        "before": "bus:1",
+        "after": "bus:2",
+        "provenance": "live_independent",
+        "read_source": "ax_send_menu_checkmark"
+      },
+      "compensation": {
+        "comparison": {
+          "comparator": "exact",
+          "desired": "bus:1",
+          "equal": true,
+          "observed": "bus:1"
+        },
+        "disposition": "verified",
+        "readback": {
+          "evidence": "ax_live tracks[1].send_destination (send_menu_checkmark)",
+          "field": "send_destination",
+          "observed": "bus:1",
+          "provenance": "live_independent",
+          "read_source": "ax_send_menu_checkmark",
+          "sampled_at": "2026-10-23T14:03:32.976Z",
+          "track_index": 1,
+          "value": "bus:1"
+        }
+      },
+      "journal_summary": {
+        "compensation_write_boundary_count": 1,
+        "failed_compensation_count": 0,
+        "forward_write_boundary_count": 1,
+        "record_count": 1,
+        "uncertain_compensation_count": 0,
+        "verified_compensation_count": 1,
+        "write_boundary_count": 2
+      },
+      "journal_status": "cancelled",
+      "replay": {
+        "state": "C",
+        "verified": false,
+        "saga_state": "fullyCompensated",
+        "duplicate": true
+      }
+    },
+    "independent_ui": {
+      "ax_characters": 271017,
+      "ax_exact": true,
+      "protected_scalar_values": 151,
+      "protected_scalars_exact": true,
+      "window_png_bytes_before": 1150756,
+      "window_png_bytes_after": 1150775,
+      "window_png_byte_exact": false,
+      "popup_present": false,
+      "manual_recovery": false
+    },
+    "limits": [
+      "This separately prepared warm English Mixer-focus case does not qualify the earlier cold entry, arbitrary viewport restoration, shared strips or normal large-fixture completion and fresh return.",
+      "The full AX and 151 protected raw values return exactly; the window PNG differs. The retained cold timeout and incomplete initial association are not promoted to passing runs."
+    ]
+  },
+  "flat32_public_bypass": [
+    {
+      "locale": "ko-KR",
+      "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+      "binary_sha256": "40837c41dc893bb9bac16d63a7539898181ea1f220c1bb2622c424bfeadf0c39",
+      "raw_sha256": "4744f7833938eb9758cd48426835fadde055b4555b912570299690cf050673fc",
+      "fixture": {
+        "arrange_tracks": 32,
+        "mixer_strips": 38,
+        "warm": true,
+        "source_send_bus": 1,
+        "mode": "post_fader",
+        "send_level_raw": 0
+      },
+      "controls": {
+        "wrong_source": {
+          "state": "C",
+          "error": "readback_unavailable",
+          "write_attempted": false
+        },
+        "wrong_project": {
+          "state": "C",
+          "error": "stale_target_reference",
+          "write_attempted": false
+        }
+      },
+      "directions": [
+        {
+          "desired_bypassed": true,
+          "setter_seconds": 17.470004833000004,
+          "results": {
+            "before": {
+              "state": "A",
+              "bypassed": false,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            },
+            "set": {
+              "state": "A",
+              "bypassed": true,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": true
+            },
+            "independent": {
+              "state": "A",
+              "bypassed": true,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            }
+          }
+        },
+        {
+          "desired_bypassed": false,
+          "setter_seconds": 17.473852249999993,
+          "results": {
+            "before": {
+              "state": "A",
+              "bypassed": true,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            },
+            "set": {
+              "state": "A",
+              "bypassed": false,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": true
+            },
+            "independent": {
+              "state": "A",
+              "bypassed": false,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            }
+          }
+        }
+      ],
+      "independent_ui": {
+        "ax_characters": 178408,
+        "forward_only_declared_bypass_bit_changed": true,
+        "return_and_final_capture_ax_exact": true,
+        "protected_scalar_values": 151,
+        "protected_scalars_exact": true,
+        "window_png_bytes_before": 1122265,
+        "window_png_bytes_after_final_capture": 1157175,
+        "window_png_byte_exact": false,
+        "popup_present": false,
+        "manual_recovery": false
+      },
+      "bypass_setters": 2,
+      "routing_destination_setters": 0,
+      "fresh_request_return": true,
+      "owned_cancellation_inverse": false
+    },
+    {
+      "locale": "en-US",
+      "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+      "binary_sha256": "40837c41dc893bb9bac16d63a7539898181ea1f220c1bb2622c424bfeadf0c39",
+      "raw_sha256": "16128be36fb3905442ecdd2a04fd20c4412e1a40abd28a535fe1d3f0ef49958e",
+      "fixture": {
+        "arrange_tracks": 32,
+        "mixer_strips": 38,
+        "warm": true,
+        "source_send_bus": 1,
+        "mode": "post_fader",
+        "send_level_raw": 0
+      },
+      "controls": {
+        "wrong_source": {
+          "state": "C",
+          "error": "readback_unavailable",
+          "write_attempted": false
+        },
+        "wrong_project": {
+          "state": "C",
+          "error": "stale_target_reference",
+          "write_attempted": false
+        }
+      },
+      "directions": [
+        {
+          "desired_bypassed": true,
+          "setter_seconds": 17.771262291,
+          "results": {
+            "before": {
+              "state": "A",
+              "bypassed": false,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            },
+            "set": {
+              "state": "A",
+              "bypassed": true,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": true
+            },
+            "independent": {
+              "state": "A",
+              "bypassed": true,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            }
+          }
+        },
+        {
+          "desired_bypassed": false,
+          "setter_seconds": 17.66254345799996,
+          "results": {
+            "before": {
+              "state": "A",
+              "bypassed": true,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            },
+            "set": {
+              "state": "A",
+              "bypassed": false,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": true
+            },
+            "independent": {
+              "state": "A",
+              "bypassed": false,
+              "verified": true,
+              "verify_source": "ax_owned_send_checkbox",
+              "write_attempted": false
+            }
+          }
+        }
+      ],
+      "independent_ui": {
+        "ax_characters": 271017,
+        "forward_only_declared_bypass_bit_changed": true,
+        "return_and_final_capture_ax_exact": true,
+        "protected_scalar_values": 151,
+        "protected_scalars_exact": true,
+        "window_png_bytes_before": 1150720,
+        "window_png_bytes_after_final_capture": 1150703,
+        "window_png_byte_exact": false,
+        "popup_present": false,
+        "manual_recovery": false
+      },
+      "bypass_setters": 2,
+      "routing_destination_setters": 0,
+      "fresh_request_return": true,
+      "owned_cancellation_inverse": false
+    }
+  ],
   "retained_failures": [
     {"source_commit": "7b58b9010f896c7ffde98b9943eabe1772cce7e4", "raw_sha256": "f2a984b6ee54156972f8610583f4dd4964c0b6877cea648d42b13215266d0b49", "result": "Checked input prerequisites refused before Send; zero journal write boundaries; complete terminal AX equals prepared baseline"},
     {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "raw_sha256": "e0f6fb512eaa2fd4e5b4fcd80f44c264193c0833bf4fa111697e5799bf10ca45", "result": "Plan waited 117 seconds before application; stale_target_reference / write_attempted false; complete terminal AX equals prepared baseline"},
@@ -229,10 +521,20 @@
       "source_commit": "6c9fd5f60ab8009025b1684ecaf8f856856a117e",
       "raw_sha256": "476f6985c07434493c231cd34657d7f28692eac409f32532b4b32b9b89711e32",
       "result": "An uncontrolled 49.381-second post-capture delay preceded a 14.434-second prewrite refusal. No write boundary crossed; terminal AX/scalars/window PNG exactly matched the prepared state. The delay is retained, not a new passing execution or a proven sole predicate failure."
+    },
+    {
+      "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+      "raw_sha256": "b7f63756c36361d6d5d1fd9c857da4ecd543307a6ddf606f4d72f10f6cb1d411",
+      "result": "English initial background-focus capture returned no observed association evidence before navigation or writes. Independent full AX stayed exact, the window PNG differed; the later prepared Mixer-focus result does not qualify this entry."
+    },
+    {
+      "source_commit": "e7bae788604b6207d56e8d8c6b93df934635fcb2",
+      "raw_sha256": "abc04db14cd018ff56f9a92f3a2eb9541a2ca04eaca3f2ad5639183c8ac5325a",
+      "result": "English first Mixer-focus capture exceeded the unchanged 90-second server deadline before plan/application. The owned process subsequently stopped. Independent Send remained Bus 1/raw zero/bypass off with no popup; two other raw Solo observations changed from off to mixed and late Mixer metadata differed. No complete restoration or causal musical-state claim is made."
     }
   ],
   "limits": [
-    "Stopped English/Korean four-track/nine-strip profiles and one separately labelled Korean warm 32-track/38-strip cancellation.",
+    "Stopped English/Korean four-track/nine-strip profiles and separately labelled warm 32-track/38-strip cancellation and public bypass roundtrips in both locales.",
     "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.",
     "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.",
     "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."
