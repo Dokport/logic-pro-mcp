@@ -20,7 +20,7 @@
     "Sources/LogicProMCP/Workflows/ApprovedSessionRepair.swift"
   ],
   "evidence": ["evidence/2026-10-23-canonical-bus-stereo-send-owned-return.json"],
-  "method": "Actual registered public MCP calls against a source-attested executable, event-bound cancellation through public trace/journal observations, and independent native AX comparisons. Screenshots separately corroborate the visible viewport and routing controls. Selected response fields are attached without private project paths or opaque request/reference/trace tokens.",
+  "method": "Actual registered public MCP calls against a source-attested executable, event-bound cancellation through public trace/journal observations, and independent native AX comparisons. The initial host locale is English; the explicitly labelled Korean cases reuse the same executable after an app-specific locale relaunch. Screenshots separately corroborate the visible viewport and routing controls. Selected response fields are attached without private project paths or opaque request/reference/trace tokens.",
   "canon_not_applicable": {
     "reason": "This measures native source custody, action/readback, compensation, replay and UI restoration. It makes no assertion about canonical label vocabulary or translations."
   },
@@ -32,6 +32,7 @@
     },
     {
       "case": "event-bound canonical cancellation",
+      "locale": "en-US",
       "elapsed_seconds": 138.103871333,
       "forward": "A; bus:1 to stereo_output; live-independent ax_send_menu_checkmark",
       "cancel_basis": "New verified child and exact key observed in progress; no timer-derived authority",
@@ -44,6 +45,7 @@
     },
     {
       "case": "normal canonical completion and distinct generic fixture return",
+      "locale": "en-US",
       "forward_seconds": 61.274524667,
       "forward": "A / completed / verified; independently checked stereo_output",
       "forward_replay": "duplicate true; cached completed outcome",
@@ -53,14 +55,46 @@
       "return_replay": "duplicate true; both completed journals and cached non-trace response equality checked",
       "independent_final_ui": "Complete 54717-character AX state exactly equals the prepared baseline",
       "raw_transcript_sha256": "c54303d26ce91966daf23a4064101006ff90f2813dbdf3ed76271bdf7d27cdca"
+    },
+    {
+      "case": "Korean event-bound canonical cancellation",
+      "locale": "ko-KR",
+      "source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30",
+      "context_head": "184c39e2609da3bd04b7b16411b55002c4aacf39",
+      "binding": "The executable embeds abef1bcb, not the repository context head. Sources, package manifest and dependency pins are identical at both heads; strict signature and debug source-content provenance checks pass without rebuilding or relabelling the executable.",
+      "elapsed_seconds": 138.41726175,
+      "controls": "Wrong-target planning is nonexecutable; wrong-digest application refuses without writing; all independent AX characters remain unchanged",
+      "forward": "A; bus:1 to stereo_output; live-independent ax_send_menu_checkmark",
+      "cancel_basis": "New verified child and exact key observed in progress; no timer-derived authority",
+      "terminal": "C / fullyCompensated; one verified forward and one verified owned inverse, zero failed or uncertain compensations; journal cancelled",
+      "inverse": "bus:1; exact comparison equal; live-independent menu readback",
+      "replay": "duplicate true; retained cancelled outcome, no renewed execution authority",
+      "independent_ui": "Complete 36684-character AX state exactly equals the prepared Korean Tracks baseline. Screenshots corroborate the leftmost visible viewport and restored Send.",
+      "raw_transcript_sha256": "b8b5bd203d98cde237b8863129b9dbc6c9a4f48ea41dcc28172ed60e37bddacd"
+    },
+    {
+      "case": "Korean normal canonical completion and distinct generic fixture return",
+      "locale": "ko-KR",
+      "source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30",
+      "context_head": "184c39e2609da3bd04b7b16411b55002c4aacf39",
+      "forward_seconds": 63.215903708,
+      "forward": "A / completed / verified; independently checked stereo_output",
+      "forward_replay": "duplicate true; cached completed outcome",
+      "independent_forward_ui": "Only the occupied Send destination display line changes from Bus 1 to St Out; all other AX lines, including Tracks focus, remain equal",
+      "fresh_generic_return_seconds": 34.861177999999995,
+      "fresh_generic_return": "A / completed / verified; fresh capture, separate key and confirmation hash; stereo_output to bus:1",
+      "return_replay": "duplicate true; both completed journals and cached non-trace response equality checked",
+      "independent_final_ui": "Complete 36684-character AX state exactly equals the prepared Korean baseline",
+      "raw_transcript_sha256": "a7a0da07bd253194e478811a029c296406e3922df195d70f99005033582205d5"
     }
   ],
   "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry. A separate generic request returns a normally completed change. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair.",
   "limits": [
-    "One stopped English four-track/nine-strip fixture; hidden/shared strips, arbitrary topology, other locales, cold acquisition and Logic 12.4 are unqualified.",
+    "One stopped four-track/nine-strip fixture in English and Korean; hidden/shared strips, arbitrary topology, other locales, cold acquisition and Logic 12.4 are unqualified.",
     "This fully visible leftmost viewport does not qualify automatic restoration of arbitrary scrolled/offscreen layouts. The separate opt-in native Scroll To test was skipped, not promoted to native evidence.",
     "The earlier source checkpoint 7b58b901 refused checked input acquisition before writing with a stopped Help guard. Its immutable recording is retained separately; the source-attested abef1bcb runs establish the repaired bounded profile.",
     "An initial normal-completion attempt waited 117 seconds between planning and application and was refused without writing. That retained plan-expiry failure is not a product regression or a passing normal execution; no lifetime or deadline was extended.",
+    "An initial Korean caller had no interactive stdin and stopped before refresh with independent_continuation_missing. Its raw recording is retained; the separate PTY-backed execution, not that launch failure, supplies the Korean cancellation evidence.",
     "Native receiver-conflict injection, mixed-Saga atomicity, namespace/allocation and full R1-R4/F1-F5 acceptance are not established.",
     "Raw recordings contain private project identities and are not published. Attached excerpts and hashes are not a headless native replay or independent per-AX-action instrumentation. Pixel equality is not claimed."
   ],

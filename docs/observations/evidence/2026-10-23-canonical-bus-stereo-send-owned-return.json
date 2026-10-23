@@ -78,9 +78,33 @@
     "fresh_generic_return_terminal_exactly_matches_prepared": true,
     "pixel_equality_claimed": false
   },
+  "korean": {
+    "locale": "ko-KR",
+    "context_head": "184c39e2609da3bd04b7b16411b55002c4aacf39",
+    "source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30",
+    "source_package_and_pins_identical": true,
+    "controls": {"wrong_target_plan_executable": false, "wrong_digest": {"state": "C", "error": "stale_target_reference", "write_attempted": false}, "independent_after_controls_exactly_matches_prepared": true},
+    "cancelled": {
+      "raw_sha256": "b8b5bd203d98cde237b8863129b9dbc6c9a4f48ea41dcc28172ed60e37bddacd",
+      "elapsed_seconds": 138.41726175,
+      "state": "C", "verified": false, "saga_state": "fullyCompensated",
+      "cancel_basis": {"dispatcher_verified_operation": "mixer.set_send_output_verified", "exact_key_in_progress": true, "timer_authority": false, "independent_CUA_intermediate_change_claimed": false},
+      "forward": {"state": "A", "write_boundary_crossed": true, "before": "bus:1", "after": "stereo_output", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"},
+      "compensation": {"disposition": "verified", "comparison": {"comparator": "exact", "desired": "bus:1", "equal": true, "observed": "bus:1"}, "readback": {"observed": "bus:1", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"}},
+      "journal_summary": {"compensation_write_boundary_count": 1, "failed_compensation_count": 0, "forward_write_boundary_count": 1, "record_count": 1, "uncertain_compensation_count": 0, "verified_compensation_count": 1, "write_boundary_count": 2},
+      "journal_status": "cancelled",
+      "replay": {"state": "C", "verified": false, "saga_state": "fullyCompensated", "duplicate": true}
+    },
+    "completed": {
+      "raw_sha256": "a7a0da07bd253194e478811a029c296406e3922df195d70f99005033582205d5",
+      "canonical_forward": {"elapsed_seconds": 63.215903708, "state": "A", "verified": true, "saga_state": "completed", "before": "bus:1", "after": "stereo_output", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark", "replay": {"elapsed_seconds": 0.002491749999990134, "state": "A", "verified": true, "saga_state": "completed", "duplicate": true}, "journal_status": "completed"},
+      "fresh_generic_return": {"elapsed_seconds": 34.861177999999995, "state": "A", "verified": true, "saga_state": "completed", "before": "stereo_output", "after": "bus:1", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark", "replay": {"elapsed_seconds": 0.003726249999999709, "state": "A", "verified": true, "saga_state": "completed", "duplicate": true}, "journal_status": "completed", "canonical_return_qualified": false, "owned_cancellation_inverse": false}
+    },
+    "independent_ui": {"prepared_character_count": 36684, "focus": "Tracks container", "cancelled_terminal_exactly_matches_prepared": true, "completed_forward_only_difference": "Occupied Send destination display", "fresh_generic_return_terminal_exactly_matches_prepared": true, "pixel_equality_claimed": false}
+  },
   "retained_failures": [
     {"source_commit": "7b58b9010f896c7ffde98b9943eabe1772cce7e4", "raw_sha256": "f2a984b6ee54156972f8610583f4dd4964c0b6877cea648d42b13215266d0b49", "result": "Checked input prerequisites refused before Send; zero journal write boundaries; complete terminal AX equals prepared baseline"},
     {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "raw_sha256": "e0f6fb512eaa2fd4e5b4fcd80f44c264193c0833bf4fa111697e5799bf10ca45", "result": "Plan waited 117 seconds before application; stale_target_reference / write_attempted false; complete terminal AX equals prepared baseline"}
   ],
-  "limits": ["One stopped English four-track/nine-strip profile.", "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.", "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.", "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."]
+  "limits": ["One stopped four-track/nine-strip profile in English and Korean.", "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.", "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.", "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."]
 }
