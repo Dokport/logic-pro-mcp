@@ -674,7 +674,8 @@ extension AccessibilityChannel {
         let pairs = await observation.observe(referenceIsCurrent: {
             originalPair.track.currentIndex() != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
-        }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil }, allHeldHeaders: true)
+        }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil },
+            allHeldHeaders: true, prioritizingHeader: originalPair.track)
         if let originalMixerGeometry, observation.effects.restoration == "restored" {
             // The hidden Mixer bar is absent from the ordinary viewport census.
             // An original-header inverse must not retain a source after leaving

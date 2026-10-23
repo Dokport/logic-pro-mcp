@@ -10191,6 +10191,75 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Requested native header is observed before optional peers within the unchanged collection reserve",
+          arguments: ["owned", "foreign_document", "foreign_window", "missing_header", "unrequested_census_change"])
+    func requestedNativeHeaderPrecedesOptionalCollection(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let target = AXTrackBinding.Binding(
+                window: fault == "foreign_window" ? f.builder.element(965_991_001) : f.window,
+                header: fault == "missing_header" ? f.builder.element(965_991_002) : f.headers[3],
+                document: fault == "foreign_document" ? "file:///Foreign.logicx" : association.document,
+                runtime: f.logic())
+            if fault == "unrequested_census_change" {
+                f.routingSelection = { index in
+                    if index == 3 {
+                        f.routingLateScopeInjected = true
+                        f.builder.setChildren(f.rail, [f.headers[0], f.headers[1], f.headers[3]])
+                    }
+                }
+            }
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, prioritizingHeader: target, collectionNow: {
+                    start.advanced(by: f.selections.isEmpty ? .zero : .seconds(6))
+                })
+            if fault == "owned" {
+                #expect(f.selections == [3, 0], "Spend optional collection time on the actual requested header first")
+                #expect(pairs.count == 2)
+                #expect(pairs.contains { CFEqual($0.track.header, target.header) })
+                #expect(association.effects.restoration == "restored")
+                #expect(association.headers.count == 4 && association.strips.count == 4,
+                    "Prioritizing a challenge does not narrow complete ownership custody")
+            } else {
+                #expect(pairs.isEmpty, "A priority hint supplies no foreign or incomplete ownership authority")
+                if fault == "unrequested_census_change" { #expect(f.routingLateScopeInjected) }
+                else { #expect(f.selections.isEmpty) }
+            }
+        }
+    }
+
+    @Test("Original-header renewal actually challenges its retained native source before optional peers")
+    func sourceRenewalPrioritizesItsActualNativeHeader() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let source = try #require(pairs.first { CFEqual($0.track.header, f.headers[3]) })
+            let selectionCount = f.selections.count
+            let renewal = await AccessibilityChannel.renewSourceThroughOriginalHeader(source, original: source.strip,
+                runtime: f.logic(), selectedHeaderRequired: false, sourceDisposition: .readObservation)
+            let actual = try #require(renewal.source)
+            #expect(actual.originalTrack.matches(source.track) && actual.pair.track.matches(source.track))
+            #expect(Array(f.selections.dropFirst(selectionCount)).first == 3,
+                "The input consumer must request the exact retained header priority, not merely expose an unused helper")
+            #expect(actual.observation.headers.count == 4 && actual.observation.strips.count == 4)
+            #expect(renewal.effects.restoration == "restored")
+        }
+    }
+
     @Test("Measured population cost reserves both rechecks without an unrelated quarter-deadline cap",
           arguments: [6, 11, 16])
     func measuredCollectionUsesAvailableTimeWithoutSpendingRecheckReserve(elapsedSeconds: Int) async throws {

@@ -1342,9 +1342,20 @@ extension AccessibilityChannel {
                      stoppingWhen stop: @Sendable () -> Bool,
                      allHeldHeaders: Bool = false,
                      narrowChallengeHeaders: [AXTrackBinding.Binding] = [],
+                     prioritizingHeader: AXTrackBinding.Binding? = nil,
                      populationReadDuration: Duration = .zero,
                      collectionNow: @Sendable () -> ContinuousClock.Instant = { .now }) async -> [Pair] {
-            let firstChallenge = headers.indices.first { index in
+            var preferredIndex: Int?
+            if let prioritizingHeader {
+                guard allHeldHeaders, CFEqual(prioritizingHeader.window, window),
+                      prioritizingHeader.document.utf8.elementsEqual(document.utf8),
+                      prioritizingHeader.exposure?.hasEnded != true,
+                      headers.filter({ CFEqual($0, prioritizingHeader.header) }).count == 1 else {
+                    effects.reason = "association_selection_unverified"; return []
+                }
+                preferredIndex = headers.firstIndex { CFEqual($0, prioritizingHeader.header) }
+            }
+            var eligibleChallenges = headers.indices.filter { index in
                 guard index != originalIndex else { return false }
                 return allHeldHeaders || narrowChallengeHeaders.filter { binding in
                     CFEqual(binding.header, headers[index]) && CFEqual(binding.window, window)
@@ -1352,6 +1363,11 @@ extension AccessibilityChannel {
                         && binding.exposure?.hasEnded != true
                 }.count == 1
             }
+            if let preferredIndex, preferredIndex != originalIndex {
+                eligibleChallenges.removeAll { $0 == preferredIndex }
+                eligibleChallenges.insert(preferredIndex, at: 0)
+            }
+            let firstChallenge = eligibleChallenges.first
             guard let firstChallenge else {
                 effects.reason = "association_selection_unverified"; return []
             }
@@ -1365,7 +1381,10 @@ extension AccessibilityChannel {
                 effects.reason = "association_selection_unverified"; return []
             }
             let originalAssociationStrip = originalSelectedChild ?? originalFocus
-            let challenges = allHeldHeaders ? headers.indices.filter { $0 != originalIndex } : [firstChallenge]
+            // The retained source must not fall behind optional peer discovery
+            // when the existing collection reserve ends. Priority changes only
+            // order: every challenge retains full census and inverse custody.
+            let challenges = allHeldHeaders ? eligibleChallenges : [firstChallenge]
             // Whole-held pairs are optional partial observations. Do not spend
             // the entire owned deadline on more challenges: the original inverse
             // and final fresh population still need that same deadline. This is
