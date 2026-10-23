@@ -19,7 +19,8 @@
     "Sources/LogicProMCP/Channels/AccessibilityChannel+SelectionAssociation.swift",
     "Sources/LogicProMCP/Workflows/ApprovedSessionRepair.swift",
     "Sources/LogicProMCP/Channels/AccessibilityChannel+Tracks.swift",
-    "Sources/LogicProMCP/Accessibility/AXLogicProElements+Mixer.swift"
+    "Sources/LogicProMCP/Accessibility/AXLogicProElements+Mixer.swift",
+    "Sources/LogicProMCP/State/StatePoller.swift"
   ],
   "evidence": ["evidence/2026-10-23-canonical-bus-stereo-send-owned-return.json"],
   "method": "Actual registered public MCP calls against source-attested executables, event-bound cancellation through public trace/journal observations, and independent native AX comparisons. The initial host locale is English. English and Korean Bus-to-Stereo cases share one executable after an app-specific locale relaunch; the labelled Korean existing-Bus cases identify their own later executables with corrected original-input refresh. Screenshots separately corroborate the visible viewport and routing controls. Selected response fields are attached without private project paths or opaque request/reference/trace tokens.",
@@ -269,6 +270,23 @@
       },
       "raw_transcript_sha256": "886a29c1d6bdaaf65b30cface9847b8fa3fe948d3af5cb5f41945360cf8d428a",
       "scope": "Normal completion and a separately captured canonical return on this warm English fixture. The return is not an owned cancellation inverse; cold acquisition, Korean normal large-fixture completion, arbitrary viewports, shared strips and whole routing remain unqualified."
+    },
+    {
+      "case": "Korean warm large-fixture canonical forward refuses final readback after its write",
+      "locale": "ko-KR",
+      "source_commit": "c71e480e7a722770fe91a68298f8da9b7262e5b8",
+      "binary_sha256": "e7e7b4570c0a07bf28d0a77bd55b1b620fe10a7b0d6dd8601f83f9e3c32a2b3a",
+      "binding": "Embedded commit, strict signature and debug source-content provenance checks agree.",
+      "capture_seconds": 87.494656375,
+      "capture": "Selection capture returns 38 strips and the selected Audio 2 association. Its restoration receipt is restored, while overall strips, associations and routing coverage remain explicitly incomplete.",
+      "controls": "Wrong-target planning is nonexecutable; the wrong-digest request returns C/stale_target_reference with write_attempted false. Independent complete AX remains equal before actual application.",
+      "forward_seconds": 131.193308208,
+      "forward": "B / rollbackUncertain / verified false; one forward write boundary, no compensation write boundary and unknown compensation. Replay retains the same uncertain result.",
+      "native_failure": "Post-press context and original-control checks are false while both popup-absence checks are true. Original-header renewal then refuses the complete slot/protected-state/population check. The failing conjunct and any deadline contribution were not isolated.",
+      "independent_forward_ui": "Audio 2 Send visibly remains Bus 2, raw zero, bypass off. Equality of the 151-value scalar projection alone misses this destination change and does not establish restoration.",
+      "independent_development_restoration": "After the failed request and process termination, the independently identified Audio 2 occupied-send menu was explicitly returned to Bus 1. The settled complete 178425-character AX state and all 151 raw protected values exactly match the original baseline, including original focus and stopped transport. This is manual fixture recovery, not verified automatic compensation or a successful canonical return.",
+      "qualification": "Failure retained; Korean large-fixture normal completion and automatic recovery remain unqualified. Capture latency is close to the unchanged 90-second deadline and does not establish an adequate performance margin.",
+      "raw_transcript_sha256": "392dee578cf2f451552015cfbf26a135c03108fc63b9de16a88d1c03082fda70"
     }
   ],
   "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry; a separate generic request returns its normally completed change. The corrected Korean existing-Bus replacement also completes, compensates its owned change and supports a separate fresh canonical return on this fixture. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair. A separately labelled Korean warm flat session also verifies existing-Bus owned cancellation with exact independent AX, protected-scalar and window-image preservation. A separately prepared English warm flat Mixer-focus cancellation also verifies its owned return and exact AX/protected-scalar preservation, with no pixel-equality claim. Both locales separately verify the public Send bypass roundtrip on the warm flat fixture; these fresh-request returns do not establish owned bypass compensation. The separately labelled warm English large fixture also completes Bus 1 to Bus 2 and a distinct fresh canonical Bus 2 to Bus 1 return; both report A/completed, retain the original track reference and replay without reexecution. Its final AX, protected scalar values and window PNG exactly match that run's baseline.",
@@ -280,7 +298,8 @@
     "An initial normal-completion attempt waited 117 seconds between planning and application and was refused without writing. That retained plan-expiry failure is not a product regression or a passing normal execution; no lifetime or deadline was extended.",
     "An initial Korean caller had no interactive stdin and stopped before refresh with independent_continuation_missing. Its raw recording is retained; the separate PTY-backed execution, not that launch failure, supplies the Korean cancellation evidence.",
     "Native receiver-conflict injection, mixed-Saga atomicity, namespace/allocation and full R1-R4/F1-F5 acceptance are not established.",
-    "Raw recordings contain private project identities and are not published. Attached excerpts and hashes are not a headless native replay or independent per-AX-action instrumentation. Pixel equality is claimed only for the labelled Korean warm flat cancellation and English warm flat normal/fresh-return case."
+    "Raw recordings contain private project identities and are not published. Attached excerpts and hashes are not a headless native replay or independent per-AX-action instrumentation. Pixel equality is claimed only for the labelled Korean warm flat cancellation and English warm flat normal/fresh-return case.",
+    "The separately labelled c71e480e Korean warm large-fixture run returned its initial capture but left Bus 2 after an uncertain post-write verification. Its exact eventual UI restoration required explicit independent fixture recovery; neither the successful earlier English run nor 649 passing injected regressions qualify this failed native path. A timeout contribution is not proved by timing alone."
   ],
   "supersedes": null
 }

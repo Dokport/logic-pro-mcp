@@ -684,6 +684,32 @@
       "source_commit": "7d07517d70d1408d998dd20f0847fed5868e906c",
       "raw_sha256": "3b3b4397027a1f3c22bb492d8455e62b5106cee43a8188916d5b8fcc7b48a519",
       "result": "Application was refused with C/stale_target_reference and no write after a 127.604-second capture-to-application gap exceeded the unchanged 60-second capture lifetime. Independent terminal AX and all protected scalars stayed exact. This delayed attempt does not qualify normal completion; the separately recorded prompt execution uses the same binary."
+    },
+    {
+      "source_commit": "290b28f5694ab8151b903fa8227d453df29542d3",
+      "raw_sha256": "d165a53e0d96c5b222fe79febf005c585f2d41c99e951f889bd16017b186f6fb",
+      "result": "Korean warm 32-track selection capture exceeded the unchanged 90-second deadline in 90.005056958 seconds before plan/application. No Send write occurred. Independent complete 178425-character AX and all 151 raw protected values exactly matched their own warm baseline. This is failed-acquisition cleanup evidence, not a normal canonical routing qualification."
+    },
+    {
+      "source_commit": "c71e480e7a722770fe91a68298f8da9b7262e5b8",
+      "raw_sha256": "392dee578cf2f451552015cfbf26a135c03108fc63b9de16a88d1c03082fda70",
+      "result": {
+        "case": "Korean warm large-fixture canonical forward refuses final readback after its write",
+        "locale": "ko-KR",
+        "source_commit": "c71e480e7a722770fe91a68298f8da9b7262e5b8",
+        "binary_sha256": "e7e7b4570c0a07bf28d0a77bd55b1b620fe10a7b0d6dd8601f83f9e3c32a2b3a",
+        "binding": "Embedded commit, strict signature and debug source-content provenance checks agree.",
+        "capture_seconds": 87.494656375,
+        "capture": "Selection capture returns 38 strips and the selected Audio 2 association. Its restoration receipt is restored, while overall strips, associations and routing coverage remain explicitly incomplete.",
+        "controls": "Wrong-target planning is nonexecutable; the wrong-digest request returns C/stale_target_reference with write_attempted false. Independent complete AX remains equal before actual application.",
+        "forward_seconds": 131.193308208,
+        "forward": "B / rollbackUncertain / verified false; one forward write boundary, no compensation write boundary and unknown compensation. Replay retains the same uncertain result.",
+        "native_failure": "Post-press context and original-control checks are false while both popup-absence checks are true. Original-header renewal then refuses the complete slot/protected-state/population check. The failing conjunct and any deadline contribution were not isolated.",
+        "independent_forward_ui": "Audio 2 Send visibly remains Bus 2, raw zero, bypass off. Equality of the 151-value scalar projection alone misses this destination change and does not establish restoration.",
+        "independent_development_restoration": "After the failed request and process termination, the independently identified Audio 2 occupied-send menu was explicitly returned to Bus 1. The settled complete 178425-character AX state and all 151 raw protected values exactly match the original baseline, including original focus and stopped transport. This is manual fixture recovery, not verified automatic compensation or a successful canonical return.",
+        "qualification": "Failure retained; Korean large-fixture normal completion and automatic recovery remain unqualified. Capture latency is close to the unchanged 90-second deadline and does not establish an adequate performance margin.",
+        "raw_transcript_sha256": "392dee578cf2f451552015cfbf26a135c03108fc63b9de16a88d1c03082fda70"
+      }
     }
   ],
   "limits": [
