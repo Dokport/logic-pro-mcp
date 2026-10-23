@@ -3974,6 +3974,50 @@ struct Issue965HeldSelectionAssociationTests {
             emptyModeMenu: true, sagaMode: mode, freshPhysicalReturn: true)
     }
 
+    @Test(arguments: ["completed", "failure", "cancel", "unverified", "wrong_project", "wrong_target",
+                      "missing_confirmation", "wrong_confirmation", "invalid_later", "multiple",
+                      "raw_level", "raw_bypass", "nondefault_mode", "expired_pair",
+                      "external_destination", "external_level", "external_mode", "replaced_control",
+                      "unknown_after", "foreign_after", "no_observer", "lost_observer", "late_inverse_mode",
+                      "late_inverse_missing_bus_receiver", "late_inverse_bus_receiver"])
+    func registeredFreshBusStereoReturnOwnsOnlyItsNewChange(mode: String) async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true,
+            emptyModeMenu: true, sagaMode: mode, freshPhysicalReturn: true, freshBusStereoReturn: true)
+    }
+
+    @Test func freshBusStereoReturnDoesNotEnableCanonicalRepair() async throws {
+        try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+            canonicalSend: "unsupported_pair", canonicalPhysical: true,
+            freshPhysicalReturn: true, freshBusStereoReturn: true)
+    }
+
+    @Test func freshBusStereoReturnRequiresTypedBusAndCannotForgeCanonicalAuthority() throws {
+        #expect(!ApprovedSessionRepair.supportsCapturedSendDirection(before: .bus(1), after: .stereoOutput))
+        #expect(ApprovedSessionRepair.supportsCapturedSendDirection(before: .physical(3, 4), after: .stereoOutput))
+        #expect(ApprovedSessionRepair.supportsCapturedSendDirection(before: .bus(1), after: .bus(2)))
+        #expect(!AccessibilityChannel.supportsOccupiedSendChange(before: .bus(1), after: .physical(3, 4)))
+        func plan(_ number: Value) -> SagaPlan {
+            .init(steps: [.init(operationID: .mixerSetSendOutputVerified,
+                targetRef: .init(rawValue: "mix_fresh_bus_return"), params: ["ordinal": .int(1),
+                    "destination": .object(["kind": .string("stereo_output")]),
+                    "expected_current": .object(["kind": .string("bus"), "number": number]),
+                    "replace_existing": .bool(true)],
+                expectedInverse: .init(operationID: .mixerSetSendOutputVerified, valueParameter: "destination"))],
+                idempotencyKey: "fresh-bus-return")
+        }
+        for number: Value in [.int(1), .int(256)] {
+            let good = plan(number)
+            #expect(SendRemovalSagaAdapter.accepts(good))
+            #expect(SendRemovalSagaAdapter.journalValue(try #require(good.steps.first)) == .string("stereo_output"))
+            var forged = good
+            forged.canonicalPlanID = "unowned"; forged.canonicalDigest = "unowned"
+            #expect(!SendRemovalSagaAdapter.accepts(forged))
+        }
+        for number: Value in [.int(0), .int(257), .double(1), .bool(true), .string("1"), .null] {
+            #expect(!SendRemovalSagaAdapter.accepts(plan(number)))
+        }
+    }
+
     @Test func freshPhysicalSendReturnKeepsItsTypedBeforeAndFiniteDirections() throws {
         func plan(_ before: Value) -> SagaPlan {
             .init(steps: [.init(operationID: .mixerSetSendOutputVerified,
@@ -3990,7 +4034,6 @@ struct Issue965HeldSelectionAssociationTests {
             .object(["kind": .string("physical"), "ports": .array([.int(4), .int(3)])]),
             .object(["kind": .string("physical"), "ports": .array([.bool(true), .int(4)])]),
             .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)]), "native_proof": .object([:])]),
-            .object(["kind": .string("bus"), "number": .int(1)]),
             .object(["kind": .string("stereo_output")]),
             .object(["kind": .string("no_send")]),
             .string("physical:3-4"),
@@ -4791,6 +4834,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                delayedMixerName: String? = nil,
                                                expireInspectionBeforeSendDispatch: Bool = false,
                                                freshPhysicalReturn: Bool = false,
+                                               freshBusStereoReturn: Bool = false,
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil,
                                                sendGeometry: Bool = false) async throws {
@@ -5119,6 +5163,12 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setAttribute(destination, kAXTitleAttribute as String, "Bus 1 → Existing")
                 b.setChildren(menu, [stereo]); b.setChildren(busMenu, [destination]); b.setChildren(busParent, [busMenu])
                 b.setChildren(root, [echo, mode, parent, busParent])
+                if freshBusStereoReturn {
+                    b.setAttribute(echo, kAXTitleAttribute as String, "Bus 1 → Existing")
+                    b.setAttribute(stereo, kAXTitleAttribute as String, "Bus 1 → Existing")
+                    b.setAttribute(destination, kAXTitleAttribute as String, "Stereo Output")
+                    b.setChildren(menu, [destination]); b.setChildren(busMenu, [stereo])
+                }
             }
             if let noOpDestination, noOpDestination != .stereoOutput {
                 b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : "Output 3-4")
@@ -5290,7 +5340,7 @@ struct Issue965HeldSelectionAssociationTests {
                         return true
                     }
                     f.routingDestinationPresses += 1; f.routingReplacement = replacement
-                    b.setAttribute(echo, kAXTitleAttribute as String, existingBus ? "Bus 1 → Existing" : freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
+                    b.setAttribute(echo, kAXTitleAttribute as String, freshBusStereoReturn ? "Stereo Output" : existingBus ? "Bus 1 → Existing" : freshPhysicalReturn ? "Stereo Output" : "Output 3-4")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", ""); b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
                     if removing {
                         b.setChildren(replacement, [name, renewedSend[0]])
@@ -5340,7 +5390,7 @@ struct Issue965HeldSelectionAssociationTests {
                         return true
                     }
                     f.routingDestinationPresses += 1; f.routingReplacement = restoredSource
-                    b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
+                    b.setAttribute(echo, kAXTitleAttribute as String, freshBusStereoReturn ? "Bus 1 → Existing" : freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
                     b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
                     b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
                     b.setAttribute(destination, "AXMenuItemMarkChar", "")
@@ -5386,13 +5436,16 @@ struct Issue965HeldSelectionAssociationTests {
                     kAXInsertionPointLineNumberAttribute].map({ $0 as String }).contains(attribute) {
                     return .failure(.init(raw: AXError.noValue.rawValue))
                 }
-                if sagaMode == "late_inverse_mode", f.routingDestinationPresses == 1, CFEqual(element, stereo) {
+                if ["late_inverse_mode", "late_inverse_bus_receiver"].contains(sagaMode ?? ""),
+                   f.routingDestinationPresses == 1, CFEqual(element, stereo) {
                     if attribute == kAXTitleAttribute as String, f.routingClassifierHelpReads > 0 {
                         f.routingClassifierHelpReads += 1
                         // The fresh checked-current scan is followed by the
                         // final offered-leaf lookup; mutate only that later read.
                         if f.routingClassifierHelpReads == 3 {
-                            b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader")
+                            if sagaMode == "late_inverse_bus_receiver" {
+                                b.setAttribute(b.element(1_965_2680), kAXDescriptionAttribute as String, "Bus 2")
+                            } else { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
                             f.routingLateScopeInjected = true
                         }
                     }
@@ -5806,7 +5859,7 @@ struct Issue965HeldSelectionAssociationTests {
                 if canonicalBus {
                     sendIntent["bus"] = .int(canonicalBusChange || canonicalSend == "nonmatching_bus" ? 2 : 1)
                 } else if canonicalPhysical {
-                    sendIntent["output"] = (canonicalMatching ? !freshPhysicalReturn : freshPhysicalReturn && canonicalSend != "unsupported_pair") ? .object(["kind": .string("stereo_output")])
+                    sendIntent["output"] = (freshBusStereoReturn || (canonicalMatching ? !freshPhysicalReturn : freshPhysicalReturn && canonicalSend != "unsupported_pair")) ? .object(["kind": .string("stereo_output")])
                         : .object(["kind": .string("physical"), "ports": .array(canonicalSend == "unsupported_pair" ? [.int(1), .int(2)] : [.int(3), .int(4)])])
                 } else { sendIntent["remove"] = .bool(true) }
                 if canonicalSend == "physical_removal" {
@@ -6309,7 +6362,7 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingBypassFinalValueReads += 1
                     }
                 }
-                if sagaMode == "late_inverse_mode", f.routingDestinationPresses == 1,
+                if ["late_inverse_mode", "late_inverse_bus_receiver"].contains(sagaMode ?? ""), f.routingDestinationPresses == 1,
                    CFEqual(element, stereo), attribute == kAXEnabledAttribute as String {
                     f.routingClassifierHelpReads = 1
                 }
@@ -7119,7 +7172,9 @@ struct Issue965HeldSelectionAssociationTests {
                 "expected_current": .object(["kind": .string("stereo_output")]), "replace_existing": .bool(true)]
             if freshPhysicalReturn {
                 preparedParams["destination"] = .object(["kind": .string("stereo_output")])
-                preparedParams["expected_current"] = .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
+                preparedParams["expected_current"] = freshBusStereoReturn
+                    ? .object(["kind": .string("bus"), "number": .int(1)])
+                    : .object(["kind": .string("physical"), "ports": .array([.int(3), .int(4)])])
             }
             if let noOpDestination {
                 let value: Value = switch noOpDestination {
@@ -7154,6 +7209,8 @@ struct Issue965HeldSelectionAssociationTests {
                                 b.setAttribute(destination, kAXTitleAttribute as String, changed)
                             case "external_level": b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1)
                             case "external_mode": b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader")
+                            case "late_inverse_missing_bus_receiver":
+                                b.setAttribute(b.element(1_965_2680), kAXDescriptionAttribute as String, "Bus 2")
                             case "replaced_control":
                                 let decoy = b.element(1_965_2799)
                                 b.setButton(decoy, description: "list", x: 0, y: 0, width: 1, height: 1)
@@ -7226,6 +7283,14 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     return
                 }
+                if ["late_inverse_missing_bus_receiver", "late_inverse_bus_receiver"].contains(sagaMode) {
+                    #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 1)
+                    let state = try #require(body["saga_state"] as? String)
+                    #expect(["compensationFailed", "rollbackUncertain"].contains(state))
+                    #expect(b.attributeValue(b.element(1_965_2680), kAXDescriptionAttribute as String) as? String == "Bus 2")
+                    #expect(!gate.isHeldByEntitledHolder())
+                    return
+                }
                 if ["external_empty", "foreign_after", "no_observer", "external_destination", "external_level",
                     "external_mode", "replaced_control", "unknown_after", "late_inverse_mode", "lost_observer"].contains(sagaMode) {
                     if sagaMode == "no_observer" { #expect(f.routingDestinationPresses == 0) }
@@ -7254,14 +7319,14 @@ struct Issue965HeldSelectionAssociationTests {
                     let steps = try #require(body["steps"] as? [[String: Any]])
                     let evidence = try #require(steps[0]["evidence"] as? [String: Any])
                     let beforeState = try #require(evidence["before_state"] as? [String: Any])
-                    #expect(beforeState["observed"] as? String == "physical:3-4")
+                    #expect(beforeState["observed"] as? String == (freshBusStereoReturn ? "bus:1" : "physical:3-4"))
                     let verification = try #require(evidence["verification"] as? [String: Any])
                     let readback = try #require(verification["readback"] as? [String: Any])
                     #expect(readback["observed"] as? String == "stereo_output")
                     if !completed {
                         let compensation = try #require(steps[0]["compensation"] as? [String: Any])
                         let inverseReadback = try #require(compensation["readback"] as? [String: Any])
-                        #expect(inverseReadback["observed"] as? String == "physical:3-4")
+                        #expect(inverseReadback["observed"] as? String == (freshBusStereoReturn ? "bus:1" : "physical:3-4"))
                     }
                 }
                 let slots = try #require(AXLogicProElements.sendSlotObservations(in: completed ? replacement : restoredSource,

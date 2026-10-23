@@ -121,7 +121,7 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         onMenuEnabledRead: (@Sendable () -> Void)? = nil,
         includingMixerView: Bool = false
     ) {
-        precondition(names.count == 3)
+        precondition(!names.isEmpty)
         let builder = FakeAXRuntimeBuilder()
         self.builder = builder
         let probe = TrackSortActionProbe()
@@ -147,7 +147,7 @@ private struct TrackSortAXFixture: @unchecked Sendable {
         builder.setAttribute(rail, kAXRoleAttribute as String, kAXGroupRole as String)
         builder.setAttribute(rail, kAXDescriptionAttribute as String, "Track Headers")
 
-        let headers = (0..<3).map { offset -> AXUIElement in
+        let headers = names.indices.map { offset -> AXUIElement in
             let header = builder.element(448_100 + offset)
             builder.setAttribute(header, kAXRoleAttribute as String, kAXLayoutItemRole as String)
             builder.setAttribute(header, kAXTitleAttribute as String, observedNames?[offset] ?? names[offset])
@@ -310,6 +310,98 @@ private struct TrackSortAXFixture: @unchecked Sendable {
 
 @Suite("#448 verified track sort")
 struct Issue448TrackSortVerifiedTests {
+    @Test(arguments: ["sorted", "ineffective_press", "wrong_order", "unreadable", "stale_ref"])
+    func thirtyTwoTrackDispatcherChecksTheEntireNativeOrder(mode: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let names = ["Audio 1"] + (3...31).map { "Audio \($0)" } + ["Aux 1", "Audio 2"]
+            let expectedIndices = [0, 31] + Array(1...30)
+            let desiredNames = expectedIndices.map { names[$0] }
+            let observedNames: [String]
+            switch mode {
+            case "sorted": observedNames = desiredNames
+            case "wrong_order": observedNames = Array(desiredNames.reversed())
+            default: observedNames = names
+            }
+            // Model Logic's observed in-place header reuse, not an AX-handle
+            // permutation that would accidentally certify the old row order.
+            let fixture = TrackSortAXFixture(orderAfterPress: Array(names.indices),
+                expectedReferenceOrder: expectedIndices, names: names,
+                namesAfterPress: observedNames, railUnreadableAfterPress: mode == "unreadable")
+            let registry = TargetRegistry()
+            var references: [TargetReference] = []
+            for (index, name) in names.enumerated() {
+                let descriptor = TargetDescriptor(trackIndex: index, trackName: name)
+                references.append(await registry.bind(kind: .track, descriptor: descriptor,
+                    fingerprint: descriptor.fingerprint))
+            }
+            let expected = expectedIndices.map { references[$0].rawValue }
+            var requested = expected
+            if mode == "stale_ref" { requested[31] = "trk_00000000-0000-4000-8000-000000000971" }
+            let generation = await registry.currentTopologyGeneration
+            let channel = TrackSortStateBChannel(runtime: fixture.runtime)
+            let router = ChannelRouter()
+            await router.register(channel)
+            let result = await TrackDispatcher.handle(command: "sort_verified", params: [
+                "criterion": .string("track_name"),
+                "expected_order": .array(requested.map(Value.string)), "confirmed": .bool(true)],
+                router: router, cache: StateCache(), targetRegistry: registry)
+            let body = try #require(sharedJSONObject(sharedToolText(result)))
+            let isError = try #require(result.isError)
+            let writeAttempted = try #require(body["write_attempted"] as? Bool)
+            if mode == "stale_ref" {
+                #expect(isError)
+                #expect(body["state"] as? String == "C")
+                #expect(body["error"] as? String == "stale_target_reference")
+                #expect(!writeAttempted)
+                #expect(fixture.actionProbe.pressCount == 0)
+                #expect(await channel.calls.isEmpty)
+                #expect(await registry.currentTopologyGeneration == generation)
+                return
+            }
+            #expect(fixture.actionProbe.pressCount == 1)
+            #expect(await channel.calls.count == 1)
+            #expect(writeAttempted)
+            let menuPressReportedSuccess = try #require(body["menu_press_reported_success"] as? Bool)
+            #expect(menuPressReportedSuccess)
+            #expect(body["actuated_criterion"] as? String == "track_name")
+            #expect(body["actuated_menu_item_label"] as? String == "트랙 이름")
+            #expect(body["before_order"] as? [String] == references.map(\.rawValue))
+            let before = try #require(body["before_tracks"] as? [[String: Any]])
+            #expect(before.compactMap { $0["name"] as? String } == names)
+            #expect(body["expected_order"] as? [String] == expected)
+            #expect(body["before_track_count"] as? Int == names.count)
+            let verified = try #require(body["verified"] as? Bool)
+            if mode == "sorted" {
+                #expect(!isError)
+                #expect(body["state"] as? String == "A")
+                #expect(verified)
+                #expect(body["after_order"] as? [String] == expected)
+            } else {
+                #expect(isError)
+                #expect(body["state"] as? String == "B")
+                #expect(!verified)
+                let safeToRetry = try #require(body["safe_to_retry"] as? Bool)
+                #expect(!safeToRetry)
+                #expect(body["reason"] as? String == (mode == "unreadable"
+                    ? "readback_unavailable" : "readback_mismatch"))
+            }
+            if mode == "unreadable" {
+                #expect(body["after_order"] is NSNull)
+                #expect(body["after_tracks"] is NSNull)
+            } else {
+                #expect(body["after_track_count"] as? Int == names.count)
+                let after = try #require(body["after_tracks"] as? [[String: Any]])
+                #expect(after.compactMap { $0["name"] as? String } == observedNames)
+                let referenceByName = Dictionary(uniqueKeysWithValues: zip(names, references.map(\.rawValue)))
+                let observedOrder = try observedNames.map { try #require(referenceByName[$0]) }
+                #expect(body["after_order"] as? [String] == observedOrder,
+                    "A failed goal still has to report the complete actual reference permutation")
+            }
+            #expect(await registry.currentTopologyGeneration == generation + 1)
+            #expect(await registry.resolve(references[0]) == nil)
+        }
+    }
+
     @Test(arguments: [false, true])
     func canonicalFlatNameSortUsesItsMeasuredLeafAndOwnedCreationDateInverse(cancelAfterSort: Bool) async throws {
         try await canonicalSort(cancelAfterSort: cancelAfterSort)
