@@ -523,6 +523,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingChangedSendPublished = false
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
+        var routingInputOpenDiscoveryStart: Int?
+        var routingInputOpenDiscoveryCounts: [Int] = []
         var routingForeignHelpReads = 0
         var routingForeignHelpFirstStack: [String] = []
         var scrollToChangedOutput = false
@@ -4815,6 +4817,97 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Canonical Send input prerequisites keep the admitted Mixer census while their own popup is open",
+          arguments: ["forward", "cancel"])
+    func canonicalExistingBusSendReadsInputsThroughItsHeldMixer(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_scoped_input", stableDestinationBulkReads: true)
+        }
+    }
+
+    @Test("An input read borrowing a held Mixer still uses the existing native-popup custody path",
+          arguments: ["unscoped", "owned", "foreign_scope"])
+    func heldInputReadPreservesNativePopupWithoutFocusedWindow(scope: String) async throws {
+        let f = try Fixture(), b = f.builder
+        let input = b.element(1_971_980), root = b.element(1_971_981), echo = b.element(1_971_982)
+        let parent = b.element(1_971_983), submenu = b.element(1_971_984), leaf = b.element(1_971_985)
+        let wrapper = b.element(1_971_986), frame = CGRect(x: 20, y: 100, width: 230, height: 175)
+        let outer = b.element(1_971_987)
+        b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
+        b.setRole(outer, kAXGroupRole as String); b.setAttribute(outer, kAXDescriptionAttribute as String, "Mixer")
+        let windowChildren = b.makeAXRuntime().children(f.window)
+        b.setChildren(outer, [f.mixer])
+        b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? outer : $0 })
+        b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
+            x: 0, y: 0, width: 1, height: 1)
+        b.setChildren(input, [])
+        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [input])
+        for (node, role, title) in [(root, kAXMenuRole, ""), (echo, kAXMenuItemRole, "Bus 1"),
+                                   (parent, kAXMenuItemRole, "Bus"), (submenu, kAXMenuRole, ""),
+                                   (leaf, kAXMenuItemRole, "Bus 1")] {
+            b.setRole(node, role as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+            b.setChildren(node, [])
+        }
+        for node in [echo, leaf] { b.setAttribute(node, "AXMenuItemMarkChar", "✓") }
+        b.setChildren(submenu, [leaf]); b.setChildren(parent, [submenu]); b.setChildren(root, [echo, parent])
+        b.setActionNames(input, [kAXPressAction as String]); b.setActionNames(root, [kAXCancelAction as String])
+        b.setRole(wrapper, kAXPopUpButtonRole as String)
+        b.setAttribute(wrapper, kAXParentAttribute as String, f.mixer)
+        b.setAttribute(wrapper, kAXWindowAttribute as String, f.window)
+        b.setFrame(root, x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
+        f.routingFocusHit = { _, _ in .success(f.routingNativePopupFrame == nil ? nil : echo) }
+        f.routingReadResult = { element, attribute in
+            if f.routingNativePopupFrame != nil, CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        f.routingAction = { element, action in
+            if CFEqual(element, input), action == kAXPressAction as String {
+                b.setChildren(wrapper, [root]); f.routingNativePopupFrame = frame; f.inputMenuPresses += 1
+                return true
+            }
+            if CFEqual(element, root), action == kAXCancelAction as String {
+                b.setChildren(wrapper, []); f.routingNativePopupFrame = nil
+                return true
+            }
+            Issue.record("Only the acquired input popup and its Cancel may run"); return false
+        }
+        let gate = LogicMutationGate(), claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            var borrowed = scope == "unscoped" ? nil : held
+            if scope == "foreign_scope" {
+                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                borrowed = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                    logic: runtime, expectedProject: nil, requiresProjectReference: false))
+                b.setAttribute(f.window, kAXDocumentAttribute as String, held.document)
+            }
+            let owner = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+                strip: f.strips[1], document: held.document)
+            let readScope = borrowed
+            let read = await AXMixerStripBinding.$current.withValue(owner) {
+                await AccessibilityChannel.getInputBusObservation(runtime: runtime, timing: .immediate,
+                    readingOriginalScope: readScope)
+            }
+            if scope == "foreign_scope" {
+                #expect(read.assignment == nil)
+                #expect(f.inputMenuPresses == 0, "Reject foreign metadata before acquiring a popup")
+                #expect(held.permitsRead(), "The foreign scope cannot retire the original observation")
+                return
+            }
+            #expect(read.assignment == .bus(1), "Actual native input read: \(read.result.message)")
+            #expect(f.inputMenuPresses == 1)
+            #expect(f.routingNativePopupFrame == nil, "The acquired native popup must actually close")
+        }
+    }
+
     @Test(arguments: ["forward", "cancel"])
     func canonicalExistingBusSendSurvivesItsOwnedInputReadRenewal(mode: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -5760,9 +5853,16 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setChildren(inputRoot, [inputEcho] + (ownInput ? [physicalParent] : []) + [inputBusParent])
                         let rows = b.makeAXRuntime().children(f.mixer)
                         b.setChildren(f.mixer, rows + [inputRoot]); f.inputMenuPresses += 1
+                        if canonicalBusReceiverFault == "physical_source_scoped_input", f.routingInputReadRenewalArmed {
+                            f.routingInputOpenDiscoveryStart = f.coupledGuardPopulationScans
+                        }
                         return true
                     }
                     if CFEqual(element, inputRoot), action == kAXCancelAction as String {
+                        if let start = f.routingInputOpenDiscoveryStart {
+                            f.routingInputOpenDiscoveryCounts.append(f.coupledGuardPopulationScans - start)
+                            f.routingInputOpenDiscoveryStart = nil
+                        }
                         b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, inputRoot) })
                         if f.routingInputReadRenewalArmed, canonicalBusReceiverFault == "physical_source",
                            f.routingCanonicalInputBuses.last == 0 {
@@ -6207,7 +6307,10 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 }
                 if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
-                if sourceInputReadRenewal || canonicalBusReceiverFault == "physical_source" { f.routingInputReadRenewalArmed = true }
+                if sourceInputReadRenewal || canonicalBusReceiverFault == "physical_source"
+                    || canonicalBusReceiverFault == "physical_source_scoped_input" {
+                    f.routingInputReadRenewalArmed = true
+                }
                 let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let arguments: [String: Value] = ["plan_id": .string(planID),
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
@@ -6221,6 +6324,12 @@ struct Issue965HeldSelectionAssociationTests {
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if canonicalBusReceiverFault == "physical_source_scoped_input" {
+                    #expect(f.routingInputOpenDiscoveryCounts.count >= (canonicalSend == "cancel" ? 6 : 3),
+                        "Reach checked source and both receivers, including inverse prerequisites when cancelling")
+                    #expect(f.routingInputOpenDiscoveryCounts.allSatisfy { $0 == 0 },
+                        "Read the admitted original native census instead of rediscovering the whole window during Input popups: \(f.routingInputOpenDiscoveryCounts)")
+                }
                 if sourceInputReadRenewal {
                     #expect(f.routingInputReadRenewed, "Reach actual post-menu retirement before routing")
                 }

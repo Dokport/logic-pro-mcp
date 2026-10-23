@@ -490,14 +490,16 @@ extension AccessibilityChannel {
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
         refreshingOriginalSourceAfterCleanup: Bool = false,
-        observingPeerHeaders: [AXTrackBinding.Binding]? = nil) async -> CheckedOutputReading {
+        observingPeerHeaders: [AXTrackBinding.Binding]? = nil,
+        readingOriginalScope: HeldSelectionAssociation? = nil) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
             runtime: runtime, timing: timing, restoringMixerGeometry: restoringMixerGeometry,
             observingPopupFocus: observingPopupFocus,
             observingRenewedFocus: observingRenewedFocus,
             requiringOriginalInputControl: requiringOriginalInputControl,
             refreshingOriginalSourceAfterCleanup: refreshingOriginalSourceAfterCleanup,
-            observingPeerHeaders: observingPeerHeaders)
+            observingPeerHeaders: observingPeerHeaders,
+            readingOriginalScope: readingOriginalScope)
     }
 
     static func getCheckedInputObservation(runtime: AXLogicProElements.Runtime,
@@ -506,13 +508,15 @@ extension AccessibilityChannel {
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
         refreshingOriginalSourceAfterCleanup: Bool = false,
-        observingPeerHeaders: [AXTrackBinding.Binding]? = nil) async -> CheckedOutputReading {
+        observingPeerHeaders: [AXTrackBinding.Binding]? = nil,
+        readingOriginalScope: HeldSelectionAssociation? = nil) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
             includingNonBusInputs: true, runtime: runtime, timing: timing,
             restoringMixerGeometry: restoringMixerGeometry,
             observingPopupFocus: observingPopupFocus, observingRenewedFocus: observingRenewedFocus,
             refreshingOriginalSourceAfterCleanup: refreshingOriginalSourceAfterCleanup,
-            observingPeerHeaders: observingPeerHeaders)
+            observingPeerHeaders: observingPeerHeaders,
+            readingOriginalScope: readingOriginalScope)
     }
 
     /// Shares the exact owned reader; wire receipt decoding never supplies graph identity.
@@ -559,11 +563,22 @@ extension AccessibilityChannel {
         }
         @Sendable func currentPhysicalIndex(ownedPopup: AXUIElement? = nil) -> Int? {
             if let readingOriginalScope {
+                if inputBusOnly {
+                    // Borrow identity only inside an ordinary, reciprocal Mixer
+                    // popup. Native Input windows retain their existing reader;
+                    // the held association's neutral-Output exception is not an
+                    // Input-popup capability, including AXFocusedWindow NoValue.
+                    guard let ownedPopup,
+                          let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
+                          menus.count == 1, CFEqual(menus[0], ownedPopup) else {
+                        return physical.currentIndex(runtime: runtime)
+                    }
+                }
                 return physical.currentIndex(in: readingOriginalScope, ownedPopup: ownedPopup)
             }
             return physical.currentIndex(runtime: runtime)
         }
-        guard readingOriginalScope == nil || currentPhysicalIndex() != nil else {
+        guard readingOriginalScope.map({ physical.currentIndex(in: $0) != nil }) ?? true else {
             return refuse(.staleTargetReference, "The original read scope no longer contains this physical source.")
         }
         if refreshingOriginalSourceAfterCleanup {

@@ -1313,6 +1313,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                       !pair.strip.matches(task.pair.strip) || CFEqual(nativeControl, original.control) else { return nil }
                 let prior = pair
                 let current = AXMixerInputSlotBinding(owner: pair.strip, control: nativeControl, source: label)
+                let inputReadScope = roster?.observation ?? proof
                 let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
                     await AXMixerStripBinding.$outputAssociation.withValue(pair) {
                         await AccessibilityChannel.getCheckedInputObservation(runtime: runtime,
@@ -1320,7 +1321,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                             observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                             observingRenewedFocus: { inputFocus.retainAssociation($0) },
                             refreshingOriginalSourceAfterCleanup: true,
-                            observingPeerHeaders: sendInputPeerHeaders)
+                            observingPeerHeaders: sendInputPeerHeaders,
+                            readingOriginalScope: inputReadScope)
                     }
                 }
                 stage = "source_input_assignment"
@@ -1396,6 +1398,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     stage = "receiver_\(bus)_pre_read"
                     guard sourceCurrent(), currentSlot.owner.currentIndex(runtime: runtime) != nil else { return nil }
                     let owner = currentSlot.owner
+                    let inputReadScope = roster?.observation ?? proof
                     stage = "receiver_\(bus)_native_read"
                     let read = await AXMixerStripBinding.$current.withValue(owner) {
                         await AXMixerStripBinding.$outputAssociation.withValue(currentPair) {
@@ -1405,7 +1408,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                 observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                                 observingRenewedFocus: { inputFocus.retainAssociation($0) },
                                 refreshingOriginalSourceAfterCleanup: currentPair != nil,
-                                observingPeerHeaders: inputPeerHeaders.isEmpty ? nil : inputPeerHeaders)
+                                observingPeerHeaders: inputPeerHeaders.isEmpty ? nil : inputPeerHeaders,
+                                readingOriginalScope: inputReadScope)
                         }
                     }
                     stage = "receiver_\(bus)_assignment"
