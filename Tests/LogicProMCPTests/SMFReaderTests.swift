@@ -406,10 +406,34 @@ func testSMFTrackExtractionRefusesUnownedOrAmbiguousFileLayout(fault: String) {
     case "invalid_utf8": other = trackData([0, 0xFF, 4, 1, 0xFF] + end)
     default: other = namedSMFTrack("Peer", events: end)
     }
-    let input = fault == "format_zero" ? smfData(tracks: [target])
+    let input = fault == "format_zero" ? smfData(tracks: [trackData([0, 0x90, 60, 100, 1, 0x80, 60, 0] + end)])
         : smfData(format: 1, tracks: [conductor, target, other])
     #expect(throws: SMFReader.TrackExtractionError.unsupportedFileLayout) {
         try SMFReader.extractTracks(namedInstrument: "Target", from: input)
+    }
+}
+
+@Test func testSMFTrackExtractionAcceptsLogicSingleTrackFormatZeroExport() throws {
+    // Logic 12.4's "All MIDI Tracks as MIDI File" for a project with one MIDI
+    // track: format 0, every meta event at tick 0 ahead of the notes.
+    var events: [UInt8] = [0, 0xFF, 0x20, 1, 0]
+    events += [0, 0xFF, 3, 6] + Array("Region".utf8)
+    events += [0, 0xFF, 4, 6] + Array("Target".utf8)
+    events += [0, 0xFF, 0x58, 4, 4, 2, 0x18, 8, 0, 0xFF, 0x59, 2, 0, 0]
+    events += [0, 0xFF, 0x54, 5, 0x21, 0, 0, 0, 0, 0, 0xFF, 0x51, 3, 7, 0xA1, 0x20]
+    events += [0, 0x90, 60, 100, 0x83, 0x60, 0x80, 60, 0, 0, 0xFF, 0x2F, 0]
+    let input = smfData(tracks: [trackData(events)])
+    #expect(try SMFReader.extractTracks(namedInstrument: "Target", from: input) == input)
+    let document = try SMFReader.parseDocument(input)
+    #expect(document.format == 0 && document.notes.map(\.pitch) == [60])
+    #expect(document.tempoChanges.first?.microsecondsPerQuarter == 500_000)
+    #expect(throws: SMFReader.TrackExtractionError.instrumentNotFound) {
+        try SMFReader.extractTracks(namedInstrument: "Region", from: input)
+    }
+    let twoNames = smfData(tracks: [namedSMFTrack("Target", events: [0, 0xFF, 4, 4] + Array("Peer".utf8)
+        + [0, 0x90, 60, 100, 1, 0x80, 60, 0, 0, 0xFF, 0x2F, 0])])
+    #expect(throws: SMFReader.TrackExtractionError.unsupportedFileLayout) {
+        try SMFReader.extractTracks(namedInstrument: "Target", from: twoNames)
     }
 }
 
