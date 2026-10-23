@@ -179,6 +179,15 @@ extension AccessibilityChannel {
                 } else { header = nil }
                 lock.withLock { passiveMixer = candidate; passiveHeader = nil; passiveRoutingHeader = header.map { ($0, logic) } }
             }
+            // Chooses read ordering only. The association's complete current
+            // proof is still renewed before each Help read; mixed navigation
+            // and restoration witnesses keep their existing observation order.
+            var hasOnlyAssociationReadFocus: Bool {
+                lock.withLock {
+                    association != nil && navigation == nil && passiveMixer == nil && passiveHeader == nil
+                        && passiveRoutingHeader == nil && routingPopupFocus == nil && mixerInverseFocus == nil
+                }
+            }
             func permits() -> Bool {
                 let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader, mixerInverseFocus) }
                 // An owned popup or selection inverse deliberately holds temporary

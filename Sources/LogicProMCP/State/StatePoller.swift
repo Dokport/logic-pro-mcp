@@ -262,7 +262,10 @@ actor StatePoller {
             let focus = runtime.keyboardFocus
             let readFocusScope = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
             let editingStopsRead: @Sendable () -> Bool = {
-                Self.backgroundTickYields(to: focus())
+                if request.scope == .selection, readFocusScope.hasOnlyAssociationReadFocus {
+                    return !readFocusScope.permits() && Self.backgroundTickYields(to: focus())
+                }
+                return Self.backgroundTickYields(to: focus())
                     && !readFocusScope.permits()
             }
             // Track-only acquisition omits focus-moving Help. Mixer input/send

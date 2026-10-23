@@ -453,6 +453,10 @@ struct Issue965HeldSelectionAssociationTests {
         let bundle: URL
         var selections: [Int] = []
         var focusRestorationWrites: [AXUIElement] = []
+        var globalFocusClassificationsDuringHeldEntry = 0
+        var guardedEntryHelpReads = 0
+        var focusOrderFaultInjected = false
+        var helpReadsAfterFocusOrderFault = 0
         var cleanupTransportReads = 0
         var cleanupTransportReadsAtWrite = 0
         var cleanupScopeInjected = false
@@ -1221,7 +1225,10 @@ struct Issue965HeldSelectionAssociationTests {
             poller: StatePoller(axChannel: f.channel(), cache: cache,
                 runtime: .init(hasVisibleWindow: { true }, projectFileReader: fileReader,
                                keyboardFocus: {
-                                   guardedPassiveFocus || (guardedRenewalFocus && f.routingReplacement != nil)
+                                   if f.guardedEntryHelpReads > 0, f.selections.isEmpty {
+                                       f.globalFocusClassificationsDuringHeldEntry += 1
+                                   }
+                                   return guardedPassiveFocus || (guardedRenewalFocus && f.routingReplacement != nil)
                                        ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing
                                })),
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
@@ -10315,6 +10322,68 @@ struct Issue965HeldSelectionAssociationTests {
         let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
             kAXFocusedUIElementAttribute as String, runtime: f.builder.makeAXRuntime()))
         #expect(CFEqual(focus, f.strips[1]))
+    }
+
+    @Test("Held native custody avoids global strip reclassification and still stops the next Help after loss",
+          arguments: ["none", "project", "editor", "transport", "retired"])
+    func heldNativeCustodyPrecedesGlobalFocusClassification(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        for (index, strip) in f.strips.enumerated() {
+            f.builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+            let slot = f.builder.element(1_966_200 + index)
+            f.builder.setRole(slot, kAXButtonRole as String)
+            f.builder.setAttribute(slot, kAXDescriptionAttribute as String, "Audio Plug-in")
+            f.builder.setAttribute(slot, kAXHelpAttribute as String, "Audio Effect slot. Insert an audio effect.")
+            f.builder.setAttribute(slot, kAXPositionAttribute as String, axPoint(200 + CGFloat(index) * 70, 300))
+            f.builder.setAttribute(slot, kAXSizeAttribute as String, axSize(58, 16))
+            let children = f.builder.makeAXRuntime().children(strip)
+            f.builder.setChildren(strip, children + [slot])
+        }
+        f.routingReadResult = { element, attribute in
+            guard attribute == kAXHelpAttribute as String, AXHelpers.HelpReadGuard.current != nil else { return nil }
+            if f.focusOrderFaultInjected { f.helpReadsAfterFocusOrderFault += 1 }
+            do {
+                f.guardedEntryHelpReads += 1
+                if fault != "none", !f.focusOrderFaultInjected {
+                    f.focusOrderFaultInjected = true
+                    switch fault {
+                    case "project":
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///different.logicx/")
+                    case "editor":
+                        let editor = f.builder.element(1_965_996)
+                        f.builder.setRole(editor, kAXTextFieldRole as String)
+                        f.builder.setAttribute(editor, kAXValueAttribute as String, "typing")
+                        f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                    case "transport":
+                        f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+                    case "retired":
+                        f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[1]) })
+                    default: Issue.record("unknown focus-order fault")
+                    }
+                }
+            }
+            return nil
+        }
+        let body = try await inspect(f, domains: ["tracks", "strips", "associations", "routing"],
+                                     guardedPassiveFocus: true, scope: "selection")
+        #expect(f.guardedEntryHelpReads > 0, "The actual guarded native Help reader must be reached")
+        if fault == "none" {
+            let section = try #require(body["associations"] as? [String: Any])
+            let rows = try #require(section["rows"] as? [[String: Any]])
+            #expect(rows.compactMap { $0["track_index"] as? Int } == [0])
+            #expect(f.passiveFinalAppTupleReads > 0, "Fresh original-focus custody remains exercised")
+            #expect(f.globalFocusClassificationsDuringHeldEntry == 0,
+                    "A current held proof must precede the global hierarchy classifier")
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        } else {
+            #expect(f.focusOrderFaultInjected)
+            #expect(f.helpReadsAfterFocusOrderFault == 0)
+            #expect(f.selections.isEmpty)
+            #expect(body["associations"] == nil)
+        }
     }
 
     @Test("Native-shaped passive focus guarding permits only the observed original-focus inverse",
