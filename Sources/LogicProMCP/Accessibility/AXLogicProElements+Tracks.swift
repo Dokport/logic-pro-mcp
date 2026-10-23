@@ -186,21 +186,37 @@ enum AXTrackBinding {
                 && shape.matchesPopulation(other.shape.headers)
         }
 
+        func currentIndex(in observation: AccessibilityChannel.HeldSelectionAssociation) -> Int? {
+            guard observation.retainsOriginalHeaderCarrier(self) else { return nil }
+            return currentIndex(using: observation)
+        }
+
         func currentIndex() -> Int? {
-            guard let index = currentScopeIndex(), ExactTrackNameAdapter.operationPermitted(),
+            currentIndex(using: nil)
+        }
+
+        private func currentIndex(using observation: AccessibilityChannel.HeldSelectionAssociation?) -> Int? {
+            guard let index = currentScopeIndex(using: observation), ExactTrackNameAdapter.operationPermitted(),
                   shape.observe(AXValueExtractors.extractTrackStackState(
                     from: header, runtime: runtime.ax).isStackHeader),
                   // The deciding child-role reads may outlive the first scope
                   // proof. Renew the same window/document/unique membership.
-                  currentScopeIndex() == index else { return nil }
+                  currentScopeIndex(using: observation) == index else { return nil }
             return index
         }
 
-        private func currentScopeIndex() -> Int? {
+        private func currentScopeIndex(using observation: AccessibilityChannel.HeldSelectionAssociation?) -> Int? {
             guard ExactTrackNameAdapter.operationPermitted(), shape.isCurrent, exposure?.isCurrent ?? true,
-                  projectPath != nil, currentWindowAndDocumentMatch(),
-                  case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime),
-                  ExactTrackNameAdapter.operationPermitted(),
+                  projectPath != nil, currentWindowAndDocumentMatch() else { exposure?.end(); return nil }
+            let observed: [AXUIElement]?
+            if let observation {
+                observed = observation.readOriginalHeaderPopulation(for: self, observingPopulation: {
+                    _ = shape.observePopulation($0)
+                })
+            } else if case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime) {
+                observed = headers
+            } else { observed = nil }
+            guard let headers = observed, ExactTrackNameAdapter.operationPermitted(),
                   shape.observePopulation(headers),
                   exposure?.isCurrent ?? true,
                   // The census can itself outlive the preceding scope proof.

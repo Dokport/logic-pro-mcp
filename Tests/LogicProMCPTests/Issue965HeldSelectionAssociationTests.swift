@@ -565,6 +565,7 @@ struct Issue965HeldSelectionAssociationTests {
         var captureClockReadsAfterName = 0
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
+        var heldHeaderDiscoveryScans = 0
         var coupledGuardPlayReads = 0
         var coupledGuardRecordReads = 0
         var coupledGuardCountDiscovery = false
@@ -10330,6 +10331,93 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(actual.pair.track.matches(source.track) && actual.observedPairs.count == 3)
             #expect(actual.observation.headers.count == 4 && actual.observation.strips.count == 4)
             #expect(renewed.effects.restoration == "restored")
+        }
+    }
+
+    @Test("A retained header read renews its exact original rail and lifetime without whole-window rediscovery",
+          arguments: ["owned", "foreign_scope", "missing_peer", "rail_role", "header_shape"])
+    func originalHeldRailRetainsHeaderIdentity(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let binding = AXTrackBinding.Binding(window: f.window, header: f.headers[0],
+                document: held.document, runtime: runtime, observedStackHeader: false, observedHeaders: held.headers)
+            #expect(binding.currentIndex() == 0)
+            var scope = held
+            if fault == "foreign_scope" {
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                scope = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                    logic: runtime, expectedProject: nil, requiresProjectReference: false))
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, held.document)
+            }
+            if fault == "missing_peer" { f.builder.setChildren(f.rail, Array(f.headers.dropLast())) }
+            if fault == "rail_role" { f.builder.setRole(f.rail, kAXButtonRole as String) }
+            if fault == "header_shape" {
+                let arrow = f.builder.element(965_992_002)
+                f.builder.setRole(arrow, kAXDisclosureTriangleRole as String)
+                f.builder.setAttribute(arrow, kAXValueAttribute as String, NSNumber(value: 1))
+                f.builder.setChildren(f.headers[0], f.builder.makeAXRuntime().children(f.headers[0]) + [arrow])
+            }
+            f.heldHeaderDiscoveryScans = 0
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            let actual = binding.currentIndex(in: scope)
+            if fault == "owned" {
+                #expect(actual == 0)
+                #expect(f.heldHeaderDiscoveryScans == 0, "Renew the original rail, not another global discovery")
+            } else { #expect(actual == nil) }
+            if fault == "foreign_scope" {
+                #expect(binding.currentIndex() == 0, "A foreign proof cannot retire an otherwise current original binding")
+            }
+            if fault == "missing_peer" {
+                f.builder.setChildren(f.rail, f.headers)
+                #expect(binding.currentIndex() == nil, "Restoration cannot erase an observed lifetime loss")
+            }
+            if fault == "rail_role" {
+                f.builder.setRole(f.rail, kAXGroupRole as String)
+                #expect(binding.currentIndex(in: scope) == nil, "A lost native scope cannot revive when its role returns")
+            }
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
+    @Test("A post-input source receipt renews its original native rail instead of rediscovering the window")
+    func renewedInputSourceUsesItsActualHeldRail() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let pairs = await held.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let pair = try #require(pairs.first { CFEqual($0.track.header, f.headers[0]) })
+            let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
+                runtime: runtime, sourceDisposition: .readObservation)
+            let source = try #require(observed.source)
+            f.heldHeaderDiscoveryScans = 0
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            #expect(source.permits(runtime: runtime))
+            #expect(f.heldHeaderDiscoveryScans == 0, "The actual source consumer must use its retained native scope")
         }
     }
 

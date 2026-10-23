@@ -582,7 +582,7 @@ extension AccessibilityChannel {
         func sourceForOriginalHeader(_ prior: HeldSelectionAssociation.Pair,
             runtime: AXLogicProElements.Runtime) -> Self? {
             guard permits(runtime: runtime), observation.effects.restoration == "restored",
-                  prior.track.currentIndex() != nil, CFEqual(prior.strip.window, original.window),
+                  prior.track.currentIndex(in: observation) != nil, CFEqual(prior.strip.window, original.window),
                   CFEqual(prior.strip.mixer, pair.strip.mixer),
                   prior.strip.document.utf8.elementsEqual(observation.document.utf8),
                   observation.headers.filter({ CFEqual($0, prior.track.header) }).count == 1 else { return nil }
@@ -610,7 +610,7 @@ extension AccessibilityChannel {
         func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil,
                      nativeOutputPopup: Bool = false) -> Bool {
             guard pair.strip.currentIndex(runtime: runtime) == index,
-                  originalTrack.currentIndex() != nil,
+                  (ownedPopup == nil ? originalTrack.currentIndex(in: observation) : originalTrack.currentIndex()) != nil,
                   ownedPopup.map({ observation.permitsOwnedPopupRead($0,
                     nativeSource: nativeOutputPopup ? pair.strip : nil) }) ?? observation.permitsRead(),
                   case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),

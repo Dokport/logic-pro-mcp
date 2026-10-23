@@ -471,6 +471,37 @@ extension AccessibilityChannel {
             return true
         }
 
+        func retainsOriginalHeaderCarrier(_ binding: AXTrackBinding.Binding) -> Bool {
+            !lost && CFEqual(binding.window, window)
+                && binding.document.utf8.elementsEqual(document.utf8)
+                && headers.filter({ CFEqual($0, binding.header) }).count == 1
+        }
+
+        /// Identity-only sampling of this already-observed native rail. It grants
+        /// no Help, selection, popup, inverse or publication permission.
+        func readOriginalHeaderPopulation(for binding: AXTrackBinding.Binding,
+            observingPopulation: ([AXUIElement]) -> Void) -> [AXUIElement]? {
+            guard retainsOriginalHeaderCarrier(binding),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+            guard let role = AXHelpers.getRole(rail, runtime: logic.ax),
+                  [kAXGroupRole, kAXListRole, kAXScrollAreaRole, kAXOutlineRole, kAXTableRole]
+                    .contains(where: { role == $0 as String }),
+                  case .read(let current) = AXLogicProElements.enumerateTrackHeaderRows(in: rail, runtime: logic.ax) else {
+                lost = true; binding.exposure?.end(); return nil
+            }
+            // Consume the actual sample even when later ownership fails. A
+            // restored census cannot revive a previously retired binding.
+            observingPopulation(current)
+            binding.exposure?.observeHeaders(current)
+            retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(current) }
+            guard Self.same(headers, current), owned(),
+                  binding.exposure?.isCurrent ?? true,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                lost = true; binding.exposure?.end(); return nil
+            }
+            return current
+        }
+
         /// Only this explicit association observation uses this request-local focus scope.
         /// It does not itself read Help, and cannot admit an editor, key event or
         /// unheld strip. Requested-strip Help remains under its existing guard.

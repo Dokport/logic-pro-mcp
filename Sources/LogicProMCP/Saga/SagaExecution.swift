@@ -340,26 +340,15 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                             await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
                         }
                     }
-                    if self.approved != nil {
-                        Log.info("Canonical Send checked pre-read: assignment=\(checked.assignment?.token ?? "none"),same_control=\(self.capturedControl.map { captured in checked.sendControl.map(captured.matches) == true } ?? true),checks=\(checked.sendNonRoutingChecks),remaining=\(OperationTraceContext.current?.deadline.map { String(describing: ContinuousClock.now.duration(to: $0)) } ?? "none")", subsystem: "saga")
-                    }
                     guard let before = Self.expectedBefore(self.forward), checked.assignment == before,
                           self.capturedControl.map({ captured in checked.sendControl.map(captured.matches) == true }) ?? true,
                           checked.sendNonRoutingChecks == ["Post Fader"] || checked.sendNonRoutingChecks == ["포스트 페이더"],
-                          let slots = { () -> [SendSlotObservation]? in
-                              let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax)
-                              Log.info("Canonical Send pre-read slots: observed=\(String(describing: slots)),expected=\(String(describing: self.footprint)),help_stopped=\(AXHelpers.HelpReadGuard.current?.stopped == true),remaining=\(OperationTraceContext.current?.deadline.map { String(describing: ContinuousClock.now.duration(to: $0)) } ?? "none")", subsystem: "saga")
-                              return slots
-                          }(),
+                          let slots = AXLogicProElements.sendSlotObservations(in: physical.strip, runtime: runtime.ax),
                           slots.count == 2, slots.filter({ $0.state == .observedEmpty }).count == 1,
                           let occupied = slots.first(where: { $0.state == .occupiedUnknownDestination }),
                           occupied.ordinal == ordinal, occupied.levelRaw == 0, occupied.bypassed == false,
                           self.footprint.map({ $0 == slots }) ?? true,
-                          ({ () -> Bool in
-                              let index = physical.currentIndex(runtime: runtime)
-                              Log.info("Canonical Send pre-read membership: current=\(index != nil),remaining=\(OperationTraceContext.current?.deadline.map { String(describing: ContinuousClock.now.duration(to: $0)) } ?? "none")", subsystem: "saga")
-                              return index != nil
-                          })() else { return nil }
+                          physical.currentIndex(runtime: runtime) != nil else { return nil }
                     self.pair = held; self.footprint = slots
                     token = before.token; source = .axSendMenuCheckmark
                 }
