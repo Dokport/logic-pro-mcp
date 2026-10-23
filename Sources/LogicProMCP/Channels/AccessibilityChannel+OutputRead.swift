@@ -564,7 +564,8 @@ extension AccessibilityChannel {
         guard physical.currentIndex(runtime: runtime) != nil else {
             return refuse(.staleTargetReference, "The original physical source is no longer in its bound project/window.")
         }
-        @Sendable func currentPhysicalIndex(ownedPopup: AXUIElement? = nil) -> Int? {
+        @Sendable func currentPhysicalMembership(ownedPopup: AXUIElement? = nil)
+            -> (index: Int?, checkedInHeldScope: Bool) {
             if let readingOriginalScope {
                 if inputBusOnly {
                     // Borrow identity only inside an ordinary, reciprocal Mixer
@@ -574,12 +575,12 @@ extension AccessibilityChannel {
                     guard let ownedPopup,
                           let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
                           menus.count == 1, CFEqual(menus[0], ownedPopup) else {
-                        return physical.currentIndex(runtime: runtime)
+                        return (physical.currentIndex(runtime: runtime), false)
                     }
                 }
-                return physical.currentIndex(in: readingOriginalScope, ownedPopup: ownedPopup)
+                return (physical.currentIndex(in: readingOriginalScope, ownedPopup: ownedPopup), true)
             }
-            return physical.currentIndex(runtime: runtime)
+            return (physical.currentIndex(runtime: runtime), false)
         }
         guard readingOriginalScope.map({ physical.currentIndex(in: $0) != nil }) ?? true else {
             return refuse(.staleTargetReference, "The original read scope no longer contains this physical source.")
@@ -670,11 +671,18 @@ extension AccessibilityChannel {
         // held physical membership, then the exact current main window/document
         // after those reads. AX still offers no atomic compare-and-act primitive.
         @Sendable func ownerBoundaryStillCurrent(ownedPopup: AXUIElement? = nil) -> Bool {
-            guard !Task.isCancelled, runtime.logicProPID() == pid,
-                  currentPhysicalIndex(ownedPopup: ownedPopup) != nil,
-                  case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
-                  CFEqual(window, physical.window),
-                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(
+            guard !Task.isCancelled, runtime.logicProPID() == pid else { return false }
+            let membership = currentPhysicalMembership(ownedPopup: ownedPopup)
+            guard membership.index != nil else { return false }
+            // The actual held-scope read just renewed its main/focused window,
+            // original native paths and complete rail/Mixer membership. Keep the
+            // ordinary/native fallback's global window check; a second hierarchy
+            // discovery adds no identity to that already checked held window.
+            if !membership.checkedInHeldScope {
+                guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+                      CFEqual(window, physical.window) else { return false }
+            }
+            guard case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(
                     physical.window, runtime: runtime),
                   document.utf8.elementsEqual(physical.document.utf8) else { return false }
             return true

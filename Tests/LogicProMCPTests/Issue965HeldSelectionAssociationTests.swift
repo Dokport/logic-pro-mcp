@@ -531,6 +531,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingInputReadRenewed = false
         var routingInputOpenDiscoveryStart: Int?
         var routingInputOpenDiscoveryCounts: [Int] = []
+        var routingInputOpenWindowScans = 0
+        var routingInputDiscoveryProbe: AXUIElement?
         var routingPopupReadFocusRetained = false
         var routingForeignHelpReads = 0
         var routingForeignHelpFirstStack: [String] = []
@@ -802,6 +804,11 @@ struct Issue965HeldSelectionAssociationTests {
                         footprintReads[key] = sample
                     }
                     routingRead?(element, attribute)
+                    if routingInputOpenDiscoveryStart != nil,
+                       routingInputDiscoveryProbe.map({ CFEqual(element, $0) }) == true,
+                       attribute == kAXRoleAttribute as String, activeBulkAttributes == nil {
+                        routingInputOpenWindowScans += 1
+                    }
                     if routingScalarControls.contains(where: { CFEqual($0, element) }),
                        [kAXValueAttribute as String, kAXMinValueAttribute as String, kAXMaxValueAttribute as String].contains(attribute) {
                         return .some(builder.attributeValue(element, attribute) as AnyObject?)
@@ -4847,21 +4854,25 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("Canonical Send input prerequisites keep the admitted Mixer census while their own popup is open",
-          arguments: ["forward", "cancel"])
-    func canonicalExistingBusSendReadsInputsThroughItsHeldMixer(mode: String) async throws {
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalExistingBusSendReadsInputsThroughItsHeldMixer(mode: String, anotherWindow: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
-                canonicalBusReceiverFault: "physical_source_scoped_input", stableDestinationBulkReads: true)
+                canonicalBusReceiverFault: "physical_source_scoped_input", stableDestinationBulkReads: true,
+                scopedInputAdditionalWindow: anotherWindow)
         }
     }
 
     @Test("An input read borrowing a held Mixer still uses the existing native-popup custody path",
-          arguments: ["unscoped", "owned", "foreign_scope", "guarded_native", "guarded_native_document",
+          arguments: ["unscoped", "owned", "foreign_scope", "guarded_ordinary", "guarded_ordinary_document",
+                      "guarded_ordinary_window", "guarded_ordinary_source", "guarded_ordinary_gate",
+                      "guarded_native", "guarded_native_document",
                       "guarded_native_window", "guarded_native_source", "guarded_native_root",
                       "guarded_native_editor", "guarded_native_gate"])
     func heldInputReadPreservesNativePopupWithoutFocusedWindow(scope: String) async throws {
         let f = try Fixture(), b = f.builder
+        let ordinary = scope.hasPrefix("guarded_ordinary")
         let input = b.element(1_971_980), root = b.element(1_971_981), echo = b.element(1_971_982)
         let parent = b.element(1_971_983), submenu = b.element(1_971_984), leaf = b.element(1_971_985)
         let wrapper = b.element(1_971_986), frame = CGRect(x: 20, y: 100, width: 230, height: 175)
@@ -4890,7 +4901,7 @@ struct Issue965HeldSelectionAssociationTests {
         b.setFrame(root, x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
         f.routingFocusHit = { _, _ in .success(f.routingNativePopupFrame == nil ? nil : echo) }
         f.routingReadResult = { element, attribute in
-            if f.routingNativePopupFrame != nil, CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
+            if !ordinary, f.routingNativePopupFrame != nil, CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
                 if scope == "guarded_native_window" { return .success(b.element(1_971_988)) }
                 return .failure(.init(raw: AXError.noValue.rawValue))
             }
@@ -4899,9 +4910,13 @@ struct Issue965HeldSelectionAssociationTests {
         f.routingAction = { element, action in
             if CFEqual(element, input), action == kAXPressAction as String {
                 b.setChildren(wrapper, [root]); f.routingNativePopupFrame = frame; f.inputMenuPresses += 1
+                if ordinary { b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [root]) }
                 switch scope {
-                case "guarded_native_document": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
-                case "guarded_native_source": b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, input) })
+                case "guarded_native_document", "guarded_ordinary_document":
+                    b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                case "guarded_ordinary_window": b.setAttribute(f.app, kAXFocusedWindowAttribute as String, b.element(1_971_988))
+                case "guarded_native_source", "guarded_ordinary_source":
+                    b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, input) })
                 case "guarded_native_root": b.setChildren(wrapper, [])
                 case "guarded_native_editor":
                     let editor = b.element(1_971_989)
@@ -4912,6 +4927,7 @@ struct Issue965HeldSelectionAssociationTests {
                 return true
             }
             if CFEqual(element, root), action == kAXCancelAction as String {
+                if ordinary { b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, root) }) }
                 b.setChildren(wrapper, []); f.routingNativePopupFrame = nil
                 return true
             }
@@ -4920,7 +4936,7 @@ struct Issue965HeldSelectionAssociationTests {
         let gate = LogicMutationGate(), claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
         defer { gate.release(claim) }
         let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: {
-            gate.stillOwns(claim) && (scope != "guarded_native_gate" || f.routingNativePopupFrame == nil)
+            gate.stillOwns(claim) && (!scope.hasSuffix("_gate") || f.routingNativePopupFrame == nil)
         })
         try await OperationTraceContext.$current.withValue(context) {
             let runtime = f.logic()
@@ -4938,7 +4954,7 @@ struct Issue965HeldSelectionAssociationTests {
             let readScope = borrowed
             let focus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
             let readGuard = AXHelpers.HelpReadGuard(allowHelpReads: true, stop: {
-                guard scope.hasPrefix("guarded_native") else { return false }
+                guard scope.hasPrefix("guarded_native") || ordinary else { return false }
                 let permitted = focus.permits() || held.permitsRead()
                 if !permitted, f.routingForeignHelpFirstStack.isEmpty { f.routingForeignHelpFirstStack = Thread.callStackSymbols }
                 return !permitted
@@ -4951,7 +4967,7 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
             #expect(!f.routingPopupReadFocusRetained, "Every reader exit clears its temporary native focus proof")
-            if scope.hasPrefix("guarded_native_" ) {
+            if scope.hasPrefix("guarded_native_") || scope.hasPrefix("guarded_ordinary_") {
                 #expect(read.assignment == nil, "A changed source, project, root, focus or gate cannot qualify input")
                 return
             }
@@ -4964,7 +4980,7 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(read.assignment == .bus(1), "Actual native input read: \(read.result.message)")
             #expect(f.inputMenuPresses == 1)
             #expect(f.routingNativePopupFrame == nil, "The acquired native popup must actually close")
-            if scope == "guarded_native" {
+            if scope == "guarded_native" || scope == "guarded_ordinary" {
                 #expect(held.permitsRead(), "A qualified native popup cannot retire the original capture: \(f.routingForeignHelpFirstStack.joined(separator: "\n"))")
             }
         }
@@ -5060,7 +5076,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil,
                                                sendGeometry: Bool = false,
-                                               decidingSendFault: String? = nil) async throws {
+                                               decidingSendFault: String? = nil,
+                                               scopedInputAdditionalWindow: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inverseInputReadRenewal = canonicalBusReceiverFault?.hasPrefix("physical_source_inverse_read_renewal") == true
@@ -6403,6 +6420,23 @@ struct Issue965HeldSelectionAssociationTests {
                     || canonicalBusReceiverFault == "physical_source_scoped_input" {
                     f.routingInputReadRenewalArmed = true
                 }
+                if scopedInputAdditionalWindow {
+                    let additional = b.element(1_971_999)
+                    b.setRole(additional, kAXWindowRole as String)
+                    b.setAttribute(additional, kAXTitleAttribute as String, "Auxiliary")
+                    b.setChildren(additional, [])
+                    b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, additional])
+                    let unrelated = b.element(1_971_998)
+                    b.setRole(unrelated, kAXGroupRole as String)
+                    b.setChildren(unrelated, [])
+                    let container = b.element(1_971_997)
+                    b.setRole(container, kAXGroupRole as String)
+                    b.setChildren(container, [unrelated])
+                    // Modal guards inspect direct window children. Only a full
+                    // descendant walk reaches this unrelated nested probe.
+                    b.setChildren(f.window, b.makeAXRuntime().children(f.window) + [container])
+                    f.routingInputDiscoveryProbe = unrelated
+                }
                 let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let arguments: [String: Value] = ["plan_id": .string(planID),
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
@@ -6434,6 +6468,8 @@ struct Issue965HeldSelectionAssociationTests {
                         "Reach checked source and both receivers, including inverse prerequisites when cancelling")
                     #expect(f.routingInputOpenDiscoveryCounts.allSatisfy { $0 == 0 },
                         "Read the admitted original native census instead of rediscovering the whole window during Input popups: \(f.routingInputOpenDiscoveryCounts)")
+                    #expect(f.routingInputOpenWindowScans == 0,
+                        "An admitted Input popup must not rescan the whole Arrange window when another non-dialog window exists")
                 }
                 if sourceInputReadRenewal {
                     #expect(f.routingInputReadRenewed, "Reach actual post-menu retirement before routing")
