@@ -646,7 +646,8 @@ extension AccessibilityChannel {
         runtime: AXLogicProElements.Runtime, selectedHeaderRequired: Bool = true,
         sourceDisposition: OriginalHeaderSourceDisposition = .retiredOriginal,
         restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
-        observingReadFocus: @Sendable (HeldSelectionAssociation) -> Void = { _ in }
+        observingReadFocus: @Sendable (HeldSelectionAssociation) -> Void = { _ in },
+        observingPeerHeaders: [AXTrackBinding.Binding]? = nil
     ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
               let observation = HeldSelectionAssociation(window: original.window, logic: runtime,
@@ -675,7 +676,8 @@ extension AccessibilityChannel {
             originalPair.track.currentIndex() != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
         }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil },
-            allHeldHeaders: true, prioritizingHeader: originalPair.track)
+            allHeldHeaders: true, prioritizingHeader: originalPair.track,
+            observingPeerHeaders: observingPeerHeaders)
         if let originalMixerGeometry, observation.effects.restoration == "restored" {
             // The hidden Mixer bar is absent from the ordinary viewport census.
             // An original-header inverse must not retain a source after leaving

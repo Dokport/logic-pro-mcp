@@ -479,13 +479,15 @@ extension AccessibilityChannel {
         restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
-        refreshingOriginalSourceAfterCleanup: Bool = false) async -> CheckedOutputReading {
+        refreshingOriginalSourceAfterCleanup: Bool = false,
+        observingPeerHeaders: [AXTrackBinding.Binding]? = nil) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
             runtime: runtime, timing: timing, restoringMixerGeometry: restoringMixerGeometry,
             observingPopupFocus: observingPopupFocus,
             observingRenewedFocus: observingRenewedFocus,
             requiringOriginalInputControl: requiringOriginalInputControl,
-            refreshingOriginalSourceAfterCleanup: refreshingOriginalSourceAfterCleanup)
+            refreshingOriginalSourceAfterCleanup: refreshingOriginalSourceAfterCleanup,
+            observingPeerHeaders: observingPeerHeaders)
     }
 
     static func getCheckedInputObservation(runtime: AXLogicProElements.Runtime,
@@ -524,7 +526,8 @@ extension AccessibilityChannel {
         requiringSendMode: Bool = true,
         requiringOriginalSendControl: AXLogicProElements.AssignedSendMenuControl? = nil,
         requiringOriginalInputControl: AXMixerInputSlotBinding? = nil,
-        refreshingOriginalSourceAfterCleanup: Bool = false
+        refreshingOriginalSourceAfterCleanup: Bool = false,
+        observingPeerHeaders: [AXTrackBinding.Binding]? = nil
     ) async -> CheckedOutputReading {
         let operation = sendReplacement?.modeChange != nil ? "mixer.set_send_mode_verified" : sendReplacement != nil ? "mixer.set_send_output_verified" :
             (inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified"))
@@ -1564,7 +1567,8 @@ extension AccessibilityChannel {
                 let observed = await renewSourceThroughOriginalHeader(originalPair, original: physical,
                     runtime: runtime, selectedHeaderRequired: false,
                     sourceDisposition: refreshingOriginalSourceAfterCleanup ? .readObservation : .retiredOriginal,
-                    restoringMixerGeometry: restoringMixerGeometry, observingReadFocus: observingRenewedFocus)
+                    restoringMixerGeometry: restoringMixerGeometry, observingReadFocus: observingRenewedFocus,
+                    observingPeerHeaders: observingPeerHeaders)
                 extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
                     "attempted": observed.effects.attempted, "changed": observed.effects.changed,
                     "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]

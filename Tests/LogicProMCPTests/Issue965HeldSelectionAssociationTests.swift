@@ -10260,6 +10260,79 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Optional peer discovery ends only after the requested native strips were actually associated",
+          arguments: ["owned", "missing_peer", "foreign_document", "unrequested_census_change"])
+    func requestedNativePeersEndOnlyOptionalDiscovery(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let originalPairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let first = try #require(originalPairs.first { CFEqual($0.track.header, f.headers[1]) })
+            let second = try #require(originalPairs.first { CFEqual($0.track.header, f.headers[2]) })
+            let absent = AXTrackBinding.Binding(window: f.window,
+                header: f.builder.element(965_992_001), document: initial.document, runtime: f.logic())
+            let foreign = AXTrackBinding.Binding(window: f.window,
+                header: second.track.header, document: "file:///Foreign.logicx", runtime: f.logic())
+            let targets = [first.track, fault == "missing_peer" ? absent : fault == "foreign_document" ? foreign : second.track]
+            let count = f.selections.count
+            if fault == "unrequested_census_change" {
+                f.routingSelection = { index in
+                    if index == 2 {
+                        f.routingLateScopeInjected = true
+                        f.builder.setChildren(f.rail, [f.headers[0], f.headers[1], f.headers[2]])
+                    }
+                }
+            }
+            let observation = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await observation.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, observingPeerHeaders: targets)
+            let selected = Array(f.selections.dropFirst(count))
+            if fault == "owned" {
+                #expect(selected == [1, 2, 0], "Do not navigate to unrelated header3 after both actual native peers were observed")
+                #expect(pairs.count == 3 && !pairs.contains { CFEqual($0.track.header, f.headers[3]) })
+                #expect(observation.headers.count == 4 && observation.strips.count == 4)
+                #expect(observation.effects.restoration == "restored")
+            } else if fault == "unrequested_census_change" {
+                #expect(f.routingLateScopeInjected && pairs.isEmpty)
+            } else {
+                #expect(selected == [1, 2, 3, 0], "Unobserved or foreign native peers must not terminate collection early")
+                #expect(pairs.count == 4)
+                #expect(!pairs.contains { $0.track.matches(fault == "missing_peer" ? absent : foreign) })
+            }
+        }
+    }
+
+    @Test("Input source renewal forwards actual peer custody without optional unrelated selections")
+    func inputRenewalForwardsActualNativePeerCollection() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let source = try #require(pairs.first { CFEqual($0.track.header, f.headers[3]) })
+            let peer = try #require(pairs.first { CFEqual($0.track.header, f.headers[1]) })
+            let count = f.selections.count
+            let renewed = await AccessibilityChannel.renewSourceThroughOriginalHeader(source, original: source.strip,
+                runtime: f.logic(), selectedHeaderRequired: false, sourceDisposition: .readObservation,
+                observingPeerHeaders: [peer.track])
+            let actual = try #require(renewed.source)
+            #expect(Array(f.selections.dropFirst(count)) == [3, 1, 0])
+            #expect(actual.pair.track.matches(source.track) && actual.observedPairs.count == 3)
+            #expect(actual.observation.headers.count == 4 && actual.observation.strips.count == 4)
+            #expect(renewed.effects.restoration == "restored")
+        }
+    }
+
     @Test("Measured population cost reserves both rechecks without an unrelated quarter-deadline cap",
           arguments: [6, 11, 16])
     func measuredCollectionUsesAvailableTimeWithoutSpendingRecheckReserve(elapsedSeconds: Int) async throws {

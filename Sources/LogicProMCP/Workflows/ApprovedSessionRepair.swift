@@ -1312,6 +1312,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           let nativeControl = native.control, CFEqual(nativeControl, slot.control) else { return nil }
                     candidates.append((prior, slot))
                 }
+                var inputPeerHeaders = candidates.compactMap { $0.0?.track }
                 if let roster {
                     stage = "receiver_\(bus)_roster"
                     guard roster.permits(runtime: runtime) else { return nil }
@@ -1322,7 +1323,15 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         let native = AXLogicProElements.inputSlotRead(in: current.strip.strip, runtime: runtime.ax)
                         guard case .source(let label) = native.reading, let nativeControl = native.control,
                               RoutingGraphPublication.classifyOutputLabel(label).0 == .bus,
-                              RoutingGraphPublication.classifyOutputLabel(label).1 == bus else { continue }
+                              let peerBus = RoutingGraphPublication.classifyOutputLabel(label).1,
+                              buses.contains(peerBus) else { continue }
+                        // These headers already have actual native pair witnesses.
+                        // Their current input labels only choose needed discovery;
+                        // the checked input readers still decide every Bus fact.
+                        if !inputPeerHeaders.contains(where: { $0.matches(current.track) }) {
+                            inputPeerHeaders.append(current.track)
+                        }
+                        guard peerBus == bus else { continue }
                         // This is an actual current positive receiver candidate,
                         // not a label join to a retired peer ref. Its owned menu
                         // must independently prove the Bus before it is usable.
@@ -1343,7 +1352,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                 restoringMixerGeometry: originalMixerGeometry,
                                 observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                                 observingRenewedFocus: { inputFocus.retainAssociation($0) },
-                                refreshingOriginalSourceAfterCleanup: currentPair != nil)
+                                refreshingOriginalSourceAfterCleanup: currentPair != nil,
+                                observingPeerHeaders: inputPeerHeaders.isEmpty ? nil : inputPeerHeaders)
                         }
                     }
                     stage = "receiver_\(bus)_assignment"

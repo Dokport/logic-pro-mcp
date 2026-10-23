@@ -1343,6 +1343,7 @@ extension AccessibilityChannel {
                      allHeldHeaders: Bool = false,
                      narrowChallengeHeaders: [AXTrackBinding.Binding] = [],
                      prioritizingHeader: AXTrackBinding.Binding? = nil,
+                     observingPeerHeaders: [AXTrackBinding.Binding]? = nil,
                      populationReadDuration: Duration = .zero,
                      collectionNow: @Sendable () -> ContinuousClock.Instant = { .now }) async -> [Pair] {
             var preferredIndex: Int?
@@ -1404,6 +1405,21 @@ extension AccessibilityChannel {
                 collectionEnd = start.advanced(by: reserve > .zero ? remaining - reserve : remaining / 4)
             } else { collectionEnd = nil }
             var observed: [(Int, AXUIElement)] = []
+            func requestedPeersWereObserved() -> Bool {
+                guard allHeldHeaders, let observingPeerHeaders, !observed.isEmpty else { return false }
+                if let preferredIndex, preferredIndex != originalIndex,
+                   !observed.contains(where: { $0.0 == preferredIndex }) { return false }
+                return observingPeerHeaders.allSatisfy { peer in
+                    guard CFEqual(peer.window, window),
+                          peer.document.utf8.elementsEqual(document.utf8), peer.exposure?.hasEnded != true,
+                          headers.filter({ CFEqual($0, peer.header) }).count == 1,
+                          let index = headers.firstIndex(where: { CFEqual($0, peer.header) }) else { return false }
+                    // The original relationship still needs its actual changed-
+                    // strip return below. This only ends optional discovery;
+                    // no pair survives a failed full-custody inverse or viewport.
+                    return index == originalIndex || observed.contains(where: { $0.0 == index })
+                }
+            }
             var restored = true
             var selectionsVerified = true
             // An initially selected header and passive focus are not a pair
@@ -1453,6 +1469,7 @@ extension AccessibilityChannel {
                         }
                         if !CFEqual(associationStrip, originalAssociationStrip) { observed.append((challenge, associationStrip)) }
                     }
+                    if requestedPeersWereObserved() { break }
                     continue
                 }
                 if expectedIndex == originalIndex {
