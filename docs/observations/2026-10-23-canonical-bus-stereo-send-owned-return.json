@@ -1,0 +1,68 @@
+{
+  "schema": 3,
+  "id": "2026-10-23-canonical-bus-stereo-send-owned-return",
+  "date": "2026-10-23",
+  "subject": "Captured Bus-to-Stereo Send completion and owned cancellation from Tracks focus",
+  "question": "Can a captured singleton Bus-to-Stereo Send goal check its native input prerequisites, complete or compensate its own change, and restore the prepared Tracks state?",
+  "verdict": "partial",
+  "surface": "mixer.routing",
+  "issues": [291, 971],
+  "host": {"app": "Logic Pro", "version": "12.3", "build": "6674", "locale": "en-US", "os": "macOS 26.3 (25D125)"},
+  "reverify": {
+    "kind": "manual",
+    "command": "Prepare a stopped disposable four-track/nine-strip project. Select a source with physical Input 1, main Stereo output and exactly one occupied Bus 1 Send in Post Fader mode, raw level zero and bypass off; retain a separate existing Bus 1 receiver. Start with Tracks-container focus and the fully visible leftmost viewport. Capture selection/tracks/strips/associations/routing through inspect_session. Plan one confirmed canonical Send output goal with the issued project/track references and observed ordinal 1. Check wrong-target planning and wrong-digest application without changing the independent native UI. Apply the valid plan within its existing lifetime. For cancellation, observe a newly verified child and that exact key still in progress before cancelling it. Inspect compensation, terminal journal and same-key replay. In a separate execution, let the canonical goal complete, verify its cached completed-key replay and independently inspect the actual Send change. Freshly capture the changed source and use a separately preflighted generic Stereo-to-Bus 1 singleton to return the fixture. Compare complete independent native UI states at each terminal checkpoint.",
+    "expected": "Cancellation reports one verified forward and one verified owned inverse, fullyCompensated and a cancelled journal, with checked bus:1 restored. Normal canonical completion reports A/completed/verified and independently checked stereo_output. Its distinct generic return reports A/completed/verified and checked bus:1; that fresh request is not a canonical return or the preceding request's owned inverse. Same-key replay returns retained results. The complete terminal AX state equals the prepared Tracks baseline. Existing custody, protected-state, deadline and ambiguity refusals remain intact."
+  },
+  "depends": [
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+OutputAssignment.swift",
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+OutputRead.swift",
+    "Sources/LogicProMCP/Channels/AccessibilityChannel+SelectionAssociation.swift",
+    "Sources/LogicProMCP/Workflows/ApprovedSessionRepair.swift"
+  ],
+  "evidence": ["evidence/2026-10-23-canonical-bus-stereo-send-owned-return.json"],
+  "method": "Actual registered public MCP calls against a source-attested executable, event-bound cancellation through public trace/journal observations, and independent native AX comparisons. Screenshots separately corroborate the visible viewport and routing controls. Selected response fields are attached without private project paths or opaque request/reference/trace tokens.",
+  "canon_not_applicable": {
+    "reason": "This measures native source custody, action/readback, compensation, replay and UI restoration. It makes no assertion about canonical label vocabulary or translations."
+  },
+  "observations": [
+    {
+      "source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30",
+      "binary_sha256": "dfbf9b5bae0c8fb0cf46c3b3ad12e9dded8cdb2967852e7dc7e7fd9893ef79a5",
+      "binding": "Embedded commit, strict signature and source-content provenance checks agree. Native read renewal retains its original Mixer owner before whole-window Help discovery; the original rail, selected-child, reciprocal path, complete census, viewport and stopped-transport checks are unchanged."
+    },
+    {
+      "case": "event-bound canonical cancellation",
+      "elapsed_seconds": 138.103871333,
+      "forward": "A; bus:1 to stereo_output; live-independent ax_send_menu_checkmark",
+      "cancel_basis": "New verified child and exact key observed in progress; no timer-derived authority",
+      "terminal": "C / fullyCompensated; journal reports one forward and one verified inverse boundary, zero failed or uncertain compensations",
+      "inverse": "bus:1; exact comparison equal; live-independent menu readback",
+      "journal": "cancelled",
+      "replay": "duplicate true; retained cancelled outcome, no renewed execution authority",
+      "independent_ui": "All 54717 AX characters exactly equal the prepared baseline, including Tracks focus, selection and protected controls. Screenshots corroborate the leftmost visible viewport and restored Send.",
+      "raw_transcript_sha256": "4d3a4756bcd918104f9c5e301e0eecd8a5c9c42f4d4d802bfd9758b16bd81f90"
+    },
+    {
+      "case": "normal canonical completion and distinct generic fixture return",
+      "forward_seconds": 61.274524667,
+      "forward": "A / completed / verified; independently checked stereo_output",
+      "forward_replay": "duplicate true; cached completed outcome",
+      "independent_forward_ui": "Only the occupied Send destination display line changes; all other AX lines, including Tracks focus, remain equal",
+      "fresh_generic_return_seconds": 34.864796375,
+      "fresh_generic_return": "A / completed / verified; fresh capture, separate key and confirmation hash; stereo_output to bus:1",
+      "return_replay": "duplicate true; both completed journals and cached non-trace response equality checked",
+      "independent_final_ui": "Complete 54717-character AX state exactly equals the prepared baseline",
+      "raw_transcript_sha256": "c54303d26ce91966daf23a4064101006ff90f2813dbdf3ed76271bdf7d27cdca"
+    }
+  ],
+  "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry. A separate generic request returns a normally completed change. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair.",
+  "limits": [
+    "One stopped English four-track/nine-strip fixture; hidden/shared strips, arbitrary topology, other locales, cold acquisition and Logic 12.4 are unqualified.",
+    "This fully visible leftmost viewport does not qualify automatic restoration of arbitrary scrolled/offscreen layouts. The separate opt-in native Scroll To test was skipped, not promoted to native evidence.",
+    "The earlier source checkpoint 7b58b901 refused checked input acquisition before writing with a stopped Help guard. Its immutable recording is retained separately; the source-attested abef1bcb runs establish the repaired bounded profile.",
+    "An initial normal-completion attempt waited 117 seconds between planning and application and was refused without writing. That retained plan-expiry failure is not a product regression or a passing normal execution; no lifetime or deadline was extended.",
+    "Native receiver-conflict injection, mixed-Saga atomicity, namespace/allocation and full R1-R4/F1-F5 acceptance are not established.",
+    "Raw recordings contain private project identities and are not published. Attached excerpts and hashes are not a headless native replay or independent per-AX-action instrumentation. Pixel equality is not claimed."
+  ],
+  "supersedes": null
+}

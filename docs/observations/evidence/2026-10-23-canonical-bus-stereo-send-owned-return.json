@@ -1,0 +1,86 @@
+{
+  "format": "actual-canonical-bus-stereo-send-excerpts.v1",
+  "method": "Selected actual MCP response fields and separately observed native UI comparisons; private paths and opaque tokens omitted. This is not a native replay.",
+  "source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30",
+  "binary_sha256": "dfbf9b5bae0c8fb0cf46c3b3ad12e9dded8cdb2967852e7dc7e7fd9893ef79a5",
+  "controls": {
+    "wrong_target_plan_executable": false,
+    "wrong_digest": {"state": "C", "error": "stale_target_reference", "write_attempted": false},
+    "independent_after_controls_exactly_matches_prepared": true
+  },
+  "cancelled": {
+    "raw_sha256": "4d3a4756bcd918104f9c5e301e0eecd8a5c9c42f4d4d802bfd9758b16bd81f90",
+    "elapsed_seconds": 138.10387133300003,
+    "cancel_basis": {"dispatcher_verified_operation": "mixer.set_send_output_verified", "exact_key_in_progress": true, "timer_authority": false, "independent_CUA_intermediate_change_claimed": false},
+    "state": "C",
+    "verified": false,
+    "saga_state": "fullyCompensated",
+    "step": {
+      "operation_id": "mixer.set_send_output_verified",
+      "result": {"state": "A", "write_boundary_crossed": true},
+      "before": {"observed": "bus:1", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"},
+      "verification": {
+        "disposition": "applied",
+        "comparison": {"comparator": "exact", "desired": "stereo_output", "equal": true, "observed": "stereo_output"},
+        "readback": {"observed": "stereo_output", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"}
+      },
+      "compensation": {
+        "disposition": "verified",
+        "comparison": {"comparator": "exact", "desired": "bus:1", "equal": true, "observed": "bus:1"},
+        "readback": {"observed": "bus:1", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"}
+      }
+    },
+    "journal_summary": {"compensation_write_boundary_count": 1, "failed_compensation_count": 0, "forward_write_boundary_count": 1, "record_count": 1, "uncertain_compensation_count": 0, "verified_compensation_count": 1, "write_boundary_count": 2},
+    "journal_status": "cancelled",
+    "replay": {"state": "C", "verified": false, "saga_state": "fullyCompensated", "duplicate": true}
+  },
+  "completed": {
+    "raw_sha256": "c54303d26ce91966daf23a4064101006ff90f2813dbdf3ed76271bdf7d27cdca",
+    "canonical_forward": {
+      "elapsed_seconds": 61.274524666999994,
+      "state": "A", "verified": true, "saga_state": "completed",
+      "step": {
+        "operation_id": "mixer.set_send_output_verified",
+        "result": {"state": "A", "write_boundary_crossed": true},
+        "before": "bus:1",
+        "verification": {
+          "disposition": "applied",
+          "comparison": {"comparator": "exact", "desired": "stereo_output", "equal": true, "observed": "stereo_output"},
+          "readback": {"observed": "stereo_output", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"}
+        }
+      },
+      "replay": {"elapsed_seconds": 0.0022078749999820957, "state": "A", "verified": true, "saga_state": "completed", "duplicate": true}
+    },
+    "fresh_generic_return": {
+      "elapsed_seconds": 34.864796375,
+      "state": "A", "verified": true, "saga_state": "completed",
+      "step": {
+        "operation_id": "mixer.set_send_output_verified",
+        "result": {"state": "A", "write_boundary_crossed": true},
+        "before": "stereo_output",
+        "verification": {
+          "disposition": "applied",
+          "comparison": {"comparator": "exact", "desired": "bus:1", "equal": true, "observed": "bus:1"},
+          "readback": {"observed": "bus:1", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"}
+        }
+      },
+      "replay": {"elapsed_seconds": 0.003582375000007687, "state": "A", "verified": true, "saga_state": "completed", "duplicate": true},
+      "journal_status": "completed",
+      "canonical_return_qualified": false,
+      "owned_cancellation_inverse": false
+    }
+  },
+  "independent_ui": {
+    "prepared_character_count": 54717,
+    "focus": "Tracks container",
+    "cancelled_terminal_exactly_matches_prepared": true,
+    "completed_forward_only_difference": "Occupied Send destination display",
+    "fresh_generic_return_terminal_exactly_matches_prepared": true,
+    "pixel_equality_claimed": false
+  },
+  "retained_failures": [
+    {"source_commit": "7b58b9010f896c7ffde98b9943eabe1772cce7e4", "raw_sha256": "f2a984b6ee54156972f8610583f4dd4964c0b6877cea648d42b13215266d0b49", "result": "Checked input prerequisites refused before Send; zero journal write boundaries; complete terminal AX equals prepared baseline"},
+    {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "raw_sha256": "e0f6fb512eaa2fd4e5b4fcd80f44c264193c0833bf4fa111697e5799bf10ca45", "result": "Plan waited 117 seconds before application; stale_target_reference / write_attempted false; complete terminal AX equals prepared baseline"}
+  ],
+  "limits": ["One stopped English four-track/nine-strip profile.", "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.", "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.", "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."]
+}
