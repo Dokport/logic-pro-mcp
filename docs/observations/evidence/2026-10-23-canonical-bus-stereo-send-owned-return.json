@@ -656,6 +656,169 @@
       "Normal completion and a separately captured canonical return on this warm English fixture. The return is not an owned cancellation inverse; cold acquisition, Korean normal large-fixture completion, arbitrary viewports, shared strips and whole routing remain unqualified."
     ]
   },
+  "korean_flat32_completed": {
+    "locale": "ko-KR",
+    "source_commit": "1cb325dfa49f045a50216bdcb969d9f2d196a213",
+    "binary_sha256": "96aeae0454624463fa48054cb44b16d7a7c6548eb879786aea84ceb962b536b3",
+    "raw_sha256": "a4704d56e5e3fac31f63f46c08c87f3643bc577fa6c4491c217f20a2618deb13",
+    "fixture": {
+      "arrange_tracks": 32,
+      "mixer_strips": 38,
+      "warm": true,
+      "entry": "Stopped active Logic with the selected source in passive Mixer-strip focus",
+      "send_mode": "post_fader",
+      "send_level_raw": 0,
+      "send_bypassed": false
+    },
+    "capture_seconds": [
+      87.39417683299999,
+      86.807264917
+    ],
+    "capture_to_apply_seconds": 5.712224542000001,
+    "canonical_forward": {
+      "elapsed_seconds": 139.88141212500003,
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "step": {
+        "evidence": {
+          "before_state": {
+            "evidence": "ax_live tracks[1].send_destination (send_menu_checkmark)",
+            "field": "send_destination",
+            "observed": "bus:1",
+            "provenance": "live_independent",
+            "read_source": "ax_send_menu_checkmark",
+            "sampled_at": "2026-10-23T19:28:40.307Z",
+            "track_index": 1,
+            "value": "bus:1"
+          },
+          "verification": {
+            "comparison": {
+              "comparator": "exact",
+              "desired": "bus:2",
+              "equal": true,
+              "observed": "bus:2"
+            },
+            "disposition": "applied",
+            "readback": {
+              "evidence": "ax_live tracks[1].send_destination (send_menu_checkmark)",
+              "field": "send_destination",
+              "observed": "bus:2",
+              "provenance": "live_independent",
+              "read_source": "ax_send_menu_checkmark",
+              "sampled_at": "2026-10-23T19:30:18.325Z",
+              "track_index": 1,
+              "value": "bus:2"
+            }
+          }
+        },
+        "operation_id": "mixer.set_send_output_verified",
+        "result": {
+          "detail": "mixer.set_send_output_verified: verified=true",
+          "state": "A",
+          "write_boundary_crossed": true
+        },
+        "step_index": 0
+      },
+      "replay": {
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "duplicate": true
+      }
+    },
+    "forward_journal_status": "completed",
+    "fresh_canonical_return": {
+      "elapsed_seconds": 140.87722104200003,
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "step": {
+        "evidence": {
+          "before_state": {
+            "evidence": "ax_live tracks[1].send_destination (send_menu_checkmark)",
+            "field": "send_destination",
+            "observed": "bus:2",
+            "provenance": "live_independent",
+            "read_source": "ax_send_menu_checkmark",
+            "sampled_at": "2026-10-23T19:32:55.549Z",
+            "track_index": 1,
+            "value": "bus:2"
+          },
+          "verification": {
+            "comparison": {
+              "comparator": "exact",
+              "desired": "bus:1",
+              "equal": true,
+              "observed": "bus:1"
+            },
+            "disposition": "applied",
+            "readback": {
+              "evidence": "ax_live tracks[1].send_destination (send_menu_checkmark)",
+              "field": "send_destination",
+              "observed": "bus:1",
+              "provenance": "live_independent",
+              "read_source": "ax_send_menu_checkmark",
+              "sampled_at": "2026-10-23T19:34:34.250Z",
+              "track_index": 1,
+              "value": "bus:1"
+            }
+          }
+        },
+        "operation_id": "mixer.set_send_output_verified",
+        "result": {
+          "detail": "mixer.set_send_output_verified: verified=true",
+          "state": "A",
+          "write_boundary_crossed": true
+        },
+        "step_index": 0
+      },
+      "replay": {
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "duplicate": true
+      }
+    },
+    "return_wrong_digest": {
+      "state": "C",
+      "error": "stale_target_reference",
+      "write_attempted": false
+    },
+    "same_original_track_ref": true,
+    "routing_destination_setters": 2,
+    "restoration_is_owned_cancellation_inverse": false,
+    "independent_ui": {
+      "ax_characters": 178425,
+      "forward_only_declared_destination_changed": true,
+      "return_ax_exact": true,
+      "protected_scalar_values": 151,
+      "protected_scalars_exact": true,
+      "before_ax_sha256": "6599bc9e3f3e049cfee18ceb0f217b92c6709589df0e106d7abc25e38f3721ab",
+      "after_controls_ax_sha256": "6599bc9e3f3e049cfee18ceb0f217b92c6709589df0e106d7abc25e38f3721ab",
+      "forward_ax_sha256": "76dfff840c31c63893d9d26b23fd8cc58647964bd996385c9057fb1b3efe0769",
+      "forward_only_declared_destination_normalized_ax_sha256": "6599bc9e3f3e049cfee18ceb0f217b92c6709589df0e106d7abc25e38f3721ab",
+      "return_ax_sha256": "6599bc9e3f3e049cfee18ceb0f217b92c6709589df0e106d7abc25e38f3721ab",
+      "before_protected_tuple_json_sha256": "6caff759b10b16a68363e7dd6c84a4d64af5c67ff95b47e434b659d4fe445812",
+      "return_protected_tuple_json_sha256": "6caff759b10b16a68363e7dd6c84a4d64af5c67ff95b47e434b659d4fe445812",
+      "pixel_equality_claimed": false,
+      "popup_present": false,
+      "manual_recovery": false
+    },
+    "limits": [
+      "One normal completion and a separately captured canonical return on the prepared warm Korean fixture; the return is a fresh request, not an owned cancellation inverse. Cold/shared/nested/arbitrary-viewport acquisition and whole routing remain unqualified.",
+      "Capture is close to the unchanged 90-second budget. A prior source revision refused source_input_bookend without writing on the same prepared fixture; its first failed predicate was not isolated. This successful run does not establish repeatability or a general latency margin."
+    ],
+    "controls": {
+      "wrong_target_plan_executable": false,
+      "wrong_digest": {
+        "state": "C",
+        "error": "stale_target_reference",
+        "write_attempted": false
+      },
+      "independent_after_controls_exactly_matches_prepared": true
+    }
+  },
   "retained_failures": [
     {"source_commit": "7b58b9010f896c7ffde98b9943eabe1772cce7e4", "raw_sha256": "f2a984b6ee54156972f8610583f4dd4964c0b6877cea648d42b13215266d0b49", "result": "Checked input prerequisites refused before Send; zero journal write boundaries; complete terminal AX equals prepared baseline"},
     {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "raw_sha256": "e0f6fb512eaa2fd4e5b4fcd80f44c264193c0833bf4fa111697e5799bf10ca45", "result": "Plan waited 117 seconds before application; stale_target_reference / write_attempted false; complete terminal AX equals prepared baseline"},
@@ -710,10 +873,62 @@
         "qualification": "Failure retained; Korean large-fixture normal completion and automatic recovery remain unqualified. Capture latency is close to the unchanged 90-second deadline and does not establish an adequate performance margin.",
         "raw_transcript_sha256": "392dee578cf2f451552015cfbf26a135c03108fc63b9de16a88d1c03082fda70"
       }
+    },
+    {
+      "source_commit": "fd598e0637316a722b2293c17a6126d76b094a89",
+      "raw_sha256": "8f47ad1a16d78ce09c7259d44e53b3dc53eaffddaa4591b1217c235611d84b74",
+      "result": {
+        "case": "Retained Korean warm large-fixture canonical refusal",
+        "locale": "ko-KR",
+        "source_commit": "fd598e0637316a722b2293c17a6126d76b094a89",
+        "binary_sha256": "4dadd1cd1925a9aa079ee2898f9095cbbdaa3bf1ede0c58adce6837db0f7dabb",
+        "forward_seconds": 131.325921542,
+        "state": "B",
+        "verified": false,
+        "saga_state": "rollbackUncertain",
+        "journal_summary": {
+          "compensation_write_boundary_count": 0,
+          "failed_compensation_count": 0,
+          "forward_write_boundary_count": 1,
+          "record_count": 1,
+          "uncertain_compensation_count": 1,
+          "verified_compensation_count": 0,
+          "write_boundary_count": 1
+        },
+        "observation": "The final change-publication refusal observed acquisition=deadline. Independent UI retained Bus 2. Explicit development-fixture recovery subsequently restored the complete original AX state and all 151 protected values; it was not automatic compensation. The deadline observation does not isolate every earlier failed predicate.",
+        "qualification": "Retained failed execution; not native completion evidence.",
+        "raw_transcript_sha256": "8f47ad1a16d78ce09c7259d44e53b3dc53eaffddaa4591b1217c235611d84b74"
+      }
+    },
+    {
+      "source_commit": "fc705faeeeb7d0defbe58b6af52aae2c4b4bc888",
+      "raw_sha256": "253ced77460aaab7c2400237c251cd711b8003cceeb020a0891620574891ddba",
+      "result": {
+        "case": "Retained Korean warm large-fixture canonical refusal",
+        "locale": "ko-KR",
+        "source_commit": "fc705faeeeb7d0defbe58b6af52aae2c4b4bc888",
+        "binary_sha256": "744109f070771439e49ae65030323a9aa85540ed4e15f1bed5368be00521d893",
+        "forward_seconds": 59.065025459,
+        "state": "C",
+        "verified": false,
+        "saga_state": "partiallyApplied",
+        "journal_summary": {
+          "compensation_write_boundary_count": 0,
+          "failed_compensation_count": 0,
+          "forward_write_boundary_count": 0,
+          "record_count": 1,
+          "uncertain_compensation_count": 0,
+          "verified_compensation_count": 0,
+          "write_boundary_count": 0
+        },
+        "observation": "Source-input acquisition refused at source_input_bookend after an independent Bus 1 before-read. No forward or inverse write boundary was crossed. Complete independent AX and all 151 protected values remained equal to the prepared baseline. The first failed predicate was not isolated; later logging-only success does not resolve this earlier refusal.",
+        "qualification": "Retained failed execution; not native completion evidence.",
+        "raw_transcript_sha256": "253ced77460aaab7c2400237c251cd711b8003cceeb020a0891620574891ddba"
+      }
     }
   ],
   "limits": [
-    "Stopped English/Korean four-track/nine-strip profiles and separately labelled warm 32-track/38-strip cancellation and public bypass roundtrips in both locales. A separate English warm large normal-completion/fresh-canonical-return case is also labelled.",
+    "Stopped English/Korean four-track/nine-strip profiles and separately labelled warm 32-track/38-strip cancellation and public bypass roundtrips in both locales. A separate English warm large normal-completion/fresh-canonical-return case is also labelled. A separate Korean warm large normal-completion/fresh-canonical-return run is also labelled, without pixel-equality or repeatability qualification.",
     "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.",
     "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.",
     "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."
