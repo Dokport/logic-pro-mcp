@@ -1554,11 +1554,26 @@ extension AccessibilityChannel {
                               CFEqual(currentControl, control) else { return false }
                         return label.utf8.elementsEqual(originalLabel.utf8)
                     }
-                    if case .source = input.reading, let control = input.control,
-                       case .success(.some(let label)) = AXHelpers.getAttributeResult(control,
-                        kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
-                       label.utf8.elementsEqual(originalLabel.utf8),
-                       inputControlStillCurrent(control), popupAbsent(), source.permits(runtime: runtime) {
+                    let renewedControl: AXUIElement? = {
+                        var stage = "input_slot", accepted = false
+                        defer {
+                            if !accepted { Log.info("Renewed checked input refused at \(stage): \(input.reading)", subsystem: "ax") }
+                        }
+                        guard case .source = input.reading, let control = input.control else { return nil }
+                        stage = "input_description"
+                        guard case .success(.some(let label)) = AXHelpers.getAttributeResult(control,
+                            kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
+                              label.utf8.elementsEqual(originalLabel.utf8) else { return nil }
+                        stage = "input_control_bookend"
+                        guard inputControlStillCurrent(control) else { return nil }
+                        stage = "popup_absence"
+                        guard popupAbsent() else { return nil }
+                        stage = "source_bookend"
+                        guard source.permits(runtime: runtime) else { return nil }
+                        accepted = true
+                        return control
+                    }()
+                    if let control = renewedControl {
                         sourceAfter = true
                         extras["popup_menu_state"] = "closed"
                         extras["source_renewal"] = source.pair.source
@@ -1567,6 +1582,8 @@ extension AccessibilityChannel {
                         inputRenewal = source
                         inputSlot = .init(owner: source.pair.strip, control: control, source: originalLabel)
                     }
+                } else {
+                    Log.info("Checked input original-header renewal is not current: observed=\(observed.source != nil)", subsystem: "ax")
                 }
             }
         }
