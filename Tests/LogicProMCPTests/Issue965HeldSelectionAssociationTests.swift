@@ -579,6 +579,7 @@ struct Issue965HeldSelectionAssociationTests {
         var expireRetainedCapture = false
         var captureExpiredAtCheckedSendDispatch = false
         var inspectionExpiredBeforeSendRead = false
+        var routingNamePropagatedDuringInputRead = false
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
         var heldHeaderDiscoveryScans = 0
@@ -4866,6 +4867,24 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("An owned Mixer name may propagate while checking existing Bus inputs", arguments: ["forward", "cancel"])
+    func canonicalNamedExistingBusSendAcceptsNamePropagationDuringInputRead(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true, mixerNameAfterInputRead: "Selected Canonical")
+        }
+    }
+
+    @Test("An input read cannot adopt an unrelated Mixer name")
+    func canonicalNamedExistingBusSendRefusesForeignNameDuringInputRead() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true, mixerNameAfterInputRead: "External")
+        }
+    }
+
     @Test(arguments: ["forward", "cancel"])
     func canonicalExistingBusSendRetainsItsCheckedPhysicalSourceInput(mode: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -5094,6 +5113,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                inverseNameMenu: Bool = false,
                                                inverseNameFault: String? = nil,
                                                delayedMixerName: String? = nil,
+                                               mixerNameAfterInputRead: String? = nil,
                                                expireInspectionBeforeSendDispatch: Bool = false,
                                                expireInspectionBeforeSendRead: Bool = false,
                                                freshPhysicalReturn: Bool = false,
@@ -5163,6 +5183,12 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(nameField, kAXValueAttribute as String, name)
                     b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
                     if coupledMixerName { b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, name) }
+                    if mixerNameAfterInputRead != nil, f.routingNamePropagatedDuringInputRead {
+                        // Once the actual name has propagated, a later owned
+                        // rename affects this same source, including its redraw.
+                        b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, name)
+                        b.setAttribute(b.element(1_965_2608), kAXValueAttribute as String, name)
+                    }
                     return true
                 }
             }
@@ -6043,6 +6069,15 @@ struct Issue965HeldSelectionAssociationTests {
                             default: break
                             }
                         }
+                        if let mixerNameAfterInputRead, !f.routingNamePropagatedDuringInputRead,
+                           f.routingNameWrites == ["Selected Canonical"], f.routingDestinationPresses == 0 {
+                            f.routingNamePropagatedDuringInputRead = true
+                            b.setAttribute(f.routingReplacement == nil || stableDestinationControls
+                                ? b.element(1_965_711) : name, kAXValueAttribute as String, mixerNameAfterInputRead)
+                            // A Send redraw must retain that actual source name;
+                            // it is not a second external rename back to Duplicate.
+                            b.setAttribute(name, kAXValueAttribute as String, mixerNameAfterInputRead)
+                        }
                         return true
                     }
                     let forward = CFEqual(element, canonicalBusStereoReturn ? stereo : busTwo) && action == kAXPressAction as String
@@ -6280,6 +6315,10 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.inspectionExpiredBeforeSendRead)
                         #expect(await cache.retainedInspection(id: id) == nil)
                     }
+                    if mixerNameAfterInputRead != nil {
+                        #expect(f.routingNamePropagatedDuringInputRead,
+                            "The changed Mixer name must be observed after an actual owned name and input popup")
+                    }
                     if canonicalBusReceiverFault?.hasPrefix("checked_") == true {
                         #expect(f.routingCanonicalContradictedInputs.count > contradictionsBeforeApply,
                             "The named task must reach the actual changed input proof")
@@ -6301,6 +6340,14 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.routingDestinationPresses == 2)
                         #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String
                             == (inverseNameFault == "late_membership" ? "Duplicate" : "Selected Canonical"))
+                    } else if mixerNameAfterInputRead == "External" {
+                        #expect(body["state"] as? String == "B")
+                        #expect(body["saga_state"] as? String == "rollbackUncertain")
+                        #expect(f.routingNameWrites == ["Selected Canonical"])
+                        #expect(f.routingDestinationPresses == 0 && f.routingBusLeafPresses.isEmpty)
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Selected Canonical")
+                        #expect(b.attributeValue(f.routingReplacement == nil || stableDestinationControls
+                            ? b.element(1_965_711) : name, kAXValueAttribute as String) as? String == "External")
                     } else if delayedMixerName == "External" {
                         #expect(body["state"] as? String == "B")
                         #expect(body["saga_state"] as? String != "completed")
@@ -6325,6 +6372,11 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.routingNameWrites == (compensated ? ["Selected Canonical", "Duplicate"] : ["Selected Canonical"]))
                         #expect(f.routingDestinationPresses == (canonicalSend == "late_replacement" ? 0 : compensated ? 2 : 1))
                         #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == (compensated ? "Duplicate" : "Selected Canonical"))
+                        if mixerNameAfterInputRead != nil {
+                            #expect(b.attributeValue(f.routingReplacement == nil || stableDestinationControls
+                                ? b.element(1_965_711) : name, kAXValueAttribute as String) as? String
+                                == (compensated ? "Duplicate" : "Selected Canonical"))
+                        }
                         if canonicalSend == "late_replacement" {
                             #expect(f.routingLateScopeInjected && f.routingBypassMenuOpens == 0)
                         }

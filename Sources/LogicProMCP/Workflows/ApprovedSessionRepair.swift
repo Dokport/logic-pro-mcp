@@ -1460,6 +1460,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             let finalControl: AXLogicProElements.AssignedSendMenuControl
             var continuedChange: AccessibilityChannel.ChangedSendObservation?
             if let renewal {
+                // Input cleanup may propagate the name already written by this
+                // plan. Continue that actual owned effect before comparing the
+                // footprint or asking the deciding Send leaf to corroborate it.
+                stage = "renewed_owned_name"
+                if hasMatchingNameGoals, !(await renewNameAfterSend(renewal)) { return nil }
                 stage = "renewed_footprint"
                 // The actual whole-census renewal authenticates new physical owners;
                 // frozen complete values still decide their preservation.
@@ -1506,8 +1511,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
 
-    /// Carry only this plan's independently observed Send effect through the
-    /// earlier owned name. The registry's original strip is never rebound.
+    /// Continue this plan's already-owned name through its original-header
+    /// Send custody. The registry's original strip is never rebound.
     func renewNameAfterSend(_ source: AccessibilityChannel.OriginalHeaderSourceRenewal) async -> Bool {
         guard let task = sendTask else { return false }
         return await renewNameAfterRouting(source, reference: task.reference, pair: task.pair)
