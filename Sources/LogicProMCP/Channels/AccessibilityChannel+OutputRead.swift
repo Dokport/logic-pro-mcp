@@ -636,13 +636,25 @@ extension AccessibilityChannel {
             return true
         }
         @Sendable func sourceFactsCurrent(preservingOriginalLabel: Bool = true) -> Bool {
-            guard !Task.isCancelled, runtime.logicProPID() == pid,
-                  let current = selectedControl(),
-                  CFEqual(current, slot),
-                  case .success(.some(let label)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
-                  (!preservingOriginalLabel || label.utf8.elementsEqual(originalLabel.utf8)),
-                  transportStillStopped(),
-                  !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else { return false }
+            var stage = "process", accepted = false
+            defer {
+                if inputBusOnly, !accepted {
+                    Log.info("Checked input source facts refused at \(stage); help_stopped=\(AXHelpers.HelpReadGuard.current?.stopped == true)", subsystem: "ax")
+                }
+            }
+            guard !Task.isCancelled, runtime.logicProPID() == pid else { return false }
+            stage = "original_control"
+            guard let current = selectedControl(), CFEqual(current, slot) else { return false }
+            stage = "description_read"
+            guard case .success(.some(let label)) = AXHelpers.getAttributeResult(slot,
+                kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError> else { return false }
+            stage = "original_description"
+            guard !preservingOriginalLabel || label.utf8.elementsEqual(originalLabel.utf8) else { return false }
+            stage = "transport"
+            guard transportStillStopped() else { return false }
+            stage = "dialog"
+            guard !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else { return false }
+            accepted = true
             return true
         }
         func sourceOwned() -> Bool {
@@ -903,9 +915,21 @@ extension AccessibilityChannel {
             // Renew source facts and root membership before the one deciding
             // complete physical/window/document boundary. Neither grants action
             // authority on its own, and no earlier census is reused as permission.
-            guard sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel),
-                  let current = currentPopupMenus() else { return false }
-            return current.count == 1 && CFEqual(current[0], root) && ownerBoundaryStillCurrent()
+            var stage = "source_facts", accepted = false
+            defer {
+                if inputBusOnly, !accepted {
+                    Log.info("Checked input popup custody refused at \(stage); help_stopped=\(AXHelpers.HelpReadGuard.current?.stopped == true)", subsystem: "ax")
+                }
+            }
+            guard sourceFactsCurrent(preservingOriginalLabel: preservingOriginalLabel) else { return false }
+            stage = "popup_membership"
+            guard let current = currentPopupMenus() else { return false }
+            stage = "original_root"
+            guard current.count == 1, CFEqual(current[0], root) else { return false }
+            stage = "owner_boundary"
+            guard ownerBoundaryStillCurrent() else { return false }
+            accepted = true
+            return true
         }
         // Two agreeing reads bracketed by the same source/menu, not an atomic graph snapshot.
         func checkedChoice(observingBusNumbers: (([Int]) -> Void)? = nil) -> OutputAssignment? {
