@@ -1187,7 +1187,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         if case .bus(let after)? = task.desired, before != after { buses = [before, after] }
         else if task.desired == .stereoOutput { buses = [before] }
         else { return .init(pair: originalPair, control: control, renewal: nil) }
-        let refreshInputSources = task.desired == .stereoOutput
+        // Both admitted Bus departures must renew the actual original input
+        // owner after popup cleanup; the destination kind does not preserve it.
         var stage = "initial_custody", accepted = false
         defer { if !accepted { Log.info("Canonical Send input read refused at \(stage)", subsystem: "saga") } }
         let priorSource = ownedChange?.source
@@ -1267,7 +1268,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                             restoringMixerGeometry: originalMixerGeometry,
                             observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                             observingRenewedFocus: { inputFocus.retainAssociation($0) },
-                            refreshingOriginalSourceAfterCleanup: refreshInputSources)
+                            refreshingOriginalSourceAfterCleanup: true)
                     }
                 }
                 stage = "source_input_assignment"
@@ -1342,7 +1343,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                 restoringMixerGeometry: originalMixerGeometry,
                                 observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                                 observingRenewedFocus: { inputFocus.retainAssociation($0) },
-                                refreshingOriginalSourceAfterCleanup: refreshInputSources && currentPair != nil)
+                                refreshingOriginalSourceAfterCleanup: currentPair != nil)
                         }
                     }
                     stage = "receiver_\(bus)_assignment"

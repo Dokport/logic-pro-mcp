@@ -5658,7 +5658,7 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(busTwo, []); b.setActionNames(busTwo, [kAXPressAction as String])
                 b.setChildren(b.element(1_965_2682), [destination, busTwo])
                 b.setChildren(f.mixer, f.strips + [receiver])
-                if sourceInputReadRenewal || canonicalBusStereoReturn {
+                do {
                     // Read renewal must preserve independently observed scalars,
                     // inserts and the unchanged main output, not just Send values.
                     for (index, owner) in (f.strips + [receiver]).enumerated() {
@@ -5714,7 +5714,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 f.routingAction = { element, action in
-                    if sourceInputReadRenewal || canonicalBusStereoReturn {
+                    do {
                         if action == kAXPressAction as String,
                            [1_971_532, 1_971_535, 1_971_538].contains(where: { CFEqual(element, b.element($0)) }) {
                             b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [mainRoot])
@@ -5729,7 +5729,7 @@ struct Issue965HeldSelectionAssociationTests {
                        CFEqual(element, input) || CFEqual(element, b.element(1_965_2680)) || CFEqual(element, sourceInput) {
                         let ownInput = CFEqual(element, sourceInput)
                         let bus = CFEqual(element, input) ? 2 : 1
-                        if canonicalBusStereoReturn, canonicalBusReceiverFault == "physical_source", !ownInput,
+                        if f.routingInputReadRenewalArmed, canonicalBusReceiverFault == "physical_source", !ownInput,
                            let count = f.routingSourceInputCancelledAtSelectionCount {
                             #expect(f.selections.count > count,
                                 "The canonical caller must actually re-observe its header after Source Input Cancel")
@@ -5758,7 +5758,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, inputRoot), action == kAXCancelAction as String {
                         b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, inputRoot) })
-                        if canonicalBusStereoReturn, canonicalBusReceiverFault == "physical_source",
+                        if f.routingInputReadRenewalArmed, canonicalBusReceiverFault == "physical_source",
                            f.routingCanonicalInputBuses.last == 0 {
                             f.routingSourceInputCancelledAtSelectionCount = f.selections.count
                         }
@@ -5818,7 +5818,7 @@ struct Issue965HeldSelectionAssociationTests {
                             b.setChildren(currentSource, currentChildren + [sourceInput])
                         }
                     }
-                    if sourceInputReadRenewal || canonicalBusStereoReturn {
+                    do {
                         let fields = [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)]
                         let observed = b.makeAXRuntime().children(currentSource)
                         b.setChildren(currentSource, observed + fields.filter { control in
@@ -6201,7 +6201,7 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 }
                 if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
-                if sourceInputReadRenewal { f.routingInputReadRenewalArmed = true }
+                if sourceInputReadRenewal || canonicalBusReceiverFault == "physical_source" { f.routingInputReadRenewalArmed = true }
                 let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let arguments: [String: Value] = ["plan_id": .string(planID),
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
@@ -6271,9 +6271,10 @@ struct Issue965HeldSelectionAssociationTests {
                             #expect(checkedInputs.filter { $0 == 1 }.count >= (canonicalSend == "cancel" ? 2 : 1))
                             #expect(!checkedInputs.contains(2), "An unrelated Bus receiver is not a routing prerequisite")
                             if canonicalBusReceiverFault?.contains("source") == true { #expect(checkedInputs.contains(0)) }
-                            if canonicalBusReceiverFault == "physical_source" {
-                                #expect(f.routingSourceInputFreshHeaderChallenges >= (canonicalSend == "cancel" ? 2 : 1))
-                            }
+                        }
+                        if canonicalBusReceiverFault == "physical_source" {
+                            #expect(f.routingSourceInputFreshHeaderChallenges >= (canonicalSend == "cancel" ? 2 : 1),
+                                "Each checked physical-input read must actually renew its original native header before old-source Help")
                         }
                         let steps = try #require(body["steps"] as? [[String: Any]])
                         let evidence = try #require(steps.first?["evidence"] as? [String: Any])
