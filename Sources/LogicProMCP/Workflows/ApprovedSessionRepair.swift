@@ -1240,7 +1240,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         // Both admitted Bus departures must renew the actual original input
         // owner after popup cleanup; the destination kind does not preserve it.
         var stage = "initial_custody", accepted = false
-        defer { if !accepted { Log.info("Canonical Send input read refused at \(stage)", subsystem: "saga") } }
+        var sourceCheckpoint = "not_checked"
+        defer {
+            if !accepted {
+                Log.info("Canonical Send input read refused at \(stage), source_current=\(sourceCheckpoint)", subsystem: "saga")
+            }
+        }
         let priorSource = ownedChange?.source
         guard ownedChange.map({ $0.permits(runtime: originalPair.track.runtime)
             && $0.control.matches(control) && $0.checkedBefore == task.before && $0.checkedAfter == expected
@@ -1275,22 +1280,36 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             return true
         }
         func sourceCurrent() -> Bool {
-            guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
-                  pair.track.currentIndex(in: roster?.observation ?? proof) != nil,
-                  pair.strip.currentIndex(in: roster?.observation ?? proof) != nil,
-                  let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer,
+            do { try SessionPopulationObservation.requireOwnedAcquisition() }
+            catch { sourceCheckpoint = "acquisition:\(error)"; return false }
+            sourceCheckpoint = "source_header"
+            guard pair.track.currentIndex(in: roster?.observation ?? proof) != nil else { return false }
+            sourceCheckpoint = "source_strip"
+            guard pair.strip.currentIndex(in: roster?.observation ?? proof) != nil else { return false }
+            sourceCheckpoint = "complete_population"
+            guard let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer,
                     runtime: runtime.ax)?.strips, census.count == task.capture.channelStrips.count else { return false }
             if let roster {
-                return roster.permits(runtime: runtime) && census.count == roster.observation.strips.count
-                    && zip(census, roster.observation.strips).allSatisfy({ CFEqual($0, $1) })
+                sourceCheckpoint = "read_renewal"
+                guard roster.permits(runtime: runtime) else { return false }
+                sourceCheckpoint = "renewed_population"
+                guard census.count == roster.observation.strips.count,
+                      zip(census, roster.observation.strips).allSatisfy({ CFEqual($0, $1) }) else { return false }
+                sourceCheckpoint = "current"
+                return true
             }
+            sourceCheckpoint = "captured_control"
             guard let current = AXLogicProElements.assignedSendMenuControl(in: pair.strip.strip,
-                    ordinal: task.ordinal, runtime: runtime.ax), control.matches(current),
-                  zip(census, task.capture.channelStrips).allSatisfy({ current, captured in
+                    ordinal: task.ordinal, runtime: runtime.ax), control.matches(current) else { return false }
+            sourceCheckpoint = "captured_population"
+            guard zip(census, task.capture.channelStrips).allSatisfy({ current, captured in
                     guard let owner = captured.physicalBinding else { return false }
                     return CFEqual(current, owner.matches(task.pair.strip) ? pair.strip.strip : owner.strip)
                   }) else { return false }
-            return proof.permitsRead()
+            sourceCheckpoint = "original_read_scope"
+            guard proof.permitsRead() else { return false }
+            sourceCheckpoint = "current"
+            return true
         }
         let inputFocus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
         return await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: {
