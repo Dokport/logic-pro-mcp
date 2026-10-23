@@ -600,9 +600,19 @@ extension AccessibilityChannel {
             : OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveMixerReadFocus(
                 window: physical.window, logic: runtime, acquisitionPermitted: { !Task.isCancelled })
         @Sendable func focusAllowsAcquisition() -> Bool {
-            if let passiveFocus { return passiveFocus.permits(runtime: runtime) }
-            if let passiveMixerFocus { return passiveMixerFocus.permits() }
-            return readLogicKeyboardFocus(runtime: runtime) == .notTextEditing
+            if let passiveFocus {
+                let permitted = passiveFocus.permits(runtime: runtime)
+                if !permitted, sendReplacement != nil { Log.info("Routing focus refused: retained routing focus", subsystem: "ax") }
+                return permitted
+            }
+            if let passiveMixerFocus {
+                let permitted = passiveMixerFocus.permits()
+                if !permitted, sendReplacement != nil { Log.info("Routing focus refused: retained Mixer focus", subsystem: "ax") }
+                return permitted
+            }
+            let permitted = readLogicKeyboardFocus(runtime: runtime) == .notTextEditing
+            if !permitted, sendReplacement != nil { Log.info("Routing focus refused: keyboard observation", subsystem: "ax") }
+            return permitted
         }
         guard focusAllowsAcquisition(),
               !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else {
@@ -688,13 +698,24 @@ extension AccessibilityChannel {
             return true
         }
         @Sendable func sourceFactsCurrent(preservingOriginalLabel: Bool = true) -> Bool {
-            guard !Task.isCancelled, runtime.logicProPID() == pid,
-                  let current = selectedControl(),
-                  CFEqual(current, slot),
-                  case .success(.some(let label)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
-                  (!preservingOriginalLabel || label.utf8.elementsEqual(originalLabel.utf8)),
-                  transportStillStopped(),
-                  !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else { return false }
+            guard !Task.isCancelled, runtime.logicProPID() == pid else { return false }
+            guard let current = selectedControl(), CFEqual(current, slot) else {
+                if sendReplacement != nil { Log.info("Routing source facts refused: original control", subsystem: "ax") }
+                return false
+            }
+            guard case .success(.some(let label)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError>,
+                  (!preservingOriginalLabel || label.utf8.elementsEqual(originalLabel.utf8)) else {
+                if sendReplacement != nil { Log.info("Routing source facts refused: original label", subsystem: "ax") }
+                return false
+            }
+            guard transportStillStopped() else {
+                if sendReplacement != nil { Log.info("Routing source facts refused: stopped transport", subsystem: "ax") }
+                return false
+            }
+            guard !AXLogicProElements.dialogPresenceReason(runtime: runtime).isBlocked else {
+                if sendReplacement != nil { Log.info("Routing source facts refused: modal state", subsystem: "ax") }
+                return false
+            }
             return true
         }
         func sourceOwned(ownedPopup: AXUIElement? = nil) -> Bool {
@@ -761,8 +782,17 @@ extension AccessibilityChannel {
             // and this geometry supplies no source or Send-control identity.
             sendMixerGeometry = proof.observedMixerViewportGeometry()
         } else { sendMixerGeometry = nil }
-        guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
-            return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed.")
+        guard focusAllowsAcquisition() else {
+            return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed. Checkpoint: focus before source facts.")
+        }
+        guard sourceFactsCurrent() else {
+            return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed. Checkpoint: source facts.")
+        }
+        guard focusAllowsAcquisition() else {
+            return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed. Checkpoint: focus after source facts.")
+        }
+        guard sourceOwned() else {
+            return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed. Checkpoint: original source custody.")
         }
         // The deciding AX reads can outlive the request. Renew its existing
         // cancellation, deadline and acquired gate at the actual press boundary;
