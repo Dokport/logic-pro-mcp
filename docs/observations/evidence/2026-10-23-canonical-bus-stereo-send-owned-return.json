@@ -102,9 +102,33 @@
     },
     "independent_ui": {"prepared_character_count": 36684, "focus": "Tracks container", "cancelled_terminal_exactly_matches_prepared": true, "completed_forward_only_difference": "Occupied Send destination display", "fresh_generic_return_terminal_exactly_matches_prepared": true, "pixel_equality_claimed": false}
   },
+  "korean_existing_bus": {
+    "locale": "ko-KR",
+    "source_commit": "e6ab91751056c70eff0cbf4d54ab0d4ba172d887",
+    "binary_sha256": "36596dc2b525d884569c403d2c7b8db500bc8a416fe1d349bc430c71e2e7db69",
+    "controls": {"wrong_target_plan_executable": false, "wrong_digest": {"state": "C", "error": "stale_target_reference", "write_attempted": false}, "independent_after_controls_exactly_matches_prepared": true},
+    "cancelled": {
+      "raw_sha256": "1d820e5112914b735b0584941ea047b64d0088359e2f805b3f2a34d56f11c926",
+      "elapsed_seconds": 154.32561479100002,
+      "state": "C", "verified": false, "saga_state": "fullyCompensated",
+      "cancel_basis": {"dispatcher_verified_operation": "mixer.set_send_output_verified", "exact_key_in_progress": true, "timer_authority": false, "independent_CUA_intermediate_change_claimed": false},
+      "forward": {"state": "A", "write_boundary_crossed": true, "before": "bus:1", "after": "bus:2", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"},
+      "compensation": {"disposition": "verified", "comparison": {"comparator": "exact", "desired": "bus:1", "equal": true, "observed": "bus:1"}, "readback": {"observed": "bus:1", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark"}},
+      "journal_summary": {"compensation_write_boundary_count": 1, "failed_compensation_count": 0, "forward_write_boundary_count": 1, "record_count": 1, "uncertain_compensation_count": 0, "verified_compensation_count": 1, "write_boundary_count": 2},
+      "journal_status": "cancelled",
+      "replay": {"elapsed_seconds": 0.0031754590000332428, "state": "C", "verified": false, "saga_state": "fullyCompensated", "duplicate": true}
+    },
+    "completed": {
+      "raw_sha256": "7bac9b7f823f9e3b94b42e3dedee559e389c9dabc3decb8f81b5807f05ed7842",
+      "canonical_forward": {"elapsed_seconds": 73.64797075, "state": "A", "verified": true, "saga_state": "completed", "before": "bus:1", "after": "bus:2", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark", "replay": {"elapsed_seconds": 0.0021701659999848744, "state": "A", "verified": true, "saga_state": "completed", "duplicate": true}},
+      "fresh_canonical_return": {"elapsed_seconds": 73.17615733399998, "state": "A", "verified": true, "saga_state": "completed", "before": "bus:2", "after": "bus:1", "provenance": "live_independent", "read_source": "ax_send_menu_checkmark", "replay": {"elapsed_seconds": 0.0023977910000212432, "state": "A", "verified": true, "saga_state": "completed", "duplicate": true}, "owned_cancellation_inverse": false}
+    },
+    "independent_ui": {"prepared_character_count": 36684, "focus": "Tracks container", "cancelled_terminal_exactly_matches_prepared": true, "completed_forward_only_difference": "Occupied Send destination display", "fresh_canonical_return_terminal_exactly_matches_prepared": true, "pixel_equality_claimed": false}
+  },
   "retained_failures": [
     {"source_commit": "7b58b9010f896c7ffde98b9943eabe1772cce7e4", "raw_sha256": "f2a984b6ee54156972f8610583f4dd4964c0b6877cea648d42b13215266d0b49", "result": "Checked input prerequisites refused before Send; zero journal write boundaries; complete terminal AX equals prepared baseline"},
-    {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "raw_sha256": "e0f6fb512eaa2fd4e5b4fcd80f44c264193c0833bf4fa111697e5799bf10ca45", "result": "Plan waited 117 seconds before application; stale_target_reference / write_attempted false; complete terminal AX equals prepared baseline"}
+    {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "raw_sha256": "e0f6fb512eaa2fd4e5b4fcd80f44c264193c0833bf4fa111697e5799bf10ca45", "result": "Plan waited 117 seconds before application; stale_target_reference / write_attempted false; complete terminal AX equals prepared baseline"},
+    {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "context_head": "fa22296ef4239392a63228e78cd942c15ad8ef27", "raw_sha256": "aad77f0cc6479ef3e9c3f75cdeeb9a81f9d43b1e4ba2178f92af86f99102ec8a", "result": "Korean Tracks Bus-to-Bus input prerequisites refused before any Send write; zero journal write boundaries; complete terminal AX equals prepared baseline"}
   ],
   "limits": ["One stopped four-track/nine-strip profile in English and Korean.", "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.", "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.", "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."]
 }

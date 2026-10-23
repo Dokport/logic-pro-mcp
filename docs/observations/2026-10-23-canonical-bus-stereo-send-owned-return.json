@@ -2,8 +2,8 @@
   "schema": 3,
   "id": "2026-10-23-canonical-bus-stereo-send-owned-return",
   "date": "2026-10-23",
-  "subject": "Captured Bus-to-Stereo Send completion and owned cancellation from Tracks focus",
-  "question": "Can a captured singleton Bus-to-Stereo Send goal check its native input prerequisites, complete or compensate its own change, and restore the prepared Tracks state?",
+  "subject": "Captured existing-Bus Send completion and owned cancellation from Tracks focus",
+  "question": "Can captured singleton Bus-to-Stereo and existing-Bus replacement Send goals check native input prerequisites, complete or compensate their own changes, and restore the prepared Tracks state?",
   "verdict": "partial",
   "surface": "mixer.routing",
   "issues": [291, 971],
@@ -20,7 +20,7 @@
     "Sources/LogicProMCP/Workflows/ApprovedSessionRepair.swift"
   ],
   "evidence": ["evidence/2026-10-23-canonical-bus-stereo-send-owned-return.json"],
-  "method": "Actual registered public MCP calls against a source-attested executable, event-bound cancellation through public trace/journal observations, and independent native AX comparisons. The initial host locale is English; the explicitly labelled Korean cases reuse the same executable after an app-specific locale relaunch. Screenshots separately corroborate the visible viewport and routing controls. Selected response fields are attached without private project paths or opaque request/reference/trace tokens.",
+  "method": "Actual registered public MCP calls against source-attested executables, event-bound cancellation through public trace/journal observations, and independent native AX comparisons. The initial host locale is English. English and Korean Bus-to-Stereo cases share one executable after an app-specific locale relaunch; the labelled Korean existing-Bus replacement uses the later executable with corrected original-input refresh. Screenshots separately corroborate the visible viewport and routing controls. Selected response fields are attached without private project paths or opaque request/reference/trace tokens.",
   "canon_not_applicable": {
     "reason": "This measures native source custody, action/readback, compensation, replay and UI restoration. It makes no assertion about canonical label vocabulary or translations."
   },
@@ -86,13 +86,35 @@
       "return_replay": "duplicate true; both completed journals and cached non-trace response equality checked",
       "independent_final_ui": "Complete 36684-character AX state exactly equals the prepared Korean baseline",
       "raw_transcript_sha256": "a7a0da07bd253194e478811a029c296406e3922df195d70f99005033582205d5"
+    },
+    {
+      "case": "Korean existing-Bus canonical replacement, owned cancellation and fresh canonical return",
+      "locale": "ko-KR",
+      "source_commit": "e6ab91751056c70eff0cbf4d54ab0d4ba172d887",
+      "binary_sha256": "36596dc2b525d884569c403d2c7b8db500bc8a416fe1d349bc430c71e2e7db69",
+      "binding": "Exact embedded commit, strict signature and debug source-content provenance agree. The already-admitted changed-Bus direction now requests the same original-header input refresh as Bus-to-Stereo; native receiver, whole protected footprint and owned-inverse requirements are unchanged.",
+      "retained_counterexample": "Before correction, the same Korean Tracks fixture refused checked source input before any Send write. Its complete 36684-character terminal AX matched the prepared baseline; the immutable recording remains separate.",
+      "causal_test": "With the final fixture unchanged and only the old consumer behavior restored, actual source-header selection counts failed three assertions. Enabling only the existing original-header refresh closes them; five focused functions and the complete affected 321-function selection pass. One opt-in native Scroll To case is explicitly skipped, not native evidence.",
+      "cancel_seconds": 154.32561479100002,
+      "cancelled": "Verified bus:1 to bus:2 followed by exact-key event-bound cancellation; C / fullyCompensated, one forward and one verified owned inverse, zero failed or uncertain compensations; cancelled journal and retained duplicate outcome",
+      "inverse": "bus:1; exact comparison equal; live-independent ax_send_menu_checkmark",
+      "cancel_raw_transcript_sha256": "1d820e5112914b735b0584941ea047b64d0088359e2f805b3f2a34d56f11c926",
+      "forward_seconds": 73.64797075,
+      "forward": "A / completed / verified; independently checked bus:2; cached duplicate replay",
+      "independent_forward_ui": "Only the occupied Send destination display changes from Bus 1 to Bus 2; all other AX lines remain equal",
+      "fresh_canonical_return_seconds": 73.17615733399998,
+      "fresh_canonical_return": "A / completed / verified; fresh capture and separately confirmed canonical Bus 2 to Bus 1 plan; cached duplicate replay. This new execution is not the earlier request's owned inverse.",
+      "complete_raw_transcript_sha256": "7bac9b7f823f9e3b94b42e3dedee559e389c9dabc3decb8f81b5807f05ed7842",
+      "independent_terminal_ui": "Both cancellation and fresh canonical return exactly match the complete prepared 36684-character Korean Tracks baseline, without manual recovery",
+      "counterexample_raw_transcript_sha256": "aad77f0cc6479ef3e9c3f75cdeeb9a81f9d43b1e4ba2178f92af86f99102ec8a"
     }
   ],
-  "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry. A separate generic request returns a normally completed change. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair.",
+  "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry; a separate generic request returns its normally completed change. The corrected Korean existing-Bus replacement also completes, compensates its owned change and supports a separate fresh canonical return on this fixture. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair.",
   "limits": [
     "One stopped four-track/nine-strip fixture in English and Korean; hidden/shared strips, arbitrary topology, other locales, cold acquisition and Logic 12.4 are unqualified.",
     "This fully visible leftmost viewport does not qualify automatic restoration of arbitrary scrolled/offscreen layouts. The separate opt-in native Scroll To test was skipped, not promoted to native evidence.",
     "The earlier source checkpoint 7b58b901 refused checked input acquisition before writing with a stopped Help guard. Its immutable recording is retained separately; the source-attested abef1bcb runs establish the repaired bounded profile.",
+    "The earlier abef1bcb executable in context fa22296e still refused Korean Tracks-focus Bus-to-Bus source-input acquisition before writing. The later source-attested e6ab9175 runs qualify its corrected bounded counterpart; earlier English Mixer-focus evidence is not relabelled Korean Tracks evidence.",
     "An initial normal-completion attempt waited 117 seconds between planning and application and was refused without writing. That retained plan-expiry failure is not a product regression or a passing normal execution; no lifetime or deadline was extended.",
     "An initial Korean caller had no interactive stdin and stopped before refresh with independent_continuation_missing. Its raw recording is retained; the separate PTY-backed execution, not that launch failure, supplies the Korean cancellation evidence.",
     "Native receiver-conflict injection, mixed-Saga atomicity, namespace/allocation and full R1-R4/F1-F5 acceptance are not established.",
