@@ -449,7 +449,8 @@ extension AccessibilityChannel {
             await AXMixerStripBinding.$outputAssociation.withValue(changed.source.pair) {
                 await getCheckedRoutingDestination(params: [:], sendOrdinal: changed.control.ordinal,
                     runtime: runtime, timing: timing, sendReplacement: .init(expected: changed.checkedAfter,
-                        destination: changed.checkedBefore, occupiedInverse: changed))
+                        destination: changed.checkedBefore, occupiedInverse: changed),
+                    readingOriginalScope: changed.source.observation)
             }
         }
     }
