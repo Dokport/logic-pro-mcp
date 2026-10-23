@@ -624,12 +624,17 @@ extension AccessibilityChannel {
     }
 
     enum OriginalHeaderSourceDisposition {
-        case retiredOriginal, survivingOriginal
+        case retiredOriginal, survivingOriginal, readObservation
 
         func accepts(_ current: AXMixerStripBinding.Binding, original: AXMixerStripBinding.Binding) -> Bool {
             switch self {
             case .retiredOriginal: return !current.matches(original)
             case .survivingOriginal: return current.matches(original)
+            case .readObservation:
+                // The actual one-to-one original-header observation, not CF
+                // retirement, qualifies this read-only post-popup source.
+                return CFEqual(current.window, original.window) && CFEqual(current.mixer, original.mixer)
+                    && current.document.utf8.elementsEqual(original.document.utf8)
             }
         }
     }

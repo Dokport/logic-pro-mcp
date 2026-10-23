@@ -1187,6 +1187,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         if case .bus(let after)? = task.desired, before != after { buses = [before, after] }
         else if task.desired == .stereoOutput { buses = [before] }
         else { return .init(pair: originalPair, control: control, renewal: nil) }
+        let refreshInputSources = task.desired == .stereoOutput
         var stage = "initial_custody", accepted = false
         defer { if !accepted { Log.info("Canonical Send input read refused at \(stage)", subsystem: "saga") } }
         let priorSource = ownedChange?.source
@@ -1265,7 +1266,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                         await AccessibilityChannel.getCheckedInputObservation(runtime: runtime,
                             restoringMixerGeometry: originalMixerGeometry,
                             observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
-                            observingRenewedFocus: { inputFocus.retainAssociation($0) })
+                            observingRenewedFocus: { inputFocus.retainAssociation($0) },
+                            refreshingOriginalSourceAfterCleanup: refreshInputSources)
                     }
                 }
                 stage = "source_input_assignment"
@@ -1339,7 +1341,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                                 requiringOriginalInputControl: currentSlot,
                                 restoringMixerGeometry: originalMixerGeometry,
                                 observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
-                                observingRenewedFocus: { inputFocus.retainAssociation($0) })
+                                observingRenewedFocus: { inputFocus.retainAssociation($0) },
+                                refreshingOriginalSourceAfterCleanup: refreshInputSources && currentPair != nil)
                         }
                     }
                     stage = "receiver_\(bus)_assignment"

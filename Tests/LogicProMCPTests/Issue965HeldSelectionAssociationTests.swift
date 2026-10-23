@@ -518,6 +518,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingBusLeafPresses: [Int] = []
         var routingCanonicalInputBuses: [Int] = []
         var routingCanonicalContradictedInputs: [Int] = []
+        var routingSourceInputCancelledAtSelectionCount: Int?
+        var routingSourceInputFreshHeaderChallenges = 0
         var routingChangedSendPublished = false
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
@@ -5656,7 +5658,7 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(busTwo, []); b.setActionNames(busTwo, [kAXPressAction as String])
                 b.setChildren(b.element(1_965_2682), [destination, busTwo])
                 b.setChildren(f.mixer, f.strips + [receiver])
-                if sourceInputReadRenewal {
+                if sourceInputReadRenewal || canonicalBusStereoReturn {
                     // Read renewal must preserve independently observed scalars,
                     // inserts and the unchanged main output, not just Send values.
                     for (index, owner) in (f.strips + [receiver]).enumerated() {
@@ -5712,7 +5714,7 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                 }
                 f.routingAction = { element, action in
-                    if sourceInputReadRenewal {
+                    if sourceInputReadRenewal || canonicalBusStereoReturn {
                         if action == kAXPressAction as String,
                            [1_971_532, 1_971_535, 1_971_538].contains(where: { CFEqual(element, b.element($0)) }) {
                             b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [mainRoot])
@@ -5727,6 +5729,13 @@ struct Issue965HeldSelectionAssociationTests {
                        CFEqual(element, input) || CFEqual(element, b.element(1_965_2680)) || CFEqual(element, sourceInput) {
                         let ownInput = CFEqual(element, sourceInput)
                         let bus = CFEqual(element, input) ? 2 : 1
+                        if canonicalBusStereoReturn, canonicalBusReceiverFault == "physical_source", !ownInput,
+                           let count = f.routingSourceInputCancelledAtSelectionCount {
+                            #expect(f.selections.count > count,
+                                "The canonical caller must actually re-observe its header after Source Input Cancel")
+                            f.routingSourceInputFreshHeaderChallenges += 1
+                            f.routingSourceInputCancelledAtSelectionCount = nil
+                        }
                         f.routingCanonicalInputBuses.append(ownInput ? 0 : bus)
                         let appliesToReceiver = canonicalBusReceiverFault?.hasPrefix(ownInput ? "checked_source_"
                             : bus == 1 ? "checked_before_" : "checked_after_") == true
@@ -5749,6 +5758,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if CFEqual(element, inputRoot), action == kAXCancelAction as String {
                         b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, inputRoot) })
+                        if canonicalBusStereoReturn, canonicalBusReceiverFault == "physical_source",
+                           f.routingCanonicalInputBuses.last == 0 {
+                            f.routingSourceInputCancelledAtSelectionCount = f.selections.count
+                        }
                         if sourceInputReadRenewal, f.routingInputReadRenewalArmed, !f.routingInputReadRenewed,
                            canonicalBusReceiverFault == "physical_source_read_renewal" || f.routingDestinationPresses == 1 {
                             f.routingInputReadRenewed = true
@@ -5798,19 +5811,19 @@ struct Issue965HeldSelectionAssociationTests {
                             CFEqual($0, f.strips[0]) ? peer : $0
                         })
                     }
+                    let currentSource = f.routingReplacement ?? f.strips[1]
                     if canonicalBusReceiverFault?.contains("source") == true {
-                        let currentSource = f.routingReplacement ?? f.strips[1]
                         let currentChildren = b.makeAXRuntime().children(currentSource)
                         if !currentChildren.contains(where: { CFEqual($0, sourceInput) }) {
                             b.setChildren(currentSource, currentChildren + [sourceInput])
                         }
-                        if sourceInputReadRenewal {
-                            let fields = [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)]
-                            let observed = b.makeAXRuntime().children(currentSource)
-                            b.setChildren(currentSource, observed + fields.filter { control in
-                                !observed.contains(where: { CFEqual($0, control) })
-                            })
-                        }
+                    }
+                    if sourceInputReadRenewal || canonicalBusStereoReturn {
+                        let fields = [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)]
+                        let observed = b.makeAXRuntime().children(currentSource)
+                        b.setChildren(currentSource, observed + fields.filter { control in
+                            !observed.contains(where: { CFEqual($0, control) })
+                        })
                     }
                     if forward || inverse {
                         b.setAttribute(echo, kAXTitleAttribute as String, forward
@@ -6258,6 +6271,9 @@ struct Issue965HeldSelectionAssociationTests {
                             #expect(checkedInputs.filter { $0 == 1 }.count >= (canonicalSend == "cancel" ? 2 : 1))
                             #expect(!checkedInputs.contains(2), "An unrelated Bus receiver is not a routing prerequisite")
                             if canonicalBusReceiverFault?.contains("source") == true { #expect(checkedInputs.contains(0)) }
+                            if canonicalBusReceiverFault == "physical_source" {
+                                #expect(f.routingSourceInputFreshHeaderChallenges >= (canonicalSend == "cancel" ? 2 : 1))
+                            }
                         }
                         let steps = try #require(body["steps"] as? [[String: Any]])
                         let evidence = try #require(steps.first?["evidence"] as? [String: Any])
@@ -7767,6 +7783,15 @@ struct Issue965HeldSelectionAssociationTests {
             }
             if CFEqual(element, root), action == kAXCancelAction as String {
                 f.inputMenuCancels += 1
+                if condition.hasPrefix("force_fresh_"), condition != "force_fresh_retired_source" {
+                    f.builder.setChildren(f.mixer, f.strips)
+                    if condition == "force_fresh_changed_label" {
+                        f.builder.setAttribute(input, kAXDescriptionAttribute as String, "Bus 9")
+                    } else if condition == "force_fresh_foreign_project" {
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    return true
+                }
                 if keep, f.inputMenuCancels == 1 {
                     // Capture keeps its original owner; the independent apply read
                     // below performs the real replacement and must renew its own proof.
@@ -7932,6 +7957,55 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(CFEqual(pair.track.header, f.headers[0]) && CFEqual(pair.strip.strip, f.strips[1]),
             "Only the actual opposite-ordinal own-gesture pair may tether renewal")
         #expect(f.selections == [1, 0])
+        if condition.hasPrefix("force_fresh_") {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "fresh-original-input-read"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            let suppliedPair: AccessibilityChannel.HeldSelectionAssociation.Pair? = condition == "force_fresh_missing_pair"
+                ? nil : condition == "force_fresh_wrong_pair" ? .init(track: pair.track,
+                    strip: .init(window: f.window, mixer: f.mixer, strip: f.strips[0], document: f.bundle.absoluteString)) : pair
+            let (read, permittedInClaim) = await OperationTraceContext.$current.withValue(context) {
+                let reading = await AXMixerStripBinding.$current.withValue(source) {
+                    await AXMixerStripBinding.$outputAssociation.withValue(suppliedPair) {
+                        await AccessibilityChannel.getInputBusObservation(runtime: f.logic(), timing: .immediate,
+                            refreshingOriginalSourceAfterCleanup: true)
+                    }
+                }
+                return (reading, reading.inputRenewal?.permits(runtime: f.logic()) == true)
+            }
+            if ["force_fresh_missing_pair", "force_fresh_wrong_pair"].contains(condition) {
+                let body = try #require(sharedJSONObject(read.result.message))
+                #expect(body["state"] as? String == "C")
+                #expect(read.assignment == nil && read.inputRenewal == nil)
+                #expect(f.inputMenuPresses == 0 && f.inputMenuCancels == 0)
+                #expect(f.selections == [1, 0])
+                return
+            }
+            if ["force_fresh_changed_label", "force_fresh_foreign_project"].contains(condition) {
+                let body = try #require(sharedJSONObject(read.result.message))
+                #expect(body["state"] as? String == "C")
+                #expect(read.assignment == nil && read.inputRenewal == nil && !permittedInClaim)
+                #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1, "Reach the actual post-Cancel change")
+                #expect(f.routingDestinationPresses == 0)
+                if condition == "force_fresh_foreign_project" { #expect(f.selections == [1, 0]) }
+                return
+            }
+            #expect(read.assignment == .bus(number))
+            let renewed = try #require(read.inputRenewal, "Observe the original header before any post-Cancel source Help")
+            let survives = condition == "force_fresh_surviving_source"
+            #expect(renewed.original.matches(source))
+            #expect(renewed.pair.strip.matches(source) == survives)
+            #expect(CFEqual(renewed.pair.strip.strip, survives ? source.strip : replacement))
+            #expect(renewed.originalTrack.matches(pair.track) && permittedInClaim)
+            #expect(!renewed.permits(runtime: f.logic()), "No retained native permission outside its own claim context")
+            #expect((f.routingReplacement == nil) == survives)
+            #expect(source.currentIndex(runtime: f.logic()) == (survives ? 1 : nil))
+            #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1)
+            #expect(f.selections == [1, 0, 1, 0], "Actual native header challenges, not a JSON restoration receipt")
+            #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+            return
+        }
         if graph {
             let body = try await inspect(f, navigation: condition != "navigation_disabled", cache: cache,
                 registry: registry, domains: keep ? ["tracks", "strips", "associations", "routing"]
@@ -9677,6 +9751,12 @@ struct Issue965HeldSelectionAssociationTests {
                       "deciding_read", "deciding_control_replaced", "renewed_label_changed"])
     func registeredReceiverKeepRefusesLostOriginalRenewal(condition: String) async throws {
         try await assertInputBusRenewal(number: 1, condition: condition, graph: true, keep: true)
+    }
+
+    @Test(arguments: ["force_fresh_surviving_source", "force_fresh_retired_source", "force_fresh_missing_pair",
+                      "force_fresh_wrong_pair", "force_fresh_changed_label", "force_fresh_foreign_project"])
+    func requestedInputRefreshNeedsItsActualOriginalHeader(_ condition: String) async throws {
+        try await assertInputBusRenewal(number: 1, condition: condition)
     }
 
     @Test(arguments: [1, 256])
