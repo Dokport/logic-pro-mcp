@@ -30,6 +30,11 @@ enum AXMixerStripBinding {
         }
 
         /// Re-read owner and complete current membership, not the cached ordinal or strip name.
+        func currentIndex(in observation: AccessibilityChannel.HeldSelectionAssociation,
+                          ownedPopup: AXUIElement? = nil) -> Int? {
+            observation.readOriginalMixerIndex(for: self, ownedPopup: ownedPopup)
+        }
+
         func currentIndex(runtime: AXLogicProElements.Runtime) -> Int? {
             guard !Task.isCancelled,
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
@@ -709,7 +714,7 @@ extension AXLogicProElements {
         return false
     }
 
-    private static func isMixerContainerRole(_ role: String?) -> Bool {
+    static func isMixerContainerRole(_ role: String?) -> Bool {
         guard let role else { return false }
         return role == (kAXGroupRole as String)
             || role == (kAXScrollAreaRole as String)
@@ -1480,7 +1485,7 @@ extension AXLogicProElements {
 
     /// Consume the retained direct child's value, then corroborate that same control.
     /// Neither a new checkbox nor a nonbinary/unread value becomes a bypass default.
-    private static func observedSendBypass(group: AXUIElement, control: AXUIElement, runtime: AXHelpers.Runtime) -> Bool? {
+    static func observedSendBypass(group: AXUIElement, control: AXUIElement, runtime: AXHelpers.Runtime) -> Bool? {
         guard case .success(.some(let value)) = AXHelpers.getAttributeResult(
             control, kAXValueAttribute as String, runtime: runtime) as Result<NSNumber?, AXHelpers.AXStatusError>,
               value.doubleValue == 0 || value.doubleValue == 1,

@@ -5,6 +5,17 @@ import Testing
 
 @Suite("#965 population producers preserve acquisition failures")
 struct Issue965PopulationAcquisitionStatusTests {
+    private final class DiscoveryReads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var batches = 0
+        private var roles = 0
+        func batch() { lock.withLock { batches += 1 } }
+        func scalar(_ attribute: String) {
+            if attribute == kAXRoleAttribute as String { lock.withLock { roles += 1 } }
+        }
+        var counts: (batches: Int, roles: Int) { lock.withLock { (batches, roles) } }
+    }
+
     enum Failure: CaseIterable, Sendable {
         case children, rowRole, missingRail
     }
@@ -68,6 +79,60 @@ struct Issue965PopulationAcquisitionStatusTests {
                 executeAppleScript: { _ in .error("fixture forbids AppleScript") }
             )
         }
+    }
+
+    @Test("Verified rail discovery uses fresh batches without losing native failures or text-field pruning",
+          arguments: ["owned", "role_failure", "children_failure", "malformed_children", "pruned_text_field"])
+    func verifiedDiscoveryBatchesPreserveScope(_ fault: String) throws {
+        let f = Fixture(), base = f.runtime(), reads = DiscoveryReads()
+        let text = f.builder.element(965_806)
+        if fault == "pruned_text_field" {
+            f.builder.setRole(text, kAXTextFieldRole as String)
+            f.builder.setChildren(f.window, [f.rail, text])
+        }
+        let ax = AXHelpers.Runtime(axApp: base.ax.axApp,
+            attributeValue: { element, attribute in
+                reads.scalar(attribute); return base.ax.attributeValue(element, attribute)
+            }, attributeIsSettable: base.ax.attributeIsSettable,
+            setAttributeValue: base.ax.setAttributeValue, children: base.ax.children,
+            performAction: base.ax.performAction, childCount: base.ax.childCount,
+            actionNames: base.ax.actionNames, actionNamesResult: base.ax.actionNamesResult,
+            childrenResult: base.ax.childrenResult,
+            attributeValueResult: { element, attribute in
+                reads.scalar(attribute)
+                return AXHelpers.getAttributeResult(element, attribute, runtime: base.ax)
+            }, performActionResult: base.ax.performActionResult,
+            attributeValuesResult: { element, attributes in
+                reads.batch()
+                return .success(attributes.map { attribute -> AnyObject in
+                    let fails = fault == "role_failure" && CFEqual(element, f.first) && attribute == kAXRoleAttribute as String
+                        || fault == "children_failure" && CFEqual(element, f.rail) && attribute == kAXChildrenAttribute as String
+                        || fault == "pruned_text_field" && CFEqual(element, text) && attribute == kAXChildrenAttribute as String
+                    if fails {
+                        var error = AXError.cannotComplete
+                        return AXValueCreate(.axError, &error)!
+                    }
+                    if fault == "malformed_children", CFEqual(element, f.window), attribute == kAXChildrenAttribute as String {
+                        return NSNumber(value: 42)
+                    }
+                    if attribute == kAXChildrenAttribute as String {
+                        return (try? AXHelpers.childrenResult(element, runtime: base.ax).get()).map { $0 as CFArray } ?? NSNull()
+                    }
+                    return base.ax.attributeValue(element, attribute) ?? NSNull()
+                })
+            })
+        let runtime = AXLogicProElements.Runtime(logicProPID: base.logicProPID, ax: ax,
+            executeAppleScript: { _ in .error("fixture forbids AppleScript") })
+        let result = AXLogicProElements.allTrackHeadersVerifiedRead(in: f.window, runtime: runtime)
+        if fault == "owned" || fault == "pruned_text_field" {
+            guard case .read(let headers) = result else { Issue.record("The complete native rail must remain readable"); return }
+            #expect(headers.count == 2 && CFEqual(headers[0], f.first))
+            #expect(reads.counts.roles == 2, "Only final row classification needs separate role reads after the fresh discovery batches")
+        } else {
+            guard case .unreadable = result else { Issue.record("A failed or malformed visited node cannot publish an observed rail"); return }
+        }
+        #expect(reads.counts.batches > 0)
+        #expect(f.builder.setCalls.isEmpty && f.builder.actionCalls.isEmpty)
     }
 
     @Test(arguments: Failure.allCases)

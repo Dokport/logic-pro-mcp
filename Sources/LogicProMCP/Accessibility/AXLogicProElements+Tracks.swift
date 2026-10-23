@@ -186,21 +186,37 @@ enum AXTrackBinding {
                 && shape.matchesPopulation(other.shape.headers)
         }
 
+        func currentIndex(in observation: AccessibilityChannel.HeldSelectionAssociation) -> Int? {
+            guard observation.retainsOriginalHeaderCarrier(self) else { return nil }
+            return currentIndex(using: observation)
+        }
+
         func currentIndex() -> Int? {
-            guard let index = currentScopeIndex(), ExactTrackNameAdapter.operationPermitted(),
+            currentIndex(using: nil)
+        }
+
+        private func currentIndex(using observation: AccessibilityChannel.HeldSelectionAssociation?) -> Int? {
+            guard let index = currentScopeIndex(using: observation), ExactTrackNameAdapter.operationPermitted(),
                   shape.observe(AXValueExtractors.extractTrackStackState(
                     from: header, runtime: runtime.ax).isStackHeader),
                   // The deciding child-role reads may outlive the first scope
                   // proof. Renew the same window/document/unique membership.
-                  currentScopeIndex() == index else { return nil }
+                  currentScopeIndex(using: observation) == index else { return nil }
             return index
         }
 
-        private func currentScopeIndex() -> Int? {
+        private func currentScopeIndex(using observation: AccessibilityChannel.HeldSelectionAssociation?) -> Int? {
             guard ExactTrackNameAdapter.operationPermitted(), shape.isCurrent, exposure?.isCurrent ?? true,
-                  projectPath != nil, currentWindowAndDocumentMatch(),
-                  case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime),
-                  ExactTrackNameAdapter.operationPermitted(),
+                  projectPath != nil, currentWindowAndDocumentMatch() else { exposure?.end(); return nil }
+            let observed: [AXUIElement]?
+            if let observation {
+                observed = observation.readOriginalHeaderPopulation(for: self, observingPopulation: {
+                    _ = shape.observePopulation($0)
+                })
+            } else if case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime) {
+                observed = headers
+            } else { observed = nil }
+            guard let headers = observed, ExactTrackNameAdapter.operationPermitted(),
                   shape.observePopulation(headers),
                   exposure?.isCurrent ?? true,
                   // The census can itself outlive the preceding scope proof.
@@ -779,9 +795,25 @@ extension AXLogicProElements {
 
         func visit(_ element: AXUIElement, remainingDepth: Int, path: [Int]) {
             guard !encounteredUnreadableAX else { return }
+            // One fresh native tuple for this visited node. Keep the full
+            // discovery and every status; this is neither a cached rail nor
+            // permission to reuse an earlier population observation.
+            let attributes = [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String]
+            let metadata = runtime.attributeValuesResult == nil ? nil
+                : AXHelpers.getNonHelpAttributes(element, attributes, runtime: runtime)
+            func string(_ attribute: String) -> Result<String?, AXHelpers.AXStatusError> {
+                guard let metadata, let index = attributes.firstIndex(of: attribute) else {
+                    return trackStringAttribute(element, attribute, runtime: runtime)
+                }
+                switch metadata[index] {
+                case .failure(let error) where trackStatusIsDefinitiveAbsence(error): return .success(nil)
+                case .failure(let error): return .failure(error)
+                case .success(let value): return .success(value as? String)
+                }
+            }
             var knownMenuChildrenStage: String?
             var diagnosticRole = "absent"
-            switch trackStringAttribute(element, kAXRoleAttribute as String, runtime: runtime) {
+            switch string(kAXRoleAttribute as String) {
             case .success(.some(let role)):
                 observingExposure?.observeRole(element: element, role: role)
                 // Popup text controls can refuse AXChildren while the original
@@ -795,15 +827,11 @@ extension AXLogicProElements {
                     knownMenuChildrenStage = "track_header_menu_item_children"
                 }
                 if role == (kAXListRole as String),
-                   case .success(let identifier) = trackStringAttribute(
-                        element, kAXIdentifierAttribute as String, runtime: runtime
-                   ),
+                   case .success(let identifier) = string(kAXIdentifierAttribute as String),
                    identifier == "Track Headers" {
                     candidates.lists.append(element)
                 } else if role == (kAXScrollAreaRole as String),
-                          case .success(let identifier) = trackStringAttribute(
-                            element, kAXIdentifierAttribute as String, runtime: runtime
-                          ),
+                          case .success(let identifier) = string(kAXIdentifierAttribute as String),
                           identifier == "Tracks" {
                     candidates.scrollAreas.append(element)
                 } else if role == (kAXGroupRole as String),
@@ -824,7 +852,11 @@ extension AXLogicProElements {
             }
 
             guard remainingDepth > 0 else { return }
-            switch AXHelpers.childrenResult(element, runtime: runtime) {
+            let children: Result<[AXUIElement], AXHelpers.AXStatusError>
+            if let metadata {
+                children = metadata[2].flatMap { AXHelpers.projectChildrenStatus(.success, $0) }
+            } else { children = AXHelpers.childrenResult(element, runtime: runtime) }
+            switch children {
             case .success(let children):
                 observingExposure?.observeChildren(element: element, children: children)
                 for (index, child) in children.enumerated() {
