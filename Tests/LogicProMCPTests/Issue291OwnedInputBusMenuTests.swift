@@ -1003,6 +1003,44 @@ struct Issue291OwnedInputBusMenuTests {
         #expect(f.value(focus) == 100, "No focus or fader setter supplies restoration")
     }
 
+    @Test("A late cleanup census cannot authorize Help reads of a now-retired input owner")
+    func inputCleanupRechecksOwnerBeforeRetiredControlHelp() async throws {
+        final class RetirementProbe: @unchecked Sendable {
+            var deliveredOldCensus = false
+            var retiredHelpReads = 0
+        }
+        let p = try prepare(), f = p.f, probe = RetirementProbe()
+        f.childrenReadResult = { node in
+            guard CFEqual(node, f.mixer), !probe.deliveredOldCensus,
+                  f.mutations.contains(where: {
+                      CFEqual($0.0, f.root) && $0.1 == kAXCancelAction as String
+                  }) else { return nil }
+            // The sampled census still names the old owner, but the host has
+            // already retired it when the caller consumes that sample. Its AX
+            // attributes remain readable; no error or changed caption masks it.
+            probe.deliveredOldCensus = true
+            f.reorder([1])
+            return .success(f.strips)
+        }
+        f.attributeReadResult = { element, attribute in
+            if probe.deliveredOldCensus, CFEqual(element, f.outputs[0]),
+               attribute == kAXHelpAttribute as String { probe.retiredHelpReads += 1 }
+            return nil
+        }
+        let body = try #require(sharedJSONObject(await read(p).message))
+        #expect(probe.deliveredOldCensus, "Reach real post-Cancel membership retirement")
+        #expect(probe.retiredHelpReads == 0, "Old census data cannot authorize another old-control Help scan")
+        #expect(body["state"] as? String == "C")
+        let sourceCurrent = try #require(body["source_custody_after_cleanup"] as? Bool)
+        let writeAttempted = try #require(body["write_attempted"] as? Bool)
+        #expect(!sourceCurrent && !writeAttempted)
+        #expect(body["output_checkmark_reads_observed"] as? Int == 2)
+        #expect(body["popup_menu_state"] as? String == "closed")
+        let role: String = try #require(AXHelpers.getAttribute(f.outputs[0], kAXRoleAttribute as String,
+            runtime: f.logic.ax))
+        #expect(role == kAXButtonRole as String, "The original input stays readable, not conveniently invalidated")
+    }
+
     @Test("Cleanup requires original input membership even when its AX role stays readable",
           arguments: ["healthy", "invalid_element", "readable_nonmember"])
     func originalInputMustSurviveCancel(_ mode: String) async throws {
