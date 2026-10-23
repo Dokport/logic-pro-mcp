@@ -4770,12 +4770,12 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: ["forward", "cancel"])
-    func canonicalExistingBusSendUsesItsQualifiedReceiversAndOwnedInverse(mode: String) async throws {
+    @Test(arguments: ["forward", "cancel"], [false, true])
+    func canonicalExistingBusSendUsesItsQualifiedReceiversAndOwnedInverse(mode: String, named: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true,
-                canonicalBusChange: true)
+                canonicalBusChange: true, canonicalName: named)
         }
     }
 
@@ -4826,24 +4826,33 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: ["missing_before", "missing_after"])
-    func canonicalExistingBusSendRequiresBothReturnAndForwardReceivers(fault: String) async throws {
+    @Test(arguments: ["missing_before", "missing_after"], [false, true])
+    func canonicalExistingBusSendRequiresBothReturnAndForwardReceivers(fault: String, named: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: "missing_receiver", canonicalBus: true,
-                canonicalBusChange: true, canonicalBusReceiverFault: fault)
+                canonicalBusChange: true, canonicalBusReceiverFault: fault, canonicalName: named)
         }
     }
 
     @Test(arguments: ["checked_before_at_capture", "checked_after_at_capture",
                       "checked_before_after_preview", "checked_after_after_preview",
                       "checked_before_after_forward", "checked_source_after_preview",
-                      "checked_source_after_forward"])
-    func canonicalExistingBusSendChecksReceiverMenusRatherThanCaptions(fault: String) async throws {
+                      "checked_source_after_forward"], [false, true])
+    func canonicalExistingBusSendChecksReceiverMenusRatherThanCaptions(fault: String, named: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: fault.hasSuffix("after_forward") ? "cancel" : "forward",
-                canonicalBus: true, canonicalBusChange: true, canonicalBusReceiverFault: fault)
+                canonicalBus: true, canonicalBusChange: true, canonicalBusReceiverFault: fault, canonicalName: named)
+        }
+    }
+
+    @Test("An external source name cannot authorize a later existing-Bus Send leaf")
+    func canonicalNamedExistingBusSendRefusesALateExternalName() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "late_name", canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true)
         }
     }
 
@@ -6222,6 +6231,8 @@ struct Issue965HeldSelectionAssociationTests {
                 let planID = try #require(planned["plan_id"] as? String)
                 let digest = try #require(planned["digest"] as? String)
                 let preview = try #require(planned["steps"] as? [[String: Any]])
+                let contradictionsBeforeApply = f.routingCanonicalContradictedInputs.count
+                if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
                 if canonicalName {
                     try #require(executable, "The combined task must be executable, not a supported subset")
                     #expect(preview.count == 2)
@@ -6249,7 +6260,20 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.expireRetainedCapture)
                         #expect(await cache.retainedInspection(id: id) == nil)
                     }
-                    if inverseNameFault != nil {
+                    if canonicalBusReceiverFault?.hasPrefix("checked_") == true {
+                        #expect(f.routingCanonicalContradictedInputs.count > contradictionsBeforeApply,
+                            "The named task must reach the actual changed input proof")
+                        let afterForward = canonicalBusReceiverFault?.hasSuffix("after_forward") == true
+                        let expectedDestinationPresses: Int = afterForward ? 1 : 0
+                        #expect(f.routingDestinationPresses == expectedDestinationPresses)
+                        #expect(f.routingBusLeafPresses == (afterForward ? [2] : []),
+                            "A changed receiver cannot authorize the forward or owned inverse leaf")
+                        #expect(body["state"] as? String == (afterForward ? "B" : "C"),
+                            "Actual named refusal: \(sharedToolText(result))")
+                        #expect(body["saga_state"] as? String == (afterForward ? "partiallyCompensated" : "fullyCompensated"))
+                        #expect(f.routingNameWrites == ["Selected Canonical", "Duplicate"])
+                        #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Duplicate")
+                    } else if inverseNameFault != nil {
                         #expect(f.routingLateScopeInjected)
                         #expect(body["saga_state"] as? String == "rollbackUncertain")
                         #expect(f.routingNameWrites == (inverseNameFault == "late_membership"
@@ -6421,7 +6445,6 @@ struct Issue965HeldSelectionAssociationTests {
                 if canonicalSend == "wrong_project" {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 }
-                if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
                 if sourceInputReadRenewal || canonicalBusReceiverFault == "physical_source"
                     || canonicalBusReceiverFault == "physical_source_scoped_input" {
                     f.routingInputReadRenewalArmed = true
@@ -6449,7 +6472,6 @@ struct Issue965HeldSelectionAssociationTests {
                     "confirmed": .bool(true), "idempotency_key": .string(key)]
                 let result: CallTool.Result
                 let inputReadsBeforeApply = f.routingCanonicalInputBuses.count
-                let contradictionsBeforeApply = f.routingCanonicalContradictedInputs.count
                 if decidingSendFault != nil { f.routingBeforeSendMenuOpens = 0 }
                 if let decidingSendFault, decidingSendFault.hasPrefix("late_") {
                     let priorActions = f.routingActionNames, priorRead = f.routingRead

@@ -495,13 +495,17 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let desired = intent.localOutput ?? intent.bus.map(OutputAssignment.bus)
         guard rows.count == 1, let row = rows.first, let mixerRef = source.mixerReference(at: row),
               checked.count == 1, let reading = checked.first else { return nil }
-        let capturedBusChange = names.isEmpty && policy.inputs.isEmpty
+        let namedBusReplacement: Bool
+        if case .bus(let before) = reading.assignment, case .bus(let after)? = desired {
+            namedBusReplacement = names.count == 1 && before != after
+        } else { namedBusReplacement = false }
+        let capturedBusChange = (names.isEmpty || namedBusReplacement) && policy.inputs.isEmpty
             && capturedExistingSendBusChange(before: reading.assignment, desired: desired,
                 source: source, sourceIndex: row)
         guard
-              // A captured Bus change remains one Send-only task, with positive
-              // existing receiver prerequisites for every involved Bus destination.
-              intent.bus == nil || (names.isEmpty && policy.inputs.isEmpty
+              // Each involved Bus retains its positive existing receiver proof.
+              // A source name also needs its exact coupled footprint below.
+              intent.bus == nil || ((names.isEmpty || namedBusReplacement) && policy.inputs.isEmpty
                 && (reading.assignment == desired || capturedBusChange)),
               desired.map({ reading.assignment == $0 || supportsCapturedSendDirection(before: reading.assignment, after: $0)
                 || capturedBusChange })
@@ -513,7 +517,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               let occupied = slots.first(where: { $0.state == .occupiedUnknownDestination }),
               occupied.ordinal == ordinal, occupied.levelRaw == 0, occupied.bypassed == false else { return nil }
         if let name = names.first {
-            guard name.target == target.handle, let desired = intent.localOutput,
+            guard name.target == target.handle, let desired,
+                  intent.localOutput != nil || namedBusReplacement,
                   desired != reading.assignment,
                   let row = source.tracks.first(where: { $0.physicalBinding?.matches(pair.track) == true }),
                   !row.name.utf8.elementsEqual(name.name.utf8),
