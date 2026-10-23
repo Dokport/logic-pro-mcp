@@ -7783,7 +7783,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             if CFEqual(element, root), action == kAXCancelAction as String {
                 f.inputMenuCancels += 1
-                if condition.hasPrefix("force_fresh_"), condition != "force_fresh_retired_source" {
+                if condition.hasPrefix("force_fresh_"), !condition.hasSuffix("retired_source") {
                     f.builder.setChildren(f.mixer, f.strips)
                     if condition == "force_fresh_changed_label" {
                         f.builder.setAttribute(input, kAXDescriptionAttribute as String, "Bus 9")
@@ -7816,7 +7816,8 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement] + unpairedRows + (condition == "popup_still_open" ? [root] : []))
                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
-                    condition == "unselected_pair" ? f.strips[0] : replacement)
+                    condition.hasPrefix("force_fresh_rail_") ? f.rail
+                        : condition == "unselected_pair" ? f.strips[0] : replacement)
                 if graph, condition == "unselected_pair" {
                     f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
                     f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
@@ -7965,13 +7966,57 @@ struct Issue965HeldSelectionAssociationTests {
             let suppliedPair: AccessibilityChannel.HeldSelectionAssociation.Pair? = condition == "force_fresh_missing_pair"
                 ? nil : condition == "force_fresh_wrong_pair" ? .init(track: pair.track,
                     strip: .init(window: f.window, mixer: f.mixer, strip: f.strips[0], document: f.bundle.absoluteString)) : pair
-            let (read, permittedInClaim) = await OperationTraceContext.$current.withValue(context) {
-                let reading = await AXMixerStripBinding.$current.withValue(source) {
-                    await AXMixerStripBinding.$outputAssociation.withValue(suppliedPair) {
-                        await AccessibilityChannel.getInputBusObservation(runtime: f.logic(), timing: .immediate,
-                            refreshingOriginalSourceAfterCleanup: true)
+            let railEntry = condition.hasPrefix("force_fresh_rail_")
+            if railEntry {
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                let previousResult = f.routingReadResult
+                f.routingReadResult = { element, attribute in
+                    if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                        kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute]
+                        .map({ $0 as String }).contains(attribute) {
+                        // Native non-editor absence, not an unknown success(nil).
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    return previousResult?(element, attribute)
+                }
+                let previousRead = f.routingRead
+                f.routingRead = { element, attribute in
+                    previousRead?(element, attribute)
+                    if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
+                       f.inputMenuCancels > 0, f.selections.count > 2, f.selections.last == 0 {
+                        // Like the native Tracks entry, returning our original
+                        // selected header restores its original rail focus.
+                        f.builder.setAttribute(f.app, attribute, f.rail)
+                    }
+                    if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                        let originalSelected = AXValueExtractors.extractSelectedState(f.headers[0],
+                            runtime: f.builder.makeAXRuntime()) == true
+                        f.builder.setAttribute(f.mixer, attribute,
+                            [originalSelected ? f.routingReplacement ?? f.strips[1] : f.strips[0]])
                     }
                 }
+            }
+            let (read, permittedInClaim) = try await OperationTraceContext.$current.withValue(context) {
+                let focus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+                let proof: AccessibilityChannel.HeldSelectionAssociation?
+                if railEntry {
+                    proof = try #require(AccessibilityChannel.HeldSelectionAssociation(
+                        window: f.window, logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
+                        allowsSelectedChildRailEntry: true))
+                } else { proof = nil }
+                let guardian = AXHelpers.HelpReadGuard(allowHelpReads: true,
+                    stop: { proof.map { !focus.permits() && !$0.permitsRead() } ?? false })
+                let reading = await AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+                    await AXMixerStripBinding.$current.withValue(source) {
+                        await AXMixerStripBinding.$outputAssociation.withValue(suppliedPair) {
+                            await AccessibilityChannel.getInputBusObservation(runtime: f.logic(), timing: .immediate,
+                                observingPopupFocus: { focus.retainRoutingPopupFocus($0) },
+                                observingRenewedFocus: { focus.retainAssociation($0) },
+                                refreshingOriginalSourceAfterCleanup: true)
+                        }
+                    }
+                }
+                if railEntry { #expect(!guardian.stopped, "The old census cannot authorize Help before the fresh observation is retained") }
                 return (reading, reading.inputRenewal?.permits(runtime: f.logic()) == true)
             }
             if ["force_fresh_missing_pair", "force_fresh_wrong_pair"].contains(condition) {
@@ -7993,7 +8038,7 @@ struct Issue965HeldSelectionAssociationTests {
             }
             #expect(read.assignment == .bus(number))
             let renewed = try #require(read.inputRenewal, "Observe the original header before any post-Cancel source Help")
-            let survives = condition == "force_fresh_surviving_source"
+            let survives = condition.hasSuffix("surviving_source")
             #expect(renewed.original.matches(source))
             #expect(renewed.pair.strip.matches(source) == survives)
             #expect(CFEqual(renewed.pair.strip.strip, survives ? source.strip : replacement))
@@ -9754,7 +9799,8 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test(arguments: ["force_fresh_surviving_source", "force_fresh_retired_source", "force_fresh_missing_pair",
-                      "force_fresh_wrong_pair", "force_fresh_changed_label", "force_fresh_foreign_project"])
+                      "force_fresh_wrong_pair", "force_fresh_changed_label", "force_fresh_foreign_project",
+                      "force_fresh_rail_retired_source", "force_fresh_rail_surviving_source"])
     func requestedInputRefreshNeedsItsActualOriginalHeader(_ condition: String) async throws {
         try await assertInputBusRenewal(number: 1, condition: condition)
     }

@@ -650,7 +650,8 @@ extension AccessibilityChannel {
     ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
               let observation = HeldSelectionAssociation(window: original.window, logic: runtime,
-                  expectedProject: nil, requiresProjectReference: false, allowsSelectedChildRailEntry: true),
+                  expectedProject: nil, requiresProjectReference: false, allowsSelectedChildRailEntry: true,
+                  retainedMixerSource: sourceDisposition == .readObservation ? original : nil),
               CFEqual(observation.mixer, original.mixer),
               observation.document.utf8.elementsEqual(original.document.utf8),
               observation.headers.filter({ CFEqual($0, originalPair.track.header) }).count == 1,

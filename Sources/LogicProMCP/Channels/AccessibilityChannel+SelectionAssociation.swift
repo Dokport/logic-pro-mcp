@@ -46,7 +46,8 @@ extension AccessibilityChannel {
               allowsSelectedChildRailEntry: Bool = false,
               retainedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus? = nil,
               retainedTrackBindings: [AXTrackBinding.Binding]? = nil,
-              restorationBaseline: HeldSelectionAssociation? = nil) {
+              restorationBaseline: HeldSelectionAssociation? = nil,
+              retainedMixerSource: AXMixerStripBinding.Binding? = nil) {
             // The existing foreground AX probe requires this CLI process's
             // window-server connection; a missing/foreign PID still refuses.
             _ = logic.onScreenWindowList()
@@ -56,6 +57,8 @@ extension AccessibilityChannel {
                   case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                   let url = URL(string: document), url.isFileURL,
                   url.host == nil || url.host == "" || url.host == "localhost",
+                  retainedMixerSource.map({ CFEqual($0.window, window)
+                      && $0.document.utf8.elementsEqual(document.utf8) }) ?? true,
                   !requiresProjectReference || (
                     expectedProject?.projectName?.utf8.elementsEqual(AccessibilityChannel.projectName(fromWindowTitle: title).utf8) == true
                     && expectedProject?.projectFilePath?.utf8.elementsEqual(url.path.utf8) == true),
@@ -76,7 +79,7 @@ extension AccessibilityChannel {
                       && CFEqual($0.rail, rail) && CFEqual($0.header, headers[selected]) && $0.permits() }) ?? true,
                   let mixer = Self.entryMixer(focus: focus, window: window, railPath: railPath,
                     logic: logic, allowsSelectedChildRailEntry: allowsSelectedChildRailEntry,
-                    retainedHeaderFocus: retainedHeaderFocus),
+                    retainedHeaderFocus: retainedHeaderFocus, retainedMixer: retainedMixerSource?.mixer),
                   let enumeration = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),
                   enumeration.strips.filter({ CFEqual($0, focus) }).count == 1
                     || (allowsSelectedChildRailEntry && (railPath.contains { CFEqual($0, focus) }
@@ -135,12 +138,21 @@ extension AccessibilityChannel {
         private static func entryMixer(focus: AXUIElement, window: AXUIElement,
                                        railPath: [AXUIElement], logic: AXLogicProElements.Runtime,
                                        allowsSelectedChildRailEntry: Bool,
-                                       retainedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus?) -> AXUIElement? {
+                                       retainedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus?,
+                                       retainedMixer: AXUIElement?) -> AXUIElement? {
             guard allowsSelectedChildRailEntry,
                   railPath.contains(where: { CFEqual($0, focus) }) || retainedHeaderFocus != nil else {
                 // Preserve scalar/default acquisition exactly: the focus's
                 // original physical parent supplies its Mixer candidate.
                 return AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
+            }
+            if let retainedMixer {
+                // Renew this already-held native owner, not a whole-window Help
+                // discovery through the old census after popup cleanup. The
+                // constructor still proves its reciprocal path, complete current
+                // strips, rail, selected child, viewport and stopped transport.
+                guard Self.path(retainedMixer, to: window, ax: logic.ax) != nil else { return nil }
+                return retainedMixer
             }
             guard case .found(let mixer) = (try? AXLogicProElements.mixerPopulationAreaLookup(
                 in: window, runtime: logic, requiresCompleteAbsence: true,
