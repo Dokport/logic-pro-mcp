@@ -6537,7 +6537,8 @@ struct Issue965HeldSelectionAssociationTests {
                     if canonicalBusStereoReturn {
                         #expect(f.routingCanonicalContradictedInputs.count > contradictionsBeforeApply,
                             "Refusal must reach the actual changed input proof, not an earlier unsupported path")
-                        #expect(f.routingDestinationPresses == (canonicalBusReceiverFault?.hasSuffix("after_forward") == true ? 1 : 0))
+                        let expectedDestinationPresses: Int = canonicalBusReceiverFault?.hasSuffix("after_forward") == true ? 1 : 0
+                        #expect(f.routingDestinationPresses == expectedDestinationPresses)
                     }
                     if canonicalBusReceiverFault?.hasSuffix("after_forward") == true {
                         #expect(f.routingBusLeafPresses == (canonicalBusStereoReturn ? [] : [2]), "An invalid original receiver must prevent the owned inverse")
@@ -6569,7 +6570,9 @@ struct Issue965HeldSelectionAssociationTests {
                             let checkedInputs = f.routingCanonicalInputBuses.dropFirst(inputReadsBeforeApply)
                             #expect(checkedInputs.filter { $0 == 1 }.count >= (canonicalSend == "cancel" ? 2 : 1))
                             #expect(!checkedInputs.contains(2), "An unrelated Bus receiver is not a routing prerequisite")
-                            if canonicalBusReceiverFault?.contains("source") == true { #expect(checkedInputs.contains(0)) }
+                            if canonicalBusReceiverFault?.contains("source") == true {
+                                #expect(checkedInputs.contains(0))
+                            }
                         }
                         if canonicalBusReceiverFault == "physical_source" {
                             #expect(f.routingSourceInputFreshHeaderChallenges >= (canonicalSend == "cancel" ? 2 : 1),
@@ -8361,7 +8364,11 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(CFEqual(renewed.pair.strip.strip, survives ? source.strip : replacement))
             #expect(renewed.originalTrack.matches(pair.track) && permittedInClaim)
             #expect(!renewed.permits(runtime: f.logic()), "No retained native permission outside its own claim context")
-            #expect((f.routingReplacement == nil) == survives)
+            if survives {
+                #expect(f.routingReplacement == nil)
+            } else {
+                #expect(f.routingReplacement != nil)
+            }
             #expect(source.currentIndex(runtime: f.logic()) == (survives ? 1 : nil))
             #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1)
             #expect(f.selections == [1, 0, 1, 0], "Actual native header challenges, not a JSON restoration receipt")

@@ -1242,7 +1242,8 @@ struct Issue291AssignedSendMenuTests {
         let body = try #require(sharedJSONObject(response.message))
         #expect(body["state"] as? String == "C")
         #expect(body["current_destination"] == nil)
-        #expect(body["navigation_attempted"] as? Bool == false)
+        let navigated = try #require(body["navigation_attempted"] as? Bool)
+        #expect(!navigated)
         #expect(f.mutations.isEmpty, "An expired or revoked request must not leave a newly opened popup")
     }
 
