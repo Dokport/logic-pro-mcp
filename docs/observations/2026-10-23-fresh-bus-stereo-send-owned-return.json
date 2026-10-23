@@ -19,7 +19,7 @@
     "Sources/LogicProMCP/Saga/SagaExecution.swift",
     "Sources/LogicProMCP/Workflows/ApprovedSessionRepair.swift"
   ],
-  "evidence": [],
+  "evidence": ["evidence/2026-10-23-fresh-bus-stereo-send-owned-return.json"],
   "method": "Registered public MCP calls against the sealed candidate, public trace/journal observations for event-bound cancellation, and independent native Accessibility UI comparisons before acquisition, after negative controls, after completion/replay and after each terminal return. Only one mutation caller ran at a time; both candidate processes stopped normally after their bounded runs.",
   "canon_not_applicable": {
     "reason": "This measures native action custody, typed destination readback, journal replay and UI restoration. It makes no assertion about Apple's canonical label vocabulary or translations."
