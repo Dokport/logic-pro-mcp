@@ -33,6 +33,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   censuses grow to 117 operations; the op joins the `legacy_index_allowed` census.
 
 ### Fixed
+- **`export_track_midi` / `read_track_notes` accept Logic's single-track (format 0) export.** With
+  exactly one MIDI track, Logic 12.4 writes "All MIDI Tracks as MIDI File" as format 0: one chunk
+  carrying the track's instrument name at tick 0, the conductor metadata and the notes. Every such
+  project was refused `unsupported_midi_export_layout`. The chunk is now accepted under the same
+  ownership rule as a format-1 track (one instrument name, no channel or SysEx event before it) and
+  the file is returned unchanged; a mismatched name is still `track_midi_not_exported`, and other
+  format-0 shapes are still refused.
 - **`tracks.set_instrument` opened the wrong Library folder when the Library panel shows one
   column (#1100).** Selecting the category over AX already slides the column view, so the
   coordinate click that followed landed on the next column's row at the same height
