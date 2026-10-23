@@ -125,10 +125,116 @@
     },
     "independent_ui": {"prepared_character_count": 36684, "focus": "Tracks container", "cancelled_terminal_exactly_matches_prepared": true, "completed_forward_only_difference": "Occupied Send destination display", "fresh_canonical_return_terminal_exactly_matches_prepared": true, "pixel_equality_claimed": false}
   },
+  "korean_flat32_existing_bus": {
+    "locale": "ko-KR",
+    "source_commit": "6c9fd5f60ab8009025b1684ecaf8f856856a117e",
+    "binary_sha256": "e2f00b9696bbf69770912a858a01f5e2796a3a91bec0bb413765d93832ff02af",
+    "fixture": {
+      "arrange_tracks": 32,
+      "mixer_strips": 38,
+      "warm": true
+    },
+    "controls": {
+      "wrong_target_plan_executable": false,
+      "wrong_digest": {
+        "state": "C",
+        "error": "stale_target_reference",
+        "write_attempted": false
+      },
+      "independent_after_controls_exactly_matches_prepared": true
+    },
+    "cancelled": {
+      "raw_sha256": "c0316d1b23bdbf1ba44fa201abcbd301465a22aa96853f48ef24c5cd36f3558b",
+      "elapsed_seconds": 189.59498050000002,
+      "capture_to_apply_seconds": 8.46574975,
+      "state": "C",
+      "verified": false,
+      "saga_state": "fullyCompensated",
+      "cancel_basis": {
+        "dispatcher_verified_operation": "mixer.set_send_output_verified",
+        "single_valid_execution_caller": true,
+        "exact_key_in_progress": true,
+        "timer_authority": false,
+        "independent_CUA_intermediate_change_claimed": false
+      },
+      "forward": {
+        "state": "A",
+        "write_boundary_crossed": true,
+        "before": "bus:1",
+        "after": "bus:2",
+        "provenance": "live_independent",
+        "read_source": "ax_send_menu_checkmark"
+      },
+      "compensation": {
+        "comparison": {
+          "comparator": "exact",
+          "desired": "bus:1",
+          "equal": true,
+          "observed": "bus:1"
+        },
+        "disposition": "verified",
+        "readback": {
+          "evidence": "ax_live tracks[1].send_destination (send_menu_checkmark)",
+          "field": "send_destination",
+          "observed": "bus:1",
+          "provenance": "live_independent",
+          "read_source": "ax_send_menu_checkmark",
+          "sampled_at": "2026-10-23T12:42:53.575Z",
+          "track_index": 1,
+          "value": "bus:1"
+        }
+      },
+      "journal_summary": {
+        "compensation_write_boundary_count": 1,
+        "failed_compensation_count": 0,
+        "forward_write_boundary_count": 1,
+        "record_count": 1,
+        "uncertain_compensation_count": 0,
+        "verified_compensation_count": 1,
+        "write_boundary_count": 2
+      },
+      "journal_status": "cancelled",
+      "replay": {
+        "state": "C",
+        "verified": false,
+        "saga_state": "fullyCompensated",
+        "duplicate": true
+      }
+    },
+    "independent_ui": {
+      "ax_characters": 178408,
+      "ax_exact": true,
+      "protected_scalar_values": 151,
+      "protected_scalars_exact": true,
+      "window_png_bytes": 1156329,
+      "window_png_byte_exact": true,
+      "popup_present": false,
+      "manual_recovery": false
+    },
+    "limits": [
+      "This warm Korean selected-source cancellation does not qualify cold acquisition, other locales on the large fixture, arbitrary viewport restoration, shared strips, or normal large-fixture completion and fresh return.",
+      "The original capture/operation deadlines and lifetime remain unchanged. The successful window is actively prepared; separate inactive-entry and delayed-capture refusals remain unqualified positive executions."
+    ]
+  },
   "retained_failures": [
     {"source_commit": "7b58b9010f896c7ffde98b9943eabe1772cce7e4", "raw_sha256": "f2a984b6ee54156972f8610583f4dd4964c0b6877cea648d42b13215266d0b49", "result": "Checked input prerequisites refused before Send; zero journal write boundaries; complete terminal AX equals prepared baseline"},
     {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "raw_sha256": "e0f6fb512eaa2fd4e5b4fcd80f44c264193c0833bf4fa111697e5799bf10ca45", "result": "Plan waited 117 seconds before application; stale_target_reference / write_attempted false; complete terminal AX equals prepared baseline"},
-    {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "context_head": "fa22296ef4239392a63228e78cd942c15ad8ef27", "raw_sha256": "aad77f0cc6479ef3e9c3f75cdeeb9a81f9d43b1e4ba2178f92af86f99102ec8a", "result": "Korean Tracks Bus-to-Bus input prerequisites refused before any Send write; zero journal write boundaries; complete terminal AX equals prepared baseline"}
+    {"source_commit": "abef1bcb92bf2612f7d16f9a3f244dad2a154f30", "context_head": "fa22296ef4239392a63228e78cd942c15ad8ef27", "raw_sha256": "aad77f0cc6479ef3e9c3f75cdeeb9a81f9d43b1e4ba2178f92af86f99102ec8a", "result": "Korean Tracks Bus-to-Bus input prerequisites refused before any Send write; zero journal write boundaries; complete terminal AX equals prepared baseline"},
+    {
+      "source_commit": "0117834f173f3ac8d894207f1e32d6282afca20e",
+      "raw_sha256": "808ce7c31138756d524b97881e7fcb7890edd0de5e583c29b3a039b387f01cec",
+      "result": "The large active fixture crossed one forward and one inverse boundary but reported rollbackUncertain with no verified inverse readback. Independent terminal AX/scalars matched the actual warm pre-apply state; initial cold metadata/scalar and pixel differences remained unqualified."
+    },
+    {
+      "source_commit": "6c9fd5f60ab8009025b1684ecaf8f856856a117e",
+      "raw_sha256": "476f6985c07434493c231cd34657d7f28692eac409f32532b4b32b9b89711e32",
+      "result": "An uncontrolled 49.381-second post-capture delay preceded a 14.434-second prewrite refusal. No write boundary crossed; terminal AX/scalars/window PNG exactly matched the prepared state. The delay is retained, not a new passing execution or a proven sole predicate failure."
+    }
   ],
-  "limits": ["One stopped four-track/nine-strip profile in English and Korean.", "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.", "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.", "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."]
+  "limits": [
+    "Stopped English/Korean four-track/nine-strip profiles and one separately labelled Korean warm 32-track/38-strip cancellation.",
+    "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.",
+    "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.",
+    "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."
+  ]
 }
