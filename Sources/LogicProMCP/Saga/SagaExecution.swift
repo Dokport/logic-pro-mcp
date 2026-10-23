@@ -507,8 +507,13 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
             }
             let mapped = ProductionSagaStepExecutor.mapResponse(response, operationID: step.operationID)
             if case .text(let text, _, _) = response.content.first,
-               let body = decodedJSONObject(text), let attempted = body["write_attempted"] as? Bool {
-                return .init(state: mapped.state, writeBoundaryCrossed: attempted, detail: mapped.detail)
+               let body = decodedJSONObject(text) {
+                if self.approved != nil, mapped.state == .stateC, let hint = body["hint"] as? String {
+                    Log.info("Canonical Send dispatch refused: \(hint)", subsystem: "saga")
+                }
+                if let attempted = body["write_attempted"] as? Bool {
+                    return .init(state: mapped.state, writeBoundaryCrossed: attempted, detail: mapped.detail)
+                }
             }
             return mapped
         }
