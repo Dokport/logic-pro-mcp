@@ -1315,8 +1315,17 @@ extension AccessibilityChannel {
                         : .couldNotDismiss(initialPopupCount: 1, remainingPopupCount: 1)
                 }, permittingCleanup: { writerMenuOwned(preservingOriginalLabel: false) })
             extras.merge(cleanup) { _, new in new }
-            func uncertain(_ hint: String) -> CheckedOutputReading {
-                Log.info("Occupied Send verification refused: \(hint)", subsystem: "ax")
+            func uncertain(_ hint: String, checkpoint: String? = nil) -> CheckedOutputReading {
+                let acquisition: String
+                do {
+                    try SessionPopulationObservation.requireOwnedAcquisition()
+                    acquisition = "current"
+                } catch {
+                    acquisition = String(describing: error)
+                }
+                if let checkpoint { extras["verification_checkpoint"] = checkpoint }
+                extras["acquisition_at_refusal"] = acquisition
+                Log.info("Occupied Send verification refused: checkpoint=\(checkpoint ?? "unspecified"), acquisition=\(acquisition): \(hint)", subsystem: "ax")
                 extras["hint"] = hint
                 return .init(result: .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras)), assignment: nil)
             }
@@ -1434,11 +1443,25 @@ extension AccessibilityChannel {
                     verifiedPopulation = current
                     return true
                 }
-                guard let renewed = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax),
-                      !survivingDestination || (renewedOwner.matches(physical) && renewed.control.matches(assigned)),
-                      normalized(renewed.slots) == normalized(singleton.slots), populationPreserved(),
-                      source.permits(runtime: runtime) else {
-                    return uncertain("Renewal changed the complete empty-slot footprint, protected send state or physical population.")
+                guard let renewed = soleAssignedSend(in: renewedOwner.strip, runtime: runtime.ax) else {
+                    return uncertain("Renewal did not observe exactly one occupied Send with a complete empty-slot footprint.",
+                        checkpoint: "renewed_singleton")
+                }
+                guard !survivingDestination || (renewedOwner.matches(physical) && renewed.control.matches(assigned)) else {
+                    return uncertain("Renewal did not retain the exact surviving source and Send controls.",
+                        checkpoint: "surviving_control")
+                }
+                guard normalized(renewed.slots) == normalized(singleton.slots) else {
+                    return uncertain("Renewal's complete slot/protected-state projection did not match its original.",
+                        checkpoint: "protected_footprint")
+                }
+                guard populationPreserved() else {
+                    return uncertain("Renewal did not observe the original ordered physical population and protected peers.",
+                        checkpoint: "physical_population")
+                }
+                guard source.permits(runtime: runtime) else {
+                    return uncertain("Renewal did not corroborate its current original-header source custody.",
+                        checkpoint: "renewed_source_custody")
                 }
                 // The fresh checked reader observes this unique occupied group;
                 // its census ordinal is only the already proved footprint coordinate.
