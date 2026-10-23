@@ -1441,7 +1441,8 @@ extension AccessibilityChannel {
                 // its census ordinal is only the already proved footprint coordinate.
                 let after = await AXMixerStripBinding.$current.withValue(renewedOwner) {
                     await getOutputObservation(runtime: runtime, sendOrdinal: renewed.control.ordinal, timing: timing,
-                        observingSendMode: request.modeChange != nil)
+                        observingSendMode: request.modeChange != nil,
+                        readingOriginalScope: source.observation)
                 }
                 if let data = after.result.message.data(using: .utf8), let receipt = try? JSONSerialization.jsonObject(with: data) {
                     extras["after_acquisition"] = receipt
