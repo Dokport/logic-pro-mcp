@@ -213,7 +213,8 @@
     },
     "limits": [
       "This warm Korean selected-source cancellation does not qualify cold acquisition, other locales on the large fixture, arbitrary viewport restoration, shared strips, or normal large-fixture completion and fresh return.",
-      "The original capture/operation deadlines and lifetime remain unchanged. The successful window is actively prepared; separate inactive-entry and delayed-capture refusals remain unqualified positive executions."
+      "The original capture/operation deadlines and lifetime remain unchanged. The successful window is actively prepared; separate inactive-entry and delayed-capture refusals remain unqualified positive executions.",
+    "The separately identified named-source existing-Bus attempts retain a compensated no-Send failure, an uncertain name inverse and three later acquisition refusals. Passing injected regressions and earlier unnamed roundtrips do not qualify those failed native profiles; each source revision, actual effect count and required independent recovery remains distinguished."
     ]
   },
   "english_flat32_existing_bus": {
@@ -924,6 +925,119 @@
         "observation": "Source-input acquisition refused at source_input_bookend after an independent Bus 1 before-read. No forward or inverse write boundary was crossed. Complete independent AX and all 151 protected values remained equal to the prepared baseline. The first failed predicate was not isolated; later logging-only success does not resolve this earlier refusal.",
         "qualification": "Retained failed execution; not native completion evidence.",
         "raw_transcript_sha256": "253ced77460aaab7c2400237c251cd711b8003cceeb020a0891620574891ddba"
+      }
+    },
+    {
+      "source_commit": "0df9315829f47326396b9a672097032336a70281",
+      "raw_sha256": "8823f2d8482375e31499357465e2a9ef50010d6369ca1afef72524b7badc458e",
+      "result": {
+        "case": "Retained Korean warm 32-track named-source existing-Bus execution failure",
+        "locale": "ko-KR",
+        "source_commit": "0df9315829f47326396b9a672097032336a70281",
+        "binary_sha256": "db24b2b90e74524a930886c62cc5df43baf05d00fa196df49f34f1c0b1f2a6b1",
+        "capture_seconds": 84.99141591699998,
+        "state": "C",
+        "verified": false,
+        "observation": "Forward name verified, then the Send before-read was unavailable after historical inspection expiry. The owned name inverse restored the data without a Send destination write. Only focus differed from the original complete AX state; independent focus recovery is not automatic UI restoration.",
+        "qualification": "Retained failed execution; not native named-source completion or repeatability evidence.",
+        "raw_transcript_sha256": "8823f2d8482375e31499357465e2a9ef50010d6369ca1afef72524b7badc458e",
+        "forward_seconds": 112.26584920799999,
+        "saga_state": "fullyCompensated",
+        "journal_summary": {
+          "compensation_write_boundary_count": 1,
+          "failed_compensation_count": 0,
+          "forward_write_boundary_count": 1,
+          "record_count": 2,
+          "uncertain_compensation_count": 0,
+          "verified_compensation_count": 1,
+          "write_boundary_count": 2
+        },
+        "independent_ui": "All 151 protected values and the original Bus 1 Send remained unchanged. Track and Mixer names were restored by the owned name inverse; only focus differed."
+      }
+    },
+    {
+      "source_commit": "a0c8f5aaf2532f43e3f01b4db7719f2af98855c4",
+      "raw_sha256": "8fba69645c67572414e599ade4c0213089af1ea1fb3da27541eab17f1750df26",
+      "result": {
+        "case": "Retained Korean warm 32-track named-source existing-Bus execution failure",
+        "locale": "ko-KR",
+        "source_commit": "a0c8f5aaf2532f43e3f01b4db7719f2af98855c4",
+        "binary_sha256": "ead1c9fa127cf2f2a7728d3728a5c4e5da84ab1d5ced3e14a478ed745c0443b0",
+        "capture_seconds": 87.282848167,
+        "state": "B",
+        "verified": false,
+        "observation": "Forward name verified and the original Send before-read continued through its owned name effect. Both receiver inputs were checked, but the dispatcher refused before a Send destination write. The name inverse was uncertain and the written name remained. Independent fixture recovery is not owned compensation.",
+        "qualification": "Retained failed execution; not native named-source completion or repeatability evidence.",
+        "raw_transcript_sha256": "8fba69645c67572414e599ade4c0213089af1ea1fb3da27541eab17f1750df26",
+        "forward_seconds": 169.98890441700001,
+        "saga_state": "rollbackUncertain",
+        "journal_summary": {
+          "compensation_write_boundary_count": 0,
+          "failed_compensation_count": 0,
+          "forward_write_boundary_count": 1,
+          "record_count": 2,
+          "uncertain_compensation_count": 1,
+          "verified_compensation_count": 0,
+          "write_boundary_count": 1
+        },
+        "independent_ui": "All 151 protected values and the original Bus 1 Send remained unchanged. The written Track and Mixer name remained; automatic name restoration was not verified."
+      }
+    },
+    {
+      "source_commit": "a6e1324e87c2e0947fe6c18c07df34bec047c62d",
+      "raw_sha256": "58bf586fa4433e01cb4bd52bb4c55a508a17db91b277394528bbff5231793848",
+      "result": {
+        "case": "Retained Korean warm 32-track named-source existing-Bus acquisition refusal",
+        "locale": "ko-KR",
+        "source_commit": "a6e1324e87c2e0947fe6c18c07df34bec047c62d",
+        "binary_sha256": "728673e80e7bfc71475adb85b5a29bd991d8f1b4d3c387f7ec30c1b3fb011572",
+        "capture_seconds": 90.00454624999999,
+        "state": "C",
+        "verified": false,
+        "observation": "Initial acquisition refused with readback_unavailable at 90.00454625 seconds before the combined task ran. The ownership log identifies the original Mixer path, but the first failed predicate was not isolated. Timing does not prove a separate path mutation or its cause.",
+        "qualification": "Retained failed execution; not native named-source completion or repeatability evidence.",
+        "raw_transcript_sha256": "58bf586fa4433e01cb4bd52bb4c55a508a17db91b277394528bbff5231793848",
+        "error": "readback_unavailable",
+        "write_attempted": false,
+        "independent_ui": "Complete AX state and all 151 protected values exactly matched the prepared baseline after refusal; no independent fixture recovery was required."
+      }
+    },
+    {
+      "source_commit": "a6e1324e87c2e0947fe6c18c07df34bec047c62d",
+      "raw_sha256": "ef5793bc15384826390b550746acf6b434ac424f7122acfc4a96170c3ea70fc0",
+      "result": {
+        "case": "Retained Korean warm 32-track named-source existing-Bus acquisition refusal (same-build retry)",
+        "locale": "ko-KR",
+        "source_commit": "a6e1324e87c2e0947fe6c18c07df34bec047c62d",
+        "binary_sha256": "728673e80e7bfc71475adb85b5a29bd991d8f1b4d3c387f7ec30c1b3fb011572",
+        "capture_seconds": 90.00573504099998,
+        "state": "C",
+        "verified": false,
+        "observation": "Initial acquisition returned operation_timeout at 90.005735041 seconds before the combined task ran. No replacement report was published and no data write was attempted.",
+        "qualification": "Retained failed execution; not native named-source completion or repeatability evidence.",
+        "raw_transcript_sha256": "ef5793bc15384826390b550746acf6b434ac424f7122acfc4a96170c3ea70fc0",
+        "error": "operation_timeout",
+        "write_attempted": false,
+        "independent_ui": "Complete AX state and all 151 protected values exactly matched the prepared baseline after refusal; no independent fixture recovery was required."
+      }
+    },
+    {
+      "source_commit": "adc66e52758b93acc5330579bda7b4819c52162f",
+      "raw_sha256": "dc181a0ce42f21863b6fb3191fe879fef065cdfb5dfb95ed62e26e57e439016b",
+      "result": {
+        "case": "Retained Korean warm 32-track named-source existing-Bus acquisition refusal",
+        "locale": "ko-KR",
+        "source_commit": "adc66e52758b93acc5330579bda7b4819c52162f",
+        "binary_sha256": "85cf76a2170fccf6fe27b62a5738e6e03d5385e5f0a9e2827c6fe70a66fb5451",
+        "capture_seconds": 90.00829600000002,
+        "state": "C",
+        "verified": false,
+        "observation": "Initial acquisition still returned operation_timeout at 90.008296 seconds after the selected Input-reader change. Passing discovery-counter tests do not qualify native acquisition performance. No replacement report was published and no data write was attempted.",
+        "qualification": "Retained failed execution; not native named-source completion or repeatability evidence.",
+        "raw_transcript_sha256": "dc181a0ce42f21863b6fb3191fe879fef065cdfb5dfb95ed62e26e57e439016b",
+        "error": "operation_timeout",
+        "write_attempted": false,
+        "independent_ui": "Complete AX state and all 151 protected values exactly matched the prepared baseline after refusal; no independent fixture recovery was required."
       }
     }
   ],

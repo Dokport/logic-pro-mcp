@@ -534,6 +534,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingInputReadRenewed = false
         var routingInputOpenDiscoveryStart: Int?
         var routingInputOpenDiscoveryCounts: [Int] = []
+        var routingOutputOpenDiscoveryStart: Int?
+        var routingOutputOpenDiscoveryCounts: [Int] = []
         var routingInputOpenWindowScans = 0
         var routingInputDiscoveryProbe: AXUIElement?
         var routingPopupReadFocusRetained = false
@@ -4905,7 +4907,7 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test("Selected routing capture reads Input popups through its actual held Mixer", arguments: ["selection", "whole_project"])
+    @Test("Selected routing capture reads its popups through its actual held Mixer", arguments: ["selection", "whole_project"])
     func routingCaptureKeepsItsHeldInputReadScope(scope: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
@@ -5611,6 +5613,9 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
                     || (canonicalSend != nil && CFEqual(element, b.element(1_965_2799)))
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
+                    if captureInputReadScope != nil, !f.routingInputReadRenewalArmed {
+                        f.routingOutputOpenDiscoveryStart = f.coupledGuardPopulationScans
+                    }
                     if let decidingSendFault, f.routingDestinationPresses == 0 {
                         f.routingBeforeSendMenuOpens += 1
                         if decidingSendFault != "healthy", !decidingSendFault.hasPrefix("late_"),
@@ -5643,6 +5648,10 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, [f.strips[0], source, root]); return true
                 }
                 if action == kAXCancelAction as String, CFEqual(element, root) {
+                    if let start = f.routingOutputOpenDiscoveryStart {
+                        f.routingOutputOpenDiscoveryCounts.append(f.coupledGuardPopulationScans - start)
+                        f.routingOutputOpenDiscoveryStart = nil
+                    }
                     if bypassMode != nil { f.routingBypassMenuCancels += 1 }
                     b.setChildren(f.mixer, [f.strips[0], source]); return true
                 }
@@ -5993,10 +6002,17 @@ struct Issue965HeldSelectionAssociationTests {
                     do {
                         if action == kAXPressAction as String,
                            [1_971_532, 1_971_535, 1_971_538].contains(where: { CFEqual(element, b.element($0)) }) {
+                            if captureInputReadScope != nil, !f.routingInputReadRenewalArmed {
+                                f.routingOutputOpenDiscoveryStart = f.coupledGuardPopulationScans
+                            }
                             b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [mainRoot])
                             return true
                         }
                         if CFEqual(element, mainRoot), action == kAXCancelAction as String {
+                            if let start = f.routingOutputOpenDiscoveryStart {
+                                f.routingOutputOpenDiscoveryCounts.append(f.coupledGuardPopulationScans - start)
+                                f.routingOutputOpenDiscoveryStart = nil
+                            }
                             b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, mainRoot) })
                             return true
                         }
@@ -6156,13 +6172,20 @@ struct Issue965HeldSelectionAssociationTests {
                 domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"],
                 scope: captureInputReadScope ?? (canonicalBusReceiverFault == "physical_source_read_renewal" ? "selection" : "whole_project"))
             if let captureInputReadScope {
+                #expect(f.routingDestinationPresses == 0 && f.routingNameWrites.isEmpty,
+                    "Capture reads must not cross a data-write boundary")
                 let scans = f.routingInputOpenDiscoveryCounts
+                let outputScans = f.routingOutputOpenDiscoveryCounts
                 #expect(!scans.isEmpty, "Reach the captured source's actual Input popup")
+                #expect(outputScans.count >= 2, "Reach the captured source's actual main Output and Send popups")
                 if captureInputReadScope == "selection" {
                     #expect(scans.allSatisfy { $0 == 0 },
                         "The admitted selected capture must retain its original native scope during Input reads: \(scans)")
+                    #expect(outputScans.allSatisfy { $0 == 0 },
+                        "Main Output and Send reads retain that same actual scope: \(outputScans)")
                 } else {
                     #expect(scans.contains { $0 > 0 }, "Whole-project capture keeps its existing discovery path")
+                    #expect(outputScans.contains { $0 > 0 }, "Whole-project Output capture keeps its existing discovery path")
                 }
                 f.routingInputOpenDiscoveryCounts.removeAll()
             }
