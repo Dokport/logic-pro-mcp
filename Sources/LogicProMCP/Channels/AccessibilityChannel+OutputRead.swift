@@ -495,12 +495,14 @@ extension AccessibilityChannel {
         restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
         observingPopupFocus: @escaping @Sendable ((@Sendable () -> Bool)?) -> Void = { _ in },
         observingRenewedFocus: @escaping @Sendable (HeldSelectionAssociation) -> Void = { _ in },
-        refreshingOriginalSourceAfterCleanup: Bool = false) async -> CheckedOutputReading {
+        refreshingOriginalSourceAfterCleanup: Bool = false,
+        observingPeerHeaders: [AXTrackBinding.Binding]? = nil) async -> CheckedOutputReading {
         await getCheckedRoutingDestination(params: [:], sendOrdinal: nil, inputBusOnly: true,
             includingNonBusInputs: true, runtime: runtime, timing: timing,
             restoringMixerGeometry: restoringMixerGeometry,
             observingPopupFocus: observingPopupFocus, observingRenewedFocus: observingRenewedFocus,
-            refreshingOriginalSourceAfterCleanup: refreshingOriginalSourceAfterCleanup)
+            refreshingOriginalSourceAfterCleanup: refreshingOriginalSourceAfterCleanup,
+            observingPeerHeaders: observingPeerHeaders)
     }
 
     /// Shares the exact owned reader; wire receipt decoding never supplies graph identity.

@@ -754,6 +754,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     private var outputApplied = false
     private var outputInverseConsumed = false
     private var outputPeerReadbackUnavailable = false
+    private var sendInputPeerHeaders: [AXTrackBinding.Binding]?
+    private var sendInputPeerHeadersPrepared = false
     private var sortSnapshot: TargetRegistrySnapshot?
     private var sortProject: TargetReference?
     private var sortApplied = false
@@ -1164,6 +1166,54 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return (task.pair, task.control)
     }
 
+    /// Discover header witnesses in the existing independent read budget, not
+    /// the route-write budget. These are hints for a later actual input read,
+    /// never cached Bus values, renewed public references or write authority.
+    func prepareSendInputPeerHeaders(at original: AccessibilityChannel.HeldSelectionAssociation.Pair) async -> Bool {
+        let parentHelpGuard = AXHelpers.HelpReadGuard.current
+        guard parentHelpGuard?.stopped != true else { return false }
+        guard let task = sendTask, case .bus(let before) = task.before else { return true }
+        let buses: [Int]
+        if case .bus(let after)? = task.desired, before != after { buses = [before, after] }
+        else if task.desired == .stereoOutput { buses = [before] }
+        else { return true }
+        if sendInputPeerHeadersPrepared { return true }
+        sendInputPeerHeadersPrepared = true
+        guard original.track.matches(task.pair.track), await projectIsCurrent(allowPendingCancellation: true) else { return false }
+        let runtime = original.track.runtime
+        guard let proof = AccessibilityChannel.HeldSelectionAssociation(window: original.track.window,
+            logic: runtime, expectedProject: nil, requiresProjectReference: false,
+            allowsSelectedChildRailEntry: true, retainedMixerSource: original.strip), proof.permitsRead() else { return true }
+        let focus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+        focus.retainAssociation(proof)
+        let observed = await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: {
+            parentHelpGuard?.permits() == false || !focus.permits()
+        })) {
+            await AccessibilityChannel.renewSourceThroughOriginalHeader(original, original: original.strip,
+                runtime: runtime, sourceDisposition: .readObservation,
+                observingReadFocus: { focus.retainAssociation($0) })
+        }
+        guard observed.effects.restoration == "restored", let renewed = observed.source,
+              renewed.pair.strip.matches(original.strip), renewed.pair.track.matches(original.track),
+              renewed.permits(runtime: runtime) else { return observed.effects.attempted.isEmpty }
+        var headers: [AXTrackBinding.Binding] = []
+        var covered = Set<Int>()
+        for row in task.capture.channelStrips {
+            guard let slot = row.inputSlotBinding, !slot.owner.matches(task.pair.strip),
+                  RoutingGraphPublication.classifyOutputLabel(slot.source).0 == .bus,
+                  let bus = RoutingGraphPublication.classifyOutputLabel(slot.source).1, buses.contains(bus),
+                  slot.owner.currentIndex(runtime: runtime) != nil else { continue }
+            // Only exact native owner correspondence identifies its original
+            // header. A missing/ambiguous pair leaves ordinary discovery intact.
+            let pairs = renewed.observedPairs.filter { $0.strip.matches(slot.owner) }
+            guard pairs.count == 1, let pair = pairs.first else { return true }
+            if !headers.contains(where: { $0.matches(pair.track) }) { headers.append(pair.track) }
+            covered.insert(bus)
+        }
+        if buses.allSatisfy({ covered.contains($0) }) { sendInputPeerHeaders = headers }
+        return true
+    }
+
     /// A caption admits only a candidate. All involved Bus endpoints and the source's
     /// loop-safety input must be independently checked before either route press.
     /// A read may retire native controls. Only its actual original-header
@@ -1268,7 +1318,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                             restoringMixerGeometry: originalMixerGeometry,
                             observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) },
                             observingRenewedFocus: { inputFocus.retainAssociation($0) },
-                            refreshingOriginalSourceAfterCleanup: true)
+                            refreshingOriginalSourceAfterCleanup: true,
+                            observingPeerHeaders: sendInputPeerHeaders)
                     }
                 }
                 stage = "source_input_assignment"

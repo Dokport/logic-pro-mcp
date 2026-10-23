@@ -332,6 +332,9 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                         guard let current = AXLogicProElements.assignedSendMenuControl(in: physical.strip,
                             ordinal: ordinal, runtime: runtime.ax), captured.matches(current) else { return nil }
                     }
+                    if let approved = self.approved {
+                        guard await approved.prepareSendInputPeerHeaders(at: held) else { return nil }
+                    }
                     let checked = await AXMixerStripBinding.$current.withValue(physical) {
                         await AXMixerStripBinding.$outputAssociation.withValue(held) {
                             await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
