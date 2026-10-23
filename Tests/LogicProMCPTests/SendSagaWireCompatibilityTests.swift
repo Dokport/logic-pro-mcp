@@ -31,9 +31,22 @@ struct SendSagaWireCompatibilityTests {
         }
         #expect(!AccessibilityChannel.supportsOccupiedSendChange(before: .bus(1), after: .bus(1)))
         #expect(!SendRemovalSagaAdapter.accepts(replacement(before: bus(.int(1)), after: bus(.int(1)))))
-        for unsupported: OutputAssignment in [.stereoOutput, .physical(3, 4), .noOutput] {
+        for unsupported: OutputAssignment in [.physical(3, 4), .noOutput] {
             #expect(!AccessibilityChannel.supportsOccupiedSendChange(before: .bus(1), after: unsupported))
         }
+    }
+
+    @Test func occupiedBusStereoReturnRequiresItsFreshWireAndNativePair() throws {
+        #expect(AccessibilityChannel.supportsOccupiedSendChange(before: .bus(1), after: .stereoOutput))
+        let plan = replacement(before: .object(["kind": .string("bus"), "number": .int(1)]),
+            after: .object(["kind": .string("stereo_output")]))
+        #expect(SendRemovalSagaAdapter.accepts(plan))
+        #expect(SendRemovalSagaAdapter.journalValue(try #require(plan.steps.first)) == .string("stereo_output"))
+        var unowned = plan
+        unowned.canonicalPlanID = "unowned"; unowned.canonicalDigest = "unowned"
+        #expect(!SendRemovalSagaAdapter.accepts(unowned))
+        #expect(!ApprovedSessionRepair.supportsCapturedSendDirection(before: .bus(1), after: .stereoOutput),
+            "A wire pair alone cannot qualify canonical repair")
     }
 
     @Test func existingBusDestinationStillRequiresAnIntegerWireValue() {

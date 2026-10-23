@@ -1,0 +1,219 @@
+{
+  "format": "actual-bus-stereo-send-excerpts.v1",
+  "method": "Selected actual MCP response fields. Private paths and opaque request, reference and trace tokens are omitted. Independent complete UI comparisons are observations separate from response fields; this excerpt is not a native replay.",
+  "source_commit": "097325de9c26b576764cd492546aabd07fd6fd10",
+  "binary_sha256": "e5b6b5309cb7830b058bfe9e37017a03ffcc1c01fd8b8f22b0a4f6b80a03d5e4",
+  "cancelled": {
+    "raw_sha256": "b844d8fd0a3d75369413fff20263f64103ea63af14d1860f6376ce557d58b332",
+    "controls": [
+      {
+        "step": "saga_wrong_target",
+        "ok": false,
+        "state": null,
+        "error": null,
+        "writes_performed": 0,
+        "write_attempted": null
+      },
+      {
+        "step": "saga_wrong_project",
+        "ok": false,
+        "state": null,
+        "error": null,
+        "writes_performed": 0,
+        "write_attempted": null
+      },
+      {
+        "step": "saga_wrong_hash",
+        "ok": null,
+        "state": "C",
+        "error": "invalid_params",
+        "writes_performed": null,
+        "write_attempted": false
+      }
+    ],
+    "cancel_basis": {
+      "dispatcher_verified_operation": "mixer.set_send_output_verified",
+      "exact_key_in_progress": true,
+      "timer_authority": false,
+      "independent_CUA_intermediate_change_claimed": false
+    },
+    "receipt": {
+      "elapsed_seconds": 72.047654041,
+      "state": "C",
+      "verified": false,
+      "saga_state": "fullyCompensated",
+      "steps": [
+        {
+          "operation_id": "mixer.set_send_output_verified",
+          "result": {
+            "detail": "mixer.set_send_output_verified: verified=true",
+            "state": "A",
+            "write_boundary_crossed": true
+          },
+          "before": {
+            "field": "send_destination",
+            "observed": "bus:1",
+            "provenance": "live_independent",
+            "read_source": "ax_send_menu_checkmark"
+          },
+          "verification": {
+            "disposition": "applied",
+            "comparison": {
+              "comparator": "exact",
+              "desired": "stereo_output",
+              "equal": true,
+              "observed": "stereo_output"
+            },
+            "readback": {
+              "field": "send_destination",
+              "observed": "stereo_output",
+              "provenance": "live_independent",
+              "read_source": "ax_send_menu_checkmark"
+            }
+          },
+          "compensation": {
+            "disposition": "verified",
+            "comparison": {
+              "comparator": "exact",
+              "desired": "bus:1",
+              "equal": true,
+              "observed": "bus:1"
+            },
+            "readback": {
+              "field": "send_destination",
+              "observed": "bus:1",
+              "provenance": "live_independent",
+              "read_source": "ax_send_menu_checkmark"
+            }
+          }
+        }
+      ]
+    },
+    "journal_summary": {
+      "compensation_write_boundary_count": 1,
+      "failed_compensation_count": 0,
+      "forward_write_boundary_count": 1,
+      "record_count": 1,
+      "uncertain_compensation_count": 0,
+      "verified_compensation_count": 1,
+      "write_boundary_count": 2
+    },
+    "journal_status": "cancelled",
+    "replay": {
+      "elapsed_seconds": 0.001453041999980087,
+      "state": "C",
+      "error": "unsupported_state",
+      "write_attempted": null
+    }
+  },
+  "completed": {
+    "raw_sha256": "521c8fe0cd9a4e9831596633465270349b17465ad0ace026b954cfc608457ae0",
+    "forward": {
+      "elapsed_seconds": 30.363162875,
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "steps": [
+        {
+          "operation_id": "mixer.set_send_output_verified",
+          "result": {
+            "detail": "mixer.set_send_output_verified: verified=true",
+            "state": "A",
+            "write_boundary_crossed": true
+          },
+          "before": {
+            "field": "send_destination",
+            "observed": "bus:1",
+            "provenance": "live_independent",
+            "read_source": "ax_send_menu_checkmark"
+          },
+          "verification": {
+            "disposition": "applied",
+            "comparison": {
+              "comparator": "exact",
+              "desired": "stereo_output",
+              "equal": true,
+              "observed": "stereo_output"
+            },
+            "readback": {
+              "field": "send_destination",
+              "observed": "stereo_output",
+              "provenance": "live_independent",
+              "read_source": "ax_send_menu_checkmark"
+            }
+          },
+          "compensation": null
+        }
+      ]
+    },
+    "fresh_return": {
+      "elapsed_seconds": 32.444643708,
+      "state": "A",
+      "verified": true,
+      "saga_state": "completed",
+      "steps": [
+        {
+          "operation_id": "mixer.set_send_output_verified",
+          "result": {
+            "detail": "mixer.set_send_output_verified: verified=true",
+            "state": "A",
+            "write_boundary_crossed": true
+          },
+          "before": {
+            "field": "send_destination",
+            "observed": "stereo_output",
+            "provenance": "live_independent",
+            "read_source": "ax_send_menu_checkmark"
+          },
+          "verification": {
+            "disposition": "applied",
+            "comparison": {
+              "comparator": "exact",
+              "desired": "bus:1",
+              "equal": true,
+              "observed": "bus:1"
+            },
+            "readback": {
+              "field": "send_destination",
+              "observed": "bus:1",
+              "provenance": "live_independent",
+              "read_source": "ax_send_menu_checkmark"
+            }
+          },
+          "compensation": null
+        }
+      ]
+    },
+    "replays": [
+      {
+        "step": "actual_completed_bus_stereo_forward_replay",
+        "elapsed_seconds": 0.0032958339999993314,
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "duplicate": true
+      },
+      {
+        "step": "actual_fresh_stereo_bus_return_replay",
+        "elapsed_seconds": 0.0030153749999897173,
+        "state": "A",
+        "verified": true,
+        "saga_state": "completed",
+        "duplicate": true
+      }
+    ]
+  },
+  "independent_ui": {
+    "prepared_character_count": 54717,
+    "after_negative_controls_exactly_matches_prepared": true,
+    "cancelled_terminal_exactly_matches_prepared": true,
+    "completed_forward_only_difference": "Occupied Send destination display changed from Bus 1 to St Out",
+    "fresh_return_terminal_exactly_matches_prepared": true
+  },
+  "limits": [
+    "One stopped English four-track/nine-strip fixture.",
+    "A distinct fresh return is not the preceding request owned inverse.",
+    "No canonical Bus-to-Stereo native qualification is established by these source-bound generic runs.",
+    "Full routing, other locales, arbitrary topology and native receiver-conflict injection remain unqualified."
+  ]
+}

@@ -451,6 +451,12 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             && capturedExistingBusPrerequisites(requested, source: source, sourceIndex: sourceIndex)
     }
 
+    static func supportsCapturedSendDirection(before: OutputAssignment, after: OutputAssignment) -> Bool {
+        // Fresh scalar ownership does not supply canonical receiver/input prerequisites.
+        if case .bus = before, after == .stereoOutput { return false }
+        return AccessibilityChannel.supportsOccupiedSendChange(before: before, after: after)
+    }
+
     /// Removal and typed local output endpoints need no receiver allocation. The ordinal
     /// selects this capture's original native control, which execution must still prove current.
     private static func capturedSend(policy: ProjectSessionAudit.IntentPolicy,
@@ -490,7 +496,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
               intent.bus == nil || (names.isEmpty && policy.inputs.isEmpty
                 && (reading.assignment == desired || capturedExistingSendBusChange(before: reading.assignment,
                     desired: desired, source: source, sourceIndex: row))),
-              desired.map({ reading.assignment == $0 || AccessibilityChannel.supportsOccupiedSendChange(before: reading.assignment, after: $0) })
+              desired.map({ reading.assignment == $0 || supportsCapturedSendDirection(before: reading.assignment, after: $0) })
                 ?? (intent.isRemoval && reading.assignment == .stereoOutput),
               reading.sendNonRoutingChecks == ["Post Fader"] || reading.sendNonRoutingChecks == ["포스트 페이더"],
               let control = reading.sendControl, control.ordinal == ordinal,
