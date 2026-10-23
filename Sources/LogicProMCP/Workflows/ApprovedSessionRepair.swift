@@ -1276,7 +1276,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         func sourceCurrent() -> Bool {
             guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
-                  pair.track.currentIndex() != nil, pair.strip.currentIndex(runtime: runtime) != nil,
+                  pair.track.currentIndex(in: roster?.observation ?? proof) != nil,
+                  pair.strip.currentIndex(runtime: runtime) != nil,
                   let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer,
                     runtime: runtime.ax)?.strips, census.count == task.capture.channelStrips.count else { return false }
             if let roster {
