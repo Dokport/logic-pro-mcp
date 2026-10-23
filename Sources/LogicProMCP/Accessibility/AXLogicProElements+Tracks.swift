@@ -779,9 +779,25 @@ extension AXLogicProElements {
 
         func visit(_ element: AXUIElement, remainingDepth: Int, path: [Int]) {
             guard !encounteredUnreadableAX else { return }
+            // One fresh native tuple for this visited node. Keep the full
+            // discovery and every status; this is neither a cached rail nor
+            // permission to reuse an earlier population observation.
+            let attributes = [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String]
+            let metadata = runtime.attributeValuesResult == nil ? nil
+                : AXHelpers.getNonHelpAttributes(element, attributes, runtime: runtime)
+            func string(_ attribute: String) -> Result<String?, AXHelpers.AXStatusError> {
+                guard let metadata, let index = attributes.firstIndex(of: attribute) else {
+                    return trackStringAttribute(element, attribute, runtime: runtime)
+                }
+                switch metadata[index] {
+                case .failure(let error) where trackStatusIsDefinitiveAbsence(error): return .success(nil)
+                case .failure(let error): return .failure(error)
+                case .success(let value): return .success(value as? String)
+                }
+            }
             var knownMenuChildrenStage: String?
             var diagnosticRole = "absent"
-            switch trackStringAttribute(element, kAXRoleAttribute as String, runtime: runtime) {
+            switch string(kAXRoleAttribute as String) {
             case .success(.some(let role)):
                 observingExposure?.observeRole(element: element, role: role)
                 // Popup text controls can refuse AXChildren while the original
@@ -795,15 +811,11 @@ extension AXLogicProElements {
                     knownMenuChildrenStage = "track_header_menu_item_children"
                 }
                 if role == (kAXListRole as String),
-                   case .success(let identifier) = trackStringAttribute(
-                        element, kAXIdentifierAttribute as String, runtime: runtime
-                   ),
+                   case .success(let identifier) = string(kAXIdentifierAttribute as String),
                    identifier == "Track Headers" {
                     candidates.lists.append(element)
                 } else if role == (kAXScrollAreaRole as String),
-                          case .success(let identifier) = trackStringAttribute(
-                            element, kAXIdentifierAttribute as String, runtime: runtime
-                          ),
+                          case .success(let identifier) = string(kAXIdentifierAttribute as String),
                           identifier == "Tracks" {
                     candidates.scrollAreas.append(element)
                 } else if role == (kAXGroupRole as String),
@@ -824,7 +836,11 @@ extension AXLogicProElements {
             }
 
             guard remainingDepth > 0 else { return }
-            switch AXHelpers.childrenResult(element, runtime: runtime) {
+            let children: Result<[AXUIElement], AXHelpers.AXStatusError>
+            if let metadata {
+                children = metadata[2].flatMap { AXHelpers.projectChildrenStatus(.success, $0) }
+            } else { children = AXHelpers.childrenResult(element, runtime: runtime) }
+            switch children {
             case .success(let children):
                 observingExposure?.observeChildren(element: element, children: children)
                 for (index, child) in children.enumerated() {
