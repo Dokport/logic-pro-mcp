@@ -768,6 +768,22 @@ extension AccessibilityChannel {
         if case .success = press { extras["popup_press_succeeded"] = true }
         else { extras["popup_press_succeeded"] = false }
         let deadline = Date().addingTimeInterval(Double(timing.popupOpenTimeoutMs) / 1_000)
+        defer { observingPopupFocus(nil) }
+        if inputBusOnly, sendReplacement == nil, let app, let passiveMixerFocus,
+           let popup = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
+           nativePopupScope(popup.root) {
+            let source = AXMixerInputSlotBinding(owner: physical, control: slot, source: originalLabel)
+            observingPopupFocus {
+                // Establish this exact native read's temporary focus before
+                // ordinary source rediscovery can query Help. The original
+                // passive strip, source control and native popup remain fresh;
+                // no association or action permission is renewed here.
+                guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                      let current = NativeOutputReadPopup.read(physical: physical, app: app, pid: pid, runtime: runtime),
+                      current.matches(popup), nativePopupScope(current.root) else { return false }
+                return passiveMixerFocus.permits(nativeInputPopup: current, nativeInputSource: source)
+            }
+        }
         var opened: [AXUIElement]?
         repeat {
             opened = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)
@@ -816,7 +832,6 @@ extension AccessibilityChannel {
                   current.matches(nativePopup), nativePopupScope(current.root) else { return nil }
             return [nativePopup.root]
         }
-        defer { observingPopupFocus(nil) }
         if nativePopup == nil, let opened, opened.count == 1, let root = opened.first {
             observingPopupFocus {
                 // Permit guarded reads for this exact menu's search field, not arbitrary
