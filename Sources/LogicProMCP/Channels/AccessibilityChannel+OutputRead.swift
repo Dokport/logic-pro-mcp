@@ -1302,9 +1302,10 @@ extension AccessibilityChannel {
                     return closeBeforeRefusal(.staleTargetReference, "Source or protected state changed after the final bus check; nothing was selected.")
                 }
             }
-            if request.modeChange != nil || request.createdRemoval != nil {
-                // The deciding peer census may observe an intervening mode or
-                // Independent Pan edit. Renew that exact before-state last.
+            if assigned != nil {
+                // Final destination and receiver reads may observe a mode or
+                // Independent Pan edit on any occupied Send. Renew its exact
+                // checked before-state after those reads, before the action.
                 guard expectedCheckedBefore(fresh: true),
                       sendMenuNonRoutingChecks(in: root, runtime: runtime.ax) == sendChecks,
                       writerMenuOwned() else {

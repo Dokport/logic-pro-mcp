@@ -521,6 +521,9 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDestinationPresses = 0
         var routingBeforeSendMenuOpens = 0
         var routingDecidingSendFaultInjected = false
+        var routingDecidingLeafActionsRead = false
+        var routingDecidingModeRead = false
+        var routingDecidingFinalChoiceRead = false
         var routingBusLeafPresses: [Int] = []
         var routingCanonicalInputBuses: [Int] = []
         var routingCanonicalContradictedInputs: [Int] = []
@@ -4996,12 +4999,14 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("Canonical Send corroborates its approved before-state in the deciding popup without a duplicate read lifecycle",
-          arguments: ["healthy", "level", "bypass", "mode", "project"])
+          arguments: ["healthy", "level", "bypass", "mode", "project",
+                      "late_action_mode", "late_choice_mode", "late_bus_mode"])
     func canonicalSendDecidingPopupRetainsItsApprovedBeforeState(fault: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true,
-                canonicalBusChange: true, decidingSendFault: fault)
+                canonicalBusChange: true, stableDestinationBulkReads: fault.hasPrefix("late_"),
+                decidingSendFault: fault)
         }
     }
 
@@ -5546,7 +5551,8 @@ struct Issue965HeldSelectionAssociationTests {
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
                     if let decidingSendFault, f.routingDestinationPresses == 0 {
                         f.routingBeforeSendMenuOpens += 1
-                        if decidingSendFault != "healthy", !f.routingDecidingSendFaultInjected,
+                        if decidingSendFault != "healthy", !decidingSendFault.hasPrefix("late_"),
+                           !f.routingDecidingSendFaultInjected,
                            SendRemovalSagaAdapter.requiredSendControl != nil {
                             f.routingDecidingSendFaultInjected = true
                             switch decidingSendFault {
@@ -6445,6 +6451,37 @@ struct Issue965HeldSelectionAssociationTests {
                 let inputReadsBeforeApply = f.routingCanonicalInputBuses.count
                 let contradictionsBeforeApply = f.routingCanonicalContradictedInputs.count
                 if decidingSendFault != nil { f.routingBeforeSendMenuOpens = 0 }
+                if let decidingSendFault, decidingSendFault.hasPrefix("late_") {
+                    let priorActions = f.routingActionNames, priorRead = f.routingRead
+                    @Sendable func changeMode() {
+                        b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                        b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                        f.routingDecidingSendFaultInjected = true
+                    }
+                    f.routingActionNames = { element in
+                        let prior = priorActions?(element)
+                        if CFEqual(element, b.element(1_971_503)),
+                           SendRemovalSagaAdapter.requiredBeforeState != nil,
+                           f.routingDestinationPresses == 0 {
+                            f.routingDecidingLeafActionsRead = true
+                            if decidingSendFault == "late_action_mode", !f.routingDecidingSendFaultInjected { changeMode() }
+                        }
+                        return prior
+                    }
+                    f.routingRead = { element, attribute in
+                        priorRead?(element, attribute)
+                        guard f.routingDecidingLeafActionsRead, !f.routingDecidingSendFaultInjected,
+                              SendRemovalSagaAdapter.requiredBeforeState != nil else { return }
+                        if CFEqual(element, mode), attribute == "AXMenuItemMarkChar" { f.routingDecidingModeRead = true }
+                        if f.routingDecidingModeRead, CFEqual(element, b.element(1_971_503)),
+                           attribute == kAXTitleAttribute as String {
+                            f.routingDecidingFinalChoiceRead = true
+                            if decidingSendFault == "late_choice_mode" { changeMode() }
+                        }
+                        if decidingSendFault == "late_bus_mode", f.routingDecidingFinalChoiceRead,
+                           CFEqual(element, b.element(1_971_502)), attribute == kAXHelpAttribute as String { changeMode() }
+                    }
+                }
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     result = await AccessibilityChannel.$sendChangeObserver.withValue({ _ in
                         f.routingChangedSendPublished = true
@@ -6459,6 +6496,11 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.routingDecidingSendFaultInjected, "Reach the actual deciding writer popup")
                         #expect(body["state"] as? String == "C", "Changed approved before-state must refuse before a Send leaf: \(sharedToolText(result))")
                         #expect(f.routingDestinationPresses == 0)
+                        if decidingSendFault.hasSuffix("mode") {
+                            #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "")
+                            #expect(b.attributeValue(preFader, "AXMenuItemMarkChar") as? String == "✓",
+                                "Refusal must retain the externally changed mode")
+                        }
                         #expect(!gate.isHeldByEntitledHolder())
                         return
                     }
