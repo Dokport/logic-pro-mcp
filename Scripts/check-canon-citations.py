@@ -1522,9 +1522,11 @@ def _why_record_refused(rel: str, changed: set, touched: set, quoted: list):
     a record about code this change does not touch, and a body that quotes a string Logic ships
     while claiming nothing it says is a label.
 
-    The code has to be a Logic-facing file outside `docs/`, because the record stands in for the
-    citation that file's change owes. Any changed path used to count, so a record depending on the
-    roadmap let a change that edits no code through (review of #975).
+    Bind to changed implementation, not label-directory membership: dispatcher and MIDI parser
+    behavior can be observed without either declaring LabelSets. Existing Logic-facing code
+    outside `docs/` and production Swift are eligible; documentation, tests and unchanged
+    dependencies are not. Any changed path used to count, which let a roadmap dependency stand
+    in for actual code (review of #975).
     """
     if rel not in changed:
         return ("it is not in this change's file list. The record has to be written or edited by "
@@ -1556,10 +1558,13 @@ def _why_record_refused(rel: str, changed: set, touched: set, quoted: list):
     depends = record.get("depends")
     code_paths = [entry.split(":", 1)[0] for entry in (depends if isinstance(depends, list) else [])
                   if isinstance(entry, str)]
-    if not any(path_ in touched and not path_.startswith("docs/") for path_ in code_paths):
-        return (f"none of its `depends` {code_paths} is Logic-facing code this change edits, "
-                f"outside docs/. A behavioural record is evidence for the code it depends on, "
-                f"and this change touches none of it.")
+    if not any(path_ in changed and (
+        (path_ in touched and not path_.startswith("docs/"))
+        or (path_.startswith("Sources/LogicProMCP/") and path_.endswith(".swift"))
+    ) for path_ in code_paths):
+        return (f"none of its `depends` {code_paths} is changed implementation code outside docs/. "
+                f"A behavioural record must bind to code this change edits, not documentation, "
+                f"tests or an unchanged dependency.")
     if quoted:
         return (f"the body quotes {len(quoted)} string(s) the corpus holds, first "
                 f"{quoted[0][:50]!r}. A body quoting a string Logic ships is stating a label fact, "
