@@ -175,7 +175,12 @@ final class SagaPartialStateFaultSeam: @unchecked Sendable {
 /// One execution's native removal custody, never persisted in the journal.
 /// The journal records checked scalar facts; those facts cannot recreate this capsule.
 final class SendRemovalSagaAdapter: @unchecked Sendable {
+    struct RequiredBeforeState: Sendable {
+        let footprint: [SendSlotObservation]
+        let nonRoutingChecks: [String]
+    }
     @TaskLocal static var requiredSendControl: AXLogicProElements.AssignedSendMenuControl?
+    @TaskLocal static var requiredBeforeState: RequiredBeforeState?
     @TaskLocal static var requiredNameCheck: (@Sendable (AXMixerStripBinding.Binding) -> Bool)?
     // The deciding before-read already checked this native pair under this
     // operation's gate. Inspection-cache eviction cannot erase that tether.
@@ -186,6 +191,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
     private let approved: ApprovedSessionRepair?
     private var pair: AccessibilityChannel.HeldSelectionAssociation.Pair?
     private var footprint: [SendSlotObservation]?
+    private var checkedBeforeNonRouting: [String]?
     private var removal: AccessibilityChannel.RemovedSendObservation?
     private var change: AccessibilityChannel.ChangedSendObservation?
     private var creation: AccessibilityChannel.CreatedSendObservation?
@@ -350,6 +356,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                           self.footprint.map({ $0 == slots }) ?? true,
                           physical.currentIndex(runtime: runtime) != nil else { return nil }
                     self.pair = held; self.footprint = slots
+                    self.checkedBeforeNonRouting = checked.sendNonRoutingChecks
                     token = before.token; source = .axSendMenuCheckmark
                 }
             }
@@ -409,8 +416,23 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 self.restored = restored
                 response = toolTextResult(restored.result)
             } else {
-                guard !self.attempted, await self.read(self.forward, cache: cache, registry: registry) != nil else {
-                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Before send footprint changed")
+                guard !self.attempted else {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Send was already attempted")
+                }
+                let requiredBefore: RequiredBeforeState?
+                if Self.isCreation(self.forward) {
+                    guard await self.read(self.forward, cache: cache, registry: registry) != nil else {
+                        return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Before send footprint changed")
+                    }
+                    requiredBefore = nil
+                } else {
+                    guard let footprint = self.footprint, let checks = self.checkedBeforeNonRouting else {
+                        return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Independent before Send observation unavailable")
+                    }
+                    // Expected data from the independent Saga read, not permission.
+                    // The deciding writer corroborates this tuple inside its own
+                    // existing popup instead of opening and cancelling a second one.
+                    requiredBefore = .init(footprint: footprint, nonRoutingChecks: checks)
                 }
                 if let approved = self.approved, approved.hasMatchingNameGoals,
                    await approved.nameGoalEvidence(afterExecution: true) == nil {
@@ -460,8 +482,10 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                                 await Self.$requiredNameCheck.withValue(nameCheck) {
                                     await Self.$checkedSourcePair.withValue(held) {
                                         await Self.$checkedReadRenewal.withValue(readRenewal) {
-                                            await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
-                                                router: router, cache: cache, targetRegistry: registry)
+                                            await Self.$requiredBeforeState.withValue(requiredBefore) {
+                                                await MixerDispatcher.handle(command: "set_send_output_verified", params: params,
+                                                    router: router, cache: cache, targetRegistry: registry)
+                                            }
                                         }
                                     }
                                 }

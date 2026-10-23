@@ -519,6 +519,8 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDocumentReadsAtFirstNameWrite: Int?
         var routingDocumentReadsAtFirstNameConfirm: Int?
         var routingDestinationPresses = 0
+        var routingBeforeSendMenuOpens = 0
+        var routingDecidingSendFaultInjected = false
         var routingBusLeafPresses: [Int] = []
         var routingCanonicalInputBuses: [Int] = []
         var routingCanonicalContradictedInputs: [Int] = []
@@ -570,7 +572,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
-        var captureClockReadsAfterName = 0
+        var captureExpiredAtCheckedSendDispatch = false
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
         var heldHeaderDiscoveryScans = 0
@@ -4977,6 +4979,16 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Canonical Send corroborates its approved before-state in the deciding popup without a duplicate read lifecycle",
+          arguments: ["healthy", "level", "bypass", "mode", "project"])
+    func canonicalSendDecidingPopupRetainsItsApprovedBeforeState(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true,
+                canonicalBusChange: true, decidingSendFault: fault)
+        }
+    }
+
     @Test("An owned changed Send retains only its effect through inverse input-read renewal",
           arguments: ["healthy", "peer_volume", "level", "mode", "destination", "project"])
     func canonicalExistingBusSendRetainsItsEffectThroughInverseInputReadRenewal(fault: String) async throws {
@@ -5047,7 +5059,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                freshBusStereoReturn: Bool = false,
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil,
-                                               sendGeometry: Bool = false) async throws {
+                                               sendGeometry: Bool = false,
+                                               decidingSendFault: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inverseInputReadRenewal = canonicalBusReceiverFault?.hasPrefix("physical_source_inverse_read_renewal") == true
@@ -5123,11 +5136,12 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? mixerOwner : $0 })
             let captureNow = ContinuousClock.now
             let cache = StateCache(sessionCaptureNow: {
-                if expireInspectionBeforeSendDispatch, !f.routingNameWrites.isEmpty {
-                    f.captureClockReadsAfterName += 1
-                    // The journal before-read and executor's deciding before-read
-                    // both succeed. Only the dispatcher's later cache lookup expires.
-                    if f.captureClockReadsAfterName >= 3 { f.expireRetainedCapture = true }
+                if expireInspectionBeforeSendDispatch, !f.routingNameWrites.isEmpty,
+                   SendRemovalSagaAdapter.checkedSourcePair != nil {
+                    // Expire at the actual admitted Send dispatch, after its
+                    // independent before-read, regardless of earlier lookup count.
+                    f.captureExpiredAtCheckedSendDispatch = true
+                    f.expireRetainedCapture = true
                 }
                 return f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
             }), registry = TargetRegistry()
@@ -5513,6 +5527,22 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
                     || (canonicalSend != nil && CFEqual(element, b.element(1_965_2799)))
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
+                    if let decidingSendFault, f.routingDestinationPresses == 0 {
+                        f.routingBeforeSendMenuOpens += 1
+                        if decidingSendFault != "healthy", !f.routingDecidingSendFaultInjected,
+                           SendRemovalSagaAdapter.requiredSendControl != nil {
+                            f.routingDecidingSendFaultInjected = true
+                            switch decidingSendFault {
+                            case "level": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 1)
+                            case "bypass": b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1)
+                            case "mode":
+                                b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                                b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                            case "project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///different.logicx/")
+                            default: Issue.record("Unknown deciding Send fault")
+                            }
+                        }
+                    }
                     if canonicalSend == "late_replacement", CFEqual(element, b.element(1_965_2799)) {
                         f.routingBypassMenuOpens += 1
                     }
@@ -6192,7 +6222,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let result = await apply(dependencies, arguments)
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
                     if expireInspectionBeforeSendDispatch {
-                        #expect(f.captureClockReadsAfterName >= 3)
+                        #expect(f.captureExpiredAtCheckedSendDispatch)
                         #expect(f.expireRetainedCapture)
                         #expect(await cache.retainedInspection(id: id) == nil)
                     }
@@ -6380,12 +6410,25 @@ struct Issue965HeldSelectionAssociationTests {
                 let result: CallTool.Result
                 let inputReadsBeforeApply = f.routingCanonicalInputBuses.count
                 let contradictionsBeforeApply = f.routingCanonicalContradictedInputs.count
+                if decidingSendFault != nil { f.routingBeforeSendMenuOpens = 0 }
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     result = await AccessibilityChannel.$sendChangeObserver.withValue({ _ in
                         f.routingChangedSendPublished = true
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if let decidingSendFault {
+                    if decidingSendFault == "healthy" {
+                        #expect(f.routingBeforeSendMenuOpens == 4,
+                            "Keep approval, prerequisite and independent Saga reads plus the deciding writer; remove only the duplicate adapter read-and-Cancel lifecycle")
+                    } else {
+                        #expect(f.routingDecidingSendFaultInjected, "Reach the actual deciding writer popup")
+                        #expect(body["state"] as? String == "C", "Changed approved before-state must refuse before a Send leaf: \(sharedToolText(result))")
+                        #expect(f.routingDestinationPresses == 0)
+                        #expect(!gate.isHeldByEntitledHolder())
+                        return
+                    }
+                }
                 if canonicalBusReceiverFault == "physical_source_scoped_input" {
                     #expect(f.routingInputOpenDiscoveryCounts.count >= (canonicalSend == "cancel" ? 6 : 3),
                         "Reach checked source and both receivers, including inverse prerequisites when cancelling")

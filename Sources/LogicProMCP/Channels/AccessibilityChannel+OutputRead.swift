@@ -1181,6 +1181,11 @@ extension AccessibilityChannel {
                   modeRawHeld(assigned, slots: protectedSends), writeBoundary() else {
                 return closeBeforeRefusal(.readbackUnavailable, "The exact occupied send, protected level/bypass/checkmarks or write boundary did not remain observed; nothing was selected.")
             }
+            if let required = SendRemovalSagaAdapter.requiredBeforeState,
+               required.footprint != protectedSends || required.nonRoutingChecks != sendChecks {
+                return closeBeforeRefusal(.staleSnapshot,
+                    "The independently observed Send footprint or checked mode no longer agrees at the deciding popup; nothing was selected.")
+            }
             if request.restoration != nil || request.creation != nil { extras["before"] = ["state": "observed_empty"] }
             else { extras["before"] = request.expected?.json }
             extras["destination"] = request.destination?.json ?? ["kind": "no_send"]
