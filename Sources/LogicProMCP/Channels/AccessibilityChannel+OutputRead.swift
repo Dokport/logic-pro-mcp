@@ -632,7 +632,12 @@ extension AccessibilityChannel {
             return true
         }
         func sourceOwned() -> Bool {
-            sourceFactsCurrent() && ownerBoundaryStillCurrent()
+            // Input Cancel may retire its owner after an earlier census. Do not
+            // enter the old controls' guarded Help scan before renewing native
+            // membership; a latched ownership refusal cannot be undone by the
+            // later original-header observation. Keep the deciding bookend too.
+            (!inputBusOnly || ownerBoundaryStillCurrent())
+                && sourceFactsCurrent() && ownerBoundaryStillCurrent()
         }
         func sendBusFailure() -> (HonestContract.FailureError, String, [String: Any])? {
             guard let request = sendReplacement, case .bus(let number) = request.destination else { return nil }
