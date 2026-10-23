@@ -1268,14 +1268,21 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                             observingRenewedFocus: { inputFocus.retainAssociation($0) })
                     }
                 }
-                guard read.inputAssignment == expectedInput else { return nil }
+                stage = "source_input_assignment"
+                guard read.inputAssignment == expectedInput else {
+                    Log.info("Canonical Send source checked input refused: \(read.result.message)", subsystem: "saga")
+                    return nil
+                }
                 if let observed = read.inputRenewal {
+                    stage = "source_input_renewal"
                     guard accept(observed, from: prior),
                           read.inputSlot?.owner.matches(pair.strip) == true,
                           read.inputSlot?.source.utf8.elementsEqual(original.source.utf8) == true else { return nil }
                 } else {
+                    stage = "source_input_control"
                     guard read.inputSlot?.matches(current) == true else { return nil }
                 }
+                stage = "source_input_bookend"
                 guard sourceCurrent() else { return nil }
             }
             for bus in buses {
