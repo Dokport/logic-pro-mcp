@@ -1598,9 +1598,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard hasMatchingNameGoals else { return true }
         guard let task = sendTask, changedNameGoals.count == 1,
               let goal = changedNameGoals.first, goal.reference == task.reference,
-              source.matches(task.pair.strip),
               let effect = nameExecutions[goal.reference]?.inverse.flatMap(ExactTrackNameAdapter.recordedNameEffect),
-              effect.matches(task.pair), effect.trackName.utf8.elementsEqual(goal.name.utf8),
+              // An actual Input renewal can retire the captured strip. Match
+              // the owned effect at this exact source and the original header.
+              effect.matches(.init(track: task.pair.track, strip: source)),
+              effect.trackName.utf8.elementsEqual(goal.name.utf8),
               task.pair.track.currentIndex() != nil,
               case .success(let name?) = AXValueExtractors.extractTrackNameResult(
                 from: task.pair.track.header, runtime: task.pair.track.runtime.ax),

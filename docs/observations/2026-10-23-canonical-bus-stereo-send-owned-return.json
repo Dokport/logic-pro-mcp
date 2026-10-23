@@ -446,6 +446,30 @@
       "error": "operation_timeout",
       "write_attempted": false,
       "independent_ui": "Complete AX state and all 151 protected values exactly matched the prepared baseline after refusal; no independent fixture recovery was required."
+    },
+    {
+      "case": "Retained Korean warm 32-track named-source existing-Bus refusal after successful selected capture",
+      "locale": "ko-KR",
+      "source_commit": "bac750c650f05209b4a68869500511d929e419c7",
+      "binary_sha256": "a85a423d366e3e1d77051559a5236acf422d602c6f55229a324c34140393d8df",
+      "capture_seconds": 70.475942375,
+      "forward_seconds": 240.37478266600002,
+      "state": "C",
+      "verified": false,
+      "saga_state": "fullyCompensated",
+      "journal_summary": {
+        "compensation_write_boundary_count": 1,
+        "failed_compensation_count": 0,
+        "forward_write_boundary_count": 1,
+        "record_count": 2,
+        "uncertain_compensation_count": 0,
+        "verified_compensation_count": 1,
+        "write_boundary_count": 2
+      },
+      "observation": "Selected acquisition completed in 70.475942375 seconds after the scoped Input, Output and Send reader changes. The name write verified, both receiver inputs were checked, and the Send dispatcher refused before a destination write. The owned name inverse then verified Audio 2.",
+      "independent_ui": "Track and Mixer name values, original Bus 1 and all 151 protected values were restored or unchanged. Complete AX state still differed in the cached Mixer group caption and focus; independent Mixer presentation refresh and focus recovery were required. That preparation is not automatic UI restoration.",
+      "qualification": "Retained failed combined execution. The name data inverse is verified; named-source Send completion, fresh return, owned Send cancellation, global UI restoration and repeatability are not established by this run.",
+      "raw_transcript_sha256": "d19638dbeb6d0610f9c9ed7969e1c6ea1cf21debf8c23245b105994552c07944"
     }
   ],
   "conclusion": "The bounded captured Bus-to-Stereo singleton completes and compensates its owned native effect from the prepared Tracks entry; a separate generic request returns its normally completed change. The corrected Korean existing-Bus replacement also completes, compensates its owned change and supports a separate fresh canonical return on this fixture. This does not qualify arbitrary canonical Stereo-to-Bus goals or whole routing/session repair. A separately labelled Korean warm flat session also verifies existing-Bus owned cancellation with exact independent AX, protected-scalar and window-image preservation. A separately prepared English warm flat Mixer-focus cancellation also verifies its owned return and exact AX/protected-scalar preservation, with no pixel-equality claim. Both locales separately verify the public Send bypass roundtrip on the warm flat fixture; these fresh-request returns do not establish owned bypass compensation. The separately labelled warm English large fixture also completes Bus 1 to Bus 2 and a distinct fresh canonical Bus 2 to Bus 1 return; both report A/completed, retain the original track reference and replay without reexecution. Its final AX, protected scalar values and window PNG exactly match that run's baseline. A separately labelled Korean warm large-fixture run now also completes the canonical Bus 1 to Bus 2 change and a distinct freshly captured canonical Bus 2 to Bus 1 return. Both report A/completed with independent checkmarks; final complete AX and all 151 protected raw values exactly match that baseline.",

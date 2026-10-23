@@ -5039,12 +5039,12 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test(arguments: ["forward", "cancel"])
-    func canonicalExistingBusSendSurvivesItsOwnedInputReadRenewal(mode: String) async throws {
+    @Test(arguments: ["forward", "cancel"], [false, true])
+    func canonicalExistingBusSendSurvivesItsOwnedInputReadRenewal(mode: String, named: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
-                canonicalBusReceiverFault: "physical_source_read_renewal")
+                canonicalBusReceiverFault: "physical_source_read_renewal", canonicalName: named)
         }
     }
 
@@ -6330,6 +6330,10 @@ struct Issue965HeldSelectionAssociationTests {
                 let preview = try #require(planned["steps"] as? [[String: Any]])
                 let contradictionsBeforeApply = f.routingCanonicalContradictedInputs.count
                 if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
+                if sourceInputReadRenewal || canonicalBusReceiverFault == "physical_source"
+                    || canonicalBusReceiverFault == "physical_source_scoped_input" {
+                    f.routingInputReadRenewalArmed = true
+                }
                 if canonicalName {
                     try #require(executable, "The combined task must be executable, not a supported subset")
                     #expect(preview.count == 2)
@@ -6352,6 +6356,7 @@ struct Issue965HeldSelectionAssociationTests {
                     if canonicalSend == "expired" { f.expireRetainedCapture = true }
                     let result = await apply(dependencies, arguments)
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if sourceInputReadRenewal { #expect(f.routingInputReadRenewed, "Reach the actual owned Input source renewal") }
                     if expireInspectionBeforeSendDispatch {
                         #expect(f.captureExpiredAtCheckedSendDispatch)
                         #expect(f.expireRetainedCapture)
@@ -6562,10 +6567,6 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if canonicalSend == "wrong_project" {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
-                }
-                if sourceInputReadRenewal || canonicalBusReceiverFault == "physical_source"
-                    || canonicalBusReceiverFault == "physical_source_scoped_input" {
-                    f.routingInputReadRenewalArmed = true
                 }
                 if scopedInputAdditionalWindow {
                     let additional = b.element(1_971_999)
