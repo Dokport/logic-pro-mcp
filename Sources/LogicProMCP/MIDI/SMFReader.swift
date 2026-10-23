@@ -113,7 +113,8 @@ struct SMFReader {
     }
 
     /// Exact file-metadata selection only, never a Logic target-identity proof.
-    /// The supported format-1 layout has one meta-only conductor followed by tracks with
+    /// The supported format-1 layout has one or more unnamed meta-only conductor chunks
+    /// (the first chunk among them) and tracks with
     /// one UTF-8 instrument-name event before any channel or SysEx event. The
     /// initial region offset may precede its metadata. Original chunks (including
     /// controllers, programs, SysEx and unknown metadata) are copied, not encoded
@@ -136,14 +137,18 @@ struct SMFReader {
             guard observed.bytes == Data(name.utf8) else { throw TrackExtractionError.instrumentNotFound }
             return data
         }
+        // Conductor data: unnamed chunks carrying only metadata. Logic 12.4 was observed to
+        // write several of them ahead of the named tracks; none can carry a track's notes,
+        // controllers or SysEx, so keeping all of them attributes nothing to the target.
+        func isConductor(_ track: FileTrack) -> Bool { !track.hasNonMetaEvents && track.instrumentNames.isEmpty }
         guard !name.isEmpty, document.format == 1, document.fileTracks.count >= 2,
-              let conductor = document.fileTracks.first,
-              !conductor.hasNonMetaEvents, conductor.instrumentNames.isEmpty else {
+              let first = document.fileTracks.first, isConductor(first) else {
             throw TrackExtractionError.unsupportedFileLayout
         }
+        let conductors = document.fileTracks.filter(isConductor)
         let expected = Data(name.utf8)
         var matching: [FileTrack] = []
-        for track in document.fileTracks.dropFirst() {
+        for track in document.fileTracks.dropFirst() where !isConductor(track) {
             guard track.instrumentNames.count == 1, let observed = track.instrumentNames.first,
                   !track.hasUnownedEvents, !observed.bytes.isEmpty,
                   String(data: observed.bytes, encoding: .utf8) != nil else {
@@ -153,10 +158,10 @@ struct SMFReader {
         }
         guard !matching.isEmpty else { throw TrackExtractionError.instrumentNotFound }
         var result = document.originalHeader
-        let trackCount = matching.count + 1
+        let trackCount = conductors.count + matching.count
         result[10] = UInt8(truncatingIfNeeded: trackCount >> 8)
         result[11] = UInt8(truncatingIfNeeded: trackCount)
-        result.append(conductor.originalChunk)
+        for track in conductors { result.append(track.originalChunk) }
         for track in matching { result.append(track.originalChunk) }
         return result
     }
