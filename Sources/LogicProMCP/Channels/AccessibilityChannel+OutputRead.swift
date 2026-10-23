@@ -594,8 +594,7 @@ extension AccessibilityChannel {
             return refuse(.transportStateUnknown, "Play and Record must read before menu acquisition.")
         }
         guard !playing, !recording else { return refuse(.unsupportedState, "Output-menu acquisition requires stopped transport.") }
-        let routingTransport = sendReplacement == nil && sendOrdinal == nil
-            ? HeldRoutingReadTransport.capture(window: physical.window, runtime: runtime) : nil
+        let routingTransport = HeldRoutingReadTransport.capture(window: physical.window, runtime: runtime)
         @Sendable func transportStillStopped() -> Bool {
             if let routingTransport { return routingTransport.stillStopped(runtime: runtime) }
             return AXLogicProElements.readControlBarCheckboxValue(matching: AXLocalePolicy.transportPlayControl, runtime: runtime) == false
