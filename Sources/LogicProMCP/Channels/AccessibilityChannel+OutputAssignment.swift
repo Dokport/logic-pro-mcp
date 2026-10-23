@@ -673,7 +673,7 @@ extension AccessibilityChannel {
         observingReadFocus(observation)
         let originalMixerGeometry = restoringMixerGeometry ?? observation.observedMixerViewportGeometry()
         let pairs = await observation.observe(referenceIsCurrent: {
-            originalPair.track.currentIndex() != nil
+            originalPair.track.currentIndex(in: observation) != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
         }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil },
             allHeldHeaders: true, prioritizingHeader: originalPair.track,
@@ -688,7 +688,7 @@ extension AccessibilityChannel {
                 if currentGeometry.hasSameViewportPosition(as: originalMixerGeometry) { mixerRestored = true }
                 else {
                     mixerRestored = await observation.recoverMixerReadability(restoring: originalMixerGeometry,
-                        referenceIsCurrent: { originalPair.track.currentIndex() != nil },
+                        referenceIsCurrent: { originalPair.track.currentIndex(in: observation) != nil },
                         stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil })
                 }
             } else { mixerRestored = false }
@@ -703,7 +703,7 @@ extension AccessibilityChannel {
         guard candidates.count == 1, let pair = candidates.first,
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,
               observation.effects.restoration == "restored",
-              sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex() != nil,
+              sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex(in: observation) != nil,
               let index = pair.strip.currentIndex(runtime: runtime) else {
             Log.info("Original-header source renewal refused: pairs=\(pairs.count), candidates=\(candidates.count), "
                 + "restoration=\(observation.effects.restoration), dispositions=\(candidates.map { sourceDisposition.accepts($0.strip, original: original) })",

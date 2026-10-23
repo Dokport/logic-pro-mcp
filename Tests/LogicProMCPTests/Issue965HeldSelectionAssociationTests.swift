@@ -566,6 +566,7 @@ struct Issue965HeldSelectionAssociationTests {
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
         var heldHeaderDiscoveryScans = 0
+        var heldHeaderDiscoveryActive = false
         var coupledGuardPlayReads = 0
         var coupledGuardRecordReads = 0
         var coupledGuardCountDiscovery = false
@@ -10418,6 +10419,75 @@ struct Issue965HeldSelectionAssociationTests {
             }
             #expect(source.permits(runtime: runtime))
             #expect(f.heldHeaderDiscoveryScans == 0, "The actual source consumer must use its retained native scope")
+        }
+    }
+
+    @Test("Association publication uses fresh original census rows and refuses late native scope loss",
+          arguments: ["owned", "late_peer", "late_rail_role"])
+    func associationPublicationKeepsItsActualNativeCensus(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            f.routingChildrenRead = { element in
+                if fault != "owned", !f.routingLateScopeInjected, f.selections.count >= 4,
+                   f.selections.last == held.originalIndex, CFEqual(element, f.headers[2]) {
+                    f.routingLateScopeInjected = true
+                    if fault == "late_peer" { f.builder.setChildren(f.rail, Array(f.headers.dropLast())) }
+                    else { f.builder.setRole(f.rail, kAXButtonRole as String) }
+                }
+            }
+            let pairs = await held.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            if fault == "owned" {
+                #expect(pairs.count == 4 && held.effects.restoration == "restored")
+                #expect(held.headers.count == 4 && held.strips.count == 4)
+                #expect(f.heldHeaderDiscoveryScans == 0, "Use the producer's actual final strict census, not a new global population for each binding")
+            } else {
+                #expect(f.routingLateScopeInjected, "Inject the native change after the actual selection inverse")
+                #expect(pairs.isEmpty, "Late native scope loss must withhold the whole association result")
+            }
+        }
+    }
+
+    @Test("Original-header collection renews its reference through the same qualified rail")
+    func originalHeaderCollectionUsesItsActualReferenceScope() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let pairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let pair = try #require(pairs.first { CFEqual($0.track.header, f.headers[initial.originalIndex]) })
+            f.routingRead = { element, attribute in
+                if f.heldHeaderDiscoveryActive, CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
+                runtime: runtime, sourceDisposition: .readObservation,
+                observingReadFocus: { _ in f.heldHeaderDiscoveryActive = true })
+            let source = try #require(observed.source)
+            #expect(f.heldHeaderDiscoveryActive && observed.effects.restoration == "restored")
+            #expect(source.originalTrack.matches(pair.track) && source.observation.headers.count == 4)
+            #expect(f.heldHeaderDiscoveryScans == 0, "After admission, reference checks and binding publication must renew the original native rail")
         }
     }
 

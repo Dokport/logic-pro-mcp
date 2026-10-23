@@ -1559,14 +1559,35 @@ extension AccessibilityChannel {
             guard selectionsVerified, !observed.isEmpty else {
                 effects.reason = "association_selection_unverified"; return []
             }
+            guard let railRole = AXHelpers.getRole(rail, runtime: logic.ax),
+                  [kAXGroupRole, kAXListRole, kAXScrollAreaRole, kAXOutlineRole, kAXTableRole]
+                    .contains(where: { railRole == $0 as String }),
+                  case .read(let publicationHeaders) = AXLogicProElements.enumerateTrackHeaderRows(in: rail,
+                    runtime: logic.ax) else {
+                lost = true; effects.reason = "association_selection_unverified"; return []
+            }
+            retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(publicationHeaders) }
+            guard Self.same(headers, publicationHeaders), await referenceIsCurrent(), permitsRead(), !stop() else {
+                effects.reason = "association_selection_unverified"; return []
+            }
             // A narrow challenge corroborates the requested selection; it does
             // not authorize later routing acquisition on that unselected peer.
-            return ((allHeldHeaders ? observed : []) + (originalPairVerified ? [(originalIndex, originalAssociationStrip)] : [])).map { index, strip in
+            let pairs = ((allHeldHeaders ? observed : []) + (originalPairVerified ? [(originalIndex, originalAssociationStrip)] : [])).map { index, strip in
                 Pair(track: retainedTrackBindings?[index]
-                        ?? .init(window: window, header: headers[index], document: document, runtime: logic),
+                        ?? .init(window: window, header: headers[index], document: document, runtime: logic,
+                            observedHeaders: publicationHeaders),
                      strip: .init(window: window, mixer: mixer, strip: strip, document: document),
                      source: originalSelectedChild == nil ? "held_exclusive_selection_focus" : "held_exclusive_selection_selected_child")
             }
+            // Constructing a binding reads its native header shape. Renew this
+            // same complete scope after those deciding reads before publishing.
+            guard let first = pairs.first, await referenceIsCurrent(),
+                  let finalHeaders = readOriginalHeaderPopulation(for: first.track, observingPopulation: { _ in }),
+                  Self.same(publicationHeaders, finalHeaders), permitsRead(),
+                  await referenceIsCurrent(), !stop() else {
+                effects.reason = "association_selection_unverified"; return []
+            }
+            return pairs
         }
     }
 }
