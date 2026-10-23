@@ -1485,7 +1485,7 @@ extension AXLogicProElements {
 
     /// Consume the retained direct child's value, then corroborate that same control.
     /// Neither a new checkbox nor a nonbinary/unread value becomes a bypass default.
-    private static func observedSendBypass(group: AXUIElement, control: AXUIElement, runtime: AXHelpers.Runtime) -> Bool? {
+    static func observedSendBypass(group: AXUIElement, control: AXUIElement, runtime: AXHelpers.Runtime) -> Bool? {
         guard case .success(.some(let value)) = AXHelpers.getAttributeResult(
             control, kAXValueAttribute as String, runtime: runtime) as Result<NSNumber?, AXHelpers.AXStatusError>,
               value.doubleValue == 0 || value.doubleValue == 1,

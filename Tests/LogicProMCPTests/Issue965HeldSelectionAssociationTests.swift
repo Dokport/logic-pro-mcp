@@ -3903,6 +3903,18 @@ struct Issue965HeldSelectionAssociationTests {
 
     @Test(arguments: ["late_play", "late_record", "late_bit", "final_record_document"])
     func registeredSendBypassRefusesLateTransportAndBitChanges(fault: String) async throws {
+        if fault == "late_bit" {
+            let healthy = BypassCensusBoundary()
+            try await assertOccupiedSingleSendRenewal(emptyModeMenu: true,
+                bypassMode: "measure_late_bit", bypassBoundary: healthy)
+            let count = try #require(healthy.censuses > 0 ? healthy.censuses : nil)
+            for index in 1...count {
+                let boundary = BypassCensusBoundary(injectAt: index)
+                try await assertOccupiedSingleSendRenewal(emptyModeMenu: true,
+                    bypassMode: fault, bypassBoundary: boundary)
+            }
+            return
+        }
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, bypassMode: fault)
     }
 
@@ -4498,6 +4510,13 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(boundary.permittedAfterFault == [false])
     }
 
+    private final class BypassCensusBoundary: @unchecked Sendable {
+        var censuses = 0, lastValueReads = -1
+        var insideNativeWriter = false
+        let injectAt: Int?
+        init(injectAt: Int? = nil) { self.injectAt = injectAt }
+    }
+
     private final class ModePeerBoundary: @unchecked Sendable {
         var peerReads = 0, beforeLeafPeerReads = 0, mutations = 0, leafCount = 0
         var injectAt = -1
@@ -4991,7 +5010,9 @@ struct Issue965HeldSelectionAssociationTests {
                                                readRestored: String? = nil, sagaMode: String? = nil,
                                                inspectSendWitness: String? = nil,
                                                noOpDestination: OutputAssignment? = nil,
-                                               bypassMode: String? = nil, levelMode: String? = nil,
+                                               bypassMode: String? = nil,
+                                               bypassBoundary: BypassCensusBoundary? = nil,
+                                               levelMode: String? = nil,
                                                freshEmpty: String? = nil, freshAfterTargetReads: Int? = nil,
                                                recordFreshFinalPeerRead: (@Sendable (Int) -> Void)? = nil,
                                                modeCommand: String? = nil,
@@ -6597,7 +6618,7 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
                     } else { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
                 }
-                if bypassMode == "late_bit", f.routingBypassMenuCancels == 3 {
+                if ["late_bit", "measure_late_bit"].contains(bypassMode ?? ""), f.routingBypassMenuCancels == 3 {
                     if CFEqual(element, b.element(1_965_2622)), attribute == kAXValueAttribute as String {
                         f.routingBypassFinalValueReads += 1
                     }
@@ -6631,7 +6652,13 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(b.element(1_965_2641), [b.element(1_965_2642), decoy])
                 }
             }
-            let router = ChannelRouter(); await router.register(f.channel())
+            let router = ChannelRouter()
+            if let boundary = bypassBoundary {
+                await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: SagaJournal(),
+                    mode: "observe", operation: "mixer.set_send_bypass_verified",
+                    beforeForward: { boundary.insideNativeWriter = true },
+                    observedResult: { _ in boundary.insideNativeWriter = false }))
+            } else { await router.register(f.channel()) }
             let gate = LogicMutationGate()
             let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
                 poller: StatePoller(axChannel: f.channel(), cache: cache,
@@ -7021,11 +7048,16 @@ struct Issue965HeldSelectionAssociationTests {
                     return .success([kAXPressAction as String])
                 }
                 f.routingChildrenRead = { element in
-                    // Calibrated in the healthy actual registered path: twelve
-                    // strict checkbox reads after the third popup Cancel precede
-                    // the final custody census, after the after-snapshot corroboration.
-                    guard bypassMode == "late_bit", f.routingBypassMenuCancels == 3,
-                          f.routingBypassFinalValueReads == 12, CFEqual(element, f.mixer),
+                    // Exercise each actual custody census following a new
+                    // post-write checkbox observation. Unrelated whole-window
+                    // discovery counts do not choose the race boundary.
+                    guard let boundary = bypassBoundary, boundary.insideNativeWriter,
+                          f.routingBypassMenuCancels == 3,
+                          f.routingBypassFinalValueReads > 0, CFEqual(element, f.mixer),
+                          boundary.lastValueReads != f.routingBypassFinalValueReads else { return }
+                    boundary.lastValueReads = f.routingBypassFinalValueReads
+                    boundary.censuses += 1
+                    guard bypassMode == "late_bit", boundary.censuses == boundary.injectAt,
                           !f.routingLateScopeInjected else { return }
                     f.routingLateScopeInjected = true
                     b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 0)
@@ -7064,6 +7096,11 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                     }
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if bypassMode == "measure_late_bit" {
+                        #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
+                        #expect(f.routingBypassPresses == 1 && f.routingBypassMenuCancels == 3)
+                        return
+                    }
                     if ["delayed_on", "delayed_off"].contains(bypassMode ?? "") {
                         #expect(f.routingLateScopeInjected && f.routingBypassPendingValue == nil)
                         #expect(f.routingBypassMenuOpens >= 3 && f.routingBypassPresses == 1)
@@ -7079,7 +7116,8 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.routingLateScopeInjected, "The actual deciding boundary must be reached")
                     }
                     let afterAttempt = ["late_bit", "malformed_after", "lost_source_after", "press_failed"].contains(bypassMode ?? "")
-                    #expect(body["state"] as? String == (afterAttempt ? "B" : "C"), "\(sharedToolText(result))")
+                    #expect(body["state"] as? String == (afterAttempt ? "B" : "C"),
+                        "Native census \(bypassBoundary?.injectAt ?? 0) of \(bypassBoundary?.censuses ?? 0): \(sharedToolText(result))")
                     #expect(f.routingBypassPresses == (afterAttempt ? 1 : 0))
                     #expect(f.routingDestinationPresses == 0)
                     #expect(!gate.isHeldByEntitledHolder())

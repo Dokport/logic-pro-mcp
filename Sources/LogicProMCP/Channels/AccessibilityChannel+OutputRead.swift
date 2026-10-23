@@ -143,7 +143,10 @@ extension AccessibilityChannel {
             for index in expected.indices where expected[index].ordinal == held.control.ordinal { expected[index].bypassed = nil }
             for index in current.indices where current[index].ordinal == held.control.ordinal { current[index].bypassed = nil }
         }
-        return current == expected && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
+        return current == expected
+            && (allowingChangedBypass || AXLogicProElements.observedSendBypass(
+                group: held.control.group, control: held.control.bypass, runtime: runtime.ax) == held.value)
+            && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
     }
 
     static func readSendBypassSnapshot(ordinal: Int, runtime: AXLogicProElements.Runtime) async -> SendBypassSnapshot? {
