@@ -338,8 +338,25 @@ extension AccessibilityChannel {
                 -- turn here is a window walk whose price Logic sets.
                 set goToDeadline to (current date) + \(Int(ServerConfig.midiImportPathAcceptBudget))
                 set goToSet to false
+                set lastSlashAt to (current date)
                 repeat while (current date) < goToDeadline
                     tell \(logicProAppleScript.systemEventsProcessTarget)
+                        -- A "/" sent while the panel is still loading is dropped (measured on an
+                        -- Intel Mac, Logic 12.4 / macOS 15.7: the Go-to sheet never opened and the
+                        -- whole budget ran out). Re-send it, but only while the panel has no sheet,
+                        -- so a retry can never type into an already-open path field.
+                        if ((current date) - lastSlashAt) >= 1 then
+                            try
+                                set slashDlg to first window whose subrole is "AXDialog"
+                                if (count of sheets of slashDlg) is 0 then
+                                    set frontmost to true
+                                    delay 0.1
+                                    keystroke "/"
+                                    set lastSlashAt to (current date)
+                                    delay 0.4
+                                end if
+                            end try
+                        end if
                         -- Only accept the assignment once the field actually
                         -- READS BACK our path, so a race that targets the wrong
                         -- early text field cannot exit the loop prematurely.
@@ -455,7 +472,10 @@ extension AccessibilityChannel {
                                 if importDlg is missing value then error "NO_IMPORT_PANEL"
                                 set sawPanel to true
                                 set ib to missing value
-                                repeat with fallbackButton in (every button of UI element 1 of importDlg)
+                                -- Measured on Logic 12.4 / macOS 15.7: Cancel and Import are direct
+                                -- children of the panel, and UI element 1 is an AXSplitGroup with no
+                                -- buttons, so the primary walk above finds nothing there.
+                                repeat with fallbackButton in (every button of importDlg)
                                     if (name of fallbackButton) is in {\(importCommitButtonNames)} then
                                         set ib to fallbackButton
                                         exit repeat
