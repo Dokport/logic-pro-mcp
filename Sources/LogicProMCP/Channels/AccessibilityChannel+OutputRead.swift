@@ -717,6 +717,16 @@ extension AccessibilityChannel {
         guard focusAllowsAcquisition(), sourceFactsCurrent(), focusAllowsAcquisition(), sourceOwned() else {
             return refuse(.readbackUnavailable, "Focus or source custody changed before the routing-popup press; nothing was pressed.")
         }
+        // The deciding AX reads can outlive the request. Renew its existing
+        // cancellation, deadline and acquired gate at the actual press boundary;
+        // a stopped read must not acquire a popup it can no longer restore.
+        guard !Task.isCancelled, OperationTraceContext.current.map({ context in
+            !context.cancellationRequested()
+                && (context.deadline.map { ContinuousClock.now < $0 } ?? true)
+                && (!context.mutationGateAcquired || context.ownsGate())
+        }) ?? true else {
+            return refuse(.readbackUnavailable, "The routing read request stopped before popup acquisition; nothing was pressed.")
+        }
         extras["navigation_attempted"] = true
         let press = AXHelpers.performActionResult(slot, kAXPressAction as String, runtime: runtime.ax)
         if case .success = press { extras["popup_press_succeeded"] = true }

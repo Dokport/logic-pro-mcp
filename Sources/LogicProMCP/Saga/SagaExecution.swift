@@ -340,9 +340,6 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                             await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: ordinal)
                         }
                     }
-                    if self.approved != nil {
-                        Log.info("Canonical Send checked pre-read: assignment=\(checked.assignment?.token ?? "none"),same_control=\(self.capturedControl.map { captured in checked.sendControl.map(captured.matches) == true } ?? true)", subsystem: "saga")
-                    }
                     guard let before = Self.expectedBefore(self.forward), checked.assignment == before,
                           self.capturedControl.map({ captured in checked.sendControl.map(captured.matches) == true }) ?? true,
                           checked.sendNonRoutingChecks == ["Post Fader"] || checked.sendNonRoutingChecks == ["포스트 페이더"],

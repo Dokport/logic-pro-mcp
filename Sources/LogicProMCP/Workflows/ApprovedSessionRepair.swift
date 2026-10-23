@@ -1186,15 +1186,13 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             allowsSelectedChildRailEntry: true, retainedMixerSource: original.strip), proof.permitsRead() else { return true }
         let focus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
         focus.retainAssociation(proof)
-        let readGuard = AXHelpers.HelpReadGuard(allowHelpReads: true, stop: {
+        let observed = await AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: {
             parentHelpGuard?.permits() == false || !focus.permits()
-        })
-        let observed = await AXHelpers.HelpReadGuard.$current.withValue(readGuard) {
+        })) {
             await AccessibilityChannel.renewSourceThroughOriginalHeader(original, original: original.strip,
                 runtime: runtime, sourceDisposition: .readObservation,
                 observingReadFocus: { focus.retainAssociation($0) })
         }
-        Log.info("Canonical Send header pre-read: source=\(observed.source != nil),same_source=\(observed.source?.pair.strip.matches(original.strip) == true),restoration=\(observed.effects.restoration),reason=\(observed.effects.reason ?? "none"),help_stopped=\(readGuard.stopped)", subsystem: "saga")
         guard observed.effects.restoration == "restored", let renewed = observed.source,
               renewed.pair.strip.matches(original.strip), renewed.pair.track.matches(original.track),
               renewed.permits(runtime: runtime) else { return observed.effects.attempted.isEmpty }

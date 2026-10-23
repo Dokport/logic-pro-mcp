@@ -6,6 +6,12 @@ import Testing
 
 @Suite("#291 assigned-send owned checked-menu acquisition", .serialized)
 struct Issue291AssignedSendMenuTests {
+    private final class RequestStop: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stopped = false
+        func stop() { lock.withLock { stopped = true } }
+        var isStopped: Bool { lock.withLock { stopped } }
+    }
     private final class FinalFocusRevocation: @unchecked Sendable {
         private let lock = NSLock()
         private var armed = false
@@ -1213,6 +1219,33 @@ struct Issue291AssignedSendMenuTests {
         #expect(!navigated)
         #expect(f.mutations.isEmpty)
     }
+    @Test("A routing read cannot acquire a popup after its request stops",
+          arguments: ["expired", "cancelled_at_capability", "gate_lost_at_capability"])
+    func stoppedRequestDoesNotAcquireRoutingPopup(_ fault: String) async throws {
+        let p = try prepare(), f = p.f
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.apply_session_repair"))
+        defer { gate.release(claim) }
+        let stopped = RequestStop()
+        f.onActionNamesRead = { control in
+            guard CFEqual(control, f.outputs[0]) else { return }
+            if fault == "cancelled_at_capability" {
+                stopped.stop()
+            }
+            if fault == "gate_lost_at_capability" { gate.release(claim) }
+        }
+        let context = OperationTraceContext(mutationGateAcquired: true,
+            ownsGate: { gate.stillOwns(claim) },
+            deadline: ContinuousClock.now.advanced(by: .seconds(fault == "expired" ? -1 : 30)),
+            cancellationRequested: { stopped.isStopped })
+        let response = await OperationTraceContext.$current.withValue(context) { await read(p) }
+        let body = try #require(sharedJSONObject(response.message))
+        #expect(body["state"] as? String == "C")
+        #expect(body["current_destination"] == nil)
+        #expect(body["navigation_attempted"] as? Bool == false)
+        #expect(f.mutations.isEmpty, "An expired or revoked request must not leave a newly opened popup")
+    }
+
     @Test("Bare checked bus echoes cannot bypass the legal bus domain", arguments:[1,256,257,999999])
     func checkedSendBusDomain(_ number: Int) async throws {
         let p = try prepare()
