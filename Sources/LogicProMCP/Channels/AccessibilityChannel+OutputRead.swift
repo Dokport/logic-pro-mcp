@@ -783,23 +783,37 @@ extension AccessibilityChannel {
                 // Permit guarded reads for this exact menu's search field, not arbitrary
                 // text focus. This uses no Help, and the ordinary source/menu checks still
                 // decide every read and Cancel action.
+                var stage = "owned_window", accepted = false
+                defer {
+                    if inputBusOnly, !accepted {
+                        Log.info("Checked input popup focus refused at \(stage)", subsystem: "ax")
+                    }
+                }
                 guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                       runtime.logicProPID() == pid, runtime.focusedApplicationPID() == pid,
                       let app = AXLogicProElements.appRoot(runtime: runtime),
                       AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: runtime.ax) as Bool? == true,
                       let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: runtime.ax),
-                      CFEqual(main, physical.window),
+                      CFEqual(main, physical.window) else { return false }
+                stage = "physical_population"
+                guard
                       let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: physical.mixer, runtime: runtime.ax),
-                      strips.strips.filter({ CFEqual($0, physical.strip) }).count == 1,
+                      strips.strips.filter({ CFEqual($0, physical.strip) }).count == 1 else { return false }
+                stage = "original_popup"
+                guard
                       let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
-                      menus.count == 1, CFEqual(menus[0], root),
+                      menus.count == 1, CFEqual(menus[0], root) else { return false }
+                stage = "focused_search"
+                guard
                       let focus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
                       AXHelpers.getRole(focus, runtime: runtime.ax) == kAXTextFieldRole as String,
                       case .success(let rows) = AXHelpers.childrenResult(root, runtime: runtime.ax) else { return false }
                 // Follow the actual focused parent, not every unrelated destination
                 // submenu on every Help read. Positively renew both directions of
                 // this original root/search path; no cached permission is retained.
+                stage = "focused_parent"
                 guard let parent: AXUIElement = AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: runtime.ax) else { return false }
+                stage = "reciprocal_search"
                 if CFEqual(parent, root) {
                     guard rows.filter({ CFEqual($0, focus) }).count == 1 else { return false }
                 } else {
@@ -811,12 +825,14 @@ extension AccessibilityChannel {
                           case .success(let children) = AXHelpers.childrenResult(parent, runtime: runtime.ax),
                           children.filter({ CFEqual($0, focus) }).count == 1 else { return false }
                 }
+                stage = "final_focus_document"
                 guard
                       let currentFocus: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: runtime.ax),
                       CFEqual(currentFocus, focus),
                       case .success(.some(let doc)) = AXLogicProElements.projectPickerDocumentRead(physical.window, runtime: runtime),
                       doc.utf8.elementsEqual(physical.document.utf8),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                accepted = true
                 return true
             }
         }
