@@ -695,7 +695,12 @@ extension AccessibilityChannel {
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,
               observation.effects.restoration == "restored",
               sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex() != nil,
-              let index = pair.strip.currentIndex(runtime: runtime) else { return (nil, observation.effects) }
+              let index = pair.strip.currentIndex(runtime: runtime) else {
+            Log.info("Original-header source renewal refused: pairs=\(pairs.count), candidates=\(candidates.count), "
+                + "restoration=\(observation.effects.restoration), dispositions=\(candidates.map { sourceDisposition.accepts($0.strip, original: original) })",
+                subsystem: "ax")
+            return (nil, observation.effects)
+        }
         return (.init(pair: pair, index: index, original: original, originalTrack: originalPair.track,
             observation: observation, observedPairs: pairs), observation.effects)
     }
