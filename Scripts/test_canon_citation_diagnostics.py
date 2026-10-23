@@ -635,6 +635,44 @@ class ABehaviouralRecordInPlaceOfACitation(unittest.TestCase):
         self.assertEqual(result["diagnostics"], [])
         self.assertEqual(result["records"], [BEHAVIOURAL_RECORD])
 
+    def test_a_record_can_bind_changed_production_swift_outside_label_prefixes(self):
+        name = "2026-09-24-fixture-behavioural-record.json"
+        rel = f"docs/observations/{name}"
+        for source in (
+            "Sources/LogicProMCP/Dispatchers/TrackDispatcher+RecordSequence.swift",
+            "Sources/LogicProMCP/MIDI/SMFReader.swift",
+            "Sources/LogicProMCP/Server/OperationRegistry.swift",
+        ):
+            with self.subTest(source=source):
+                record = dict(self.fixture_record("The import completed after the dialog opened"),
+                              depends=[source])
+                root = self.tree_with_record(name, record)
+                status, result = self.diagnose(f"Evidence: {rel}.\n", [rel, source], root=root)
+                self.assertEqual(status, 0, result)
+                self.assertEqual(result["category"], "satisfied")
+                self.assertEqual(result["records"], [rel])
+
+    def test_production_swift_dependency_still_has_to_be_changed(self):
+        name = "2026-09-24-fixture-behavioural-record.json"
+        rel = f"docs/observations/{name}"
+        record = dict(self.fixture_record("The import completed after the dialog opened"),
+                      depends=["Sources/LogicProMCP/MIDI/SMFReader.swift"])
+        root = self.tree_with_record(name, record)
+        status, result = self.diagnose(f"Evidence: {rel}.\n",
+            [rel, "Sources/LogicProMCP/Server/OperationRegistry.swift"], root=root)
+        self.assertRefused(status, result, "none of its `depends`")
+
+    def test_a_changed_test_is_not_production_implementation_evidence(self):
+        name = "2026-09-24-fixture-behavioural-record.json"
+        rel = f"docs/observations/{name}"
+        test = "Tests/LogicProMCPTests/SMFReaderTests.swift"
+        record = dict(self.fixture_record("The import completed after the dialog opened"),
+                      depends=[test])
+        root = self.tree_with_record(name, record)
+        status, result = self.diagnose(f"Evidence: {rel}.\n",
+                                       [rel, test, BEHAVIOURAL_DEPENDS], root=root)
+        self.assertRefused(status, result, "none of its `depends`")
+
     def test_inline_backticks_and_a_link_are_visible(self):
         for body in (f"Evidence: `{BEHAVIOURAL_RECORD}`.\n",
                      f"Evidence: [the record]({BEHAVIOURAL_RECORD}).\n"):
