@@ -524,6 +524,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
         var routingForeignHelpReads = 0
+        var routingForeignHelpFirstStack: [String] = []
         var scrollToChangedOutput = false
         var scrollToViewportDriftEnabled = false
         var scrollToViewportShifted = false
@@ -4838,7 +4839,7 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(sendGeometry: true)
     }
 
-    @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8])
+    @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
     func canonicalExistingBusSendRenewsHelpCustodyDuringInverseControlScan(roleSample: Int) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
@@ -5711,6 +5712,9 @@ struct Issue965HeldSelectionAssociationTests {
                             }
                         }
                         if f.routingLateScopeInjected, attribute == kAXHelpAttribute as String {
+                            if f.routingForeignHelpReads == 0 {
+                                f.routingForeignHelpFirstStack = Thread.callStackSymbols
+                            }
                             f.routingForeignHelpReads += 1
                         }
                     }
@@ -6230,7 +6234,8 @@ struct Issue965HeldSelectionAssociationTests {
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     #expect(f.routingChangedSendPublished)
                     #expect(f.routingLateScopeInjected, "Reach the actual post-effect Send control Role read")
-                    #expect(f.routingForeignHelpReads == 0, "A later scope refusal cannot excuse foreign-scope Help reads")
+                    #expect(f.routingForeignHelpReads == 0,
+                        "A later scope refusal cannot excuse foreign-scope Help reads: \(f.routingForeignHelpFirstStack.joined(separator: "\n"))")
                     #expect(f.routingBusLeafPresses == [2])
                     #expect(body["saga_state"] as? String != "fullyCompensated")
                     #expect(!gate.isHeldByEntitledHolder())
@@ -10393,8 +10398,9 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test("A post-input source receipt renews its original native rail instead of rediscovering the window")
-    func renewedInputSourceUsesItsActualHeldRail() async throws {
+    @Test("A post-input source receipt renews its original native rail and Mixer without rediscovering the window",
+          arguments: ["owned", "foreign_scope", "missing_strip", "mixer_role"])
+    func renewedInputSourceUsesItsActualHeldRail(fault: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
         f.useBulkReads = true
         let gate = LogicMutationGate()
@@ -10409,16 +10415,44 @@ struct Issue965HeldSelectionAssociationTests {
             let pair = try #require(pairs.first { CFEqual($0.track.header, f.headers[0]) })
             let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
                 runtime: runtime, sourceDisposition: .readObservation)
-            let source = try #require(observed.source)
+            let originalSource = try #require(observed.source)
+            var source = originalSource
+            let originalMixerRole = try #require(AXHelpers.getRole(f.mixer, runtime: runtime.ax))
+            if fault == "foreign_scope" {
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                let foreign = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                    logic: runtime, expectedProject: nil, requiresProjectReference: false))
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, held.document)
+                source = .init(pair: source.pair, index: source.index, original: source.original,
+                    originalTrack: source.originalTrack, observation: foreign, observedPairs: source.observedPairs)
+            }
+            if fault == "missing_strip" { f.builder.setChildren(f.mixer, Array(f.strips.dropLast())) }
+            if fault == "mixer_role" { f.builder.setRole(f.mixer, kAXButtonRole as String) }
             f.heldHeaderDiscoveryScans = 0
+            f.coupledGuardPopulationScans = 0
             f.routingRead = { element, attribute in
                 if CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
                    f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
                     f.heldHeaderDiscoveryScans += 1
                 }
             }
-            #expect(source.permits(runtime: runtime))
-            #expect(f.heldHeaderDiscoveryScans == 0, "The actual source consumer must use its retained native scope")
+            let permitted = source.permits(runtime: runtime)
+            if fault == "owned" {
+                #expect(permitted)
+                #expect(f.heldHeaderDiscoveryScans == 0, "The actual source consumer must use its retained native scope")
+                #expect(f.coupledGuardPopulationScans == 0, "An admitted original Mixer must use fresh bound census, not another whole-window discovery")
+            } else { #expect(!permitted) }
+            if fault == "foreign_scope" {
+                #expect(originalSource.permits(runtime: runtime), "A foreign proof cannot retire the valid original source")
+            }
+            if fault == "missing_strip" {
+                f.builder.setChildren(f.mixer, f.strips)
+                #expect(!source.permits(runtime: runtime), "An observed missing Mixer peer ends this scope even if it returns")
+            }
+            if fault == "mixer_role" {
+                f.builder.setRole(f.mixer, originalMixerRole)
+                #expect(!source.permits(runtime: runtime), "A positively observed foreign Mixer role cannot revive this read scope")
+            }
         }
     }
 

@@ -1277,7 +1277,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         func sourceCurrent() -> Bool {
             guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   pair.track.currentIndex(in: roster?.observation ?? proof) != nil,
-                  pair.strip.currentIndex(runtime: runtime) != nil,
+                  pair.strip.currentIndex(in: roster?.observation ?? proof) != nil,
                   let census = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer,
                     runtime: runtime.ax)?.strips, census.count == task.capture.channelStrips.count else { return false }
             if let roster {
@@ -1451,6 +1451,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     await AXMixerStripBinding.$outputAssociation.withValue(pair) {
                         await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: task.ordinal,
                             requiringOriginalSendControl: current,
+                            readingOriginalScope: renewal.observation,
                             observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
                     }
                 }

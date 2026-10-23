@@ -91,12 +91,17 @@ extension AccessibilityChannel {
         let population: [AXUIElement]
 
         func permits(runtime: AXLogicProElements.Runtime) -> Bool {
-            guard source.permits(runtime: runtime),
-                  let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
-                    ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
-                  let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
-                  zip(census, population).allSatisfy({ CFEqual($0, $1) }) else { return false }
-            return source.permits(runtime: runtime)
+            let outer = AXHelpers.HelpReadGuard.current
+            return AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: {
+                outer?.permits() == false || !source.observation.permitsRead()
+            })) {
+                guard source.permits(runtime: runtime),
+                      let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
+                        ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
+                      let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
+                      zip(census, population).allSatisfy({ CFEqual($0, $1) }) else { return false }
+                return source.permits(runtime: runtime)
+            }
         }
     }
 

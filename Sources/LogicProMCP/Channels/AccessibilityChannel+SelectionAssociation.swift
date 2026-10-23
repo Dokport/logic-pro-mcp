@@ -477,6 +477,31 @@ extension AccessibilityChannel {
                 && headers.filter({ CFEqual($0, binding.header) }).count == 1
         }
 
+        /// Fresh identity metadata for this already-admitted native Mixer only.
+        /// It grants no Help, popup, selection, inverse or reference permission.
+        func readOriginalMixerIndex(for binding: AXMixerStripBinding.Binding,
+                                    ownedPopup: AXUIElement? = nil) -> Int? {
+            guard !lost, CFEqual(binding.window, window), CFEqual(binding.mixer, mixer),
+                  binding.document.utf8.elementsEqual(document.utf8),
+                  strips.filter({ CFEqual($0, binding.strip) }).count == 1,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+            guard AXLogicProElements.isMixerContainerRole(AXHelpers.getRole(mixer, runtime: logic.ax)),
+                  let railRole = AXHelpers.getRole(rail, runtime: logic.ax),
+                  [kAXGroupRole, kAXListRole, kAXScrollAreaRole, kAXOutlineRole, kAXTableRole]
+                    .contains(where: { railRole == $0 as String }),
+                  case .read(let currentHeaders) = AXLogicProElements.enumerateTrackHeaderRows(in: rail,
+                    runtime: logic.ax) else { lost = true; return nil }
+            retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(currentHeaders) }
+            guard Self.same(headers, currentHeaders),
+                  let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),
+                  Self.same(strips, current.strips), owned(ownedPopup: ownedPopup),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                lost = true; return nil
+            }
+            let matching = current.strips.indices.filter { CFEqual(current.strips[$0], binding.strip) }
+            return matching.count == 1 ? matching[0] : nil
+        }
+
         /// Identity-only sampling of this already-observed native rail. It grants
         /// no Help, selection, popup, inverse or publication permission.
         func readOriginalHeaderPopulation(for binding: AXTrackBinding.Binding,

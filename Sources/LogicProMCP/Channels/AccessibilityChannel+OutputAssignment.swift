@@ -590,7 +590,7 @@ extension AccessibilityChannel {
             guard candidates.count == 1, let current = candidates.first,
                   observedPairs.filter({ $0.strip.matches(current.strip) }).count == 1,
                   observation.strips.filter({ CFEqual($0, current.strip.strip) }).count == 1,
-                  let index = current.strip.currentIndex(runtime: runtime), permits(runtime: runtime) else { return nil }
+                  let index = current.strip.currentIndex(in: observation), permits(runtime: runtime) else { return nil }
             return .init(pair: current, index: index, original: prior.strip, originalTrack: prior.track,
                 observation: observation, observedPairs: observedPairs)
         }
@@ -609,7 +609,7 @@ extension AccessibilityChannel {
         /// Renew after the caller's deciding slot read; the pair itself is not permission.
         func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil,
                      nativeOutputPopup: Bool = false) -> Bool {
-            guard pair.strip.currentIndex(runtime: runtime) == index,
+            guard (ownedPopup == nil ? pair.strip.currentIndex(in: observation) : pair.strip.currentIndex(runtime: runtime)) == index,
                   (ownedPopup == nil ? originalTrack.currentIndex(in: observation) : originalTrack.currentIndex()) != nil,
                   ownedPopup.map({ observation.permitsOwnedPopupRead($0,
                     nativeSource: nativeOutputPopup ? pair.strip : nil) }) ?? observation.permitsRead(),
@@ -704,7 +704,7 @@ extension AccessibilityChannel {
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,
               observation.effects.restoration == "restored",
               sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex(in: observation) != nil,
-              let index = pair.strip.currentIndex(runtime: runtime) else {
+              let index = pair.strip.currentIndex(in: observation) else {
             Log.info("Original-header source renewal refused: pairs=\(pairs.count), candidates=\(candidates.count), "
                 + "restoration=\(observation.effects.restoration), dispositions=\(candidates.map { sourceDisposition.accepts($0.strip, original: original) })",
                 subsystem: "ax")

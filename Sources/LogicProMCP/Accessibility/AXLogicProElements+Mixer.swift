@@ -30,6 +30,11 @@ enum AXMixerStripBinding {
         }
 
         /// Re-read owner and complete current membership, not the cached ordinal or strip name.
+        func currentIndex(in observation: AccessibilityChannel.HeldSelectionAssociation,
+                          ownedPopup: AXUIElement? = nil) -> Int? {
+            observation.readOriginalMixerIndex(for: self, ownedPopup: ownedPopup)
+        }
+
         func currentIndex(runtime: AXLogicProElements.Runtime) -> Int? {
             guard !Task.isCancelled,
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
@@ -709,7 +714,7 @@ extension AXLogicProElements {
         return false
     }
 
-    private static func isMixerContainerRole(_ role: String?) -> Bool {
+    static func isMixerContainerRole(_ role: String?) -> Bool {
         guard let role else { return false }
         return role == (kAXGroupRole as String)
             || role == (kAXScrollAreaRole as String)
