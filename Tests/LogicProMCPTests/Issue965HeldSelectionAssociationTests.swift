@@ -4905,6 +4905,16 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Selected routing capture reads Input popups through its actual held Mixer", arguments: ["selection", "whole_project"])
+    func routingCaptureKeepsItsHeldInputReadScope(scope: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_scoped_input", stableDestinationBulkReads: true,
+                captureInputReadScope: scope)
+        }
+    }
+
     @Test("An input read borrowing a held Mixer still uses the existing native-popup custody path",
           arguments: ["unscoped", "owned", "foreign_scope", "guarded_ordinary", "guarded_ordinary_document",
                       "guarded_ordinary_window", "guarded_ordinary_source", "guarded_ordinary_gate",
@@ -5122,7 +5132,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                matchingFault: String? = nil,
                                                sendGeometry: Bool = false,
                                                decidingSendFault: String? = nil,
-                                               scopedInputAdditionalWindow: Bool = false) async throws {
+                                               scopedInputAdditionalWindow: Bool = false,
+                                               captureInputReadScope: String? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inverseInputReadRenewal = canonicalBusReceiverFault?.hasPrefix("physical_source_inverse_read_renewal") == true
@@ -6019,7 +6030,8 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setChildren(inputRoot, [inputEcho] + (ownInput ? [physicalParent] : []) + [inputBusParent])
                         let rows = b.makeAXRuntime().children(f.mixer)
                         b.setChildren(f.mixer, rows + [inputRoot]); f.inputMenuPresses += 1
-                        if canonicalBusReceiverFault == "physical_source_scoped_input", f.routingInputReadRenewalArmed {
+                        if canonicalBusReceiverFault == "physical_source_scoped_input",
+                           f.routingInputReadRenewalArmed || captureInputReadScope != nil {
                             f.routingInputOpenDiscoveryStart = f.coupledGuardPopulationScans
                         }
                         return true
@@ -6142,7 +6154,18 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let before = try await inspect(f, cache: cache, registry: registry,
                 domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"],
-                scope: canonicalBusReceiverFault == "physical_source_read_renewal" ? "selection" : "whole_project")
+                scope: captureInputReadScope ?? (canonicalBusReceiverFault == "physical_source_read_renewal" ? "selection" : "whole_project"))
+            if let captureInputReadScope {
+                let scans = f.routingInputOpenDiscoveryCounts
+                #expect(!scans.isEmpty, "Reach the captured source's actual Input popup")
+                if captureInputReadScope == "selection" {
+                    #expect(scans.allSatisfy { $0 == 0 },
+                        "The admitted selected capture must retain its original native scope during Input reads: \(scans)")
+                } else {
+                    #expect(scans.contains { $0 > 0 }, "Whole-project capture keeps its existing discovery path")
+                }
+                f.routingInputOpenDiscoveryCounts.removeAll()
+            }
             if ["changed_control", "typed_mode_changed_control"].contains(inspectSendWitness ?? ""), before["snapshot_id"] == nil {
                 #expect(f.routingLateScopeInjected && f.routingDestinationPresses == 0)
                 #expect(before["state"] as? String == "C")

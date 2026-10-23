@@ -548,6 +548,9 @@ actor AccessibilityChannel: Channel {
                 var checkedInputs: [SessionPopulationObservation.HeldCheckedInput] = []
                 var renewals: [OriginalHeaderSourceRenewal] = []
                 var renewedSlots: [AXMixerInputSlotBinding] = []
+                // Only the selected capture's actual association may supply
+                // fresh ordinary Input-popup membership without rediscovery.
+                var inputReadScope = request.scope == .selection ? association : nil
                 stripReads: for strip in population.strips ?? [] {
                     guard !stop(), await navigationReferenceIsCurrent() else {
                         try SessionPopulationObservation.requireOwnedAcquisition()
@@ -600,6 +603,7 @@ actor AccessibilityChannel: Channel {
                         // requests. A No Output caption grants no recovery custody.
                         if !candidate.input, candidate.ordinal == nil, pair == nil,
                            strip.output.flatMap(OutputAssignment.observed(slotLabel:)) == .noOutput { continue }
+                        let readingInputScope = inputReadScope
                         let read = await AXMixerStripBinding.$current.withValue(owner) {
                             if candidate.input {
                                 return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
@@ -607,12 +611,14 @@ actor AccessibilityChannel: Channel {
                                         return await Self.getCheckedInputObservation(runtime: runtime.logicRuntime,
                                             restoringMixerGeometry: inputRestorationGeometry,
                                             observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
-                                            observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
+                                            observingRenewedFocus: { readFocusScope?.retainAssociation($0) },
+                                            readingOriginalScope: readingInputScope)
                                     }
                                     return await Self.getInputBusObservation(runtime: runtime.logicRuntime,
                                         restoringMixerGeometry: inputRestorationGeometry,
                                         observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
-                                        observingRenewedFocus: { readFocusScope?.retainAssociation($0) })
+                                        observingRenewedFocus: { readFocusScope?.retainAssociation($0) },
+                                        readingOriginalScope: readingInputScope)
                                 }
                             }
                             return await AXMixerStripBinding.$outputAssociation.withValue(pair) {
@@ -662,6 +668,7 @@ actor AccessibilityChannel: Channel {
                             }
                             if let input {
                                 if let renewal = read.inputRenewal, let slot = read.inputSlot {
+                                    if inputReadScope != nil { inputReadScope = renewal.observation }
                                     renewals.append(renewal)
                                     renewedSlots.append(slot)
                                     checkedInputs.append(.init(receiver: renewal.pair.strip, assignment: input))
