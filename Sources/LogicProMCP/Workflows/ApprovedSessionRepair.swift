@@ -1569,6 +1569,24 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return source.track.currentIndex() != nil && source.strip.currentIndex(runtime: source.track.runtime) != nil
     }
 
+    /// Historical inspection expiry does not erase an actual coupled name effect.
+    /// This supplies only the original read pair; Send state and receivers still
+    /// need their independent reads and deciding checks.
+    func sendReadPairAfterOwnedName(reference: TargetReference, source: AXMixerStripBinding.Binding) async
+        -> AccessibilityChannel.HeldSelectionAssociation.Pair? {
+        guard let task = sendTask, reference == task.mixerRef,
+              case .bus(let before) = task.before, case .bus(let after)? = task.desired, before != after,
+              changedNameGoals.count == 1, let goal = changedNameGoals.first, goal.reference == task.reference,
+              let owned = nameExecutions[goal.reference]?.inverse,
+              ExactTrackNameAdapter.recordedNameEffect(owned)?.matches(task.pair) == true,
+              await cache.retainedInspection(id: task.capture.captureID) == nil,
+              task.capture.targetSnapshot == (await registry.currentSnapshot),
+              let track = await registry.resolve(task.reference), track.kind == .track,
+              track.physicalTrack?.matches(task.pair.track) == true,
+              await projectIsCurrent(allowPendingCancellation: true), sendNameHeld(at: source) else { return nil }
+        return task.pair
+    }
+
     /// Corroborate the owned name at the actual Send leaf, not just before
     /// dispatch. The caller still proves the original source/control and gate.
     func sendNameHeld(at source: AXMixerStripBinding.Binding) -> Bool {

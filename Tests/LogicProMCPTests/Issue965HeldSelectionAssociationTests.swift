@@ -578,6 +578,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
         var captureExpiredAtCheckedSendDispatch = false
+        var inspectionExpiredBeforeSendRead = false
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
         var heldHeaderDiscoveryScans = 0
@@ -4847,12 +4848,21 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
-    @Test("An external source name cannot authorize a later existing-Bus Send leaf")
-    func canonicalNamedExistingBusSendRefusesALateExternalName() async throws {
+    @Test("An external source name cannot authorize a later existing-Bus Send leaf", arguments: [false, true])
+    func canonicalNamedExistingBusSendRefusesALateExternalName(expired: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: "late_name", canonicalBus: true,
-                canonicalBusChange: true, canonicalName: true)
+                canonicalBusChange: true, canonicalName: true, expireInspectionBeforeSendRead: expired)
+        }
+    }
+
+    @Test("An owned name keeps the original Send source after historical inspection expiry", arguments: ["forward", "cancel"])
+    func canonicalNamedExistingBusSendKeepsItsPairBeforeFirstReadAfterInspectionExpires(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true, expireInspectionBeforeSendRead: true)
         }
     }
 
@@ -5085,6 +5095,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                inverseNameFault: String? = nil,
                                                delayedMixerName: String? = nil,
                                                expireInspectionBeforeSendDispatch: Bool = false,
+                                               expireInspectionBeforeSendRead: Bool = false,
                                                freshPhysicalReturn: Bool = false,
                                                freshBusStereoReturn: Bool = false,
                                                canonicalMatching: Bool = false,
@@ -5167,6 +5178,11 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? mixerOwner : $0 })
             let captureNow = ContinuousClock.now
             let cache = StateCache(sessionCaptureNow: {
+                if expireInspectionBeforeSendRead, !f.routingNameWrites.isEmpty,
+                   SendRemovalSagaAdapter.checkedSourcePair == nil {
+                    f.inspectionExpiredBeforeSendRead = true
+                    f.expireRetainedCapture = true
+                }
                 if expireInspectionBeforeSendDispatch, !f.routingNameWrites.isEmpty,
                    SendRemovalSagaAdapter.checkedSourcePair != nil {
                     // Expire at the actual admitted Send dispatch, after its
@@ -6258,6 +6274,10 @@ struct Issue965HeldSelectionAssociationTests {
                     if expireInspectionBeforeSendDispatch {
                         #expect(f.captureExpiredAtCheckedSendDispatch)
                         #expect(f.expireRetainedCapture)
+                        #expect(await cache.retainedInspection(id: id) == nil)
+                    }
+                    if expireInspectionBeforeSendRead {
+                        #expect(f.inspectionExpiredBeforeSendRead)
                         #expect(await cache.retainedInspection(id: id) == nil)
                     }
                     if canonicalBusReceiverFault?.hasPrefix("checked_") == true {

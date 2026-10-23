@@ -318,10 +318,16 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
             } else {
                 guard !self.attempted, let reference = step.targetRef,
                       let binding = await registry.resolve(reference), binding.kind == .mixerStrip,
-                      let physical = binding.physicalMixerStrip,
-                      let held = await cache.retainedMixerAssociation(reference: reference, source: physical,
-                        snapshot: await registry.currentSnapshot),
-                      self.pair.map({ $0.strip.matches(held.strip) && $0.track.matches(held.track) }) ?? true,
+                      let physical = binding.physicalMixerStrip else { return nil }
+                let held: AccessibilityChannel.HeldSelectionAssociation.Pair
+                if let captured = await cache.retainedMixerAssociation(reference: reference, source: physical,
+                    snapshot: await registry.currentSnapshot) {
+                    held = captured
+                } else if let owned = await self.approved?.sendReadPairAfterOwnedName(reference: reference, source: physical) {
+                    held = owned
+                    Log.info("Send before-read continued through its owned source-name effect", subsystem: "saga")
+                } else { return nil }
+                guard self.pair.map({ $0.strip.matches(held.strip) && $0.track.matches(held.track) }) ?? true,
                       let ordinal = self.forward.params["ordinal"]?.intValue else { return nil }
                 let runtime = held.track.runtime
                 if Self.isCreation(self.forward) {
