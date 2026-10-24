@@ -319,8 +319,33 @@ extension AccessibilityChannel {
             }
             func stripCustodyMatches() -> Bool {
                 if checkingAssociation || originalRailFocus != nil {
-                    guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax) else { return false }
-                    return Self.same(strips, current.strips)
+                    // Inspect the same census used by the complete-read helper;
+                    // diagnostics must not obtain a second, different sample.
+                    guard let current = AXLogicProElements.stripEnumeration(in: mixer, runtime: logic.ax) else {
+                        Log.info("Held Mixer census refused: children_unreadable", subsystem: "ax")
+                        return false
+                    }
+                    guard current.unreadableChildren == 0 else {
+                        Log.info("Held Mixer census refused: unreadable_roles=\(current.unreadableChildren), expected_count=\(strips.count), observed_count=\(current.strips.count)", subsystem: "ax")
+                        return false
+                    }
+                    guard Self.same(strips, current.strips) else {
+                        let missing = strips.indices.filter { index in
+                            !current.strips.contains { CFEqual(strips[index], $0) }
+                        }
+                        let unexpected = current.strips.indices.filter { index in
+                            !strips.contains { CFEqual(current.strips[index], $0) }
+                        }
+                        let reordered = strips.indices.filter { index in
+                            index < current.strips.count && !CFEqual(strips[index], current.strips[index])
+                        }
+                        let original = originalSelectedChild ?? originalFocus
+                        let originalCount = current.strips.filter { CFEqual($0, original) }.count
+                        let expectedCount = current.strips.filter { CFEqual($0, expectedSelectedChild ?? expectedFocus) }.count
+                        Log.info("Held Mixer census refused: population_mismatch, expected_count=\(strips.count), observed_count=\(current.strips.count), missing_indices=\(missing), unexpected_indices=\(unexpected), changed_positions=\(reordered), original_member_count=\(originalCount), expected_member_count=\(expectedCount)", subsystem: "ax")
+                        return false
+                    }
+                    return true
                 }
                 // A focus-moving read is not a rail-selection capability.
                 // Renew this exact focus's reciprocal Mixer membership only;
