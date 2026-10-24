@@ -1234,7 +1234,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     func sendBusInputsCurrent(at originalPair: AccessibilityChannel.HeldSelectionAssociation.Pair,
         control: AXLogicProElements.AssignedSendMenuControl,
         expected: OutputAssignment,
-        ownedChange: AccessibilityChannel.ChangedSendObservation? = nil) async -> SendReadCustody? {
+        ownedChange: AccessibilityChannel.ChangedSendObservation? = nil,
+        corroboratingBeforeInWriter: SendRemovalSagaAdapter.RequiredBeforeState? = nil) async -> SendReadCustody? {
         guard let task = sendTask, case .bus(let before) = task.before else {
             return .init(pair: originalPair, control: control, renewal: nil)
         }
@@ -1480,27 +1481,39 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                       slots == (ownedChange?.footprint ?? task.footprint),
                       slots.count == 2, slots.filter({ $0.state == .occupiedUnknownDestination }).count == 1,
                       slots.filter({ $0.state == .observedEmpty }).count == 1 else { return nil }
-                let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
-                    await AXMixerStripBinding.$outputAssociation.withValue(pair) {
-                        await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: task.ordinal,
-                            requiringOriginalSendControl: current,
-                            readingOriginalScope: renewal.observation,
-                            observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
+                if let before = corroboratingBeforeInWriter, ownedChange == nil,
+                   sendNameUsesInputFootprint, expected == task.before {
+                    // These are the actual independent Saga read's expectations,
+                    // not write authority. The deciding writer checks them again
+                    // in its own popup at this exact renewed native control.
+                    stage = "deciding_send_before_state"
+                    guard before.footprint == slots,
+                          before.nonRoutingChecks == ["Post Fader"] || before.nonRoutingChecks == ["포스트 페이더"],
+                          sourceCurrent() else { return nil }
+                    finalControl = current
+                } else {
+                    let read = await AXMixerStripBinding.$current.withValue(pair.strip) {
+                        await AXMixerStripBinding.$outputAssociation.withValue(pair) {
+                            await AccessibilityChannel.getOutputObservation(runtime: runtime, sendOrdinal: task.ordinal,
+                                requiringOriginalSendControl: current,
+                                readingOriginalScope: renewal.observation,
+                                observingPopupFocus: { inputFocus.retainRoutingPopupFocus($0) })
+                        }
                     }
-                }
-                stage = "renewed_checked_send"
-                guard read.assignment == expected, read.sendControl?.matches(current) == true,
-                      read.sendNonRoutingChecks == ["Post Fader"] || read.sendNonRoutingChecks == ["포스트 페이더"],
-                      let final = AXLogicProElements.assignedSendMenuControl(in: pair.strip.strip,
-                        ordinal: task.ordinal, runtime: runtime.ax), current.matches(final),
-                      AXLogicProElements.sendSlotObservations(in: pair.strip.strip, runtime: runtime.ax) == slots,
-                      sourceCurrent() else { return nil }
-                finalControl = final
-                if let ownedChange {
-                    stage = "continued_native_effect"
-                    guard let continued = ownedChange.continuing(after: renewal, reading: read,
-                        slots: slots, runtime: runtime) else { return nil }
-                    continuedChange = continued
+                    stage = "renewed_checked_send"
+                    guard read.assignment == expected, read.sendControl?.matches(current) == true,
+                          read.sendNonRoutingChecks == ["Post Fader"] || read.sendNonRoutingChecks == ["포스트 페이더"],
+                          let final = AXLogicProElements.assignedSendMenuControl(in: pair.strip.strip,
+                            ordinal: task.ordinal, runtime: runtime.ax), current.matches(final),
+                          AXLogicProElements.sendSlotObservations(in: pair.strip.strip, runtime: runtime.ax) == slots,
+                          sourceCurrent() else { return nil }
+                    finalControl = final
+                    if let ownedChange {
+                        stage = "continued_native_effect"
+                        guard let continued = ownedChange.continuing(after: renewal, reading: read,
+                            slots: slots, runtime: runtime) else { return nil }
+                        continuedChange = continued
+                    }
                 }
             } else { finalControl = control }
             stage = "final_custody"

@@ -534,15 +534,20 @@ struct Issue965HeldSelectionAssociationTests {
         var routingInputReadRenewed = false
         var routingNamedSendBeforeInputCount: Int?
         var routingNamedSendPreInputPeerNameReads = 0
+        var routingNamedSendPostInputObserverReads = 0
         var measureNamedBusPreInput = false
 
         func observeNamedSendBeforeRead() {
             if measureNamedBusPreInput, routingNameWrites == ["Selected Canonical"],
-               routingNamedSendBeforeInputCount == nil,
+               routingDestinationPresses == 0,
                SendRemovalSagaAdapter.requiredSendControl == nil {
-                // End of the real independent before-Send read, after
-                // the actual name write and before the first Input read.
-                routingNamedSendBeforeInputCount = routingCanonicalInputBuses.count
+                if let count = routingNamedSendBeforeInputCount {
+                    if routingCanonicalInputBuses.count > count { routingNamedSendPostInputObserverReads += 1 }
+                } else {
+                    // End of the real independent before-Send read, after
+                    // the actual name write and before the first Input read.
+                    routingNamedSendBeforeInputCount = routingCanonicalInputBuses.count
+                }
             }
         }
 
@@ -554,6 +559,8 @@ struct Issue965HeldSelectionAssociationTests {
                 "Reach actual Input acquisition after that independent Send read")
             #expect(routingNamedSendPreInputPeerNameReads == 0,
                 "The renewed Input scope checks the complete footprint; do not duplicate it before acquisition")
+            #expect(routingNamedSendPostInputObserverReads == 0,
+                "Corroborate the actual independent before-state in the deciding writer's popup, without another observer popup")
         }
         var routingInputOpenDiscoveryStart: Int?
         var routingInputOpenDiscoveryCounts: [Int] = []
@@ -5086,6 +5093,16 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func canonicalNamedBusSendCorroboratesModeAfterInputRenewal(bulk: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_read_renewal", canonicalName: true,
+                stableDestinationBulkReads: bulk, decidingSendFault: "mode", measureNamedBusPreInput: true)
+        }
+    }
+
     @Test("Canonical Send corroborates its approved before-state in the deciding popup without a duplicate read lifecycle",
           arguments: ["healthy", "level", "bypass", "mode", "project",
                       "late_action_mode", "late_choice_mode", "late_bus_mode"])
@@ -6425,6 +6442,15 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(body["saga_state"] as? String == (afterForward ? "partiallyCompensated" : "fullyCompensated"))
                         #expect(f.routingNameWrites == ["Selected Canonical", "Duplicate"])
                         #expect(b.attributeValue(f.headers[0], kAXTitleAttribute as String) as? String == "Duplicate")
+                    } else if decidingSendFault == "mode" {
+                        #expect(f.routingDecidingSendFaultInjected, "Reach the renewed source's actual deciding writer popup")
+                        #expect(f.routingDestinationPresses == 0 && f.routingBusLeafPresses.isEmpty)
+                        #expect(body["state"] as? String == "C")
+                        #expect(body["saga_state"] as? String == "fullyCompensated")
+                        #expect(f.routingNameWrites == ["Selected Canonical", "Duplicate"])
+                        #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "")
+                        #expect(b.attributeValue(preFader, "AXMenuItemMarkChar") as? String == "✓",
+                            "The refusal retains the external mode change")
                     } else if inverseNameFault != nil {
                         #expect(f.routingLateScopeInjected)
                         #expect(body["saga_state"] as? String == "rollbackUncertain")

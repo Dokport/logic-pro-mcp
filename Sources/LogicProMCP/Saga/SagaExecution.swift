@@ -453,7 +453,8 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 var requiredControl = self.capturedControl
                 if let approved = self.approved, let control = requiredControl,
                    let expected = Self.expectedBefore(self.forward) {
-                    guard let custody = await approved.sendBusInputsCurrent(at: held, control: control, expected: expected) else {
+                    guard let custody = await approved.sendBusInputsCurrent(at: held, control: control, expected: expected,
+                        corroboratingBeforeInWriter: nameUsesInputFootprint ? requiredBefore : nil) else {
                         return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Checked Bus input prerequisites changed before Send")
                     }
                     held = custody.pair; self.pair = held
