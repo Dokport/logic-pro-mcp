@@ -530,6 +530,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingSourceInputCancelledAtSelectionCount: Int?
         var routingSourceInputFreshHeaderChallenges = 0
         var routingChangedSendPublished = false
+        var routingChangedPermissionControlWalks = 0
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
         var routingNamedSendBeforeInputCount: Int?
@@ -5157,6 +5158,17 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("An actual changed named Send checks its exact control and protected slots in one fresh census",
+          arguments: [false, true], [false, true])
+    func canonicalNamedBusSendUsesOneEffectCustodyCensus(stable: Bool, bulk: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true, canonicalBusChange: true,
+                canonicalName: true, stableDestinationControls: stable, stableDestinationBulkReads: bulk,
+                measureChangedPermissionCensus: true)
+        }
+    }
+
     @Test("A different Bus Send goal does not gain write authority from matching-goal support")
     func canonicalMatchingBusSendCannotAdmitAnotherBus() async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -5209,9 +5221,15 @@ struct Issue965HeldSelectionAssociationTests {
                                                decidingSendFault: String? = nil,
                                                scopedInputAdditionalWindow: Bool = false,
                                                captureInputReadScope: String? = nil,
-                                               measureNamedBusPreInput: Bool = false) async throws {
+                                               measureNamedBusPreInput: Bool = false,
+                                               measureChangedPermissionCensus: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
+            defer {
+                if measureChangedPermissionCensus {
+                    #expect(f.routingChangedSendPublished, "Every measured case must reach the actual native effect publisher")
+                }
+            }
             let inverseInputReadRenewal = canonicalBusReceiverFault?.hasPrefix("physical_source_inverse_read_renewal") == true
             let sourceInputReadRenewal = canonicalBusReceiverFault == "physical_source_read_renewal" || inverseInputReadRenewal
             f.measureNamedBusPreInput = measureNamedBusPreInput
@@ -6430,7 +6448,34 @@ struct Issue965HeldSelectionAssociationTests {
                         "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
                         "confirmed": .bool(true), "idempotency_key": .string(key)]
                     if canonicalSend == "expired" { f.expireRetainedCapture = true }
-                    let result = await apply(dependencies, arguments)
+                    let result: CallTool.Result
+                    if measureChangedPermissionCensus {
+                        result = await AccessibilityChannel.$sendChangeObserver.withValue({ proof in
+                            let priorChildrenRead = f.routingChildrenRead
+                            f.routingChildrenRead = { element in
+                                priorChildrenRead?(element)
+                                if CFEqual(element, proof.control.list) {
+                                    f.routingChangedPermissionControlWalks += 1
+                                }
+                            }
+                            defer { f.routingChildrenRead = priorChildrenRead }
+                            f.routingChangedPermissionControlWalks = 0
+                            let current = AXLogicProElements.assignedSendMenuControl(in: proof.source.pair.strip.strip,
+                                ordinal: proof.control.ordinal, runtime: f.logic().ax)
+                            if let current {
+                                #expect(proof.control.matches(current),
+                                    "Measure the current native control from the actual published effect")
+                            } else { Issue.record("The actual published effect must retain its current native control") }
+                            let singleCensusControlWalks = f.routingChangedPermissionControlWalks
+                            #expect(singleCensusControlWalks > 0, "The independent calibration must actually walk the native Send control")
+                            f.routingChangedPermissionControlWalks = 0
+                            #expect(proof.permits(runtime: f.logic()), "The actual current effect remains owned")
+                            print("Changed Send control walks: calibration=\(singleCensusControlWalks), custody=\(f.routingChangedPermissionControlWalks)")
+                            #expect(f.routingChangedPermissionControlWalks == singleCensusControlWalks,
+                                "Control identity and protected slots need one complete native Send census, retaining its source/Help bookends")
+                            f.routingChangedSendPublished = true
+                        }) { await apply(dependencies, arguments) }
+                    } else { result = await apply(dependencies, arguments) }
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
                     if sourceInputReadRenewal { #expect(f.routingInputReadRenewed, "Reach the actual owned Input source renewal") }
                     try f.expectNamedSendInputFootprint()

@@ -65,10 +65,17 @@ extension AccessibilityChannel {
                     source.observation.permitsOwnedPopupRead($0)
                 } ?? source.observation.permitsRead())
             })) {
+                var controls: [AXLogicProElements.AssignedSendMenuControl] = []
                 guard source.permits(runtime: runtime, ownedPopup: ownedPopup),
-                      let current = AXLogicProElements.assignedSendMenuControl(in: source.pair.strip.strip,
-                        ordinal: control.ordinal, runtime: runtime.ax), control.matches(current),
-                      let slots = AXLogicProElements.sendSlotObservations(in: source.pair.strip.strip, runtime: runtime.ax),
+                      // One complete current walk supplies both the physical
+                      // control and its protected values; neither is an old receipt.
+                      let slots = AXLogicProElements.sendSlotObservations(in: source.pair.strip.strip,
+                        runtime: runtime.ax, observingAssignedGroup: { controls.append($0) }),
+                      slots.indices.contains(control.ordinal), slots[control.ordinal].ordinal == control.ordinal,
+                      slots[control.ordinal].state == .occupiedUnknownDestination,
+                      controls.filter({ $0.ordinal == control.ordinal }).count == 1,
+                      let current = controls.first(where: { $0.ordinal == control.ordinal }),
+                      controls.filter({ CFEqual($0.list, current.list) }).count == 1, control.matches(current),
                       Self.protectedSlots(slots, ordinal: control.ordinal)
                         == Self.protectedSlots(footprint, ordinal: control.ordinal),
                       let census = removalCensus(source.pair.strip, runtime: runtime), census.count == population.count,
