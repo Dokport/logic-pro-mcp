@@ -633,6 +633,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingReadResult: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)?
         var routingWindowListRead: (@Sendable () -> Void)?
         var routingNativePopupFrame: CGRect?
+        var routingNativeApplicationFocusWrites = 0
         var inputForeignScopeHelpReads = 0
         var inputSetterDispatches = 0
         var inputReadAfterOutput = false
@@ -2610,7 +2611,8 @@ struct Issue965HeldSelectionAssociationTests {
                             // a native window, not a Mixer AXChildren menu.
                             f.builder.setChildren(nativeWrapper, [root])
                             f.routingNativePopupFrame = nativeFrame
-                            if nativeApplicationFocus {
+                            if nativeApplicationFocus, ApprovedSessionRepair.outputLeafPermission != nil {
+                                f.routingNativeApplicationFocusWrites += 1
                                 let foreign = f.builder.element(1_973_199)
                                 f.builder.setRole(foreign, kAXApplicationRole as String)
                                 let injectingForeign = nativeForeignApplication && ApprovedSessionRepair.outputLeafPermission != nil
@@ -3093,6 +3095,13 @@ struct Issue965HeldSelectionAssociationTests {
                         let inverse = try #require(step["compensation"] as? [String: Any])
                         #expect(inverse["disposition"] as? String == "verified")
                         #expect((inverse["readback"] as? [String: Any])?["observed"] as? String == (busReplacement ? "bus:3" : busArrival ? "stereo_output" : "bus:2"))
+                    }
+                }
+                if nativeApplicationFocus {
+                    #expect(f.routingNativeApplicationFocusWrites > 0,
+                        "Reach application focus at the actual approved return popup, after a valid initial capture")
+                    if nativeNoWindow {
+                        #expect(f.routingLateScopeInjected, "Reach the actual AXNoValue window response")
                     }
                 }
                 if nativeForeignApplication || nativeRefusingWindow {
