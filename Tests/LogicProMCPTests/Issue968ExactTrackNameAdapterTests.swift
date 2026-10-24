@@ -28,6 +28,8 @@ private final class ExactNameFixture: @unchecked Sendable {
     var onUnwrittenNameRead: (@Sendable () -> Void)?
     var nameReadsAfterWrite = 0
     var permitsSelection = false
+    var useBulkReads = false
+    var globalMixerDiscoveries = 0
     var exposeFieldWhenSelected = false
     var renameMenuItem: AXUIElement?
     var selectionWrites: [AXUIElement] = []
@@ -66,6 +68,7 @@ private final class ExactNameFixture: @unchecked Sendable {
     var adapterPermissionReads = 0
     var passiveHeaderNameLabel = false
     var passiveMixerStripFocus: AXUIElement?
+    var additionalPassiveMixerStrips: [AXUIElement] = []
     var unreadPassiveMixerMetadata = false
     var passiveMixerHasValue = false
     var menuEditorValueWrites: [String] = []
@@ -151,7 +154,8 @@ private final class ExactNameFixture: @unchecked Sendable {
                     return nil
                 },
                 attributeValueResultHandler: { [self] element, attribute in
-                    if let passiveMixerStripFocus, CFEqual(element, passiveMixerStripFocus) {
+                    if passiveMixerStripFocus.map({ CFEqual(element, $0) }) == true
+                        || additionalPassiveMixerStrips.contains(where: { CFEqual(element, $0) }) {
                         if [kAXValueAttribute as String, kAXSelectedTextAttribute as String].contains(attribute) {
                             if passiveMixerHasValue, attribute == kAXValueAttribute as String { return .success("editing" as AnyObject) }
                             return .failure(.init(raw: AXError.noValue.rawValue))
@@ -243,6 +247,40 @@ private final class ExactNameFixture: @unchecked Sendable {
             postPopupMenuEscape: { Issue.record("Unexpected Escape") },
             focusedApplicationPID: { [self] in observedFocusedPID }
         )
+        if useBulkReads {
+            let ax = source.ax
+            let bulk = AXHelpers.Runtime(axApp: ax.axApp, attributeValue: ax.attributeValue,
+                attributeIsSettable: ax.attributeIsSettable, setAttributeValue: ax.setAttributeValue,
+                children: ax.children, performAction: ax.performAction, childCount: ax.childCount,
+                actionNames: ax.actionNames, actionNamesResult: ax.actionNamesResult,
+                childrenResult: ax.childrenResult, attributeValueResult: ax.attributeValueResult,
+                performActionResult: ax.performActionResult, elementAtPosition: ax.elementAtPosition,
+                attributeValuesResult: { [self] element, attributes in
+                    if CFEqual(element, window), attributes == [kAXRoleAttribute, kAXIdentifierAttribute,
+                        kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as [String] {
+                        globalMixerDiscoveries += 1
+                    }
+                    var values: [AnyObject] = []
+                    for attribute in attributes {
+                        let reading: Result<AnyObject?, AXHelpers.AXStatusError>
+                        if attribute == kAXChildrenAttribute as String {
+                            reading = AXHelpers.childrenResult(element, runtime: ax).map { $0 as CFArray }
+                        } else {
+                            reading = AXHelpers.getAttributeResult(element, attribute, runtime: ax)
+                        }
+                        switch reading {
+                        case .success(let value): values.append(value ?? NSNull())
+                        case .failure(let error): return .failure(error)
+                        }
+                    }
+                    return .success(values)
+                })
+            return AXLogicProElements.Runtime(logicProPID: source.logicProPID, ax: bulk,
+                executeAppleScript: source.executeAppleScript,
+                executeAppleScriptWithTimeout: source.executeAppleScriptWithTimeout,
+                onScreenWindowList: source.onScreenWindowList, postPopupMenuEscape: source.postPopupMenuEscape,
+                focusedApplicationPID: source.focusedApplicationPID, observeFrontmost: source.observeFrontmost)
+        }
         guard legacyHeaderRoleFailureRead != nil || legacyHeaderRoleObservedRead != nil else { return source }
         let ax = source.ax
         return AXLogicProElements.Runtime(logicProPID: source.logicProPID,
@@ -2029,6 +2067,80 @@ struct Issue968ExactTrackNameAdapterTests {
             f.builder.setAttribute(f.window, kAXDocumentAttribute as String, document)
             #expect((await f.inverse(proof)).status == .rejectedBeforeWrite)
             #expect(f.writes == ["C"], "Reappearing handles cannot revive an ended exposure or permit another writer")
+        }
+    }
+
+    @Test(arguments: [false, true], ["healthy", "primary", "mirror", "peer", "document", "gate"])
+    func anOwnedNameReadUsesOnlyItsActualRenewedSourceScope(renewed: Bool, fault: String) async throws {
+        try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let f = ExactNameFixture()
+            f.useBulkReads = true
+            f.permitsSelection = true
+            let (peerHeader, _) = f.appendTrack(name: "Peer", selected: false)
+            let (capture, project, target, strip, mirror) = try await f.coupledCapture(
+                peerStripName: "Peer", includePeerAssociation: true, passiveMixerFocus: true)
+            f.builder.setAttributeSettable(f.rail, kAXSelectedChildrenAttribute as String, true)
+            f.builder.setAttribute(f.rail, kAXSelectedChildrenAttribute as String, [f.header])
+            let mixer = f.builder.element(968_170), peerStrip = f.builder.element(968_173)
+            f.additionalPassiveMixerStrips = [peerStrip]
+            f.builder.setAttribute(peerStrip, kAXNumberOfCharactersAttribute as String, NSNumber(value: 0))
+            f.builder.setAttribute(peerStrip, kAXInsertionPointLineNumberAttribute as String, NSNumber(value: 0))
+            f.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [strip])
+            f.onSelection = {
+                let selected = f.selectionWrites.last.map { CFEqual($0, peerHeader) } == true ? peerStrip : strip
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, selected)
+                f.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [selected])
+            }
+            let bar = f.builder.element(3_971_968), play = f.builder.element(3_971_969)
+            let record = f.builder.element(3_971_970)
+            f.builder.setRole(bar, kAXGroupRole as String)
+            f.builder.setAttribute(bar, kAXDescriptionAttribute as String, "Control Bar")
+            for (control, title) in [(play, "Play"), (record, "Record")] {
+                f.builder.setRole(control, kAXCheckBoxRole as String)
+                f.builder.setAttribute(control, kAXTitleAttribute as String, title)
+                f.builder.setAttribute(control, kAXValueAttribute as String, 0)
+                f.builder.setChildren(control, [])
+            }
+            f.builder.setChildren(bar, [play, record])
+            f.builder.setChildren(f.window, AXHelpers.getChildren(f.window, runtime: f.builder.makeAXRuntime()) + [bar])
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true,
+                ownsGate: { gate.stillOwns(claim) && f.boundaryOwnership })
+            try await OperationTraceContext.$current.withValue(context) {
+                let written = await f.applyCoupled(capture, project: project, target: target)
+                try #require(written.status == .applied)
+                var proof = try #require(written.inverse)
+                if renewed {
+                    let pair = try #require(capture.freshPopulation?.selectionAssociations.first)
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, strip)
+                    let acquired = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
+                        runtime: f.runtime, sourceDisposition: .readObservation)
+                    let source = try #require(acquired.source, "Use the actual original-header producer and its verified selection inverse")
+                    #expect(acquired.effects.restoration == "restored")
+                    #expect(source.observedPairs.count == 2, "The actual producer must observe both native associations")
+                    proof = try #require(await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source))
+                }
+                if fault == "primary" { f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "External") }
+                if fault == "mirror" { f.builder.setAttribute(mirror, kAXValueAttribute as String, "External") }
+                if fault == "peer", let peer = f.coupledPeerNameField {
+                    f.builder.setAttribute(peer, kAXValueAttribute as String, "External")
+                }
+                if fault == "document" { f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
+                if fault == "gate" { f.boundaryOwnership = false }
+                f.globalMixerDiscoveries = 0
+                #expect(await ExactTrackNameAdapter.readOwnedCoupledName(proof) == (fault == "healthy" ? "C" : nil))
+                if fault == "healthy" {
+                    if renewed {
+                        #expect(f.globalMixerDiscoveries == 0,
+                            "The actual renewed scope checks complete current membership without global Mixer rediscovery")
+                    } else {
+                        #expect(f.globalMixerDiscoveries > 0, "The original unrenewed name read retains its global discovery")
+                    }
+                }
+                #expect(f.writes == ["C"], "Independent name reads cannot perform another rename or inverse")
+            }
         }
     }
 

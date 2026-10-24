@@ -600,6 +600,16 @@ enum ExactTrackNameAdapter {
             return membershipStillHeld(ownedEditor: ownedEditor) && operationPermitted()
         }
 
+        private func currentStripIndex(ownedEditor: AXUIElement?) -> Int? {
+            guard ownedEditor == nil, let renewal else {
+                return pair.strip.currentIndex(runtime: pair.track.runtime)
+            }
+            guard renewal.pair.track.matches(pair.track), renewal.pair.strip.matches(pair.strip) else { return nil }
+            // The actual original-header renewal checks the complete current
+            // native census. Editor reads keep their existing acquisition path.
+            return pair.strip.currentIndex(in: renewal.observation)
+        }
+
         func namesStillHeld(before: String, after: String? = nil, ownedEditor: AXUIElement? = nil) -> Bool {
             let guardHelp = AXHelpers.HelpReadGuard(allowHelpReads: false, stop: { !operationPermitted() })
             return AXHelpers.HelpReadGuard.$current.withValue(guardHelp) {
@@ -609,7 +619,7 @@ enum ExactTrackNameAdapter {
                 let names = [before] + (after.map { [$0] } ?? [])
                 guard ownedEditor.map({ permitsCoupledEditorRead($0, pair: pair, names: names) }) ?? true,
                       operationPermitted(), membershipStillHeld(ownedEditor: ownedEditor), pair.track.currentIndex() != nil,
-                      pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
+                      currentStripIndex(ownedEditor: ownedEditor) != nil,
                       // Peer reads can redraw or change the pair. Its deciding
                       // native name/custody reads must follow the last peer read.
                       peerNamesStillHeld(ownedEditor: ownedEditor),
@@ -617,7 +627,7 @@ enum ExactTrackNameAdapter {
                         runtime: pair.track.runtime.ax), permitsStripName(stripName, before: before, after: after),
                       case .success(.some(let trackName)) = AXValueExtractors.extractTrackNameResult(
                         from: pair.track.header, runtime: pair.track.runtime.ax), matches(trackName),
-                      pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
+                      currentStripIndex(ownedEditor: ownedEditor) != nil,
                       pair.track.currentIndex() != nil, operationPermitted(),
                       ownedEditor.map({ permitsCoupledEditorRead($0, pair: pair, names: names) }) ?? true else { return false }
                 return true
