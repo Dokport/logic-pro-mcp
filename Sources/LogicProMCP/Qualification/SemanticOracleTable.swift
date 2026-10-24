@@ -929,11 +929,20 @@ enum SemanticOracleTable {
                   $0.id == (VerifiedPluginCatalog.canonicalParamKey(pluginID: pluginID, alias: param)
                     ?? param.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
               }),
-              object["raw_unit"] as? String == metadata.unit,
+              object["raw_unit"] as? String == (metadata.readbackUnit ?? metadata.unit),
               let raw = object["observed_raw"], let display = object["observed_display"],
               let displayStatus = object["display_read_status"] as? String else { return false }
         if metadata.readbackMethod == "ax_controls_view_checkbox_value" {
             guard metadata.controlsViewControlRole == "AXCheckBox", JSONInspector.isBoolean(raw) else { return false }
+        } else if let kind = ControlsViewParameterReader.kind(for: metadata) {
+            switch kind {
+            case .numericDisplay:
+                guard let number = JSONInspector.number(of: raw), number.isFinite else { return false }
+            case let .radioPair(off, on):
+                guard JSONInspector.isBoolean(raw), let value = raw as? Bool,
+                      display as? String == (value ? on : off) else { return false }
+            }
+            guard displayStatus == "read", let text = display as? String, !text.isEmpty else { return false }
         } else {
             guard metadata.readbackMethod == "ax_slider_axvalue", metadata.axDescription != nil,
                   let number = JSONInspector.number(of: raw), number.isFinite else { return false }

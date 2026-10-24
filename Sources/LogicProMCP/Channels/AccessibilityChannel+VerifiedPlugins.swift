@@ -2633,7 +2633,9 @@ extension AccessibilityChannel {
         let nativeSlider = metadata.readbackMethod == "ax_slider_axvalue" && metadata.axDescription != nil
         let controlsCheckbox = metadata.readbackMethod == "ax_controls_view_checkbox_value"
             && metadata.controlsViewControlRole == "AXCheckBox" && metadata.controlsViewRowLabel != nil
-        guard nativeSlider || controlsCheckbox, let rawUnit = metadata.unit else {
+        let controlsReadKind = ControlsViewParameterReader.kind(for: metadata)
+        guard nativeSlider || controlsCheckbox || controlsReadKind != nil,
+              let rawUnit = metadata.readbackUnit ?? metadata.unit else {
             return .error(HonestContract.encodeV2StateC(error: .unsupportedParamReadback,
                 extras: ["operation": operation, "param": suppliedParam,
                     "parameter_read_status": "unsupported", "write_attempted": false]))
@@ -2668,7 +2670,7 @@ extension AccessibilityChannel {
             operation: operation, referenceParams: params, track: track, insert: insert,
             pluginID: pluginID, paramKey: paramKey, paramAlias: suppliedParam,
             access: .read(unit: rawUnit, contextIsCurrent: contextIsCurrent, openerOverride: pluginWindowOpener),
-            writeMethod: "", readsControlsCheckbox: controlsCheckbox,
+            writeMethod: "", readsControlsCheckbox: controlsCheckbox, controlsReadKind: controlsReadKind,
             runtime: runtime, entryLookup: entryLookup,
             pluginWindowOpener: pluginWindowOpener ?? livePluginWindowOpener, pluginPopupMenuCleaner: popupCheck
         )
@@ -2713,6 +2715,7 @@ extension AccessibilityChannel {
         access: VerifiedParameterAccess,
         writeMethod: String,
         readsControlsCheckbox: Bool = false,
+        controlsReadKind: ControlsViewParameterReader.Kind? = nil,
         runtime: AXLogicProElements.Runtime,
         entryLookup: VerifiedPluginCatalog.EntryLookup,
         pluginWindowOpener: PluginWindowOpener,
@@ -2722,7 +2725,8 @@ extension AccessibilityChannel {
         // Read metadata selects its plane without borrowing write qualification.
         let controlsViewCheckbox = access.isRead ? readsControlsCheckbox
             : writeMethod == "ax_controls_view_checkbox_press"
-        let controlsViewRowLabel = controlsViewCheckbox
+        let usesControlsView = controlsViewCheckbox || (access.isRead && controlsReadKind != nil)
+        let controlsViewRowLabel = usesControlsView
             ? VerifiedPluginCatalog.controlsViewRowLabel(
                 pluginID: pluginID,
                 paramKey: paramKey,
@@ -2731,7 +2735,7 @@ extension AccessibilityChannel {
             : nil
         let controlsViewEditorAnchor: String?
         let axDescription: String
-        if controlsViewCheckbox {
+        if usesControlsView {
             // An editor-view description can corroborate the header-bound
             // window when it happens to be present. It is not an acquisition
             // precondition: an editor may already be in Controls view, where
@@ -2768,7 +2772,7 @@ extension AccessibilityChannel {
         // by its measured track/plugin header first, then select and confirm
         // the view required by the write plane before any slider lookup.
         let requiringWindowSlider = false
-        if controlsViewCheckbox, controlsViewRowLabel == nil {
+        if usesControlsView, controlsViewRowLabel == nil {
             return .error(HonestContract.encodeV2StateC(
                 error: .unsupportedParamReadback,
                 extras: [
@@ -3310,7 +3314,7 @@ extension AccessibilityChannel {
             // It cannot require the native slider because the remembered view
             // may be Controls; the requested view is selected below.
             openedCandidate = AXUIElementSendable(boundWindow)
-        } else if controlsViewCheckbox || (access.isRead && access.readOpenerOverride == nil) {
+        } else if usesControlsView || (access.isRead && access.readOpenerOverride == nil) {
             openedCandidate = await openPluginWindowFromTargetSlot(
                 slots[insert].element,
                 pluginID: pluginID,
@@ -3438,7 +3442,7 @@ extension AccessibilityChannel {
                 safeToRetry: false
             ))
         }
-        let requiredView: ControlsViewBooleanParameterWriter.PluginWindowView = (controlsViewCheckbox || access.isEQStateRead)
+        let requiredView: ControlsViewBooleanParameterWriter.PluginWindowView = (usesControlsView || access.isEQStateRead)
             ? .controls
             : .editor
         // Logic can replace the editor's AX window/switcher during a View
@@ -3505,6 +3509,50 @@ extension AccessibilityChannel {
         }
         restorePluginViewOnExit = { viewSession.restore(allowingChanges: viewChangesAllowed) }
         let resultAfterViewPreparation: ChannelResult = {
+        if let controlsReadKind, let controlsViewRowLabel,
+           case let .read(rawUnit, contextIsCurrent, _) = access {
+            func currentInstance() -> Bool {
+                contextIsCurrent() && targetPluginIdentityIsStable(
+                    target: target, insert: insert, pluginID: pluginID,
+                    originalSlot: slots[insert].element, runtime: runtime
+                ) && controlsViewAcquiredPluginWindowFailureStateC(
+                    acquiredWindow: window, operation: operation, identity: identity,
+                    pluginID: pluginID, trackName: trackName, runtime: runtime
+                ) == nil
+            }
+            guard currentInstance() else {
+                readContextEnded = true
+                return .error(windowIdentityUnresolvedStateC(operation, identity,
+                    "the acquired target/editor context ended before its Controls-view read"))
+            }
+            let observation = ControlsViewParameterReader.observe(kind: controlsReadKind,
+                label: controlsViewRowLabel, in: window, runtime: runtime.ax)
+            guard currentInstance() else {
+                readContextEnded = true
+                return .error(windowIdentityUnresolvedStateC(operation, identity,
+                    "the acquired target/editor context ended during its Controls-view read"))
+            }
+            var extras: [String: Any] = [
+                "operation": operation, "target_identity": identity, "param": paramAlias,
+                "raw_unit": rawUnit, "observation_scope": "current_insert_parameter",
+                "verify_source": "ax_plugin_window", "write_attempted": false,
+            ]
+            switch observation {
+            case let .read(raw, display):
+                extras["observed_raw"] = raw
+                extras["observed_display"] = display
+                extras["display_read_status"] = "read"
+                extras["parameter_read_status"] = "read"
+                return .success(verifiedParameterEnvelope(extras: extras))
+            case let .unavailable(status):
+                extras["parameter_read_status"] = status
+                // State B is a successful transport response, so explicitly
+                // finish the owned UI work before encoding it, as EQ reads do.
+                appendPluginViewRestoration(to: &extras)
+                appendOwnedEditorCleanup(to: &extras)
+                return .success(HonestContract.encodeV2StateB(reason: .readbackUnavailable, extras: extras))
+            }
+        }
         if access.isEQStateRead, let contextIsCurrent = access.readContextIsCurrent {
             let instanceIsCurrent: () -> Bool = {
                 contextIsCurrent() && targetPluginIdentityIsStable(
@@ -4124,7 +4172,7 @@ extension AccessibilityChannel {
         if access.isRead, readContextEnded {
             return parameterReadContextFailure(finished, error: .windowIdentityUnresolved, operation: operation)
         }
-        if access.isEQStateRead, let contextIsCurrent = access.readContextIsCurrent,
+        if (access.isEQStateRead || controlsReadKind != nil), let contextIsCurrent = access.readContextIsCurrent,
            (!contextIsCurrent() || !targetPluginIdentityIsStable(
                 target: target, insert: insert, pluginID: pluginID,
                 originalSlot: slots[insert].element, runtime: runtime

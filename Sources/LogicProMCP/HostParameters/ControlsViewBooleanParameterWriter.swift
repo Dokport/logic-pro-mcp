@@ -13,7 +13,7 @@ import Foundation
 /// choice can be named. Both roles are returned as
 /// explicit refusals and are never actuated here.
 enum ControlsViewBooleanParameterWriter {
-    enum LocatorFailure: String, Sendable, Equatable {
+    enum LocatorFailure: String, Error, Sendable, Equatable {
         case controlsViewTableNotFound
         case controlsViewTableAmbiguous
         case rowLabelMissing
@@ -1154,11 +1154,11 @@ enum ControlsViewBooleanParameterWriter {
     /// `controlsViewRowLabel`. AX exposes no stronger table identity fact. In
     /// particular, this does not claim that an unrelated one-table plug-in
     /// window can be distinguished by table structure alone.
-    static func locate(
+    static func rowControls(
         label requestedLabel: String,
         in window: AXUIElement,
         runtime: AXHelpers.Runtime = .production
-    ) -> LocateResult {
+    ) -> Result<[AXUIElement], LocatorFailure> {
         let tables: [AXUIElement]
         switch AXHelpers.censusDescendantResult(
             of: window,
@@ -1169,22 +1169,22 @@ enum ControlsViewBooleanParameterWriter {
         case let .success(census):
             tables = census.matches
         case .failure:
-            return .refused(.accessibilityReadFailed)
+            return .failure(.accessibilityReadFailed)
         }
         guard tables.count == 1, let table = tables.first else {
-            return .refused(tables.isEmpty ? .controlsViewTableNotFound : .controlsViewTableAmbiguous)
+            return .failure(tables.isEmpty ? .controlsViewTableNotFound : .controlsViewTableAmbiguous)
         }
         let rows: [AXUIElement]
         switch controlsRows(in: table, runtime: runtime) {
         case let .success(observed):
             rows = observed
         case let .failure(error):
-            return .refused(error == .malformedAttribute
+            return .failure(error == .malformedAttribute
                 ? .accessibilityReadMalformed
                 : .accessibilityReadFailed)
         }
         guard !rows.isEmpty else {
-            return .refused(.controlsViewTableNotFound)
+            return .failure(.controlsViewTableNotFound)
         }
 
         let target = normalizedLabel(requestedLabel)
@@ -1197,7 +1197,7 @@ enum ControlsViewBooleanParameterWriter {
             case let .success(observed):
                 rowRole = observed
             case .failure:
-                return .refused(.accessibilityReadFailed)
+                return .failure(.accessibilityReadFailed)
             }
             guard rowRole == (kAXRowRole as String) else { continue }
             let cells: [AXUIElement]
@@ -1205,7 +1205,7 @@ enum ControlsViewBooleanParameterWriter {
             case let .success(observed):
                 cells = observed
             case .failure:
-                return .refused(.accessibilityReadFailed)
+                return .failure(.accessibilityReadFailed)
             }
             guard !cells.isEmpty else {
                 sawMissingLabel = true
@@ -1216,7 +1216,7 @@ enum ControlsViewBooleanParameterWriter {
             case let .success(observed):
                 labels = observed
             case .failure:
-                return .refused(.accessibilityReadFailed)
+                return .failure(.accessibilityReadFailed)
             }
             guard labels.count == 1, let label = labels.first else {
                 sawMissingLabel = sawMissingLabel || labels.isEmpty
@@ -1225,7 +1225,7 @@ enum ControlsViewBooleanParameterWriter {
             }
             if normalizedLabel(label.value) == target {
                 guard cells.count == 1 else {
-                    return .refused(.rowStructureInvalid)
+                    return .failure(.rowStructureInvalid)
                 }
                 let controls: [AXUIElement]
                 switch candidateControls(
@@ -1236,7 +1236,7 @@ enum ControlsViewBooleanParameterWriter {
                 case let .success(observed):
                     controls = observed
                 case .failure:
-                    return .refused(.accessibilityReadFailed)
+                    return .failure(.accessibilityReadFailed)
                 }
                 matchingRows.append(controls)
             }
@@ -1244,11 +1244,24 @@ enum ControlsViewBooleanParameterWriter {
 
         guard matchingRows.count == 1, let controls = matchingRows.first else {
             if matchingRows.count > 1 {
-                return .refused(.rowLabelAmbiguous)
+                return .failure(.rowLabelAmbiguous)
             }
-            if sawAmbiguousLabel { return .refused(.rowLabelAmbiguous) }
-            if sawMissingLabel { return .refused(.rowLabelMissing) }
-            return .refused(.rowLabelNotFound)
+            if sawAmbiguousLabel { return .failure(.rowLabelAmbiguous) }
+            if sawMissingLabel { return .failure(.rowLabelMissing) }
+            return .failure(.rowLabelNotFound)
+        }
+        return .success(controls)
+    }
+
+    static func locate(
+        label requestedLabel: String,
+        in window: AXUIElement,
+        runtime: AXHelpers.Runtime = .production
+    ) -> LocateResult {
+        let controls: [AXUIElement]
+        switch rowControls(label: requestedLabel, in: window, runtime: runtime) {
+        case let .success(observed): controls = observed
+        case let .failure(error): return .refused(error)
         }
         guard controls.count == 1, let control = controls.first else {
             return .refused(controls.isEmpty ? .controlMissing : .controlAmbiguous)

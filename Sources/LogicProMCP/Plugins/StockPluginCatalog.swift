@@ -186,6 +186,12 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
     let valueRange: StockPluginValueRange?
     let writeMethod: String?
     let readbackMethod: String?
+    /// A read can expose an AX index while the parameter's engineering unit
+    /// remains useful to discovery or a separately qualified writer.
+    let readbackUnit: String?
+    /// Exact measured titles of a two-choice Controls-view radio row.
+    let readbackOffTitle: String?
+    let readbackOnTitle: String?
     /// Tolerance (in the parameter's own unit) for a verified write/readback
     /// round-trip: |observed - requested| <= tolerance ⇒ State A. nil when the
     /// parameter declares no verified write path (display/readback methods nil).
@@ -222,6 +228,9 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         case valueRange = "value_range"
         case writeMethod = "write_method"
         case readbackMethod = "readback_method"
+        case readbackUnit = "readback_unit"
+        case readbackOffTitle = "readback_off_title"
+        case readbackOnTitle = "readback_on_title"
         case tolerance
         case axDescription = "ax_description"
         case controlsViewRowLabel = "controls_view_row_label"
@@ -240,6 +249,9 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         valueRange: StockPluginValueRange?,
         writeMethod: String?,
         readbackMethod: String?,
+        readbackUnit: String? = nil,
+        readbackOffTitle: String? = nil,
+        readbackOnTitle: String? = nil,
         tolerance: Double? = nil,
         axDescription: String? = nil,
         controlsViewRowLabel: String? = nil,
@@ -256,6 +268,9 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         self.valueRange = valueRange
         self.writeMethod = writeMethod
         self.readbackMethod = readbackMethod
+        self.readbackUnit = readbackUnit
+        self.readbackOffTitle = readbackOffTitle
+        self.readbackOnTitle = readbackOnTitle
         self.tolerance = tolerance
         self.axDescription = axDescription
         self.controlsViewRowLabel = controlsViewRowLabel
@@ -1182,11 +1197,35 @@ enum StockPluginCatalog {
             unit: "dB",
             valueRange: StockPluginValueRange(min: -96, max: 24, defaultValue: 0),
             writeMethod: nil,
-            readbackMethod: nil,
-            availabilityState: .inferred,
-            provenance: .inferred(reason: "documented Gain parameter range; no write/readback path is claimed")
+            readbackMethod: "ax_controls_view_slider_display",
+            readbackUnit: "raw_ax_value",
+            controlsViewRowLabel: "Gain:",
+            controlsViewControlRole: "AXSlider",
+            availabilityState: .observed,
+            provenance: gainReadObservation([
+                "Gain: AXSlider raw=959; AXValueDescription=-0.1 dB",
+                "one display-bearing slider, one raw-only slider and its value indicator",
+            ])
         ),
-    ]
+    ] + [
+        ("phase_invert_left", "Phase Invert Left", "Phase Left:", "Norm", "Inv"),
+        ("phase_invert_right", "Phase Invert Right", "Phase Right:", "Norm", "Inv"),
+        ("swap_lr", "Swap L/R", "Swap L/R:", "Norm", "Swap"),
+        ("mono", "Mono", "Make Mono:", "Stereo", "Mono"),
+    ].map { id, name, row, off, on in
+        StockPluginParameterMetadata(id: id, displayName: name, unit: "boolean",
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_radio_pair",
+            readbackOffTitle: off, readbackOnTitle: on,
+            controlsViewRowLabel: row, controlsViewControlRole: "AXRadioButton",
+            availabilityState: .observed,
+            provenance: gainReadObservation(["\(row) radio pair: \(off), \(on); AXValue 0/1"]))
+    }
+
+    private static func gainReadObservation(_ evidence: [String]) -> StockPluginProvenance {
+        .observed(method: "controls_view_read_only_observation",
+            observedAt: "2026-10-24T21:21:52.596Z", logicVersion: nil, locale: "ko-KR",
+            evidence: evidence + ["read-only metadata; no parameter write qualification"])
+    }
 
     /// The raw-value pair each parameter was actually driven between on 2026-09-14, and the
     /// walk that the sweep observed. These are readings, not a policy: a change here is a claim
