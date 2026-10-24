@@ -528,7 +528,7 @@ extension AccessibilityChannel {
         /// Identity-only sampling of this already-observed native rail. It grants
         /// no Help, selection, popup, inverse or publication permission.
         func readOriginalHeaderPopulation(for binding: AXTrackBinding.Binding,
-            observingPopulation: ([AXUIElement]) -> Void) -> [AXUIElement]? {
+            requiringPassiveRead: Bool = false, observingPopulation: ([AXUIElement]) -> Void) -> [AXUIElement]? {
             guard retainsOriginalHeaderCarrier(binding),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
             guard let role = AXHelpers.getRole(rail, runtime: logic.ax),
@@ -542,7 +542,12 @@ extension AccessibilityChannel {
             observingPopulation(current)
             binding.exposure?.observeHeaders(current)
             retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(current) }
-            guard Self.same(headers, current), owned(),
+            guard Self.same(headers, current),
+                  // Only the final original-header identity bookend also
+                  // requests passive permission. Close its binding window and
+                  // document before the final full ownership/focus checks.
+                  !requiringPassiveRead || (binding.currentWindowAndDocumentMatch() && passiveReadBegins()),
+                  owned(), !requiringPassiveRead || passiveReadEnds(),
                   binding.exposure?.isCurrent ?? true,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                 lost = true; binding.exposure?.end(); return nil
@@ -558,10 +563,18 @@ extension AccessibilityChannel {
             // after their bookend, rather than repeating the same population census
             // twice for every caller's guarded AX read. Selection writes also
             // require the final scoped action boundary in select().
+            passiveReadBegins() && owned() && passiveReadEnds()
+        }
+
+        private func passiveReadBegins() -> Bool {
             guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
                   Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   passiveFocusMatches() else { lost = true; return false }
-            guard owned(), Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
+            return true
+        }
+
+        private func passiveReadEnds() -> Bool {
+            guard Self.exclusiveIndex(headers, ax: logic.ax) == expectedIndex,
                   let final: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String, runtime: logic.ax),
                   CFEqual(final, expectedFocus), selectedChildCustodyMatches() else { lost = true; return false }
             return true

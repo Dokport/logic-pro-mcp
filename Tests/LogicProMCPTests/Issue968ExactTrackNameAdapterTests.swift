@@ -88,6 +88,7 @@ private final class ExactNameFixture: @unchecked Sendable {
     var peerNameReadsAtLastMirror = 0
     var mostPeerReadsBeforeMirror = 0
     var physicalOwnerDocumentReads = 0
+    var onPhysicalOwnerDocumentRead: (@Sendable (Int) -> Void)?
     var onPeerNameReadAfterWrite: (@Sendable (Int) -> Void)?
     var rawHelpReads = 0
     var countRawHelpReads = false
@@ -126,6 +127,7 @@ private final class ExactNameFixture: @unchecked Sendable {
                 attributeValueHandler: { [self] element, attribute in
                     if CFEqual(element, window), attribute == kAXDocumentAttribute as String {
                         physicalOwnerDocumentReads += 1
+                        onPhysicalOwnerDocumentRead?(physicalOwnerDocumentReads)
                     }
                     if menuEditorValueWrites.count > menuEditorValueReadGeneration, let menuFocusedEditor,
                        CFEqual(element, menuFocusedEditor), attribute == kAXValueAttribute as String {
@@ -2090,7 +2092,9 @@ struct Issue968ExactTrackNameAdapterTests {
         + ["healthy", "primary", "mirror", "peer", "document", "gate", "late_population"].map { "renewed_retired/\($0)" }
         + ["renewed_rail/healthy", "renewed_retired_rail/healthy", "renewed/late_mixer_role", "renewed/late_rail_role",
            "renewed_retired/late_mixer_role", "renewed_retired/late_rail_role", "renewed_rail/late_population",
-           "renewed_retired_rail/late_population"])
+           "renewed_retired_rail/late_population", "renewed/focus_during_window_bookend",
+           "renewed_retired/focus_during_window_bookend", "renewed_rail/focus_during_window_bookend",
+           "renewed_retired_rail/focus_during_window_bookend"])
     func anOwnedNameReadUsesOnlyItsActualRenewedSourceScope(profile: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let renewed = profile.hasPrefix("renewed")
@@ -2170,6 +2174,24 @@ struct Issue968ExactTrackNameAdapterTests {
                     #expect(acquired.effects.restoration == "restored")
                     #expect(source.observedPairs.count == 2, "The actual producer must observe both native associations")
                     #expect(source.pair.strip.matches(pair.strip) == !retired)
+                    if fault == "focus_during_window_bookend" {
+                        #expect(source.permits(runtime: f.runtime), "First prove this actual source is admitted")
+                        f.physicalOwnerDocumentReads = 0
+                        let foreignFocus = f.builder.element(3_971_973)
+                        f.onPhysicalOwnerDocumentRead = { read in
+                            if read == 8 {
+                                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, foreignFocus)
+                            }
+                        }
+                        #expect(!source.permits(runtime: f.runtime),
+                            "Focus drift during later native document reads must be followed by final passive custody")
+                        #expect(f.physicalOwnerDocumentReads >= 8, "The native-read fault must actually fire")
+                        f.onPhysicalOwnerDocumentRead = nil
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, railEntry ? f.rail : currentStrip)
+                        #expect(!source.permits(runtime: f.runtime), "Observed focus loss cannot revive after restoration")
+                        #expect(f.writes == ["C"], "Permission reads must not add writers")
+                        return
+                    }
                     if fault == "healthy" {
                         let native = source.pair.strip
                         let foreign = f.builder.element(3_971_972)
@@ -2188,8 +2210,8 @@ struct Issue968ExactTrackNameAdapterTests {
                         f.countedMixer = mixer
                         f.mixerPopulationReads = 0
                         #expect(source.permits(runtime: f.runtime))
-                        #expect(f.mixerPopulationReads == (railEntry ? 5 : 4),
-                            "Use original Track identity bookends and final passive custody; retain the extra rail-selected-child census")
+                        #expect(f.mixerPopulationReads == (railEntry ? 4 : 3),
+                            "The final original-header bookend must include passive custody without repeating the complete Mixer census; retain both header bookends and rail-selected-child custody")
                     }
                     f.globalMixerDiscoveries = 0
                     proof = try #require(await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source))

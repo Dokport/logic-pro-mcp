@@ -624,11 +624,15 @@ extension AccessibilityChannel {
             } else {
                 sourceMatches = pair.strip.currentIndex(runtime: runtime) == index
             }
-            guard sourceMatches,
-                  (ownedPopup == nil ? originalTrack.currentIndex(in: observation) : originalTrack.currentIndex()) != nil,
-                  ownedPopup.map({ observation.permitsOwnedPopupRead($0,
-                    nativeSource: nativeOutputPopup ? pair.strip : nil) }) ?? observation.permitsRead(),
-                  case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+            guard sourceMatches else { return false }
+            if let ownedPopup {
+                guard originalTrack.currentIndex() != nil,
+                      observation.permitsOwnedPopupRead(ownedPopup,
+                        nativeSource: nativeOutputPopup ? pair.strip : nil) else { return false }
+            } else {
+                guard originalTrack.currentIndex(in: observation, requiringPassiveRead: true) != nil else { return false }
+            }
+            guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
                   CFEqual(window, original.window),
                   case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(original.window, runtime: runtime),
                   document.utf8.elementsEqual(original.document.utf8),
