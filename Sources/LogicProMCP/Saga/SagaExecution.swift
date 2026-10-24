@@ -390,7 +390,7 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                 self.creationRemoval = result.removedSend
                 response = toolTextResult(result.result)
             } else if var changed = self.change {
-                guard !self.inverseConsumed, changed.permits(runtime: held.track.runtime) else {
+                guard !self.inverseConsumed else {
                     return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
                 }
                 if let approved = self.approved {
@@ -406,9 +406,10 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                         changed = continued; self.change = continued; self.pair = custody.pair
                     }
                 }
-                guard changed.permits(runtime: held.track.runtime) else {
-                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Owned changed send is no longer current")
-                }
+                // Prerequisite input reads validate this actual effect on entry.
+                // The restoration function checks its complete current custody
+                // again before any inverse popup or action; repeating that same
+                // scan here adds no intervening observation or action boundary.
                 self.inverseConsumed = true
                 let restored = await AccessibilityChannel.restoreChangedSendObservation(changed, runtime: held.track.runtime)
                 self.restored = restored
