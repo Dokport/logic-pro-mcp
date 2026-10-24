@@ -1279,8 +1279,10 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let runtime = originalPair.track.runtime
         func accept(_ observed: AccessibilityChannel.OriginalHeaderSourceRenewal,
                     from prior: AccessibilityChannel.HeldSelectionAssociation.Pair) -> Bool {
+            // The handoff itself checks this exact renewal before and after
+            // its current native header/strip reads. No native observation or
+            // action separates that entry check from these pure CF matches.
             guard observed.original.matches(prior.strip), observed.originalTrack.matches(prior.track),
-                  observed.permits(runtime: runtime),
                   let primary = observed.sourceForOriginalHeader(originalPair, runtime: runtime) else { return false }
             pair = primary.pair; renewal = primary; roster = primary
             return true
