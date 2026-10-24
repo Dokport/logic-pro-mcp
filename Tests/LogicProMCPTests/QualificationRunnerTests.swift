@@ -824,8 +824,8 @@ struct QualificationRunnerTests {
         let attestation = try await fixture.qualify()
         let operationCases = attestation.cases.filter { $0.id.hasPrefix("in-process/") }
 
-        // Oracle presence is not independent readback. The declared MIDI-port echo and
-        // same-host output-menu receipt checks are withheld; other semantic checks still pass.
+        // Oracle presence is not independent readback. Response-only plugin checks and
+        // same-host receipt checks are withheld; other semantic checks still pass.
         // DERIVED: one case per registry spec. It was `113` and read 114 the day main added
         // `system.setup_control_surface`.
         #expect(operationCases.count == OperationRegistry.specs.count)
@@ -833,7 +833,8 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges]))
+            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges,
+            .pluginsGetParamVerified, .pluginsGetChannelEQStateVerified]))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let markedIDs = Set(marked.map(\.rawValue))
         let passed = operationCases.filter { $0.status == .passed }
@@ -3105,9 +3106,16 @@ struct QualificationRunnerTests {
     }
 
     /// Start with a real signed/verifier-accepted stage, then replace one public
-    /// input with an owned FIFO. The Python driver always reaps its child group.
+    /// input or its checksum rows. The Python driver always reaps its child group.
     @Test(.timeLimit(.minutes(2)), arguments: ["direct_binary", "direct_archive", "direct_sums",
         "hosted_binary", "hosted_archive", "hosted_manifest", "hosted_metadata", "install_archive",
+        "direct_checksum_sums_parent", "direct_checksum_sums_absolute", "direct_checksum_sums_fifo",
+        "direct_checksum_sums_empty", "direct_checksum_sums_duplicate", "direct_checksum_sums_missing",
+        "hosted_checksum_sums_parent",
+        "hosted_checksum_manifest_parent", "install_checksum_manifest_parent",
+        "hosted_checksum_manifest_fifo", "install_checksum_manifest_fifo",
+        "hosted_checksum_manifest_empty", "install_checksum_manifest_duplicate", "hosted_checksum_manifest_missing",
+        "direct_checksum_sums_reordered", "hosted_checksum_manifest_reordered", "install_checksum_manifest_reordered",
         "direct_healthy", "hosted_healthy", "install_healthy"])
     func finalConsumerRejectsNonregularPublicInputsBeforeReading(_ scenario: String) async throws {
         let verifier = Self.releaseConsumerVerifierURL
@@ -3123,6 +3131,7 @@ struct QualificationRunnerTests {
         sys.path.insert(0, 'Scripts')
         from test_release_workflow import ReleaseFinalArtifactConsumerTests
         entry, shape = sys.argv[6].split('_', 1)
+        checksum = shape[len('checksum_'):] if shape.startswith('checksum_') else None
         target = {'binary': 'LogicProMCP', 'archive': 'LogicProMCP-macOS-universal.tar.gz',
                   'sums': 'SHA256SUMS.txt', 'manifest': 'release-artifacts.sha256',
                   'metadata': 'RELEASE-METADATA.json'}.get(shape)
@@ -3132,7 +3141,8 @@ struct QualificationRunnerTests {
             # Keep the tight liveness bound for every planted FIFO. Healthy
             # controls perform real archive/signature verification and use the
             # helper's ordinary bounded budget instead of the FIFO probe's.
-            public_input_shape=target, reverify_timeout=5 if target is not None else 30)
+            public_input_shape=target, checksum_mutation=checksum,
+            reverify_timeout=5 if target is not None or checksum is not None else 30)
         print(json.dumps({'exit': result.returncode, 'timed_out': result.timed_out,
                           'calls': calls, 'stdout': result.stdout, 'stderr': result.stderr}))
         """, fixture.executableURL.path, fixture.directory.path, verifier.path,
@@ -3148,7 +3158,8 @@ struct QualificationRunnerTests {
         try #require(process.terminationStatus == 0, "\(String(decoding: errors, as: UTF8.self))")
         let result = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         let calls = try #require(result["calls"] as? [String])
-        let fault = try #require(calls.firstIndex { $0.hasPrefix("public-input-fifo ") || $0 == "public-input-healthy" })
+        let fault = try #require(calls.firstIndex { $0.hasPrefix("public-input-fifo ")
+            || $0.hasPrefix("checksum-input-mutated ") || $0 == "public-input-healthy" })
         let stagedMembers = calls.prefix(upTo: fault).filter {
             $0.hasPrefix("trusted-candidate ") && $0.contains(".member/LogicProMCP ")
         }
@@ -3157,7 +3168,7 @@ struct QualificationRunnerTests {
         let timedOut = try #require(result["timed_out"] as? Bool)
         #expect(!timedOut, "public input reached a blocking read: \(scenario)")
         let code = try #require(result["exit"] as? Int)
-        if scenario.hasSuffix("healthy") {
+        if scenario.hasSuffix("healthy") || scenario.hasSuffix("reordered") {
             #expect(code == 0, "\(result)")
             #expect(calls.contains("hosted-release-action"))
         } else {
@@ -5257,7 +5268,8 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges]))
+            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges,
+            .pluginsGetParamVerified, .pluginsGetChannelEQStateVerified]))
         let markedIDs = Set(marked.map(\.rawValue))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let passed = operationCases.filter { $0.status == .passed }

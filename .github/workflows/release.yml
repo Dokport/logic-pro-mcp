@@ -234,9 +234,14 @@ jobs:
               exit 1
             fi
           done
-          shasum -a 256 --check release-artifacts.sha256
           private=$(mktemp -d)
           trap 'rm -rf "$private"' EXIT
+          # Never let downloaded checksum rows choose filesystem paths to read.
+          shasum -a 256 LogicProMCP LogicProMCP-macOS-universal.tar.gz \
+            LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt \
+            | LC_ALL=C sort > "$private/expected-checksums"
+          LC_ALL=C sort release-artifacts.sha256 > "$private/supplied-checksums"
+          cmp "$private/expected-checksums" "$private/supplied-checksums"
           bash Scripts/release-fetch-qualified-inputs.sh verify "$private"
           git fetch --quiet --no-tags --depth=1 origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           tag_body=$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")
@@ -301,7 +306,14 @@ jobs:
               exit 1
             fi
           done
-          shasum -a 256 --check release-artifacts.sha256
+          private=$(mktemp -d)
+          trap 'rm -rf "$private"' EXIT
+          # Never let downloaded checksum rows choose filesystem paths to read.
+          shasum -a 256 LogicProMCP LogicProMCP-macOS-universal.tar.gz \
+            LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt \
+            | LC_ALL=C sort > "$private/expected-checksums"
+          LC_ALL=C sort release-artifacts.sha256 > "$private/supplied-checksums"
+          cmp "$private/expected-checksums" "$private/supplied-checksums"
 
       - name: Record what this runner actually is
         # The matrix names a runner image, not a CPU. `runs-on: macos-14` has been arm64 for some

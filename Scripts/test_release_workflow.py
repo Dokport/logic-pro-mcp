@@ -190,7 +190,8 @@ class ReleaseFinalArtifactConsumerTests(unittest.TestCase):
     def run_consumer(self, bundle_kind, *, candidate=None, bundle_path=None,
                      verifier=None, trusted_key=None, commit=None,
                      mutate_original_bundle=False, entrypoint="local",
-                     archive_mutation=None, public_input_shape=None, reverify_timeout=30):
+                     archive_mutation=None, public_input_shape=None, checksum_mutation=None,
+                     reverify_timeout=30):
         with tempfile.TemporaryDirectory(prefix="release-final-consumer-") as directory:
             root = Path(directory)
             repo = root / "repo"
@@ -370,9 +371,36 @@ cp "$input" "$output"
                         with calls.open("a") as log:
                             log.write("downloaded-mode644 " + before + " "
                                       + hashlib.sha256(binary.read_bytes()).hexdigest() + "\n")
+                    if checksum_mutation is not None:
+                        manifest, fault = checksum_mutation.split("_", 1)
+                        outside = root / "outside-release-file"
+                        if fault == "fifo":
+                            os.mkfifo(outside)
+                            digest = "0" * 64
+                        else:
+                            outside.write_bytes(b"controlled file outside the release directory")
+                            digest = hashlib.sha256(outside.read_bytes()).hexdigest()
+                        name = "SHA256SUMS.txt" if manifest == "sums" else "release-artifacts.sha256"
+                        if fault in ("parent", "absolute", "fifo"):
+                            path = str(outside) if fault == "absolute" else "../outside-release-file"
+                            replacement = digest + "  " + path + "\n"
+                        elif fault in ("empty", "duplicate", "missing", "reordered"):
+                            original = (repo / name).read_text().splitlines(keepends=True)
+                            replacement = ("" if fault == "empty" else
+                                           "".join(original + original[:1]) if fault == "duplicate" else
+                                           "".join(reversed(original)) if fault == "reordered" else
+                                           "".join(original[1:]))
+                        else:
+                            raise ValueError("Unknown checksum mutation: " + checksum_mutation)
+                        if manifest == "sums":
+                            (repo / name).write_text(replacement)
+                        with calls.open("a") as log:
+                            log.write("checksum-input-mutated " + checksum_mutation + "\n")
                     (repo / "release-artifacts.sha256").write_text("".join(
                         hashlib.sha256((repo / name).read_bytes()).hexdigest() + "  " + name + "\n"
                         for name in files))
+                    if checksum_mutation is not None and manifest == "manifest":
+                        (repo / "release-artifacts.sha256").write_text(replacement)
                     if public_input_shape is not None:
                         target = repo / public_input_shape
                         target.unlink()

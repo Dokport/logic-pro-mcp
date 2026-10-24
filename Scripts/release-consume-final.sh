@@ -125,7 +125,12 @@ PY
   verify_candidate "$extraction/LogicProMCP"
   cmp "$public/LogicProMCP" "$extraction/LogicProMCP"
 done
-(cd "$public" && shasum -a 256 --check SHA256SUMS.txt)
+# Hash only the declared artifacts. A checksum file is untrusted data, never a
+# source of paths to open. Sorting retains support for reordered checksum rows.
+(cd "$public" && shasum -a 256 LogicProMCP-macOS-universal.tar.gz \
+  LogicProMCP-macOS-arm64.tar.gz LogicProMCP | LC_ALL=C sort) > "$private/expected-checksums"
+LC_ALL=C sort "$public/SHA256SUMS.txt" > "$private/supplied-checksums"
+cmp "$private/expected-checksums" "$private/supplied-checksums"
 if [ "$mode" = stage ]; then
   (cd "$public" && shasum -a 256 LogicProMCP LogicProMCP-macOS-universal.tar.gz \
     LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt > release-artifacts.sha256)
