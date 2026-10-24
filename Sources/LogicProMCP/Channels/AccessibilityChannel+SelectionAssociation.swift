@@ -412,15 +412,27 @@ extension AccessibilityChannel {
             guard paths.count == 2, !CFEqual(activity.play, activity.record),
                   paths.allSatisfy({ !$0.isEmpty && CFEqual($0[$0.count - 1], window)
                       && $0.contains(where: { CFEqual($0, activity.controlBar) }) }),
-                  CFEqual(paths[0][0], activity.play), CFEqual(paths[1][0], activity.record),
-                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                  CFEqual(paths[0][0], activity.play), CFEqual(paths[1][0], activity.record) else { return false }
+            do { try SessionPopulationObservation.requireOwnedAcquisition() }
+            catch {
+                Log.info("Routing transport acquisition refused: \(error)", subsystem: "ax")
+                return false
+            }
             return paths.allSatisfy({ held in
                       guard let control = held.first, let current = Self.path(control, to: window, ax: logic.ax),
-                            Self.same(held, current) else { return false }
+                            Self.same(held, current) else {
+                          let expired = OperationTraceContext.current?.deadline.map { ContinuousClock.now >= $0 } ?? false
+                          Log.info("Routing transport native path unavailable or changed (deadline_expired=\(expired))", subsystem: "ax")
+                          return false
+                      }
                       let attributes = AXHelpers.getNonHelpAttributes(control, [kAXRoleAttribute, kAXValueAttribute] as [String],
                           runtime: logic.ax, permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
                       guard case .success(.some(let role)) = attributes[0], role as? String == kAXCheckBoxRole as String,
-                            case .success(.some(let rawValue)) = attributes[1], let value = rawValue as? NSNumber else { return false }
+                            case .success(.some(let rawValue)) = attributes[1], let value = rawValue as? NSNumber else {
+                          Log.info("Routing transport checkbox role or value unavailable", subsystem: "ax")
+                          return false
+                      }
+                      if value != 0 { Log.info("Routing transport checkbox is active", subsystem: "ax") }
                       return value == 0
                   })
         }
