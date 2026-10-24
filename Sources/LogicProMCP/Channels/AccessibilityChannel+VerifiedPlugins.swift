@@ -2668,7 +2668,8 @@ extension AccessibilityChannel {
             operation: operation, referenceParams: params, track: track, insert: insert,
             pluginID: pluginID, paramKey: paramKey, paramAlias: suppliedParam,
             access: .read(unit: rawUnit, contextIsCurrent: contextIsCurrent, openerOverride: pluginWindowOpener),
-            writeMethod: metadata.writeMethod ?? "", runtime: runtime, entryLookup: entryLookup,
+            writeMethod: "", readsControlsCheckbox: controlsCheckbox,
+            runtime: runtime, entryLookup: entryLookup,
             pluginWindowOpener: pluginWindowOpener ?? livePluginWindowOpener, pluginPopupMenuCleaner: popupCheck
         )
         guard contextIsCurrent() else {
@@ -2711,13 +2712,16 @@ extension AccessibilityChannel {
         paramAlias: String,
         access: VerifiedParameterAccess,
         writeMethod: String,
+        readsControlsCheckbox: Bool = false,
         runtime: AXLogicProElements.Runtime,
         entryLookup: VerifiedPluginCatalog.EntryLookup,
         pluginWindowOpener: PluginWindowOpener,
         pluginPopupMenuCleaner: PluginPopupMenuCleaner
     ) async -> ChannelResult {
         let identity = resolvedIdentity(track: track, insert: insert, pluginID: pluginID)
-        let controlsViewCheckbox = writeMethod == "ax_controls_view_checkbox_press"
+        // Read metadata selects its plane without borrowing write qualification.
+        let controlsViewCheckbox = access.isRead ? readsControlsCheckbox
+            : writeMethod == "ax_controls_view_checkbox_press"
         let controlsViewRowLabel = controlsViewCheckbox
             ? VerifiedPluginCatalog.controlsViewRowLabel(
                 pluginID: pluginID,
