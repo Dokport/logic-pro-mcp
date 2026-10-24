@@ -42,6 +42,10 @@ enum VerifiedPluginCatalog {
         "noise gate": "logic.stock.effect.noise_gate",
         "noisegate": "logic.stock.effect.noise_gate",
         "logic.stock.effect.noise_gate": "logic.stock.effect.noise_gate",
+        "sample delay": "logic.stock.effect.sample_delay",
+        "sampledelay": "logic.stock.effect.sample_delay",
+        "smpledly": "logic.stock.effect.sample_delay",
+        "logic.stock.effect.sample_delay": "logic.stock.effect.sample_delay",
     ]
 
     /// Per-plugin parameter-key alias table: caller key → canonical catalog
@@ -49,6 +53,10 @@ enum VerifiedPluginCatalog {
     /// while the catalog entry's parameter id is still `gain` (R5); both resolve
     /// to the catalog id so the capability lookup can find the parameter.
     private static let paramAliases: [String: [String: String]] = [
+        "logic.stock.effect.sample_delay": [
+            "left_delay": "left_delay",
+            "right_delay": "right_delay",
+        ],
         "logic.stock.effect.gain": [
             "gain": "gain",
             "gain_db": "gain",

@@ -1190,6 +1190,22 @@ enum StockPluginCatalog {
         )
     }
 
+    private static let sampleDelayParameters = [
+        ("left_delay", "Left Delay", "Left Delay:"),
+        ("right_delay", "Right Delay", "Right Delay:"),
+    ].map { id, name, row in
+        StockPluginParameterMetadata(id: id, displayName: name, unit: "samples",
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_sample_count",
+            controlsViewRowLabel: row, controlsViewControlRole: "AXSlider",
+            availabilityState: .observed,
+            provenance: .observed(method: "controls_view_read_only_observation",
+                observedAt: "2026-10-24T22:05:20.252Z", logicVersion: nil, locale: "ko-KR",
+                evidence: ["Left Delay: raw=1, display=1 samples; Right Delay: raw=0, display=0 samples",
+                    "Unit: Samples/ms named one-hot radio pair",
+                    "ms mode changes AXValue representation; sample reads require Samples mode without actuating the selector",
+                    "read-only metadata; no parameter write qualification"]))
+    }
+
     private static let gainParameters = [
         StockPluginParameterMetadata(
             id: "gain",
@@ -1559,7 +1575,7 @@ enum StockPluginCatalog {
         // Delay
         fx("delay_designer", "Delay Designer", "Delay"),
         fx("echo", "Echo", "Delay"),
-        fx("sample_delay", "Sample Delay", "Delay"),
+        fx("sample_delay", "Sample Delay", "Delay", parameters: sampleDelayParameters),
         fx("stereo_delay", "Stereo Delay", "Delay"),
         fx("tape_delay", "Tape Delay", "Delay"),
         // Modulation

@@ -936,7 +936,7 @@ enum SemanticOracleTable {
             guard metadata.controlsViewControlRole == "AXCheckBox", JSONInspector.isBoolean(raw) else { return false }
         } else if let kind = ControlsViewParameterReader.kind(for: metadata) {
             switch kind {
-            case .numericDisplay:
+            case .numericDisplay, .sampleCount:
                 guard let number = JSONInspector.number(of: raw), number.isFinite else { return false }
             case let .radioPair(off, on):
                 guard JSONInspector.isBoolean(raw), let value = raw as? Bool,

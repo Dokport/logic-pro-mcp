@@ -6,6 +6,7 @@ import Foundation
 enum ControlsViewParameterReader {
     enum Kind: Equatable {
         case numericDisplay
+        case sampleCount
         case radioPair(off: String, on: String)
     }
 
@@ -18,6 +19,8 @@ enum ControlsViewParameterReader {
         guard let label = metadata.controlsViewRowLabel, !label.isEmpty else { return nil }
         if metadata.readbackMethod == "ax_controls_view_slider_display",
            metadata.controlsViewControlRole == "AXSlider" { return .numericDisplay }
+        if metadata.readbackMethod == "ax_controls_view_sample_count",
+           metadata.controlsViewControlRole == "AXSlider" { return .sampleCount }
         if metadata.readbackMethod == "ax_controls_view_radio_pair",
            metadata.controlsViewControlRole == "AXRadioButton",
            let off = metadata.readbackOffTitle, !off.isEmpty,
@@ -100,13 +103,22 @@ enum ControlsViewParameterReader {
         }
         let roles = try controls.map { try text($0, kAXRoleAttribute as String, runtime: runtime) }
         switch kind {
-        case .numericDisplay:
-            // Exact measured Gain shape: a display-bearing slider, a raw-only
+        case .numericDisplay, .sampleCount:
+            // Exact measured Controls shape: a display-bearing slider, a raw-only
             // slider and its value indicator. Every raw read must corroborate;
             // an unreadable sibling cannot be filtered away to fake uniqueness.
             guard controls.count == 3, roles.filter({ $0 == "AXSlider" }).count == 2,
                   roles.filter({ $0 == "AXValueIndicator" }).count == 1 else {
                 throw ReadFailure(status: "control_shape_unconfirmed")
+            }
+            // Sample Delay changes its AXValue representation with the Unit
+            // selector. Reading ms raw zero as zero samples loses a real delay.
+            // This reader observes that selector and never switches it.
+            let units = kind == .sampleCount
+                ? try sample(kind: .radioPair(off: "ms", on: "Samples"), label: "Unit:", in: window, runtime: runtime)
+                : nil
+            if let units, units.value != .boolean(true) {
+                throw ReadFailure(status: "samples_unit_not_selected")
             }
             var values: [Double] = []
             var displays: [String] = []
@@ -123,6 +135,19 @@ enum ControlsViewParameterReader {
             }
             guard let value = values.first, values.allSatisfy({ $0 == value }) else {
                 throw ReadFailure(status: "inconsistent_raw_values")
+            }
+            if let units {
+                guard value >= 0, value.rounded(.towardZero) == value,
+                      display == String(format: "%.0f samples", value) else {
+                    throw ReadFailure(status: "sample_display_mismatch")
+                }
+                let lastUnits = try sample(kind: .radioPair(off: "ms", on: "Samples"),
+                    label: "Unit:", in: window, runtime: runtime)
+                guard units.value == lastUnits.value, units.controls.count == lastUnits.controls.count,
+                      zip(units.controls, lastUnits.controls).allSatisfy({ CFEqual($0.0, $0.1) }) else {
+                    throw ReadFailure(status: "unstable_units")
+                }
+                return Snapshot(value: .number(value), display: display, controls: controls + units.controls)
             }
             return Snapshot(value: .number(value), display: display, controls: controls)
         case let .radioPair(off, on):

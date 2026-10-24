@@ -4308,6 +4308,129 @@ private func gainReadFixture(_ param: String = "gain", controls: Bool = false,
     return fixture
 }
 
+private func sampleDelayReadFixture(_ param: String = "left_delay", samples: Bool = true,
+                                    controls: Bool = false) -> LiveFixture {
+    let fixture = LiveFixture(pluginSlotName: "SmpleDly",
+        pluginWindowStaticTextValues: ["보기:", "Sample Delay", trackName],
+        controlsViewRowLabel: param == "left_delay" ? "Left Delay:" : "Right Delay:",
+        controlsViewInitiallySelected: controls, viewSettleDelay: 0)
+    let b = fixture.builder
+    b.setAttribute(b.element(1001), kAXDocumentAttribute as String, URL(fileURLWithPath: expectedPath).absoluteString)
+    let raw = samples && param == "left_delay" ? 1.0 : 0.0
+    for (id, role) in [(139_621, "AXSlider"), (139_622, "AXSlider"), (139_623, "AXValueIndicator")] {
+        b.setRole(b.element(id), role)
+        b.setAttribute(b.element(id), kAXValueAttribute as String, raw)
+    }
+    b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String,
+        samples ? "\(Int(raw)) samples" : "0.0 ms")
+    b.setChildren(b.element(139_622), [b.element(139_623)])
+    b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_621), b.element(139_622)])
+    b.setRole(b.element(139_624), kAXRowRole as String)
+    b.setRole(b.element(139_625), kAXCellRole as String)
+    b.setRole(b.element(139_626), kAXStaticTextRole as String)
+    b.setAttribute(b.element(139_626), kAXValueAttribute as String, "Unit:")
+    for (id, title, value) in [(139_627, "Samples", samples ? 1 : 0), (139_628, "ms", samples ? 0 : 1)] {
+        b.setRole(b.element(id), kAXRadioButtonRole as String)
+        b.setAttribute(b.element(id), kAXTitleAttribute as String, title)
+        b.setAttribute(b.element(id), kAXValueAttribute as String, value)
+    }
+    b.setChildren(b.element(139_625), [b.element(139_626), b.element(139_627), b.element(139_628)])
+    b.setChildren(b.element(139_624), [b.element(139_625)])
+    let rows = [b.element(100_904), b.element(139_624)]
+    b.setChildren(b.element(100_903), rows)
+    b.setAttribute(b.element(100_903), kAXRowsAttribute as String, rows)
+    return fixture
+}
+
+private func sampleDelayReadParams(_ param: String = "left_delay") -> [String: String] {
+    var params = parameterReadParams(param)
+    params["plugin"] = "Sample Delay"
+    params["expected_plugin_identity"] = "logic.stock.effect.sample_delay"
+    return params
+}
+
+@Test(arguments: ["left_delay", "right_delay"], [false, true])
+func testIssue1396SampleDelayReadsOnlyConfirmedSamples(_ param: String, _ controls: Bool) async throws {
+    let fixture = sampleDelayReadFixture(param, controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: sampleDelayReadParams(param), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? Double == (param == "left_delay" ? 1 : 0))
+    #expect(object["observed_display"] as? String == (param == "left_delay" ? "1 samples" : "0 samples"))
+    #expect(object["raw_unit"] as? String == "samples")
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_621...139_628).contains($0.element) })
+}
+
+@Test(arguments: [false, true])
+func testIssue1396SampleDelayMillisecondsAreUnknownWithoutChangingUnits(_ controls: Bool) async throws {
+    let fixture = sampleDelayReadFixture(samples: false, controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: sampleDelayReadParams(), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(object)")
+    #expect(object["parameter_read_status"] as? String == "samples_unit_not_selected")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_621...139_628).contains($0.element) })
+}
+
+@Test(arguments: ["both_units_on", "both_units_off", "missing_unit_title", "duplicate_unit_row", "unit_drift", "display_ms", "display_count_mismatch", "fractional_samples"])
+func testIssue1396SampleDelayUncertainUnitOrCountNeverBecomesZero(_ kind: String) async throws {
+    let fixture = sampleDelayReadFixture()
+    let b = fixture.builder
+    switch kind {
+    case "both_units_on": b.setAttribute(b.element(139_628), kAXValueAttribute as String, 1)
+    case "both_units_off": b.setAttribute(b.element(139_627), kAXValueAttribute as String, 0)
+    case "missing_unit_title": b.setAttribute(b.element(139_627), kAXTitleAttribute as String, NSNull())
+    case "duplicate_unit_row":
+        b.setRole(b.element(139_629), kAXRowRole as String)
+        b.setChildren(b.element(139_629), [b.element(139_625)])
+        let rows = [b.element(100_904), b.element(139_624), b.element(139_629)]
+        b.setChildren(b.element(100_903), rows)
+        b.setAttribute(b.element(100_903), kAXRowsAttribute as String, rows)
+    case "display_ms": b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String, "0.0 ms")
+    case "display_count_mismatch": b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String, "0 samples")
+    case "fractional_samples":
+        for id in [139_621, 139_622, 139_623] { b.setAttribute(b.element(id), kAXValueAttribute as String, 0.5) }
+        b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String, "0.5 samples")
+    default: break
+    }
+    let unitReads = MutableBox(0)
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        guard kind == "unit_drift", attribute == kAXValueAttribute as String else { return nil }
+        if CFEqual(element, b.element(139_627)) {
+            unitReads.value += 1
+            return .success(NSNumber(value: unitReads.value == 1 ? 1 : 0))
+        }
+        if CFEqual(element, b.element(139_628)) { return .success(NSNumber(value: unitReads.value == 1 ? 0 : 1)) }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: sampleDelayReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(kind): \(object)")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(fixture.currentPluginViewTitle == "편집기")
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_621...139_629).contains($0.element) })
+}
+
+@Test(arguments: ["left_delay", "right_delay"])
+func testIssue1396SampleDelayReadNeverGrantsWrites(_ param: String) async throws {
+    let fixture = sampleDelayReadFixture(param)
+    var params = sampleDelayReadParams(param)
+    params.merge(["mode": "duplicate_applyback", "value": "2", "unit": "samples"]) { _, new in new }
+    let result = await AccessibilityChannel.defaultSetParamVerified(params: params, runtime: parameterReadRuntime(fixture), frontDocumentPath: { expectedPath })
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(fixture.axActions.value.isEmpty)
+}
+
 private func gainReadParams(_ param: String = "gain") -> [String: String] {
     var params = parameterReadParams(param)
     params["plugin"] = "Gain"
