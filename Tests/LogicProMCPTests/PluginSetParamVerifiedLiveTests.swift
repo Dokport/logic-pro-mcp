@@ -4510,16 +4510,33 @@ func testIssue955PublicReadResolvesOccupiedInsertReference(_ contextEndsAfterRea
     }
 }
 
-@Test(arguments: [("limiter_on", false), ("limiter_on", true), ("auto_release", false), ("auto_release", true)], [false, true])
-func testIssue955ReadBooleanNeverPressesParameterAndRestoresView(_ configuration: (String, Bool), _ alreadyControls: Bool) async throws {
+private func readOnlyBooleanEntryLookup(_ param: String) throws -> VerifiedPluginCatalog.EntryLookup {
+    let original = try #require(StockPluginCatalog.entry(id: "logic.stock.effect.compressor"))
+    var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+    var parameters = try #require(object["parameters"] as? [[String: Any]])
+    let index = try #require(parameters.firstIndex { $0["id"] as? String == param })
+    parameters[index].removeValue(forKey: "write_method")
+    parameters[index].removeValue(forKey: "tolerance")
+    object["parameters"] = parameters
+    let entry = try JSONDecoder().decode(StockPluginCatalogEntry.self,
+        from: JSONSerialization.data(withJSONObject: object))
+    return { id in id == entry.id ? entry : StockPluginCatalog.entry(id: id) }
+}
+
+@Test(arguments: [("limiter_on", false), ("limiter_on", true), ("auto_release", false), ("auto_release", true)],
+      [(false, false), (false, true), (true, false), (true, true)])
+func testIssue955ReadBooleanNeverPressesParameterAndRestoresView(_ configuration: (String, Bool),
+                                                              _ viewAndMetadata: (Bool, Bool)) async throws {
     let (param, value) = configuration
+    let (alreadyControls, readOnlyMetadata) = viewAndMetadata
     let fixture = LiveFixture(controlsViewRowLabel: param == "limiter_on" ? "Limiter On" : "Auto Release", controlsCheckboxBefore: value,
                               controlsViewInitiallySelected: alreadyControls, viewSettleDelay: 0)
     fixture.builder.setAttribute(fixture.builder.element(1001), kAXDocumentAttribute as String,
                                  URL(fileURLWithPath: expectedPath).absoluteString)
     let initialView = fixture.currentPluginViewTitle
     let result = await AccessibilityChannel.defaultGetParamVerified(
-        params: parameterReadParams(param), runtime: parameterReadRuntime(fixture)
+        params: parameterReadParams(param), runtime: parameterReadRuntime(fixture),
+        entryLookup: readOnlyMetadata ? try readOnlyBooleanEntryLookup(param) : VerifiedPluginCatalog.productionEntryLookup
     )
     let object = try #require(sharedJSONObject(result.message))
     #expect(object["state"] as? String == "A", "Boolean read should use the existing observed control: \(object)")
@@ -4533,6 +4550,24 @@ func testIssue955ReadBooleanNeverPressesParameterAndRestoresView(_ configuration
     #expect(fixture.sliderWriteCount.value == 0)
     #expect(fixture.currentSliderValue == 51)
     #expect(try #require(object["plugin_view_restore_observed"] as? Bool))
+}
+
+@Test(arguments: ["limiter_on", "auto_release"])
+func testIssue1396ReadOnlyBooleanMetadataNeverAuthorizesAWrite(_ param: String) async throws {
+    let fixture = LiveFixture()
+    var params = parameterReadParams(param)
+    params.merge(["mode": "duplicate_applyback", "value": "1", "unit": "boolean"]) { _, new in new }
+    let result = await AccessibilityChannel.defaultSetParamVerified(params: params,
+        runtime: parameterReadRuntime(fixture), frontDocumentPath: { expectedPath },
+        entryLookup: try readOnlyBooleanEntryLookup(param))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(object["error"] as? String == "unsupported_param_readback")
+    let writeAttempted = try #require(object["write_attempted"] as? Bool)
+    #expect(!writeAttempted)
+    #expect(fixture.axActions.value.isEmpty)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+    #expect(fixture.sliderWriteCount.value == 0)
 }
 
 @Test func testIssue955ProjectLossAfterCleanupKeepsRestorationReceiptButNotValue() async throws {
