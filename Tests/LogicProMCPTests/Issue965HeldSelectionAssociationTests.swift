@@ -1179,7 +1179,7 @@ struct Issue965HeldSelectionAssociationTests {
                 let levelHit: (@Sendable (AXUIElement, CGPoint) -> Result<AXUIElement?, AXHelpers.AXStatusError>)?
                 if routingLevelMouse != nil {
                     levelHit = { [self] _, _ in routingLevelHitEffect?(); return .success(routingLevelHit) }
-                } else { levelHit = base.ax.elementAtPosition }
+                } else { levelHit = routingFocusHit ?? base.ax.elementAtPosition }
                 ax = AXHelpers.Runtime(axApp: base.ax.axApp, attributeValue: base.ax.attributeValue,
                     attributeIsSettable: base.ax.attributeIsSettable, setAttributeValue: base.ax.setAttributeValue,
                     children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
@@ -4373,6 +4373,18 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("A named Bus Send retains its original Mixer focus when the first Rename commit lands on the rail",
+          arguments: [false, true])
+    func canonicalNamedBusSendRestoresItsFirstNameFocus(bulk: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true, stableDestinationControls: true,
+                stableDestinationBulkReads: bulk, coupledMixerName: true, inverseNameMenu: true,
+                forwardNameMovesFocus: true)
+        }
+    }
+
     @Test("An owned cancellation menu still refuses changed editor, project and physical membership",
           arguments: ["foreign_rail", "missing_header", "foreign_focus", "project", "peer", "late_membership"])
     func canonicalNameSendCancellationRefusesLostEditorCustody(fault: String) async throws {
@@ -5375,7 +5387,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                measureNamedBusPreInput: Bool = false,
                                                measureChangedPermissionCensus: Bool = false,
                                                singleInverseWriterPopup: Bool = false,
-                                               measureInverseAssociations: Bool = false) async throws {
+                                               measureInverseAssociations: Bool = false,
+                                               forwardNameMovesFocus: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(fourTracks: measureInverseAssociations), b = f.builder
             defer {
@@ -5756,7 +5769,13 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if canonicalName, CFEqual(element, nameField) {
                     if inverseNameMenu, f.routingDestinationPresses == 2 { return false }
-                    if action == kAXConfirmAction as String { f.routingNameConfirms += 1 }
+                    if action == kAXConfirmAction as String {
+                        f.routingNameConfirms += 1
+                        if forwardNameMovesFocus, f.routingNameConfirms == 1 {
+                            b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
+                            b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                        }
+                    }
                     return [kAXPressAction as String, kAXConfirmAction as String].contains(action)
                 }
                 if modeCommand != nil, action == kAXPressAction as String,
@@ -6421,6 +6440,15 @@ struct Issue965HeldSelectionAssociationTests {
                     return acknowledged
                 }
             }
+            if forwardNameMovesFocus {
+                let selection = f.routingSelection
+                f.routingSelection = { index in
+                    selection?(index)
+                    guard f.routingNameConfirms > 0 else { return }
+                    b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
+                        [index == 0 ? f.routingReplacement ?? f.strips[1] : f.routingOtherReplacement ?? f.strips[0]])
+                }
+            }
             let before = try await inspect(f, cache: cache, registry: registry,
                 domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"],
                 scope: captureInputReadScope ?? (canonicalBusReceiverFault == "physical_source_read_renewal" ? "selection" : "whole_project"))
@@ -6728,7 +6756,10 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.routingMenuNameOpens == 1)
                         #expect(f.routingNameConfirms == (inverseNameFault == nil || inverseNameFault == "late_membership" ? 2 : 1))
                         if inverseNameFault == nil {
-                            #expect(f.routingFocusClickEvents == [.leftMouseDown, .leftMouseUp])
+                            let expectedClicks: [CGEventType] = forwardNameMovesFocus
+                                ? [.leftMouseDown, .leftMouseUp, .leftMouseDown, .leftMouseUp]
+                                : [.leftMouseDown, .leftMouseUp]
+                            #expect(f.routingFocusClickEvents == expectedClicks)
                             let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
                                 kAXFocusedUIElementAttribute as String, runtime: b.makeAXRuntime()))
                             #expect(CFEqual(focus, f.strips[1]))

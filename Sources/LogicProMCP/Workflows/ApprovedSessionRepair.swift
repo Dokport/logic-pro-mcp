@@ -2797,7 +2797,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 liveTrackNames: { AXLogicProElements.trackNames(runtime: runtime) },
                 capturedRead: execution?.capturedRead,
                 ownedPeerEffects: ownedNameEffects, selectionOrigin: selectionOrigin, preservingFootprint: preserving,
-                afterVerifiedWrite: afterVerifiedWrite)
+                afterVerifiedWrite: afterVerifiedWrite, restoringMixerFocus: sendNameUsesInputFootprint)
             nameExecutions[goal.reference, default: .init()].inverse = receipt.inverse
         }
         return receipt.result

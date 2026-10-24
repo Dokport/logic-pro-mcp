@@ -135,6 +135,7 @@ enum ExactTrackNameAdapter {
         fileprivate var mirror: CoupledMirror?
         fileprivate var selectionOrigin: AXTrackBinding.Binding? = nil
         fileprivate var stripBefore: String? = nil
+        fileprivate var restoresMixerFocus = false
     }
 
     /// A read-only continuation of the original capture, never an owned write
@@ -221,7 +222,8 @@ enum ExactTrackNameAdapter {
         capturedRead: CapturedCoupledRead? = nil,
         ownedPeerEffects: [OwnedInverse] = [], selectionOrigin: AXTrackBinding.Binding? = nil,
         preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
-        afterVerifiedWrite: PostVerifiedWrite? = nil
+        afterVerifiedWrite: PostVerifiedWrite? = nil,
+        restoringMixerFocus: Bool = false
     ) async -> Receipt {
         func reject() -> Receipt {
             .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
@@ -235,7 +237,8 @@ enum ExactTrackNameAdapter {
                   target: action.targetReference, registry: registry) else { return reject() }
         return await applySelecting(action, router: router, cache: cache, registry: registry,
             liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror,
-            selectionOrigin: selectionOrigin, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite)
+            selectionOrigin: selectionOrigin, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite,
+            restoringMixerFocus: restoringMixerFocus)
     }
 
     /// Pure availability over the retained producer capture, not permission to
@@ -704,11 +707,13 @@ enum ExactTrackNameAdapter {
         liveTrackName: @escaping @Sendable (Int) -> String?,
         liveTrackNames: @escaping @Sendable () -> [Int: String]?, mirror: CoupledMirror?,
         selectionOrigin: AXTrackBinding.Binding?, preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
-        afterVerifiedWrite: PostVerifiedWrite? = nil, expectedStripAfter: String? = nil
+        afterVerifiedWrite: PostVerifiedWrite? = nil, expectedStripAfter: String? = nil,
+        restoringMixerFocus: Bool = false
     ) async -> Receipt {
         guard let origin = selectionOrigin, let mirror else {
             return await applyChecked(action, router: router, cache: cache, registry: registry,
-                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite, expectedStripAfter: expectedStripAfter)
+                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite, expectedStripAfter: expectedStripAfter,
+                restoringMixerFocus: restoringMixerFocus)
         }
         let source = mirror.pair.track
         func exclusive(_ binding: AXTrackBinding.Binding) -> Bool {
@@ -790,7 +795,8 @@ enum ExactTrackNameAdapter {
         let receipt: Receipt
         if acquired {
             receipt = await applyChecked(action, router: router, cache: cache, registry: registry,
-                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite, expectedStripAfter: expectedStripAfter)
+                liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite, expectedStripAfter: expectedStripAfter,
+                restoringMixerFocus: restoringMixerFocus)
         } else {
             receipt = .init(status: .rejectedBeforeWrite, before: nil, after: nil,
                 survivingReference: nil, inverse: nil,
@@ -833,7 +839,8 @@ enum ExactTrackNameAdapter {
         liveTrackName: @escaping @Sendable (Int) -> String?,
         liveTrackNames: @escaping @Sendable () -> [Int: String]?, mirror: CoupledMirror?,
         preservingFootprint: (@Sendable (Bool, AXUIElement?) -> Bool)? = nil,
-        afterVerifiedWrite: PostVerifiedWrite? = nil, expectedStripAfter: String? = nil
+        afterVerifiedWrite: PostVerifiedWrite? = nil, expectedStripAfter: String? = nil,
+        restoringMixerFocus: Bool = false
     ) async -> Receipt {
         if let failure = TrackDispatcher.renameNameFailure(action.desiredAfter) {
             return Receipt(status: .rejectedBeforeWrite, before: nil, after: nil,
@@ -872,9 +879,26 @@ enum ExactTrackNameAdapter {
                 MenuRailCustody(mirror)
             }
         }
+        // The first name in a Bus Send plan precedes its routing renewal.
+        // Capture its actual original-source focus now, before the Rename
+        // commit can move it to the rail. The option supplies no native proof.
+        let initialFocus: AccessibilityChannel.HeldSelectionAssociation?
+        if restoringMixerFocus, afterVerifiedWrite == nil, mirror?.renewal == nil {
+            guard let pair = mirror?.pair,
+                  let held = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
+                    logic: pair.track.runtime, expectedProject: nil, requiresProjectReference: false,
+                    retainedMixerSource: pair.strip),
+                  CFEqual(held.originalFocus, pair.strip.strip), CFEqual(held.mixer, pair.strip.mixer),
+                  CFEqual(held.headers[held.originalIndex], pair.track.header), held.permitsRead() else {
+                return .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
+                    result: TargetRefResolver.staleTargetReferenceResult(action.targetReference.rawValue, operation: "track.rename"))
+            }
+            initialFocus = held
+        } else { initialFocus = nil }
         // Every name leaf and inverse owns a fresh capture; nothing is reused
         // across invocations or reconstructed from the dispatcher JSON.
-        let restoresRenewedFocus = afterVerifiedWrite == nil && mirror?.renewal != nil
+        let focusBaseline = mirror?.renewal?.observation ?? initialFocus
+        let restoresRenewedFocus = afterVerifiedWrite == nil && focusBaseline != nil
         let focusTransport = afterVerifiedWrite == nil && !restoresRenewedFocus ? nil : NameFocusTransportCapture()
         let result = await $coupledNameFocusTransport.withValue(focusTransport) {
           await $coupledWriteBoundary.withValue(prewrite) {
@@ -955,7 +979,7 @@ enum ExactTrackNameAdapter {
         // Only a real A, rebound reference and deciding native after-name can
         // run the composed caller's exact original-custody restoration.
         if let afterVerifiedWrite, !(await afterVerifiedWrite(focusTransport?.value, effect)) { return unverified() }
-        if restoresRenewedFocus, var held = verifiedMirror, let source = held.renewal {
+        if restoresRenewedFocus, var held = verifiedMirror, let focusBaseline {
             let pair = held.pair
             // A verified menu commit can land on the original rail. Renew that
             // owned UI effect without querying (and invalidating) its old focus
@@ -963,7 +987,7 @@ enum ExactTrackNameAdapter {
             // path, ordered census, transport and viewport restoration baseline.
             guard let renewed = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
                 logic: pair.track.runtime, expectedProject: nil, requiresProjectReference: false,
-                allowsSelectedChildRailEntry: true, restorationBaseline: source.observation),
+                allowsSelectedChildRailEntry: true, restorationBaseline: focusBaseline),
                 CFEqual(renewed.headers[renewed.originalIndex], pair.track.header),
                 CFEqual(renewed.mixer, pair.strip.mixer),
                 renewed.document.utf8.elementsEqual(pair.track.document.utf8),
@@ -972,8 +996,10 @@ enum ExactTrackNameAdapter {
                 Log.info("Owned name renewal refused: committed-focus baseline", subsystem: "ax")
                 return unverified()
             }
-            held.renewal = .init(pair: source.pair, index: source.index, original: source.original,
-                originalTrack: source.originalTrack, observation: renewed)
+            if let source = held.renewal {
+                held.renewal = .init(pair: source.pair, index: source.index, original: source.original,
+                    originalTrack: source.originalTrack, observation: renewed)
+            }
             let restoredMirror = held
             guard await restoredMirror.isCurrent(name: after, project: action.projectReference,
                 target: action.targetReference, registry: registry),
@@ -992,9 +1018,10 @@ enum ExactTrackNameAdapter {
         guard preservingFootprint?(true, nil) ?? true else { return unverified() }
         if let mirror = verifiedMirror, !(await mirror.isCurrent(name: after, project: action.projectReference,
                                                target: action.targetReference, registry: registry)) { return unverified() }
-        let inverse = wrote ? OwnedInverse(project: action.projectReference, target: action.targetReference,
+        var inverse = wrote ? OwnedInverse(project: action.projectReference, target: action.targetReference,
                                           before: before, written: after, registry: registry, cache: cache, mirror: verifiedMirror,
                                           stripBefore: mirror.map { $0.retainedStripName ?? before }) : nil
+        inverse?.restoresMixerFocus = restoringMixerFocus
         return Receipt(status: wrote ? .applied : .alreadySatisfied, before: before, after: after,
                        survivingReference: action.targetReference, inverse: inverse, result: result)
     }
@@ -1022,7 +1049,7 @@ enum ExactTrackNameAdapter {
                     router: router, cache: proof.cache, registry: proof.registry,
                     liveTrackName: liveTrackName, liveTrackNames: liveTrackNames, mirror: mirror,
                     selectionOrigin: proof.selectionOrigin, preservingFootprint: preservingFootprint, afterVerifiedWrite: afterVerifiedWrite,
-                    expectedStripAfter: proof.stripBefore)
+                    expectedStripAfter: proof.stripBefore, restoringMixerFocus: proof.restoresMixerFocus)
     }
 
     private static func sharedText(_ result: CallTool.Result) -> String {
