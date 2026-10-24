@@ -34,7 +34,7 @@ import Testing
     let build = try #require(gate.range(of: "\nswift build -c release\n"))
     let logic = try #require(gate.range(of: "if ! pgrep -xq \"Logic Pro\"; then"))
     let permission = try #require(gate.range(of: "if ! .build/release/LogicProMCP --check-permissions; then"))
-    let suite = try #require(gate.range(of: "\nswift test --no-parallel\n"))
+    let suite = try #require(gate.range(of: "\nLOGIC_PRO_MCP_RUN_LIVE_QA=1 swift test --no-parallel\n"))
     #expect(build.lowerBound < logic.lowerBound)
     #expect(logic.lowerBound < permission.lowerBound)
     #expect(permission.lowerBound < suite.lowerBound)
