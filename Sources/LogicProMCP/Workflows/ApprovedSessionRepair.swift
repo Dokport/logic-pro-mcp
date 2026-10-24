@@ -1245,9 +1245,16 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         else { return .init(pair: originalPair, control: control, renewal: nil) }
         // Both admitted Bus departures must renew the actual original input
         // owner after popup cleanup; the destination kind does not preserve it.
-        var stage = "initial_custody", accepted = false
+        let readStartedAt = ContinuousClock.now
+        var stage = "initial_custody" {
+            willSet {
+                Log.info("Canonical Send input timing: stage=\(newValue), elapsed=\(readStartedAt.duration(to: ContinuousClock.now))", subsystem: "saga")
+            }
+        }
+        var accepted = false
         var sourceCheckpoint = "not_checked"
         defer {
+            Log.info("Canonical Send input timing: completed=\(accepted), stage=\(stage), elapsed=\(readStartedAt.duration(to: ContinuousClock.now))", subsystem: "saga")
             if !accepted {
                 Log.info("Canonical Send input read refused at \(stage), source_current=\(sourceCheckpoint)", subsystem: "saga")
             }
