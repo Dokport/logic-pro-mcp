@@ -1067,12 +1067,85 @@
         "qualification": "Retained failed combined execution. The name data inverse is verified; named-source Send completion, fresh return, owned Send cancellation, global UI restoration and repeatability are not established by this run.",
         "raw_transcript_sha256": "d19638dbeb6d0610f9c9ed7969e1c6ea1cf21debf8c23245b105994552c07944"
       }
+    },
+    {
+      "source_commit": "9c34211b6160af7f972ae53637b8c1348f20f452",
+      "raw_sha256": "46a3eb95030f119ddeec3d31d890d36c374d18f0bcf4dff651c2930744de926f",
+      "result": {
+        "case": "Retained named-source compensation with native presentation residuals",
+        "locale": "ko-KR",
+        "source_commit": "9c34211b6160af7f972ae53637b8c1348f20f452",
+        "binary_sha256": "01824975d76d79d249f2af95b6278eb344a8ceeb68c7fa699091aff75b019cf3",
+        "raw_transcript_sha256": "46a3eb95030f119ddeec3d31d890d36c374d18f0bcf4dff651c2930744de926f",
+        "state": "C",
+        "verified": false,
+        "saga_state": "fullyCompensated",
+        "journal_summary": {
+          "compensation_write_boundary_count": 2,
+          "failed_compensation_count": 0,
+          "forward_write_boundary_count": 2,
+          "record_count": 2,
+          "uncertain_compensation_count": 0,
+          "verified_compensation_count": 2,
+          "write_boundary_count": 4
+        },
+        "observation": "The name and existing-Bus Send forward writes and both owned value inverses verified. The original source name field, Send destination, bypass bit and all 151 protected values were restored or unchanged. The Mixer group caption and focus still differed, so the terminal checkpoint was rejected.",
+        "qualification": "Verified value compensation does not establish automatic complete UI restoration. This run did not reproduce the preceding held-census refusal or prove its causal repair."
+      }
+    },
+    {
+      "source_commit": "aea65b81e271eaa1c01f3ccea2b5c9678fce448d",
+      "raw_sha256": "76fa32de9975830cb1dbb54ff97b8ac72df1646bcd6f3e52c49aa943a729f613",
+      "result": {
+        "case": "Retained host crash during MCP initialization before native repair",
+        "locale": "ko-KR",
+        "source_commit": "aea65b81e271eaa1c01f3ccea2b5c9678fce448d",
+        "binary_sha256": "66fd1a281778357fca543211812d41cb5249f314a032ad15241a573148a26912",
+        "raw_transcript_sha256": "76fa32de9975830cb1dbb54ff97b8ac72df1646bcd6f3e52c49aa943a729f613",
+        "crash_sha256": "6691678698212fe93584cf45cad81e3bbcc2bee406db1f6995d2f88877da5650",
+        "observation": "Logic terminated during initialization, before any refresh, capture or repair request was sent. The crash report records EXC_BAD_ACCESS on the SeqTimer 2 thread in DDESCR_LC::TimerCallback(), in the Logic Control image.",
+        "qualification": "The cause is not established. This launch provides no combined name/Send qualification and does not exercise the new name restoration path."
+      }
+    },
+    {
+      "source_commit": "aea65b81e271eaa1c01f3ccea2b5c9678fce448d",
+      "raw_sha256": "bf5d1cf2903c55c9382e377943cc80b037389ec4a7ca6f7b7a2ddefa1cdc45de",
+      "result": {
+        "case": "Retained post-recovery cold capture presentation mismatch",
+        "locale": "ko-KR",
+        "source_commit": "aea65b81e271eaa1c01f3ccea2b5c9678fce448d",
+        "binary_sha256": "66fd1a281778357fca543211812d41cb5249f314a032ad15241a573148a26912",
+        "raw_transcript_sha256": "bf5d1cf2903c55c9382e377943cc80b037389ec4a7ca6f7b7a2ddefa1cdc45de",
+        "capture_seconds": 49.351783375,
+        "observation": "The recovered project matched its independently observed baseline before refresh and capture. Capture reported restored UI effects, but one EQ display AXValue changed from off to on. Every other AX row and all 151 protected values matched. The checkpoint was rejected before repair application.",
+        "qualification": "Neither a parameter change nor display hydration is proved. This remains a failed cold-capture restoration measurement; the later warm baseline does not replace it."
+      }
+    },
+    {
+      "source_commit": "aea65b81e271eaa1c01f3ccea2b5c9678fce448d",
+      "raw_sha256": "4ec78173018916e6b6d591c9ead853cc9089ce80e7c2e994f257f63e798a22fa",
+      "result": {
+        "case": "Retained warm named-source refusal at foreign keyboard ownership",
+        "locale": "ko-KR",
+        "source_commit": "aea65b81e271eaa1c01f3ccea2b5c9678fce448d",
+        "binary_sha256": "66fd1a281778357fca543211812d41cb5249f314a032ad15241a573148a26912",
+        "raw_transcript_sha256": "4ec78173018916e6b6d591c9ead853cc9089ce80e7c2e994f257f63e798a22fa",
+        "capture_seconds": 49.484471792,
+        "elapsed_seconds": 23.289537084000017,
+        "state": "C",
+        "verified": false,
+        "saga_state": "partiallyApplied",
+        "write_boundary_count": 0,
+        "observation": "All three pre-application checkpoints exactly matched the full native AX baseline and all 151 protected values. The name writer then refused before editor acquisition because a foreign system window owned the keyboard. No write boundary was crossed; the Send did not run. The complete terminal AX state and protected values exactly matched the baseline.",
+        "qualification": "This is a pre-write custody refusal, not a timeout or successful combined native run. The focus and caption repairs still need native requalification."
+      }
     }
   ],
   "limits": [
     "Stopped English/Korean four-track/nine-strip profiles and separately labelled warm 32-track/38-strip cancellation and public bypass roundtrips in both locales. A separate English warm large normal-completion/fresh-canonical-return case is also labelled. A separate Korean warm large normal-completion/fresh-canonical-return run is also labelled, without pixel-equality or repeatability qualification.",
     "A fresh generic fixture return is neither a canonical return nor an owned cancellation inverse.",
     "No arbitrary viewport, hidden/shared strips, other locales, mixed-Saga or whole routing qualification.",
-    "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings."
+    "Public journal counts are not independent per-AX-action instrumentation; raw recording hashes identify retained private readings.",
+    "Later named-source runs retain value compensation with caption/focus residuals, a host startup crash, a cold-capture EQ-display mismatch and a warm pre-write keyboard-custody refusal. Their exact source revisions and raw hashes are distinct. The subsequent injected focus, caption and typed-census repairs do not establish combined native name/Send completion, cancellation, cold restoration or repeatability."
   ]
 }
