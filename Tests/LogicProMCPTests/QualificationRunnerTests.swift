@@ -4459,8 +4459,9 @@ struct QualificationRunnerTests {
     }
 
     @Test(.enabled(
-        if: FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
-        "Requires `swift build -c release` before running the real-process qualification QA."
+        if: ProcessInfo.processInfo.environment["LOGIC_PRO_MCP_RUN_LIVE_QA"] == "1"
+            && FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
+        "Requires LOGIC_PRO_MCP_RUN_LIVE_QA=1 and a release build; use Scripts/release-qualify.sh."
     ))
     func realReleaseBinaryExecutesEveryOperationWithIndependentReadback() throws {
         let result = try QualificationTransport().drive(.init(
@@ -4781,8 +4782,9 @@ struct QualificationRunnerTests {
     /// failed case. (The generic "a failed required case is not promotable"
     /// rejection stays covered by `verificationEmitsEveryApplicableRejection`.)
     @Test(.enabled(
-        if: FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
-        "Requires `swift build -c release` before the Runner fault-exclusion probe."
+        if: ProcessInfo.processInfo.environment["LOGIC_PRO_MCP_RUN_LIVE_QA"] == "1"
+            && FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
+        "Requires LOGIC_PRO_MCP_RUN_LIVE_QA=1 and a release build; use Scripts/release-qualify.sh."
     ))
     func runnerIgnoresPartialStateFaultEnvOnRealServer() async throws {
         let spec = try #require(OperationRegistry.specs.first { $0.id == .transportPlay })
@@ -4876,8 +4878,9 @@ struct QualificationRunnerTests {
     /// `FAULT_TEST_SEAM` (see Package.swift) — references excluded symbols.
     #if FAULT_TEST_SEAM
     @Test(.enabled(
-        if: FileManager.default.isExecutableFile(atPath: Self.debugExecutableURL.path),
-        "Requires `swift build` (debug) before the Runner fault-seam probe."
+        if: ProcessInfo.processInfo.environment["LOGIC_PRO_MCP_RUN_LIVE_QA"] == "1"
+            && FileManager.default.isExecutableFile(atPath: Self.debugExecutableURL.path),
+        "Requires LOGIC_PRO_MCP_RUN_LIVE_QA=1 and a debug build with the fault seam."
     ))
     func runnerRejectsPartialStateObservedFromRealServer() async throws {
         let spec = try #require(OperationRegistry.specs.first { $0.id == .transportPlay })

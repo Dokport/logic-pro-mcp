@@ -23,7 +23,8 @@ SUITE = ["test", "--no-parallel"]
 PGREP = ["-xq", "Logic Pro"]
 CHECK = ["--check-permissions"]
 
-SWIFT_STUB = '#!/bin/bash\nfor a in "$@"; do printf "%s\\037" "$a"; done >> "$STUB_LOG/swift"\necho >> "$STUB_LOG/swift"\n'
+SWIFT_STUB = ('#!/bin/bash\nfor a in "$@"; do printf "%s\\037" "$a"; done >> "$STUB_LOG/swift"\necho >> "$STUB_LOG/swift"\n'
+              'if [ "$1" = test ] && [ "${LOGIC_PRO_MCP_RUN_LIVE_QA:-}" != 1 ]; then exit 97; fi\n')
 PGREP_STUB = ('#!/bin/bash\nfor a in "$@"; do printf "%s\\037" "$a"; done >> "$STUB_LOG/pgrep"\necho >> "$STUB_LOG/pgrep"\n'
               'exit "$PGREP_EXIT"\n')
 BINARY_STUB = ('#!/bin/bash\nfor a in "$@"; do printf "%s\\037" "$a"; done >> "$STUB_LOG/binary"\necho >> "$STUB_LOG/binary"\n'
@@ -271,6 +272,12 @@ def _read(path):
 class TheGateBehaves(unittest.TestCase):
     def test_the_repository_gate(self):
         self.assertEqual(gate_problems(_read(GATE)), [])
+
+    def test_a_gate_that_does_not_enable_live_tests_is_refused(self):
+        text = _read(GATE)
+        broken = text.replace("LOGIC_PRO_MCP_RUN_LIVE_QA=1 ", "", 1)
+        self.assertNotEqual(broken, text)
+        self.assertIn("with Logic running the gate exited 97", gate_problems(broken))
 
     def test_a_gate_that_continues_without_logic_is_refused(self):
         broken = _read(GATE).replace("    exit 1\n", "    :\n", 1)
