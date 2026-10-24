@@ -30,7 +30,7 @@ struct Issue373SameHandlerReadbackCreditTests {
         let readback = try #require(resource.contents.first?.text)
         #expect(response == Self.ports)
         #expect(readback == Self.ports)
-        let result = Self.result(
+        let result = try Self.result(
             .midiListPorts, response: Data(response.utf8), readback: Data(readback.utf8),
             source: "logic://midi/ports"
         )
@@ -82,7 +82,7 @@ struct Issue373SameHandlerReadbackCreditTests {
         #"{"error":"unavailable"}"#
     ])
     func echoOracleStillRejectsDivergentAndMalformedReadback(readback: String) throws {
-        let result = Self.result(
+        let result = try Self.result(
             .midiListPorts, response: Data(Self.ports.utf8), readback: Data(readback.utf8),
             source: "logic://midi/ports"
         )
@@ -103,7 +103,7 @@ struct Issue373SameHandlerReadbackCreditTests {
 
     @Test func existingLibraryInventoryReadKeepsExistingSemanticCredit() throws {
         let fixture = try #require(SemanticOracleFixtures.byOperationID[.tracksListLibrary])
-        let result = Self.result(
+        let result = try Self.result(
             .tracksListLibrary, response: fixture.responseData, readback: fixture.readbackData,
             source: "logic://library/inventory"
         )
@@ -113,7 +113,7 @@ struct Issue373SameHandlerReadbackCreditTests {
         #expect(PromotionGate.operationIsLiveCredited(Self.operationCase(result)))
         let verified = try #require(result.readback?.verified as Bool?)
         #expect(verified)
-        let different = Self.result(
+        let different = try Self.result(
             .tracksListLibrary, response: fixture.responseData,
             readback: Data(#"{"data":{"categories":["unrelated"]}}"#.utf8),
             source: "logic://library/inventory"
@@ -122,14 +122,55 @@ struct Issue373SameHandlerReadbackCreditTests {
         #expect(!different.verified)
     }
 
+    @Test(arguments: [OperationID.pluginsGetParamVerified, .pluginsGetChannelEQStateVerified])
+    func pluginResponseShapeDoesNotEarnIndependentReadbackCredit(_ id: OperationID) throws {
+        let fixture = try #require(SemanticOracleFixtures.byOperationID[id])
+        let oracle = try #require(SemanticOracleTable.byOperationID[id])
+        let protocolVerdict = try #require(oracle.evaluate(responseData: fixture.responseData,
+            readbackData: fixture.readbackData))
+        #expect(protocolVerdict)
+        let independent = QualificationSemanticReadbackValidator.validate(operationID: id.rawValue,
+            responseData: fixture.responseData, readbackData: Data("unrelated readback".utf8))
+        let declined = independent == nil
+        #expect(declined)
+        let result = try Self.result(id, response: fixture.responseData,
+            readback: fixture.readbackData, source: "logic://system/health")
+        #expect(result.status == .protocolSmoke)
+        #expect(!result.verified)
+        #expect(result.verificationKind == .protocolSmoke)
+        #expect(result.deferral?.code == .semanticValidatorUnavailable)
+        #expect(!PromotionGate.operationIsLiveCredited(Self.operationCase(result)))
+        let readbackVerified = try #require(result.readback?.verified as Bool?)
+        #expect(!readbackVerified)
+        let malformed = try #require(QualificationSemanticReadbackValidator.validate(
+            operationID: id.rawValue, responseData: Data("{}".utf8), readbackData: fixture.readbackData))
+        #expect(!malformed)
+    }
+
+    @Test(arguments: [OperationID.pluginsGetParamVerified, .pluginsGetChannelEQStateVerified])
+    func forgedPluginProtocolReceiptCannotEarnSemanticCredit(_ id: OperationID) throws {
+        let fixture = try #require(SemanticOracleFixtures.byOperationID[id])
+        let spec = try #require(OperationRegistry.specs.first { $0.id == id })
+        let claimed = QualificationCase(id: "in-process/\(id.rawValue)", status: .passed,
+            tool: spec.tool.rawValue, command: spec.command, traceID: "fixture", verified: true,
+            evidenceFiles: ["evidence/plugin.json"], binarySHA256: String(repeating: "a", count: 64),
+            operationID: id.rawValue, operationRequestID: "plugin-tool",
+            verificationKind: .semanticReadback,
+            readback: QualificationReadbackEvidence(source: "logic://system/health",
+                requestID: "unrelated-resource", verified: true,
+                sha256: SupportBundleBuilder.sha256(fixture.readbackData)))
+        #expect(!PromotionGate.operationIsLiveCredited(claimed))
+    }
+
     private static func result(
         _ id: OperationID, response: Data, readback: Data, source: String
-    ) -> QualificationOperationResult {
-        QualificationOperationResult(
-            operationID: id.rawValue, tool: id == .midiListPorts ? "logic_midi" : "logic_tracks",
-            command: id == .midiListPorts ? "list_ports" : "list_library",
+    ) throws -> QualificationOperationResult {
+        let spec = try #require(OperationRegistry.specs.first { $0.id == id })
+        let payload = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any]
+        return QualificationOperationResult(
+            operationID: id.rawValue, tool: spec.tool.rawValue, command: spec.command,
             mutability: .readOnly, requestID: "tool-response", responseData: response,
-            isError: false, state: nil, error: nil, hint: nil, writeAttempted: false,
+            isError: false, state: payload?["state"] as? String, error: nil, hint: nil, writeAttempted: false,
             readbackSource: source, readbackRequestID: "resource-readback",
             readbackData: readback, failureReason: nil
         )
