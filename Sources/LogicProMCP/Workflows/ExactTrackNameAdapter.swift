@@ -569,8 +569,12 @@ enum ExactTrackNameAdapter {
         private func peerNamesStillHeld(ownedEditor: AXUIElement? = nil) -> Bool {
             // These pure name reads share fresh complete CF membership
             // bookends and the caller's deciding original-pair owner checks.
+            guard membershipStillHeld(ownedEditor: ownedEditor), peerNameValuesStillHeld() else { return false }
+            return membershipStillHeld(ownedEditor: ownedEditor) && operationPermitted()
+        }
+
+        private func peerNameValuesStillHeld() -> Bool {
             // Exposed headers retain their individual lifetime/ordinal proof.
-            guard membershipStillHeld(ownedEditor: ownedEditor) else { return false }
             for row in preservedTracks {
                 guard operationPermitted(), let source = row.physicalBinding,
                       source.document.utf8.elementsEqual(pair.track.document.utf8),
@@ -597,29 +601,50 @@ enum ExactTrackNameAdapter {
                         source.strip, runtime: pair.track.runtime.ax),
                       name.utf8.elementsEqual(expected.utf8) else { return false }
             } }
-            return membershipStillHeld(ownedEditor: ownedEditor) && operationPermitted()
+            return operationPermitted()
         }
 
-        private func currentStripIndex(ownedEditor: AXUIElement?) -> Int? {
-            guard ownedEditor == nil, let renewal else {
-                return pair.strip.currentIndex(runtime: pair.track.runtime)
-            }
-            guard renewal.pair.track.matches(pair.track), renewal.pair.strip.matches(pair.strip) else { return nil }
-            // The actual original-header renewal checks the complete current
-            // native census. Editor reads keep their existing acquisition path.
-            return pair.strip.currentIndex(in: renewal.observation)
+        private func renewedNamesStillHeld(before: String, after: String?,
+            source: AccessibilityChannel.OriginalHeaderSourceRenewal) -> Bool {
+            let trackSources = [pair.track] + preservedTracks.compactMap(\.physicalBinding)
+            guard source.pair.track.matches(pair.track), source.originalTrack.matches(pair.track),
+                  source.pair.strip.matches(pair.strip),
+                  trackSources.count == preservedTracks.count + 1,
+                  preservedStrips.compactMap(\.physicalBinding).count == preservedStrips.count,
+                  source.observation.headers.count == trackSources.count,
+                  source.observation.headers.allSatisfy({ header in
+                      trackSources.filter { CFEqual(header, $0.header) }.count == 1
+                  }),
+                  source.observation.strips.count == preservedStrips.count + 1,
+                  source.observation.strips.filter({ CFEqual($0, pair.strip.strip) }).count == 1 else { return false }
+            // The actual renewal rechecks complete current native membership,
+            // source lifetime, selection, document and stopped transport at both
+            // ends of this pure value group. Its checks grant no write authority.
+            guard operationPermitted(), source.permits(runtime: pair.track.runtime),
+                  peerNameValuesStillHeld(),
+                  case .success(.some(let stripName)) = AXPluginInstanceIdentity.stripNameResult(pair.strip.strip,
+                    runtime: pair.track.runtime.ax), permitsStripName(stripName, before: before, after: after),
+                  case .success(.some(let trackName)) = AXValueExtractors.extractTrackNameResult(
+                    from: pair.track.header, runtime: pair.track.runtime.ax),
+                  trackName.utf8.elementsEqual(before.utf8)
+                    || after.map({ trackName.utf8.elementsEqual($0.utf8) }) == true,
+                  source.permits(runtime: pair.track.runtime), operationPermitted() else { return false }
+            return true
         }
 
         func namesStillHeld(before: String, after: String? = nil, ownedEditor: AXUIElement? = nil) -> Bool {
             let guardHelp = AXHelpers.HelpReadGuard(allowHelpReads: false, stop: { !operationPermitted() })
             return AXHelpers.HelpReadGuard.$current.withValue(guardHelp) {
+                if ownedEditor == nil, let renewal {
+                    return renewedNamesStillHeld(before: before, after: after, source: renewal)
+                }
                 func matches(_ name: String) -> Bool {
                     name.utf8.elementsEqual(before.utf8) || after.map { name.utf8.elementsEqual($0.utf8) } == true
                 }
                 let names = [before] + (after.map { [$0] } ?? [])
                 guard ownedEditor.map({ permitsCoupledEditorRead($0, pair: pair, names: names) }) ?? true,
                       operationPermitted(), membershipStillHeld(ownedEditor: ownedEditor), pair.track.currentIndex() != nil,
-                      currentStripIndex(ownedEditor: ownedEditor) != nil,
+                      pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
                       // Peer reads can redraw or change the pair. Its deciding
                       // native name/custody reads must follow the last peer read.
                       peerNamesStillHeld(ownedEditor: ownedEditor),
@@ -627,7 +652,7 @@ enum ExactTrackNameAdapter {
                         runtime: pair.track.runtime.ax), permitsStripName(stripName, before: before, after: after),
                       case .success(.some(let trackName)) = AXValueExtractors.extractTrackNameResult(
                         from: pair.track.header, runtime: pair.track.runtime.ax), matches(trackName),
-                      currentStripIndex(ownedEditor: ownedEditor) != nil,
+                      pair.strip.currentIndex(runtime: pair.track.runtime) != nil,
                       pair.track.currentIndex() != nil, operationPermitted(),
                       ownedEditor.map({ permitsCoupledEditorRead($0, pair: pair, names: names) }) ?? true else { return false }
                 return true

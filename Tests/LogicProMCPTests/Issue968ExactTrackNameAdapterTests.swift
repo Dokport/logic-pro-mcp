@@ -30,6 +30,10 @@ private final class ExactNameFixture: @unchecked Sendable {
     var permitsSelection = false
     var useBulkReads = false
     var globalMixerDiscoveries = 0
+    var countedMixer: AXUIElement?
+    var mixerPopulationReads = 0
+    var mixerPopulationReadsAtLastPeer = 0
+    var mixerCensusesWithinNameGroups: [Int] = []
     var exposeFieldWhenSelected = false
     var renameMenuItem: AXUIElement?
     var selectionWrites: [AXUIElement] = []
@@ -253,7 +257,10 @@ private final class ExactNameFixture: @unchecked Sendable {
                 attributeIsSettable: ax.attributeIsSettable, setAttributeValue: ax.setAttributeValue,
                 children: ax.children, performAction: ax.performAction, childCount: ax.childCount,
                 actionNames: ax.actionNames, actionNamesResult: ax.actionNamesResult,
-                childrenResult: ax.childrenResult, attributeValueResult: ax.attributeValueResult,
+                childrenResult: { [self] element in
+                    if countedMixer.map({ CFEqual($0, element) }) == true { mixerPopulationReads += 1 }
+                    return AXHelpers.childrenResult(element, runtime: ax)
+                }, attributeValueResult: ax.attributeValueResult,
                 performActionResult: ax.performActionResult, elementAtPosition: ax.elementAtPosition,
                 attributeValuesResult: { [self] element, attributes in
                     if CFEqual(element, window), attributes == [kAXRoleAttribute, kAXIdentifierAttribute,
@@ -264,6 +271,7 @@ private final class ExactNameFixture: @unchecked Sendable {
                     for attribute in attributes {
                         let reading: Result<AnyObject?, AXHelpers.AXStatusError>
                         if attribute == kAXChildrenAttribute as String {
+                            if countedMixer.map({ CFEqual($0, element) }) == true { mixerPopulationReads += 1 }
                             reading = AXHelpers.childrenResult(element, runtime: ax).map { $0 as CFArray }
                         } else {
                             reading = AXHelpers.getAttributeResult(element, attribute, runtime: ax)
@@ -2070,9 +2078,13 @@ struct Issue968ExactTrackNameAdapterTests {
         }
     }
 
-    @Test(arguments: [false, true], ["healthy", "primary", "mirror", "peer", "document", "gate"])
-    func anOwnedNameReadUsesOnlyItsActualRenewedSourceScope(renewed: Bool, fault: String) async throws {
+    @Test(arguments: ["unrenewed", "renewed"].flatMap { scope in
+        ["healthy", "primary", "mirror", "peer", "document", "gate"].map { "\(scope)/\($0)" }
+    } + ["document", "selection", "transport", "population", "gate"].map { "renewed/late_\($0)" })
+    func anOwnedNameReadUsesOnlyItsActualRenewedSourceScope(profile: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
+            let renewed = profile.hasPrefix("renewed/")
+            let fault = String(try #require(profile.split(separator: "/").last))
             let f = ExactNameFixture()
             f.useBulkReads = true
             f.permitsSelection = true
@@ -2129,12 +2141,31 @@ struct Issue968ExactTrackNameAdapterTests {
                 }
                 if fault == "document" { f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx") }
                 if fault == "gate" { f.boundaryOwnership = false }
+                f.countedMixer = mixer
+                f.mixerPopulationReads = 0
+                f.onPeerNameReadAfterWrite = { _ in f.mixerPopulationReadsAtLastPeer = f.mixerPopulationReads }
+                f.onMirrorReadAfterWrite = {
+                    f.mixerCensusesWithinNameGroups.append(f.mixerPopulationReads - f.mixerPopulationReadsAtLastPeer)
+                    if fault == "late_document" {
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    if fault == "late_selection" {
+                        f.builder.setAttribute(f.header, kAXSelectedAttribute as String, false)
+                        f.builder.setAttribute(peerHeader, kAXSelectedAttribute as String, true)
+                    }
+                    if fault == "late_transport" { f.builder.setAttribute(play, kAXValueAttribute as String, 1) }
+                    if fault == "late_population" { f.builder.setChildren(mixer, [strip]) }
+                    if fault == "late_gate" { f.boundaryOwnership = false }
+                }
                 f.globalMixerDiscoveries = 0
                 #expect(await ExactTrackNameAdapter.readOwnedCoupledName(proof) == (fault == "healthy" ? "C" : nil))
                 if fault == "healthy" {
                     if renewed {
                         #expect(f.globalMixerDiscoveries == 0,
                             "The actual renewed scope checks complete current membership without global Mixer rediscovery")
+                        #expect(f.mixerCensusesWithinNameGroups == [0, 0],
+                            "Both peer/name groups retain their full bookends without nesting another census between their values")
+                        #expect(f.mixerPopulationReads > 0, "Fresh native census bookends must actually execute")
                     } else {
                         #expect(f.globalMixerDiscoveries > 0, "The original unrenewed name read retains its global discovery")
                     }
