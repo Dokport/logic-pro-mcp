@@ -1492,10 +1492,15 @@ extension AccessibilityChannel {
                     && physical.currentIndex(runtime: runtime) != nil) else {
                     return uncertain("The original mode source is not uniquely current; no replacement control is adopted.")
                 }
+                // A deciding occupied inverse needs the restored source's own
+                // changed-strip return, not additional optional peer pairs.
+                // The same complete census, viewport inverse and final source
+                // custody still decide whether that return can be published.
                 let renewal = await renewSourceThroughOriginalHeader(originalPair, original: physical,
                     runtime: runtime, selectedHeaderRequired: false,
                     sourceDisposition: originalCount == 0 ? .retiredOriginal : .survivingOriginal,
-                    restoringMixerGeometry: sendMixerGeometry)
+                    restoringMixerGeometry: sendMixerGeometry,
+                    observingPeerHeaders: request.occupiedInverse != nil ? [] : nil)
                 extras["ui_effects"] = ["navigation_performed": renewal.effects.navigationPerformed,
                     "attempted": renewal.effects.attempted, "changed": renewal.effects.changed,
                     "restoration": renewal.effects.restoration, "reason": renewal.effects.reason as Any? ?? NSNull()]

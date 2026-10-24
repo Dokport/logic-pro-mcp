@@ -643,6 +643,17 @@ struct Issue965HeldSelectionAssociationTests {
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
         var routingInverseRenewedSendMenuOpens = 0
+        var routingSelectionsAtInverseLeaf: Int?
+
+        func expectMinimumInverseSourceChallenges() throws {
+            let start = try #require(routingSelectionsAtInverseLeaf, "Reach the actual inverse leaf")
+            let actual = Array(selections.dropFirst(start))
+            #expect(actual.count == 2,
+                "Keep one changed-strip challenge and the actual source return; optional peer discovery is finished")
+            let first = actual.first, last = actual.last
+            #expect(first != nil && first != 0)
+            #expect(last == 0)
+        }
         var routingNamedSendBeforeInputCount: Int?
         var routingNamedSendPreInputPeerNameReads = 0
         var routingNamedSendPostInputObserverReads = 0
@@ -5274,6 +5285,16 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("A restored Send source needs one changed-strip challenge and its verified return",
+          arguments: [false, true], [false, true])
+    func anOwnedSendInverseDoesNotCollectUnneededAssociations(named: Bool, stable: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true, canonicalBusChange: true,
+                canonicalName: named, stableDestinationControls: stable, measureInverseAssociations: true)
+        }
+    }
+
     @Test("An occupied Send retains the actual pre-popup geometry through post-press source renewal")
     func occupiedSendRenewalRetainsPrePopupMixerGeometry() async throws {
         try await assertOccupiedSingleSendRenewal(sendGeometry: true)
@@ -5353,9 +5374,10 @@ struct Issue965HeldSelectionAssociationTests {
                                                captureInputReadScope: String? = nil,
                                                measureNamedBusPreInput: Bool = false,
                                                measureChangedPermissionCensus: Bool = false,
-                                               singleInverseWriterPopup: Bool = false) async throws {
+                                               singleInverseWriterPopup: Bool = false,
+                                               measureInverseAssociations: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
-            let f = try Fixture(), b = f.builder
+            let f = try Fixture(fourTracks: measureInverseAssociations), b = f.builder
             defer {
                 if measureChangedPermissionCensus {
                     #expect(f.routingChangedSendPublished, "Every measured case must reach the actual native effect publisher")
@@ -5869,10 +5891,10 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, pending ? 1 : 0)
                         f.routingBypassPendingValue = nil
                     }
-                    b.setChildren(f.mixer, [f.strips[0], source, root]); return true
+                    b.setChildren(f.mixer, [f.strips[0], source] + Array(f.strips.dropFirst(2)) + [root]); return true
                 }
                 if restoring, action == kAXPressAction as String, CFEqual(element, renewedSend[0]) {
-                    b.setChildren(f.mixer, [f.strips[0], source, root]); return true
+                    b.setChildren(f.mixer, [f.strips[0], source] + Array(f.strips.dropFirst(2)) + [root]); return true
                 }
                 if action == kAXCancelAction as String, CFEqual(element, root) {
                     f.observeNamedSendBeforeRead()
@@ -5881,7 +5903,7 @@ struct Issue965HeldSelectionAssociationTests {
                         f.routingOutputOpenDiscoveryStart = nil
                     }
                     if bypassMode != nil { f.routingBypassMenuCancels += 1 }
-                    b.setChildren(f.mixer, [f.strips[0], source]); return true
+                    b.setChildren(f.mixer, [f.strips[0], source] + Array(f.strips.dropFirst(2))); return true
                 }
                 if action == kAXPressAction as String, CFEqual(element, destination) {
                     if let delayedMixerName {
@@ -5917,7 +5939,7 @@ struct Issue965HeldSelectionAssociationTests {
                     if fault == "level" { b.setAttribute(b.element(1_965_2644), kAXValueAttribute as String, 1) }
                     if fault == "bypass" { b.setAttribute(b.element(1_965_2642), kAXValueAttribute as String, 1) }
                     if fault == "mode" { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
-                    b.setChildren(f.mixer, [f.strips[0], replacement])
+                    b.setChildren(f.mixer, [f.strips[0], replacement] + Array(f.strips.dropFirst(2)))
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, replacement)
                     if survivingSource {
                         f.routingReplacement = nil
@@ -5942,6 +5964,9 @@ struct Issue965HeldSelectionAssociationTests {
                     return true
                 }
                 if restoring, action == kAXPressAction as String, CFEqual(element, stereo) {
+                    if measureInverseAssociations, f.routingDestinationPresses == 1 {
+                        f.routingSelectionsAtInverseLeaf = f.selections.count
+                    }
                     if stableDestinationControls {
                         f.routingDestinationPresses += 1
                         b.setAttribute(echo, kAXTitleAttribute as String, freshPhysicalReturn ? "Output 3-4" : "Stereo Output")
@@ -5960,7 +5985,7 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(mode, kAXEnabledAttribute as String, true)
                         b.setAttribute(mode, "AXMenuItemMarkChar", "✓")
                     }
-                    b.setChildren(f.mixer, [f.strips[0], restoredSource])
+                    b.setChildren(f.mixer, [f.strips[0], restoredSource] + Array(f.strips.dropFirst(2)))
                     b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, restoredSource)
                     if let inverseFault, inverseFault.hasPrefix("after_") {
                         f.routingLateScopeInjected = true
@@ -6229,7 +6254,7 @@ struct Issue965HeldSelectionAssociationTests {
                 f.routingAction = { element, action in
                     do {
                         if action == kAXPressAction as String,
-                           [1_971_532, 1_971_535, 1_971_538].contains(where: { CFEqual(element, b.element($0)) }) {
+                           (0...f.strips.count).contains(where: { CFEqual(element, b.element(1_971_532 + $0 * 3)) }) {
                             if captureInputReadScope != nil, !f.routingInputReadRenewalArmed {
                                 f.routingOutputOpenDiscoveryStart = f.coupledGuardPopulationScans
                             }
@@ -6894,6 +6919,10 @@ struct Issue965HeldSelectionAssociationTests {
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if measureInverseAssociations {
+                    try f.expectMinimumInverseSourceChallenges()
+                    #expect(body["saga_state"] as? String == "fullyCompensated")
+                }
                 if singleInverseWriterPopup {
                     #expect(f.routingInputReadRenewed, "Reach the actual owned Input read that retired the source")
                     #expect(f.routingInverseRenewedSendMenuOpens == 1,
