@@ -5327,6 +5327,10 @@ extension AccessibilityChannel {
                 "slider_descriptions": Array(sliderDescriptions.prefix(8)),
             ]
             if AXHelpers.getTitle(window, runtime: runtime.ax) == trackName {
+                let subrole: String? = AXHelpers.getAttribute(window, kAXSubroleAttribute as String, runtime: runtime.ax)
+                let closeButton: AXUIElement? = AXHelpers.getAttribute(window, kAXCloseButtonAttribute as String, runtime: runtime.ax)
+                summary["subrole"] = subrole ?? ""
+                summary["close_button_present"] = closeButton != nil
                 // An editor can expose a non-static-text footer. Preserve the
                 // actual shallow fields when identity is refused; diagnostics
                 // never authenticate that footer or authorize an action.
