@@ -437,6 +437,47 @@ func testSMFTrackExtractionRefusesUnownedOrAmbiguousFileLayout(fault: String) {
     }
 }
 
+@Test func testSMFTrackExtractionAcceptsSeveralMetaOnlyConductorChunks() throws {
+    // Logic 12.4's "All MIDI Tracks as MIDI File" for a project with Drummer and looped
+    // regions began with eight unnamed chunks, each holding only tempo, meter, key and
+    // SMPTE metadata, before the named track chunks.
+    let end: [UInt8] = [0, 0xFF, 0x2F, 0]
+    let conductorEvents: [UInt8] = [0, 0xFF, 0x58, 4, 4, 2, 0x18, 8, 0, 0xFF, 0x59, 2, 0, 0,
+        0, 0xFF, 0x54, 5, 0x21, 0, 0, 0, 0, 0, 0xFF, 0x51, 3, 7, 0xA1, 0x20] + end
+    let conductors = Array(repeating: trackData(conductorEvents), count: 3)
+    let target = namedSMFTrack("Target", events: [0, 0x90, 60, 100, 0x83, 0x60, 0x80, 60, 0] + end)
+    let peer = namedSMFTrack("Peer", events: [0, 0x90, 67, 100, 1, 0x80, 67, 0] + end)
+    let emptyRegion = namedSMFTrack("Target", events: end)
+    let input = smfData(format: 1, tracks: conductors + [target, peer, emptyRegion])
+    let exported = try SMFReader.extractTracks(namedInstrument: "Target", from: input)
+    #expect(exported == smfData(format: 1, tracks: conductors + [target, emptyRegion]))
+    let document = try SMFReader.parseDocument(exported)
+    #expect(document.notes.map(\.pitch) == [60])
+    #expect(document.tempoChanges.first?.microsecondsPerQuarter == 500_000)
+    // An unnamed chunk that carries notes is still not conductor data.
+    let unnamedNotes = trackData([0, 0x90, 72, 100, 1, 0x80, 72, 0] + end)
+    #expect(throws: SMFReader.TrackExtractionError.unsupportedFileLayout) {
+        try SMFReader.extractTracks(namedInstrument: "Target",
+            from: smfData(format: 1, tracks: conductors + [unnamedNotes, target]))
+    }
+}
+
+@Test func testSMFTrackExtractionKeepsRetainedMetadataInInputOrder() throws {
+    // Review on #1405: a later unnamed metadata-only chunk must not move ahead of the
+    // target, or same-tick meter precedence (and so the note's bar and beat) changes.
+    let end: [UInt8] = [0, 0xFF, 0x2F, 0]
+    let conductor = trackData([0, 0xFF, 0x51, 3, 7, 0xA1, 0x20] + end)
+    let target = namedSMFTrack("Target", events: [0, 0xFF, 0x58, 4, 4, 2, 0x18, 8,
+        0x8B, 0x20, 0x90, 60, 100, 0x83, 0x60, 0x80, 60, 0] + end)
+    let lateMeter = trackData([0, 0xFF, 0x58, 4, 3, 2, 0x18, 8] + end)
+    let input = smfData(format: 1, tracks: [conductor, target, lateMeter])
+    let exported = try SMFReader.extractTracks(namedInstrument: "Target", from: input)
+    #expect(exported == input)
+    let note = try #require(try SMFReader.parse(exported).first)
+    #expect(note == (try SMFReader.parse(input).first))
+    #expect(note.startBar == 2 && note.startBeat == 1.0)
+}
+
 private func namedSMFTrack(_ instrument: String, events: [UInt8]) -> [UInt8] {
     let name = Array(instrument.utf8)
     return trackData([0, 0xFF, 4] + SMFWriter.encodeVLQ(name.count) + name + events)
