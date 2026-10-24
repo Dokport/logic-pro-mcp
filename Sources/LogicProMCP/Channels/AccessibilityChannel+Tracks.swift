@@ -179,6 +179,15 @@ extension AccessibilityChannel {
                 } else { header = nil }
                 lock.withLock { passiveMixer = candidate; passiveHeader = nil; passiveRoutingHeader = header.map { ($0, logic) } }
             }
+            // Chooses read ordering only. The association's complete current
+            // proof is still renewed before each Help read; mixed navigation
+            // and restoration witnesses keep their existing observation order.
+            var hasOnlyAssociationReadFocus: Bool {
+                lock.withLock {
+                    association != nil && navigation == nil && passiveMixer == nil && passiveHeader == nil
+                        && passiveRoutingHeader == nil && routingPopupFocus == nil && mixerInverseFocus == nil
+                }
+            }
             func permits() -> Bool {
                 let held = lock.withLock { (navigation, passiveMixer, association, passiveHeader, routingPopupFocus, passiveRoutingHeader, mixerInverseFocus) }
                 // An owned popup or selection inverse deliberately holds temporary
@@ -369,14 +378,41 @@ extension AccessibilityChannel {
                     return error == .init(raw: AXError.noValue.rawValue)
                 }
 
-                func permits() -> Bool {
+                func permits() -> Bool { permits(nativeInputPopup: nil, nativeInputSource: nil) }
+
+                func permits(nativeInputPopup: AccessibilityChannel.NativeOutputReadPopup?,
+                             nativeInputSource: AXMixerInputSlotBinding?) -> Bool {
+                    func focusedWindowMatches() -> Bool {
+                        let reading: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+                            app, kAXFocusedWindowAttribute as String, runtime: logic.ax)
+                        if case .success(.some(let value)) = reading, CFGetTypeID(value) == AXUIElementGetTypeID() {
+                            return CFEqual(unsafeBitCast(value, to: AXUIElement.self), window)
+                        }
+                        guard case .failure(let error) = reading, error.raw == AXError.noValue.rawValue,
+                              (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                              let popup = nativeInputPopup, let source = nativeInputSource,
+                              CFEqual(source.owner.window, window), CFEqual(source.owner.mixer, binding.mixer),
+                              source.owner.document.utf8.elementsEqual(document.utf8),
+                              let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: binding.mixer, runtime: logic.ax),
+                              strips.strips.filter({ CFEqual($0, source.owner.strip) }).count == 1,
+                              let children = AXLogicProElements.childrenIfRead(source.owner.strip, runtime: logic.ax),
+                              children.filter({ CFEqual($0, source.control) }).count == 1,
+                              let parent: AXUIElement = AXHelpers.getAttribute(source.control, kAXParentAttribute as String, runtime: logic.ax),
+                              CFEqual(parent, source.owner.strip),
+                              AXHelpers.getRole(source.control, runtime: logic.ax) == kAXButtonRole as String,
+                              AXHelpers.getDescription(source.control, runtime: logic.ax)?.utf8.elementsEqual(source.source.utf8) == true,
+                              AccessibilityChannel.checkedOutputPopupMenus(in: binding.mixer, runtime: logic.ax)?.isEmpty == true,
+                              AccessibilityChannel.currentInputMenuAssignment(in: popup.root, runtime: logic.ax) != nil,
+                              let current = AccessibilityChannel.NativeOutputReadPopup.read(
+                                physical: source.owner, app: app, pid: pid, runtime: logic), current.matches(popup) else { return false }
+                        return true
+                    }
                     guard acquisitionPermitted(),
                           logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
                           let currentApp = AXLogicProElements.appRoot(runtime: logic), CFEqual(app, currentApp),
                           AXHelpers.getAttribute(app, kAXFrontmostAttribute as String, runtime: logic.ax) as Bool? == true,
                           let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute as String, runtime: logic.ax),
-                          let focusedWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: logic.ax),
-                          CFEqual(main, window), CFEqual(focusedWindow, window),
+                          CFEqual(main, window), focusedWindowMatches(),
                           AXHelpers.getTitle(window, runtime: logic.ax)?.utf8.elementsEqual(title.utf8) == true,
                           case .success(.some(let doc)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                           doc.utf8.elementsEqual(document.utf8),

@@ -582,7 +582,7 @@ extension AccessibilityChannel {
         func sourceForOriginalHeader(_ prior: HeldSelectionAssociation.Pair,
             runtime: AXLogicProElements.Runtime) -> Self? {
             guard permits(runtime: runtime), observation.effects.restoration == "restored",
-                  prior.track.currentIndex() != nil, CFEqual(prior.strip.window, original.window),
+                  prior.track.currentIndex(in: observation) != nil, CFEqual(prior.strip.window, original.window),
                   CFEqual(prior.strip.mixer, pair.strip.mixer),
                   prior.strip.document.utf8.elementsEqual(observation.document.utf8),
                   observation.headers.filter({ CFEqual($0, prior.track.header) }).count == 1 else { return nil }
@@ -590,7 +590,7 @@ extension AccessibilityChannel {
             guard candidates.count == 1, let current = candidates.first,
                   observedPairs.filter({ $0.strip.matches(current.strip) }).count == 1,
                   observation.strips.filter({ CFEqual($0, current.strip.strip) }).count == 1,
-                  let index = current.strip.currentIndex(runtime: runtime), permits(runtime: runtime) else { return nil }
+                  let index = current.strip.currentIndex(in: observation), permits(runtime: runtime) else { return nil }
             return .init(pair: current, index: index, original: prior.strip, originalTrack: prior.track,
                 observation: observation, observedPairs: observedPairs)
         }
@@ -609,8 +609,8 @@ extension AccessibilityChannel {
         /// Renew after the caller's deciding slot read; the pair itself is not permission.
         func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil,
                      nativeOutputPopup: Bool = false) -> Bool {
-            guard pair.strip.currentIndex(runtime: runtime) == index,
-                  originalTrack.currentIndex() != nil,
+            guard (ownedPopup == nil ? pair.strip.currentIndex(in: observation) : pair.strip.currentIndex(runtime: runtime)) == index,
+                  (ownedPopup == nil ? originalTrack.currentIndex(in: observation) : originalTrack.currentIndex()) != nil,
                   ownedPopup.map({ observation.permitsOwnedPopupRead($0,
                     nativeSource: nativeOutputPopup ? pair.strip : nil) }) ?? observation.permitsRead(),
                   case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
@@ -624,12 +624,17 @@ extension AccessibilityChannel {
     }
 
     enum OriginalHeaderSourceDisposition {
-        case retiredOriginal, survivingOriginal
+        case retiredOriginal, survivingOriginal, readObservation
 
         func accepts(_ current: AXMixerStripBinding.Binding, original: AXMixerStripBinding.Binding) -> Bool {
             switch self {
             case .retiredOriginal: return !current.matches(original)
             case .survivingOriginal: return current.matches(original)
+            case .readObservation:
+                // The actual one-to-one original-header observation, not CF
+                // retirement, qualifies this read-only post-popup source.
+                return CFEqual(current.window, original.window) && CFEqual(current.mixer, original.mixer)
+                    && current.document.utf8.elementsEqual(original.document.utf8)
             }
         }
     }
@@ -641,11 +646,13 @@ extension AccessibilityChannel {
         runtime: AXLogicProElements.Runtime, selectedHeaderRequired: Bool = true,
         sourceDisposition: OriginalHeaderSourceDisposition = .retiredOriginal,
         restoringMixerGeometry: HeldSelectionAssociation.MixerViewportGeometry? = nil,
-        observingReadFocus: @Sendable (HeldSelectionAssociation) -> Void = { _ in }
+        observingReadFocus: @Sendable (HeldSelectionAssociation) -> Void = { _ in },
+        observingPeerHeaders: [AXTrackBinding.Binding]? = nil
     ) async -> (source: OriginalHeaderSourceRenewal?, effects: SessionPopulationObservation.UIEffects) {
         guard originalPair.strip.matches(original), originalPair.track.currentIndex() != nil,
               let observation = HeldSelectionAssociation(window: original.window, logic: runtime,
-                  expectedProject: nil, requiresProjectReference: false, allowsSelectedChildRailEntry: true),
+                  expectedProject: nil, requiresProjectReference: false, allowsSelectedChildRailEntry: true,
+                  retainedMixerSource: sourceDisposition == .readObservation ? original : nil),
               CFEqual(observation.mixer, original.mixer),
               observation.document.utf8.elementsEqual(original.document.utf8),
               observation.headers.filter({ CFEqual($0, originalPair.track.header) }).count == 1,
@@ -666,9 +673,11 @@ extension AccessibilityChannel {
         observingReadFocus(observation)
         let originalMixerGeometry = restoringMixerGeometry ?? observation.observedMixerViewportGeometry()
         let pairs = await observation.observe(referenceIsCurrent: {
-            originalPair.track.currentIndex() != nil
+            originalPair.track.currentIndex(in: observation) != nil
                 && (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil
-        }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil }, allHeldHeaders: true)
+        }, stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil },
+            allHeldHeaders: true, prioritizingHeader: originalPair.track,
+            observingPeerHeaders: observingPeerHeaders)
         if let originalMixerGeometry, observation.effects.restoration == "restored" {
             // The hidden Mixer bar is absent from the ordinary viewport census.
             // An original-header inverse must not retain a source after leaving
@@ -679,7 +688,7 @@ extension AccessibilityChannel {
                 if currentGeometry.hasSameViewportPosition(as: originalMixerGeometry) { mixerRestored = true }
                 else {
                     mixerRestored = await observation.recoverMixerReadability(restoring: originalMixerGeometry,
-                        referenceIsCurrent: { originalPair.track.currentIndex() != nil },
+                        referenceIsCurrent: { originalPair.track.currentIndex(in: observation) != nil },
                         stoppingWhen: { (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil })
                 }
             } else { mixerRestored = false }
@@ -694,8 +703,13 @@ extension AccessibilityChannel {
         guard candidates.count == 1, let pair = candidates.first,
               pairs.filter({ $0.strip.matches(pair.strip) }).count == 1,
               observation.effects.restoration == "restored",
-              sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex() != nil,
-              let index = pair.strip.currentIndex(runtime: runtime) else { return (nil, observation.effects) }
+              sourceDisposition.accepts(pair.strip, original: original), originalPair.track.currentIndex(in: observation) != nil,
+              let index = pair.strip.currentIndex(in: observation) else {
+            Log.info("Original-header source renewal refused: pairs=\(pairs.count), candidates=\(candidates.count), "
+                + "restoration=\(observation.effects.restoration), dispositions=\(candidates.map { sourceDisposition.accepts($0.strip, original: original) })",
+                subsystem: "ax")
+            return (nil, observation.effects)
+        }
         return (.init(pair: pair, index: index, original: original, originalTrack: originalPair.track,
             observation: observation, observedPairs: pairs), observation.effects)
     }

@@ -46,7 +46,8 @@ extension AccessibilityChannel {
               allowsSelectedChildRailEntry: Bool = false,
               retainedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus? = nil,
               retainedTrackBindings: [AXTrackBinding.Binding]? = nil,
-              restorationBaseline: HeldSelectionAssociation? = nil) {
+              restorationBaseline: HeldSelectionAssociation? = nil,
+              retainedMixerSource: AXMixerStripBinding.Binding? = nil) {
             // The existing foreground AX probe requires this CLI process's
             // window-server connection; a missing/foreign PID still refuses.
             _ = logic.onScreenWindowList()
@@ -56,6 +57,8 @@ extension AccessibilityChannel {
                   case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: logic),
                   let url = URL(string: document), url.isFileURL,
                   url.host == nil || url.host == "" || url.host == "localhost",
+                  retainedMixerSource.map({ CFEqual($0.window, window)
+                      && $0.document.utf8.elementsEqual(document.utf8) }) ?? true,
                   !requiresProjectReference || (
                     expectedProject?.projectName?.utf8.elementsEqual(AccessibilityChannel.projectName(fromWindowTitle: title).utf8) == true
                     && expectedProject?.projectFilePath?.utf8.elementsEqual(url.path.utf8) == true),
@@ -76,7 +79,7 @@ extension AccessibilityChannel {
                       && CFEqual($0.rail, rail) && CFEqual($0.header, headers[selected]) && $0.permits() }) ?? true,
                   let mixer = Self.entryMixer(focus: focus, window: window, railPath: railPath,
                     logic: logic, allowsSelectedChildRailEntry: allowsSelectedChildRailEntry,
-                    retainedHeaderFocus: retainedHeaderFocus),
+                    retainedHeaderFocus: retainedHeaderFocus, retainedMixer: retainedMixerSource?.mixer),
                   let enumeration = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),
                   enumeration.strips.filter({ CFEqual($0, focus) }).count == 1
                     || (allowsSelectedChildRailEntry && (railPath.contains { CFEqual($0, focus) }
@@ -135,12 +138,21 @@ extension AccessibilityChannel {
         private static func entryMixer(focus: AXUIElement, window: AXUIElement,
                                        railPath: [AXUIElement], logic: AXLogicProElements.Runtime,
                                        allowsSelectedChildRailEntry: Bool,
-                                       retainedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus?) -> AXUIElement? {
+                                       retainedHeaderFocus: OwnedTrackStackObservationNavigation.ReadFocusScope.PassiveHeaderReadFocus?,
+                                       retainedMixer: AXUIElement?) -> AXUIElement? {
             guard allowsSelectedChildRailEntry,
                   railPath.contains(where: { CFEqual($0, focus) }) || retainedHeaderFocus != nil else {
                 // Preserve scalar/default acquisition exactly: the focus's
                 // original physical parent supplies its Mixer candidate.
                 return AXHelpers.getAttribute(focus, kAXParentAttribute as String, runtime: logic.ax)
+            }
+            if let retainedMixer {
+                // Renew this already-held native owner, not a whole-window Help
+                // discovery through the old census after popup cleanup. The
+                // constructor still proves its reciprocal path, complete current
+                // strips, rail, selected child, viewport and stopped transport.
+                guard Self.path(retainedMixer, to: window, ax: logic.ax) != nil else { return nil }
+                return retainedMixer
             }
             guard case .found(let mixer) = (try? AXLogicProElements.mixerPopulationAreaLookup(
                 in: window, runtime: logic, requiresCompleteAbsence: true,
@@ -457,6 +469,62 @@ extension AccessibilityChannel {
                   pair.track.exposure?.isCurrent ?? true,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
             return true
+        }
+
+        func retainsOriginalHeaderCarrier(_ binding: AXTrackBinding.Binding) -> Bool {
+            !lost && CFEqual(binding.window, window)
+                && binding.document.utf8.elementsEqual(document.utf8)
+                && headers.filter({ CFEqual($0, binding.header) }).count == 1
+        }
+
+        /// Fresh identity metadata for this already-admitted native Mixer only.
+        /// It grants no Help, popup, selection, inverse or reference permission.
+        func readOriginalMixerIndex(for binding: AXMixerStripBinding.Binding,
+                                    ownedPopup: AXUIElement? = nil) -> Int? {
+            guard !lost, CFEqual(binding.window, window), CFEqual(binding.mixer, mixer),
+                  binding.document.utf8.elementsEqual(document.utf8),
+                  strips.filter({ CFEqual($0, binding.strip) }).count == 1,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+            guard AXLogicProElements.isMixerContainerRole(AXHelpers.getRole(mixer, runtime: logic.ax)),
+                  let railRole = AXHelpers.getRole(rail, runtime: logic.ax),
+                  [kAXGroupRole, kAXListRole, kAXScrollAreaRole, kAXOutlineRole, kAXTableRole]
+                    .contains(where: { railRole == $0 as String }),
+                  case .read(let currentHeaders) = AXLogicProElements.enumerateTrackHeaderRows(in: rail,
+                    runtime: logic.ax) else { lost = true; return nil }
+            retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(currentHeaders) }
+            guard Self.same(headers, currentHeaders),
+                  let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),
+                  Self.same(strips, current.strips), owned(ownedPopup: ownedPopup),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                lost = true; return nil
+            }
+            let matching = current.strips.indices.filter { CFEqual(current.strips[$0], binding.strip) }
+            return matching.count == 1 ? matching[0] : nil
+        }
+
+        /// Identity-only sampling of this already-observed native rail. It grants
+        /// no Help, selection, popup, inverse or publication permission.
+        func readOriginalHeaderPopulation(for binding: AXTrackBinding.Binding,
+            observingPopulation: ([AXUIElement]) -> Void) -> [AXUIElement]? {
+            guard retainsOriginalHeaderCarrier(binding),
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
+            guard let role = AXHelpers.getRole(rail, runtime: logic.ax),
+                  [kAXGroupRole, kAXListRole, kAXScrollAreaRole, kAXOutlineRole, kAXTableRole]
+                    .contains(where: { role == $0 as String }),
+                  case .read(let current) = AXLogicProElements.enumerateTrackHeaderRows(in: rail, runtime: logic.ax) else {
+                lost = true; binding.exposure?.end(); return nil
+            }
+            // Consume the actual sample even when later ownership fails. A
+            // restored census cannot revive a previously retired binding.
+            observingPopulation(current)
+            binding.exposure?.observeHeaders(current)
+            retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(current) }
+            guard Self.same(headers, current), owned(),
+                  binding.exposure?.isCurrent ?? true,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                lost = true; binding.exposure?.end(); return nil
+            }
+            return current
         }
 
         /// Only this explicit association observation uses this request-local focus scope.
@@ -1330,9 +1398,21 @@ extension AccessibilityChannel {
                      stoppingWhen stop: @Sendable () -> Bool,
                      allHeldHeaders: Bool = false,
                      narrowChallengeHeaders: [AXTrackBinding.Binding] = [],
+                     prioritizingHeader: AXTrackBinding.Binding? = nil,
+                     observingPeerHeaders: [AXTrackBinding.Binding]? = nil,
                      populationReadDuration: Duration = .zero,
                      collectionNow: @Sendable () -> ContinuousClock.Instant = { .now }) async -> [Pair] {
-            let firstChallenge = headers.indices.first { index in
+            var preferredIndex: Int?
+            if let prioritizingHeader {
+                guard allHeldHeaders, CFEqual(prioritizingHeader.window, window),
+                      prioritizingHeader.document.utf8.elementsEqual(document.utf8),
+                      prioritizingHeader.exposure?.hasEnded != true,
+                      headers.filter({ CFEqual($0, prioritizingHeader.header) }).count == 1 else {
+                    effects.reason = "association_selection_unverified"; return []
+                }
+                preferredIndex = headers.firstIndex { CFEqual($0, prioritizingHeader.header) }
+            }
+            var eligibleChallenges = headers.indices.filter { index in
                 guard index != originalIndex else { return false }
                 return allHeldHeaders || narrowChallengeHeaders.filter { binding in
                     CFEqual(binding.header, headers[index]) && CFEqual(binding.window, window)
@@ -1340,6 +1420,11 @@ extension AccessibilityChannel {
                         && binding.exposure?.hasEnded != true
                 }.count == 1
             }
+            if let preferredIndex, preferredIndex != originalIndex {
+                eligibleChallenges.removeAll { $0 == preferredIndex }
+                eligibleChallenges.insert(preferredIndex, at: 0)
+            }
+            let firstChallenge = eligibleChallenges.first
             guard let firstChallenge else {
                 effects.reason = "association_selection_unverified"; return []
             }
@@ -1353,7 +1438,10 @@ extension AccessibilityChannel {
                 effects.reason = "association_selection_unverified"; return []
             }
             let originalAssociationStrip = originalSelectedChild ?? originalFocus
-            let challenges = allHeldHeaders ? headers.indices.filter { $0 != originalIndex } : [firstChallenge]
+            // The retained source must not fall behind optional peer discovery
+            // when the existing collection reserve ends. Priority changes only
+            // order: every challenge retains full census and inverse custody.
+            let challenges = allHeldHeaders ? eligibleChallenges : [firstChallenge]
             // Whole-held pairs are optional partial observations. Do not spend
             // the entire owned deadline on more challenges: the original inverse
             // and final fresh population still need that same deadline. This is
@@ -1373,6 +1461,21 @@ extension AccessibilityChannel {
                 collectionEnd = start.advanced(by: reserve > .zero ? remaining - reserve : remaining / 4)
             } else { collectionEnd = nil }
             var observed: [(Int, AXUIElement)] = []
+            func requestedPeersWereObserved() -> Bool {
+                guard allHeldHeaders, let observingPeerHeaders, !observed.isEmpty else { return false }
+                if let preferredIndex, preferredIndex != originalIndex,
+                   !observed.contains(where: { $0.0 == preferredIndex }) { return false }
+                return observingPeerHeaders.allSatisfy { peer in
+                    guard CFEqual(peer.window, window),
+                          peer.document.utf8.elementsEqual(document.utf8), peer.exposure?.hasEnded != true,
+                          headers.filter({ CFEqual($0, peer.header) }).count == 1,
+                          let index = headers.firstIndex(where: { CFEqual($0, peer.header) }) else { return false }
+                    // The original relationship still needs its actual changed-
+                    // strip return below. This only ends optional discovery;
+                    // no pair survives a failed full-custody inverse or viewport.
+                    return index == originalIndex || observed.contains(where: { $0.0 == index })
+                }
+            }
             var restored = true
             var selectionsVerified = true
             // An initially selected header and passive focus are not a pair
@@ -1422,6 +1525,7 @@ extension AccessibilityChannel {
                         }
                         if !CFEqual(associationStrip, originalAssociationStrip) { observed.append((challenge, associationStrip)) }
                     }
+                    if requestedPeersWereObserved() { break }
                     continue
                 }
                 if expectedIndex == originalIndex {
@@ -1480,14 +1584,35 @@ extension AccessibilityChannel {
             guard selectionsVerified, !observed.isEmpty else {
                 effects.reason = "association_selection_unverified"; return []
             }
+            guard let railRole = AXHelpers.getRole(rail, runtime: logic.ax),
+                  [kAXGroupRole, kAXListRole, kAXScrollAreaRole, kAXOutlineRole, kAXTableRole]
+                    .contains(where: { railRole == $0 as String }),
+                  case .read(let publicationHeaders) = AXLogicProElements.enumerateTrackHeaderRows(in: rail,
+                    runtime: logic.ax) else {
+                lost = true; effects.reason = "association_selection_unverified"; return []
+            }
+            retainedTrackBindings?.forEach { $0.exposure?.observeHeaders(publicationHeaders) }
+            guard Self.same(headers, publicationHeaders), await referenceIsCurrent(), permitsRead(), !stop() else {
+                effects.reason = "association_selection_unverified"; return []
+            }
             // A narrow challenge corroborates the requested selection; it does
             // not authorize later routing acquisition on that unselected peer.
-            return ((allHeldHeaders ? observed : []) + (originalPairVerified ? [(originalIndex, originalAssociationStrip)] : [])).map { index, strip in
+            let pairs = ((allHeldHeaders ? observed : []) + (originalPairVerified ? [(originalIndex, originalAssociationStrip)] : [])).map { index, strip in
                 Pair(track: retainedTrackBindings?[index]
-                        ?? .init(window: window, header: headers[index], document: document, runtime: logic),
+                        ?? .init(window: window, header: headers[index], document: document, runtime: logic,
+                            observedHeaders: publicationHeaders),
                      strip: .init(window: window, mixer: mixer, strip: strip, document: document),
                      source: originalSelectedChild == nil ? "held_exclusive_selection_focus" : "held_exclusive_selection_selected_child")
             }
+            // Constructing a binding reads its native header shape. Renew this
+            // same complete scope after those deciding reads before publishing.
+            guard let first = pairs.first, await referenceIsCurrent(),
+                  let finalHeaders = readOriginalHeaderPopulation(for: first.track, observingPopulation: { _ in }),
+                  Self.same(publicationHeaders, finalHeaders), permitsRead(),
+                  await referenceIsCurrent(), !stop() else {
+                effects.reason = "association_selection_unverified"; return []
+            }
+            return pairs
         }
     }
 }

@@ -453,6 +453,10 @@ struct Issue965HeldSelectionAssociationTests {
         let bundle: URL
         var selections: [Int] = []
         var focusRestorationWrites: [AXUIElement] = []
+        var globalFocusClassificationsDuringHeldEntry = 0
+        var guardedEntryHelpReads = 0
+        var focusOrderFaultInjected = false
+        var helpReadsAfterFocusOrderFault = 0
         var cleanupTransportReads = 0
         var cleanupTransportReadsAtWrite = 0
         var cleanupScopeInjected = false
@@ -515,11 +519,26 @@ struct Issue965HeldSelectionAssociationTests {
         var routingDocumentReadsAtFirstNameWrite: Int?
         var routingDocumentReadsAtFirstNameConfirm: Int?
         var routingDestinationPresses = 0
+        var routingBeforeSendMenuOpens = 0
+        var routingDecidingSendFaultInjected = false
+        var routingDecidingLeafActionsRead = false
+        var routingDecidingModeRead = false
+        var routingDecidingFinalChoiceRead = false
         var routingBusLeafPresses: [Int] = []
+        var routingCanonicalInputBuses: [Int] = []
+        var routingCanonicalContradictedInputs: [Int] = []
+        var routingSourceInputCancelledAtSelectionCount: Int?
+        var routingSourceInputFreshHeaderChallenges = 0
         var routingChangedSendPublished = false
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
+        var routingInputOpenDiscoveryStart: Int?
+        var routingInputOpenDiscoveryCounts: [Int] = []
+        var routingInputOpenWindowScans = 0
+        var routingInputDiscoveryProbe: AXUIElement?
+        var routingPopupReadFocusRetained = false
         var routingForeignHelpReads = 0
+        var routingForeignHelpFirstStack: [String] = []
         var scrollToChangedOutput = false
         var scrollToViewportDriftEnabled = false
         var scrollToViewportShifted = false
@@ -558,9 +577,11 @@ struct Issue965HeldSelectionAssociationTests {
         var routingClassifierControls: [AXUIElement] = []
         var routingWrongSourcePressed = false
         var expireRetainedCapture = false
-        var captureClockReadsAfterName = 0
+        var captureExpiredAtCheckedSendDispatch = false
         var coupledGuardBarReads = 0
         var coupledGuardPopulationScans = 0
+        var heldHeaderDiscoveryScans = 0
+        var heldHeaderDiscoveryActive = false
         var coupledGuardPlayReads = 0
         var coupledGuardRecordReads = 0
         var coupledGuardCountDiscovery = false
@@ -786,6 +807,11 @@ struct Issue965HeldSelectionAssociationTests {
                         footprintReads[key] = sample
                     }
                     routingRead?(element, attribute)
+                    if routingInputOpenDiscoveryStart != nil,
+                       routingInputDiscoveryProbe.map({ CFEqual(element, $0) }) == true,
+                       attribute == kAXRoleAttribute as String, activeBulkAttributes == nil {
+                        routingInputOpenWindowScans += 1
+                    }
                     if routingScalarControls.contains(where: { CFEqual($0, element) }),
                        [kAXValueAttribute as String, kAXMinValueAttribute as String, kAXMaxValueAttribute as String].contains(attribute) {
                         return .some(builder.attributeValue(element, attribute) as AnyObject?)
@@ -1211,7 +1237,10 @@ struct Issue965HeldSelectionAssociationTests {
             poller: StatePoller(axChannel: f.channel(), cache: cache,
                 runtime: .init(hasVisibleWindow: { true }, projectFileReader: fileReader,
                                keyboardFocus: {
-                                   guardedPassiveFocus || (guardedRenewalFocus && f.routingReplacement != nil)
+                                   if f.guardedEntryHelpReads > 0, f.selections.isEmpty {
+                                       f.globalFocusClassificationsDuringHeldEntry += 1
+                                   }
+                                   return guardedPassiveFocus || (guardedRenewalFocus && f.routingReplacement != nil)
                                        ? .textEditing(role: kAXLayoutItemRole as String, byInsertionPoint: true) : .notTextEditing
                                })),
             dialogPresent: { false }, supportBundleExporter: nil, mutationGate: gate,
@@ -3893,6 +3922,18 @@ struct Issue965HeldSelectionAssociationTests {
 
     @Test(arguments: ["late_play", "late_record", "late_bit", "final_record_document"])
     func registeredSendBypassRefusesLateTransportAndBitChanges(fault: String) async throws {
+        if fault == "late_bit" {
+            let healthy = BypassCensusBoundary()
+            try await assertOccupiedSingleSendRenewal(emptyModeMenu: true,
+                bypassMode: "measure_late_bit", bypassBoundary: healthy)
+            let count = try #require(healthy.censuses > 0 ? healthy.censuses : nil)
+            for index in 1...count {
+                let boundary = BypassCensusBoundary(injectAt: index)
+                try await assertOccupiedSingleSendRenewal(emptyModeMenu: true,
+                    bypassMode: fault, bypassBoundary: boundary)
+            }
+            return
+        }
         try await assertOccupiedSingleSendRenewal(emptyModeMenu: true, bypassMode: fault)
     }
 
@@ -4488,6 +4529,13 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(boundary.permittedAfterFault == [false])
     }
 
+    private final class BypassCensusBoundary: @unchecked Sendable {
+        var censuses = 0, lastValueReads = -1
+        var insideNativeWriter = false
+        let injectAt: Int?
+        init(injectAt: Int? = nil) { self.injectAt = injectAt }
+    }
+
     private final class ModePeerBoundary: @unchecked Sendable {
         var peerReads = 0, beforeLeafPeerReads = 0, mutations = 0, leafCount = 0
         var injectAt = -1
@@ -4731,6 +4779,53 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: ["forward", "cancel"])
+    func canonicalBusStereoDepartureUsesCapturedInputsAndOwnEffect(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true,
+                canonicalBusReceiverFault: "physical_source")
+        }
+    }
+
+    @Test func canonicalBusStereoDepartureDoesNotRequireAnUnrelatedBusReceiver() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true, canonicalBusReceiverFault: "missing_after")
+        }
+    }
+
+    @Test func canonicalBusStereoDepartureRetainsItsEffectThroughInputReadRenewal() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true,
+                canonicalBusReceiverFault: "physical_source_inverse_read_renewal")
+        }
+    }
+
+    @Test(arguments: ["missing_before", "checked_before_at_capture", "checked_before_after_preview",
+                      "checked_before_after_forward", "checked_source_after_preview", "checked_source_after_forward"])
+    func canonicalBusStereoDepartureRefusesMissingOrChangedInputProof(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true, canonicalBusReceiverFault: fault)
+        }
+    }
+
+    @Test(arguments: ["physical_source_inverse_read_renewal_peer_volume", "physical_source_inverse_read_renewal_mode",
+                      "physical_source_inverse_read_renewal_project"])
+    func canonicalBusStereoDepartureCannotRenewChangedProtectedState(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalBusStereoReturn: true, canonicalBusReceiverFault: fault)
+        }
+    }
+
     @Test(arguments: ["missing_before", "missing_after"])
     func canonicalExistingBusSendRequiresBothReturnAndForwardReceivers(fault: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -4761,12 +4856,157 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Canonical Send input prerequisites keep the admitted Mixer census while their own popup is open",
+          arguments: ["forward", "cancel"], [false, true])
+    func canonicalExistingBusSendReadsInputsThroughItsHeldMixer(mode: String, anotherWindow: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_scoped_input", stableDestinationBulkReads: true,
+                scopedInputAdditionalWindow: anotherWindow)
+        }
+    }
+
+    @Test("An input read borrowing a held Mixer still uses the existing native-popup custody path",
+          arguments: ["unscoped", "owned", "foreign_scope", "guarded_ordinary", "guarded_ordinary_document",
+                      "guarded_ordinary_window", "guarded_ordinary_source", "guarded_ordinary_gate",
+                      "guarded_native", "guarded_native_document",
+                      "guarded_native_window", "guarded_native_source", "guarded_native_root",
+                      "guarded_native_editor", "guarded_native_gate"])
+    func heldInputReadPreservesNativePopupWithoutFocusedWindow(scope: String) async throws {
+        let f = try Fixture(), b = f.builder
+        let ordinary = scope.hasPrefix("guarded_ordinary")
+        let input = b.element(1_971_980), root = b.element(1_971_981), echo = b.element(1_971_982)
+        let parent = b.element(1_971_983), submenu = b.element(1_971_984), leaf = b.element(1_971_985)
+        let wrapper = b.element(1_971_986), frame = CGRect(x: 20, y: 100, width: 230, height: 175)
+        let outer = b.element(1_971_987)
+        b.setRole(f.mixer, kAXLayoutAreaRole as String); b.setAttribute(f.mixer, kAXDescriptionAttribute as String, "Mixer")
+        b.setRole(outer, kAXGroupRole as String); b.setAttribute(outer, kAXDescriptionAttribute as String, "Mixer")
+        let windowChildren = b.makeAXRuntime().children(f.window)
+        b.setChildren(outer, [f.mixer])
+        b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? outer : $0 })
+        b.setButton(input, description: "Bus 1", help: "Input slot. Choose the channel strip input source.",
+            x: 0, y: 0, width: 1, height: 1)
+        b.setChildren(input, [])
+        b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]) + [input])
+        for (node, role, title) in [(root, kAXMenuRole, ""), (echo, kAXMenuItemRole, "Bus 1"),
+                                   (parent, kAXMenuItemRole, "Bus"), (submenu, kAXMenuRole, ""),
+                                   (leaf, kAXMenuItemRole, "Bus 1")] {
+            b.setRole(node, role as String); b.setAttribute(node, kAXTitleAttribute as String, title)
+            b.setChildren(node, [])
+        }
+        for node in [echo, leaf] { b.setAttribute(node, "AXMenuItemMarkChar", "✓") }
+        b.setChildren(submenu, [leaf]); b.setChildren(parent, [submenu]); b.setChildren(root, [echo, parent])
+        b.setActionNames(input, [kAXPressAction as String]); b.setActionNames(root, [kAXCancelAction as String])
+        b.setRole(wrapper, kAXPopUpButtonRole as String)
+        b.setAttribute(wrapper, kAXParentAttribute as String, f.mixer)
+        b.setAttribute(wrapper, kAXWindowAttribute as String, f.window)
+        b.setFrame(root, x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
+        f.routingFocusHit = { _, _ in .success(f.routingNativePopupFrame == nil ? nil : echo) }
+        f.routingReadResult = { element, attribute in
+            if !ordinary, f.routingNativePopupFrame != nil, CFEqual(element, f.app), attribute == kAXFocusedWindowAttribute as String {
+                if scope == "guarded_native_window" { return .success(b.element(1_971_988)) }
+                return .failure(.init(raw: AXError.noValue.rawValue))
+            }
+            return nil
+        }
+        f.routingAction = { element, action in
+            if CFEqual(element, input), action == kAXPressAction as String {
+                b.setChildren(wrapper, [root]); f.routingNativePopupFrame = frame; f.inputMenuPresses += 1
+                if ordinary { b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [root]) }
+                switch scope {
+                case "guarded_native_document", "guarded_ordinary_document":
+                    b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                case "guarded_ordinary_window": b.setAttribute(f.app, kAXFocusedWindowAttribute as String, b.element(1_971_988))
+                case "guarded_native_source", "guarded_ordinary_source":
+                    b.setChildren(f.strips[1], b.makeAXRuntime().children(f.strips[1]).filter { !CFEqual($0, input) })
+                case "guarded_native_root": b.setChildren(wrapper, [])
+                case "guarded_native_editor":
+                    let editor = b.element(1_971_989)
+                    b.setRole(editor, kAXTextFieldRole as String); b.setAttribute(editor, kAXValueAttribute as String, "Editing")
+                    b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                default: break
+                }
+                return true
+            }
+            if CFEqual(element, root), action == kAXCancelAction as String {
+                if ordinary { b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, root) }) }
+                b.setChildren(wrapper, []); f.routingNativePopupFrame = nil
+                return true
+            }
+            Issue.record("Only the acquired input popup and its Cancel may run"); return false
+        }
+        let gate = LogicMutationGate(), claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: {
+            gate.stillOwns(claim) && (!scope.hasSuffix("_gate") || f.routingNativePopupFrame == nil)
+        })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            var borrowed = scope == "unscoped" || scope.hasPrefix("guarded_native") ? nil : held
+            if scope == "foreign_scope" {
+                b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                borrowed = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                    logic: runtime, expectedProject: nil, requiresProjectReference: false))
+                b.setAttribute(f.window, kAXDocumentAttribute as String, held.document)
+            }
+            let owner = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+                strip: f.strips[1], document: held.document)
+            let readScope = borrowed
+            let focus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+            let readGuard = AXHelpers.HelpReadGuard(allowHelpReads: true, stop: {
+                guard scope.hasPrefix("guarded_native") || ordinary else { return false }
+                let permitted = focus.permits() || held.permitsRead()
+                if !permitted, f.routingForeignHelpFirstStack.isEmpty { f.routingForeignHelpFirstStack = Thread.callStackSymbols }
+                return !permitted
+            })
+            let read = await AXHelpers.HelpReadGuard.$current.withValue(readGuard) {
+                await AXMixerStripBinding.$current.withValue(owner) {
+                    await AccessibilityChannel.getInputBusObservation(runtime: runtime, timing: .immediate,
+                        observingPopupFocus: { f.routingPopupReadFocusRetained = $0 != nil; focus.retainRoutingPopupFocus($0) },
+                        readingOriginalScope: readScope)
+                }
+            }
+            #expect(!f.routingPopupReadFocusRetained, "Every reader exit clears its temporary native focus proof")
+            if scope.hasPrefix("guarded_native_") || scope.hasPrefix("guarded_ordinary_") {
+                #expect(read.assignment == nil, "A changed source, project, root, focus or gate cannot qualify input")
+                return
+            }
+            if scope == "foreign_scope" {
+                #expect(read.assignment == nil)
+                #expect(f.inputMenuPresses == 0, "Reject foreign metadata before acquiring a popup")
+                #expect(held.permitsRead(), "The foreign scope cannot retire the original observation")
+                return
+            }
+            #expect(read.assignment == .bus(1), "Actual native input read: \(read.result.message)")
+            #expect(f.inputMenuPresses == 1)
+            #expect(f.routingNativePopupFrame == nil, "The acquired native popup must actually close")
+            if scope == "guarded_native" || scope == "guarded_ordinary" {
+                #expect(held.permitsRead(), "A qualified native popup cannot retire the original capture: \(f.routingForeignHelpFirstStack.joined(separator: "\n"))")
+            }
+        }
+    }
+
     @Test(arguments: ["forward", "cancel"])
     func canonicalExistingBusSendSurvivesItsOwnedInputReadRenewal(mode: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
                 noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
                 canonicalBusReceiverFault: "physical_source_read_renewal")
+        }
+    }
+
+    @Test("Canonical Send corroborates its approved before-state in the deciding popup without a duplicate read lifecycle",
+          arguments: ["healthy", "level", "bypass", "mode", "project",
+                      "late_action_mode", "late_choice_mode", "late_bus_mode"])
+    func canonicalSendDecidingPopupRetainsItsApprovedBeforeState(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true,
+                canonicalBusChange: true, stableDestinationBulkReads: fault.hasPrefix("late_"),
+                decidingSendFault: fault)
         }
     }
 
@@ -4785,7 +5025,7 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertOccupiedSingleSendRenewal(sendGeometry: true)
     }
 
-    @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8])
+    @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
     func canonicalExistingBusSendRenewsHelpCustodyDuringInverseControlScan(roleSample: Int) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
             try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
@@ -4810,7 +5050,9 @@ struct Issue965HeldSelectionAssociationTests {
                                                readRestored: String? = nil, sagaMode: String? = nil,
                                                inspectSendWitness: String? = nil,
                                                noOpDestination: OutputAssignment? = nil,
-                                               bypassMode: String? = nil, levelMode: String? = nil,
+                                               bypassMode: String? = nil,
+                                               bypassBoundary: BypassCensusBoundary? = nil,
+                                               levelMode: String? = nil,
                                                freshEmpty: String? = nil, freshAfterTargetReads: Int? = nil,
                                                recordFreshFinalPeerRead: (@Sendable (Int) -> Void)? = nil,
                                                modeCommand: String? = nil,
@@ -4823,6 +5065,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                canonicalPhysical: Bool = false,
                                                canonicalBus: Bool = false,
                                                canonicalBusChange: Bool = false,
+                                               canonicalBusStereoReturn: Bool = false,
                                                canonicalBusReceiverFault: String? = nil,
                                                inverseHelpRole: Int = 1,
                                                canonicalName: Bool = false,
@@ -4837,7 +5080,9 @@ struct Issue965HeldSelectionAssociationTests {
                                                freshBusStereoReturn: Bool = false,
                                                canonicalMatching: Bool = false,
                                                matchingFault: String? = nil,
-                                               sendGeometry: Bool = false) async throws {
+                                               sendGeometry: Bool = false,
+                                               decidingSendFault: String? = nil,
+                                               scopedInputAdditionalWindow: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inverseInputReadRenewal = canonicalBusReceiverFault?.hasPrefix("physical_source_inverse_read_renewal") == true
@@ -4913,11 +5158,12 @@ struct Issue965HeldSelectionAssociationTests {
             b.setChildren(f.window, windowChildren.map { CFEqual($0, f.mixer) ? mixerOwner : $0 })
             let captureNow = ContinuousClock.now
             let cache = StateCache(sessionCaptureNow: {
-                if expireInspectionBeforeSendDispatch, !f.routingNameWrites.isEmpty {
-                    f.captureClockReadsAfterName += 1
-                    // The journal before-read and executor's deciding before-read
-                    // both succeed. Only the dispatcher's later cache lookup expires.
-                    if f.captureClockReadsAfterName >= 3 { f.expireRetainedCapture = true }
+                if expireInspectionBeforeSendDispatch, !f.routingNameWrites.isEmpty,
+                   SendRemovalSagaAdapter.checkedSourcePair != nil {
+                    // Expire at the actual admitted Send dispatch, after its
+                    // independent before-read, regardless of earlier lookup count.
+                    f.captureExpiredAtCheckedSendDispatch = true
+                    f.expireRetainedCapture = true
                 }
                 return f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
             }), registry = TargetRegistry()
@@ -5303,6 +5549,23 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
                     || (canonicalSend != nil && CFEqual(element, b.element(1_965_2799)))
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
+                    if let decidingSendFault, f.routingDestinationPresses == 0 {
+                        f.routingBeforeSendMenuOpens += 1
+                        if decidingSendFault != "healthy", !decidingSendFault.hasPrefix("late_"),
+                           !f.routingDecidingSendFaultInjected,
+                           SendRemovalSagaAdapter.requiredSendControl != nil {
+                            f.routingDecidingSendFaultInjected = true
+                            switch decidingSendFault {
+                            case "level": b.setAttribute(b.element(1_965_2624), kAXValueAttribute as String, 1)
+                            case "bypass": b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 1)
+                            case "mode":
+                                b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                                b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                            case "project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///different.logicx/")
+                            default: Issue.record("Unknown deciding Send fault")
+                            }
+                        }
+                    }
                     if canonicalSend == "late_replacement", CFEqual(element, b.element(1_965_2799)) {
                         f.routingBypassMenuOpens += 1
                     }
@@ -5606,7 +5869,7 @@ struct Issue965HeldSelectionAssociationTests {
                 b.setChildren(busTwo, []); b.setActionNames(busTwo, [kAXPressAction as String])
                 b.setChildren(b.element(1_965_2682), [destination, busTwo])
                 b.setChildren(f.mixer, f.strips + [receiver])
-                if sourceInputReadRenewal {
+                do {
                     // Read renewal must preserve independently observed scalars,
                     // inserts and the unchanged main output, not just Send values.
                     for (index, owner) in (f.strips + [receiver]).enumerated() {
@@ -5657,12 +5920,15 @@ struct Issue965HeldSelectionAssociationTests {
                             }
                         }
                         if f.routingLateScopeInjected, attribute == kAXHelpAttribute as String {
+                            if f.routingForeignHelpReads == 0 {
+                                f.routingForeignHelpFirstStack = Thread.callStackSymbols
+                            }
                             f.routingForeignHelpReads += 1
                         }
                     }
                 }
                 f.routingAction = { element, action in
-                    if sourceInputReadRenewal {
+                    do {
                         if action == kAXPressAction as String,
                            [1_971_532, 1_971_535, 1_971_538].contains(where: { CFEqual(element, b.element($0)) }) {
                             b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [mainRoot])
@@ -5677,11 +5943,20 @@ struct Issue965HeldSelectionAssociationTests {
                        CFEqual(element, input) || CFEqual(element, b.element(1_965_2680)) || CFEqual(element, sourceInput) {
                         let ownInput = CFEqual(element, sourceInput)
                         let bus = CFEqual(element, input) ? 2 : 1
+                        if f.routingInputReadRenewalArmed, canonicalBusReceiverFault == "physical_source", !ownInput,
+                           let count = f.routingSourceInputCancelledAtSelectionCount {
+                            #expect(f.selections.count > count,
+                                "The canonical caller must actually re-observe its header after Source Input Cancel")
+                            f.routingSourceInputFreshHeaderChallenges += 1
+                            f.routingSourceInputCancelledAtSelectionCount = nil
+                        }
+                        f.routingCanonicalInputBuses.append(ownInput ? 0 : bus)
                         let appliesToReceiver = canonicalBusReceiverFault?.hasPrefix(ownInput ? "checked_source_"
                             : bus == 1 ? "checked_before_" : "checked_after_") == true
                         let contradicted = appliesToReceiver && (canonicalBusReceiverFault?.hasSuffix("at_capture") == true
                             || f.routingLateScopeInjected
                             || (canonicalBusReceiverFault?.hasSuffix("after_forward") == true && f.routingDestinationPresses > 0))
+                        if contradicted { f.routingCanonicalContradictedInputs.append(ownInput ? 0 : bus) }
                         // The original caption and native owner stay unchanged. Only the actual
                         // checked input differs, which a caption-only guard cannot observe.
                         b.setAttribute(inputEcho, kAXTitleAttribute as String, ownInput ? "Input 1" : "Bus \(bus)")
@@ -5693,10 +5968,21 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setChildren(inputRoot, [inputEcho] + (ownInput ? [physicalParent] : []) + [inputBusParent])
                         let rows = b.makeAXRuntime().children(f.mixer)
                         b.setChildren(f.mixer, rows + [inputRoot]); f.inputMenuPresses += 1
+                        if canonicalBusReceiverFault == "physical_source_scoped_input", f.routingInputReadRenewalArmed {
+                            f.routingInputOpenDiscoveryStart = f.coupledGuardPopulationScans
+                        }
                         return true
                     }
                     if CFEqual(element, inputRoot), action == kAXCancelAction as String {
+                        if let start = f.routingInputOpenDiscoveryStart {
+                            f.routingInputOpenDiscoveryCounts.append(f.coupledGuardPopulationScans - start)
+                            f.routingInputOpenDiscoveryStart = nil
+                        }
                         b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).filter { !CFEqual($0, inputRoot) })
+                        if f.routingInputReadRenewalArmed, canonicalBusReceiverFault == "physical_source",
+                           f.routingCanonicalInputBuses.last == 0 {
+                            f.routingSourceInputCancelledAtSelectionCount = f.selections.count
+                        }
                         if sourceInputReadRenewal, f.routingInputReadRenewalArmed, !f.routingInputReadRenewed,
                            canonicalBusReceiverFault == "physical_source_read_renewal" || f.routingDestinationPresses == 1 {
                             f.routingInputReadRenewed = true
@@ -5734,9 +6020,11 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                         return true
                     }
-                    let forward = CFEqual(element, busTwo) && action == kAXPressAction as String
+                    let forward = CFEqual(element, canonicalBusStereoReturn ? stereo : busTwo) && action == kAXPressAction as String
                     let inverse = CFEqual(element, destination) && action == kAXPressAction as String
-                    if forward || inverse { f.routingBusLeafPresses.append(forward ? 2 : 1) }
+                    if (forward && !canonicalBusStereoReturn) || inverse {
+                        f.routingBusLeafPresses.append(forward ? 2 : 1)
+                    }
                     // Reuse the source redraw model while retaining this untouched receiver.
                     let acknowledged = originalAction(forward ? destination : inverse ? stereo : element, action)
                     if sourceInputReadRenewal, let peer = f.routingOtherReplacement {
@@ -5744,26 +6032,27 @@ struct Issue965HeldSelectionAssociationTests {
                             CFEqual($0, f.strips[0]) ? peer : $0
                         })
                     }
+                    let currentSource = f.routingReplacement ?? f.strips[1]
                     if canonicalBusReceiverFault?.contains("source") == true {
-                        let currentSource = f.routingReplacement ?? f.strips[1]
                         let currentChildren = b.makeAXRuntime().children(currentSource)
                         if !currentChildren.contains(where: { CFEqual($0, sourceInput) }) {
                             b.setChildren(currentSource, currentChildren + [sourceInput])
                         }
-                        if sourceInputReadRenewal {
-                            let fields = [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)]
-                            let observed = b.makeAXRuntime().children(currentSource)
-                            b.setChildren(currentSource, observed + fields.filter { control in
-                                !observed.contains(where: { CFEqual($0, control) })
-                            })
-                        }
+                    }
+                    do {
+                        let fields = [b.element(1_971_533), b.element(1_971_534), b.element(1_971_535)]
+                        let observed = b.makeAXRuntime().children(currentSource)
+                        b.setChildren(currentSource, observed + fields.filter { control in
+                            !observed.contains(where: { CFEqual($0, control) })
+                        })
                     }
                     if forward || inverse {
-                        b.setAttribute(echo, kAXTitleAttribute as String, forward ? "Bus 2 → Existing" : "Bus 1 → Existing")
+                        b.setAttribute(echo, kAXTitleAttribute as String, forward
+                            ? (canonicalBusStereoReturn ? "Stereo Output" : "Bus 2 → Existing") : "Bus 1 → Existing")
                         b.setAttribute(echo, "AXMenuItemMarkChar", "✓")
-                        b.setAttribute(stereo, "AXMenuItemMarkChar", "")
+                        b.setAttribute(stereo, "AXMenuItemMarkChar", forward && canonicalBusStereoReturn ? "✓" : "")
                         b.setAttribute(destination, "AXMenuItemMarkChar", forward ? "" : "✓")
-                        b.setAttribute(busTwo, "AXMenuItemMarkChar", forward ? "✓" : "")
+                        b.setAttribute(busTwo, "AXMenuItemMarkChar", forward && !canonicalBusStereoReturn ? "✓" : "")
                     }
                     let children = b.makeAXRuntime().children(f.mixer)
                     if !children.contains(where: { CFEqual($0, receiver) }) {
@@ -5856,7 +6145,9 @@ struct Issue965HeldSelectionAssociationTests {
                 let planHandler = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "plan_session_repair"))
                 var sendIntent: [String: Value] = ["target": .string("source"),
                     canonicalSend == "physical_slot" ? "physical_slot" : "observed_ordinal": .int(1)]
-                if canonicalBus {
+                if canonicalBusStereoReturn {
+                    sendIntent["output"] = .object(["kind": .string("stereo_output")])
+                } else if canonicalBus {
                     sendIntent["bus"] = .int(canonicalBusChange || canonicalSend == "nonmatching_bus" ? 2 : 1)
                 } else if canonicalPhysical {
                     sendIntent["output"] = (freshBusStereoReturn || (canonicalMatching ? !freshPhysicalReturn : freshPhysicalReturn && canonicalSend != "unsupported_pair")) ? .object(["kind": .string("stereo_output")])
@@ -5911,7 +6202,8 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 let plannedText = sharedToolText(await planHandler(dependencies, planArguments))
                 let planned = try #require(sharedJSONObject(plannedText))
-                if canonicalBusReceiverFault?.hasPrefix("missing_") == true {
+                if canonicalBusReceiverFault?.hasPrefix("missing_") == true
+                    && !(canonicalBusStereoReturn && canonicalBusReceiverFault == "missing_after") {
                     let executable = try #require(planned["executable"] as? Bool)
                     #expect(!executable)
                     #expect(f.routingDestinationPresses == 0)
@@ -5926,7 +6218,7 @@ struct Issue965HeldSelectionAssociationTests {
                     return
                 }
                 let executable = try #require(planned["executable"] as? Bool)
-                #expect(executable, "Actual plan: \(plannedText)")
+                try #require(executable, "Actual plan: \(plannedText)")
                 let planID = try #require(planned["plan_id"] as? String)
                 let digest = try #require(planned["digest"] as? String)
                 let preview = try #require(planned["steps"] as? [[String: Any]])
@@ -5953,7 +6245,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let result = await apply(dependencies, arguments)
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
                     if expireInspectionBeforeSendDispatch {
-                        #expect(f.captureClockReadsAfterName >= 3)
+                        #expect(f.captureExpiredAtCheckedSendDispatch)
                         #expect(f.expireRetainedCapture)
                         #expect(await cache.retainedInspection(id: id) == nil)
                     }
@@ -6130,23 +6422,102 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 }
                 if canonicalBusReceiverFault?.hasSuffix("after_preview") == true { f.routingLateScopeInjected = true }
-                if sourceInputReadRenewal { f.routingInputReadRenewalArmed = true }
+                if sourceInputReadRenewal || canonicalBusReceiverFault == "physical_source"
+                    || canonicalBusReceiverFault == "physical_source_scoped_input" {
+                    f.routingInputReadRenewalArmed = true
+                }
+                if scopedInputAdditionalWindow {
+                    let additional = b.element(1_971_999)
+                    b.setRole(additional, kAXWindowRole as String)
+                    b.setAttribute(additional, kAXTitleAttribute as String, "Auxiliary")
+                    b.setChildren(additional, [])
+                    b.setAttribute(f.app, kAXWindowsAttribute as String, [f.window, additional])
+                    let unrelated = b.element(1_971_998)
+                    b.setRole(unrelated, kAXGroupRole as String)
+                    b.setChildren(unrelated, [])
+                    let container = b.element(1_971_997)
+                    b.setRole(container, kAXGroupRole as String)
+                    b.setChildren(container, [unrelated])
+                    // Modal guards inspect direct window children. Only a full
+                    // descendant walk reaches this unrelated nested probe.
+                    b.setChildren(f.window, b.makeAXRuntime().children(f.window) + [container])
+                    f.routingInputDiscoveryProbe = unrelated
+                }
                 let apply = try #require(OperationHandlerRegistry.handler(tool: "logic_project", command: "apply_session_repair"))
                 let arguments: [String: Value] = ["plan_id": .string(planID),
                     "digest": .string(canonicalSend == "wrong_digest" ? String(repeating: "0", count: 64) : digest),
                     "confirmed": .bool(true), "idempotency_key": .string(key)]
                 let result: CallTool.Result
+                let inputReadsBeforeApply = f.routingCanonicalInputBuses.count
+                let contradictionsBeforeApply = f.routingCanonicalContradictedInputs.count
+                if decidingSendFault != nil { f.routingBeforeSendMenuOpens = 0 }
+                if let decidingSendFault, decidingSendFault.hasPrefix("late_") {
+                    let priorActions = f.routingActionNames, priorRead = f.routingRead
+                    @Sendable func changeMode() {
+                        b.setAttribute(mode, "AXMenuItemMarkChar", "")
+                        b.setAttribute(preFader, "AXMenuItemMarkChar", "✓")
+                        f.routingDecidingSendFaultInjected = true
+                    }
+                    f.routingActionNames = { element in
+                        let prior = priorActions?(element)
+                        if CFEqual(element, b.element(1_971_503)),
+                           SendRemovalSagaAdapter.requiredBeforeState != nil,
+                           f.routingDestinationPresses == 0 {
+                            f.routingDecidingLeafActionsRead = true
+                            if decidingSendFault == "late_action_mode", !f.routingDecidingSendFaultInjected { changeMode() }
+                        }
+                        return prior
+                    }
+                    f.routingRead = { element, attribute in
+                        priorRead?(element, attribute)
+                        guard f.routingDecidingLeafActionsRead, !f.routingDecidingSendFaultInjected,
+                              SendRemovalSagaAdapter.requiredBeforeState != nil else { return }
+                        if CFEqual(element, mode), attribute == "AXMenuItemMarkChar" { f.routingDecidingModeRead = true }
+                        if f.routingDecidingModeRead, CFEqual(element, b.element(1_971_503)),
+                           attribute == kAXTitleAttribute as String {
+                            f.routingDecidingFinalChoiceRead = true
+                            if decidingSendFault == "late_choice_mode" { changeMode() }
+                        }
+                        if decidingSendFault == "late_bus_mode", f.routingDecidingFinalChoiceRead,
+                           CFEqual(element, b.element(1_971_502)), attribute == kAXHelpAttribute as String { changeMode() }
+                    }
+                }
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     result = await AccessibilityChannel.$sendChangeObserver.withValue({ _ in
                         f.routingChangedSendPublished = true
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if let decidingSendFault {
+                    if decidingSendFault == "healthy" {
+                        #expect(f.routingBeforeSendMenuOpens == 4,
+                            "Keep approval, prerequisite and independent Saga reads plus the deciding writer; remove only the duplicate adapter read-and-Cancel lifecycle")
+                    } else {
+                        #expect(f.routingDecidingSendFaultInjected, "Reach the actual deciding writer popup")
+                        #expect(body["state"] as? String == "C", "Changed approved before-state must refuse before a Send leaf: \(sharedToolText(result))")
+                        #expect(f.routingDestinationPresses == 0)
+                        if decidingSendFault.hasSuffix("mode") {
+                            #expect(b.attributeValue(mode, "AXMenuItemMarkChar") as? String == "")
+                            #expect(b.attributeValue(preFader, "AXMenuItemMarkChar") as? String == "✓",
+                                "Refusal must retain the externally changed mode")
+                        }
+                        #expect(!gate.isHeldByEntitledHolder())
+                        return
+                    }
+                }
+                if canonicalBusReceiverFault == "physical_source_scoped_input" {
+                    #expect(f.routingInputOpenDiscoveryCounts.count >= (canonicalSend == "cancel" ? 6 : 3),
+                        "Reach checked source and both receivers, including inverse prerequisites when cancelling")
+                    #expect(f.routingInputOpenDiscoveryCounts.allSatisfy { $0 == 0 },
+                        "Read the admitted original native census instead of rediscovering the whole window during Input popups: \(f.routingInputOpenDiscoveryCounts)")
+                    #expect(f.routingInputOpenWindowScans == 0,
+                        "An admitted Input popup must not rescan the whole Arrange window when another non-dialog window exists")
+                }
                 if sourceInputReadRenewal {
                     #expect(f.routingInputReadRenewed, "Reach actual post-menu retirement before routing")
                 }
                 if inverseInputReadRenewal, canonicalBusReceiverFault != "physical_source_inverse_read_renewal" {
-                    #expect(f.routingBusLeafPresses == [2], "Read renewal must not adopt any changed protected value")
+                    #expect(f.routingBusLeafPresses == (canonicalBusStereoReturn ? [] : [2]), "Read renewal must not adopt any changed protected value")
                     #expect(f.routingDestinationPresses == 1)
                     #expect(body["saga_state"] as? String != "fullyCompensated")
                     #expect(!gate.isHeldByEntitledHolder())
@@ -6155,15 +6526,22 @@ struct Issue965HeldSelectionAssociationTests {
                 if canonicalBusReceiverFault == "checked_inverse_help" {
                     #expect(f.routingChangedSendPublished)
                     #expect(f.routingLateScopeInjected, "Reach the actual post-effect Send control Role read")
-                    #expect(f.routingForeignHelpReads == 0, "A later scope refusal cannot excuse foreign-scope Help reads")
+                    #expect(f.routingForeignHelpReads == 0,
+                        "A later scope refusal cannot excuse foreign-scope Help reads: \(f.routingForeignHelpFirstStack.joined(separator: "\n"))")
                     #expect(f.routingBusLeafPresses == [2])
                     #expect(body["saga_state"] as? String != "fullyCompensated")
                     #expect(!gate.isHeldByEntitledHolder())
                     return
                 }
                 if canonicalBusReceiverFault?.hasPrefix("checked_") == true {
+                    if canonicalBusStereoReturn {
+                        #expect(f.routingCanonicalContradictedInputs.count > contradictionsBeforeApply,
+                            "Refusal must reach the actual changed input proof, not an earlier unsupported path")
+                        let expectedDestinationPresses: Int = canonicalBusReceiverFault?.hasSuffix("after_forward") == true ? 1 : 0
+                        #expect(f.routingDestinationPresses == expectedDestinationPresses)
+                    }
                     if canonicalBusReceiverFault?.hasSuffix("after_forward") == true {
-                        #expect(f.routingBusLeafPresses == [2], "An invalid original receiver must prevent the owned inverse")
+                        #expect(f.routingBusLeafPresses == (canonicalBusStereoReturn ? [] : [2]), "An invalid original receiver must prevent the owned inverse")
                         #expect(body["saga_state"] as? String != "fullyCompensated")
                     } else {
                         #expect(body["state"] as? String == "C", "Actual refusal: \(sharedToolText(result))")
@@ -6185,12 +6563,26 @@ struct Issue965HeldSelectionAssociationTests {
                         "Actual apply: \(sharedToolText(result))")
                     #expect(f.routingDestinationPresses == (canonicalSend == "cancel" ? 2 : 1))
                     if canonicalBusChange {
-                        #expect(f.routingBusLeafPresses == (canonicalSend == "cancel" ? [2, 1] : [2]))
+                        let expectedBusLeaves = canonicalBusStereoReturn
+                            ? (canonicalSend == "cancel" ? [1] : []) : (canonicalSend == "cancel" ? [2, 1] : [2])
+                        #expect(f.routingBusLeafPresses == expectedBusLeaves)
+                        if canonicalBusStereoReturn {
+                            let checkedInputs = f.routingCanonicalInputBuses.dropFirst(inputReadsBeforeApply)
+                            #expect(checkedInputs.filter { $0 == 1 }.count >= (canonicalSend == "cancel" ? 2 : 1))
+                            #expect(!checkedInputs.contains(2), "An unrelated Bus receiver is not a routing prerequisite")
+                            if canonicalBusReceiverFault?.contains("source") == true {
+                                #expect(checkedInputs.contains(0))
+                            }
+                        }
+                        if canonicalBusReceiverFault == "physical_source" {
+                            #expect(f.routingSourceInputFreshHeaderChallenges >= (canonicalSend == "cancel" ? 2 : 1),
+                                "Each checked physical-input read must actually renew its original native header before old-source Help")
+                        }
                         let steps = try #require(body["steps"] as? [[String: Any]])
                         let evidence = try #require(steps.first?["evidence"] as? [String: Any])
                         let verification = try #require(evidence["verification"] as? [String: Any])
                         let readback = try #require(verification["readback"] as? [String: Any])
-                        #expect(readback["observed"] as? String == OutputAssignment.bus(2).token)
+                        #expect(readback["observed"] as? String == (canonicalBusStereoReturn ? .stereoOutput : OutputAssignment.bus(2)).token)
                         if canonicalSend == "cancel" {
                             let compensation = try #require(steps.first?["compensation"] as? [String: Any])
                             let restored = try #require(compensation["readback"] as? [String: Any])
@@ -6357,7 +6749,7 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
                     } else { b.setAttribute(mode, kAXTitleAttribute as String, "Pre Fader") }
                 }
-                if bypassMode == "late_bit", f.routingBypassMenuCancels == 3 {
+                if ["late_bit", "measure_late_bit"].contains(bypassMode ?? ""), f.routingBypassMenuCancels == 3 {
                     if CFEqual(element, b.element(1_965_2622)), attribute == kAXValueAttribute as String {
                         f.routingBypassFinalValueReads += 1
                     }
@@ -6391,7 +6783,13 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(b.element(1_965_2641), [b.element(1_965_2642), decoy])
                 }
             }
-            let router = ChannelRouter(); await router.register(f.channel())
+            let router = ChannelRouter()
+            if let boundary = bypassBoundary {
+                await router.register(SendRemovalSagaResultBoundary(base: f.channel(), journal: SagaJournal(),
+                    mode: "observe", operation: "mixer.set_send_bypass_verified",
+                    beforeForward: { boundary.insideNativeWriter = true },
+                    observedResult: { _ in boundary.insideNativeWriter = false }))
+            } else { await router.register(f.channel()) }
             let gate = LogicMutationGate()
             let dependencies = HandlerDependencies(router: router, cache: cache, targetRegistry: registry,
                 poller: StatePoller(axChannel: f.channel(), cache: cache,
@@ -6781,11 +7179,16 @@ struct Issue965HeldSelectionAssociationTests {
                     return .success([kAXPressAction as String])
                 }
                 f.routingChildrenRead = { element in
-                    // Calibrated in the healthy actual registered path: twelve
-                    // strict checkbox reads after the third popup Cancel precede
-                    // the final custody census, after the after-snapshot corroboration.
-                    guard bypassMode == "late_bit", f.routingBypassMenuCancels == 3,
-                          f.routingBypassFinalValueReads == 12, CFEqual(element, f.mixer),
+                    // Exercise each actual custody census following a new
+                    // post-write checkbox observation. Unrelated whole-window
+                    // discovery counts do not choose the race boundary.
+                    guard let boundary = bypassBoundary, boundary.insideNativeWriter,
+                          f.routingBypassMenuCancels == 3,
+                          f.routingBypassFinalValueReads > 0, CFEqual(element, f.mixer),
+                          boundary.lastValueReads != f.routingBypassFinalValueReads else { return }
+                    boundary.lastValueReads = f.routingBypassFinalValueReads
+                    boundary.censuses += 1
+                    guard bypassMode == "late_bit", boundary.censuses == boundary.injectAt,
                           !f.routingLateScopeInjected else { return }
                     f.routingLateScopeInjected = true
                     b.setAttribute(b.element(1_965_2622), kAXValueAttribute as String, 0)
@@ -6824,6 +7227,11 @@ struct Issue965HeldSelectionAssociationTests {
                         }
                     }
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if bypassMode == "measure_late_bit" {
+                        #expect(body["state"] as? String == "A", "\(sharedToolText(result))")
+                        #expect(f.routingBypassPresses == 1 && f.routingBypassMenuCancels == 3)
+                        return
+                    }
                     if ["delayed_on", "delayed_off"].contains(bypassMode ?? "") {
                         #expect(f.routingLateScopeInjected && f.routingBypassPendingValue == nil)
                         #expect(f.routingBypassMenuOpens >= 3 && f.routingBypassPresses == 1)
@@ -6839,7 +7247,8 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.routingLateScopeInjected, "The actual deciding boundary must be reached")
                     }
                     let afterAttempt = ["late_bit", "malformed_after", "lost_source_after", "press_failed"].contains(bypassMode ?? "")
-                    #expect(body["state"] as? String == (afterAttempt ? "B" : "C"), "\(sharedToolText(result))")
+                    #expect(body["state"] as? String == (afterAttempt ? "B" : "C"),
+                        "Native census \(bypassBoundary?.injectAt ?? 0) of \(bypassBoundary?.censuses ?? 0): \(sharedToolText(result))")
                     #expect(f.routingBypassPresses == (afterAttempt ? 1 : 0))
                     #expect(f.routingDestinationPresses == 0)
                     #expect(!gate.isHeldByEntitledHolder())
@@ -7694,6 +8103,15 @@ struct Issue965HeldSelectionAssociationTests {
             }
             if CFEqual(element, root), action == kAXCancelAction as String {
                 f.inputMenuCancels += 1
+                if condition.hasPrefix("force_fresh_"), !condition.hasSuffix("retired_source") {
+                    f.builder.setChildren(f.mixer, f.strips)
+                    if condition == "force_fresh_changed_label" {
+                        f.builder.setAttribute(input, kAXDescriptionAttribute as String, "Bus 9")
+                    } else if condition == "force_fresh_foreign_project" {
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                    }
+                    return true
+                }
                 if keep, f.inputMenuCancels == 1 {
                     // Capture keeps its original owner; the independent apply read
                     // below performs the real replacement and must renew its own proof.
@@ -7718,7 +8136,8 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement] + unpairedRows + (condition == "popup_still_open" ? [root] : []))
                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
-                    condition == "unselected_pair" ? f.strips[0] : replacement)
+                    condition.hasPrefix("force_fresh_rail_") ? f.rail
+                        : condition == "unselected_pair" ? f.strips[0] : replacement)
                 if graph, condition == "unselected_pair" {
                     f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
                     f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
@@ -7859,6 +8278,103 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(CFEqual(pair.track.header, f.headers[0]) && CFEqual(pair.strip.strip, f.strips[1]),
             "Only the actual opposite-ordinal own-gesture pair may tether renewal")
         #expect(f.selections == [1, 0])
+        if condition.hasPrefix("force_fresh_") {
+            let gate = LogicMutationGate()
+            let claim = try #require(gate.tryAcquire(operation: "fresh-original-input-read"))
+            defer { gate.release(claim) }
+            let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+            let suppliedPair: AccessibilityChannel.HeldSelectionAssociation.Pair? = condition == "force_fresh_missing_pair"
+                ? nil : condition == "force_fresh_wrong_pair" ? .init(track: pair.track,
+                    strip: .init(window: f.window, mixer: f.mixer, strip: f.strips[0], document: f.bundle.absoluteString)) : pair
+            let railEntry = condition.hasPrefix("force_fresh_rail_")
+            if railEntry {
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                let previousResult = f.routingReadResult
+                f.routingReadResult = { element, attribute in
+                    if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                        kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute]
+                        .map({ $0 as String }).contains(attribute) {
+                        // Native non-editor absence, not an unknown success(nil).
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    return previousResult?(element, attribute)
+                }
+                let previousRead = f.routingRead
+                f.routingRead = { element, attribute in
+                    previousRead?(element, attribute)
+                    if CFEqual(element, f.app), attribute == kAXFocusedUIElementAttribute as String,
+                       f.inputMenuCancels > 0, f.selections.count > 2, f.selections.last == 0 {
+                        // Like the native Tracks entry, returning our original
+                        // selected header restores its original rail focus.
+                        f.builder.setAttribute(f.app, attribute, f.rail)
+                    }
+                    if CFEqual(element, f.mixer), attribute == kAXSelectedChildrenAttribute as String {
+                        let originalSelected = AXValueExtractors.extractSelectedState(f.headers[0],
+                            runtime: f.builder.makeAXRuntime()) == true
+                        f.builder.setAttribute(f.mixer, attribute,
+                            [originalSelected ? f.routingReplacement ?? f.strips[1] : f.strips[0]])
+                    }
+                }
+            }
+            let (read, permittedInClaim) = try await OperationTraceContext.$current.withValue(context) {
+                let focus = AccessibilityChannel.OwnedTrackStackObservationNavigation.ReadFocusScope()
+                let proof: AccessibilityChannel.HeldSelectionAssociation?
+                if railEntry {
+                    proof = try #require(AccessibilityChannel.HeldSelectionAssociation(
+                        window: f.window, logic: f.logic(), expectedProject: nil, requiresProjectReference: false,
+                        allowsSelectedChildRailEntry: true))
+                } else { proof = nil }
+                let guardian = AXHelpers.HelpReadGuard(allowHelpReads: true,
+                    stop: { proof.map { !focus.permits() && !$0.permitsRead() } ?? false })
+                let reading = await AXHelpers.HelpReadGuard.$current.withValue(guardian) {
+                    await AXMixerStripBinding.$current.withValue(source) {
+                        await AXMixerStripBinding.$outputAssociation.withValue(suppliedPair) {
+                            await AccessibilityChannel.getInputBusObservation(runtime: f.logic(), timing: .immediate,
+                                observingPopupFocus: { focus.retainRoutingPopupFocus($0) },
+                                observingRenewedFocus: { focus.retainAssociation($0) },
+                                refreshingOriginalSourceAfterCleanup: true)
+                        }
+                    }
+                }
+                if railEntry { #expect(!guardian.stopped, "The old census cannot authorize Help before the fresh observation is retained") }
+                return (reading, reading.inputRenewal?.permits(runtime: f.logic()) == true)
+            }
+            if ["force_fresh_missing_pair", "force_fresh_wrong_pair"].contains(condition) {
+                let body = try #require(sharedJSONObject(read.result.message))
+                #expect(body["state"] as? String == "C")
+                #expect(read.assignment == nil && read.inputRenewal == nil)
+                #expect(f.inputMenuPresses == 0 && f.inputMenuCancels == 0)
+                #expect(f.selections == [1, 0])
+                return
+            }
+            if ["force_fresh_changed_label", "force_fresh_foreign_project"].contains(condition) {
+                let body = try #require(sharedJSONObject(read.result.message))
+                #expect(body["state"] as? String == "C")
+                #expect(read.assignment == nil && read.inputRenewal == nil && !permittedInClaim)
+                #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1, "Reach the actual post-Cancel change")
+                #expect(f.routingDestinationPresses == 0)
+                if condition == "force_fresh_foreign_project" { #expect(f.selections == [1, 0]) }
+                return
+            }
+            #expect(read.assignment == .bus(number))
+            let renewed = try #require(read.inputRenewal, "Observe the original header before any post-Cancel source Help")
+            let survives = condition.hasSuffix("surviving_source")
+            #expect(renewed.original.matches(source))
+            #expect(renewed.pair.strip.matches(source) == survives)
+            #expect(CFEqual(renewed.pair.strip.strip, survives ? source.strip : replacement))
+            #expect(renewed.originalTrack.matches(pair.track) && permittedInClaim)
+            #expect(!renewed.permits(runtime: f.logic()), "No retained native permission outside its own claim context")
+            if survives {
+                #expect(f.routingReplacement == nil)
+            } else {
+                #expect(f.routingReplacement != nil)
+            }
+            #expect(source.currentIndex(runtime: f.logic()) == (survives ? 1 : nil))
+            #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1)
+            #expect(f.selections == [1, 0, 1, 0], "Actual native header challenges, not a JSON restoration receipt")
+            #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+            return
+        }
         if graph {
             let body = try await inspect(f, navigation: condition != "navigation_disabled", cache: cache,
                 registry: registry, domains: keep ? ["tracks", "strips", "associations", "routing"]
@@ -9606,6 +10122,13 @@ struct Issue965HeldSelectionAssociationTests {
         try await assertInputBusRenewal(number: 1, condition: condition, graph: true, keep: true)
     }
 
+    @Test(arguments: ["force_fresh_surviving_source", "force_fresh_retired_source", "force_fresh_missing_pair",
+                      "force_fresh_wrong_pair", "force_fresh_changed_label", "force_fresh_foreign_project",
+                      "force_fresh_rail_retired_source", "force_fresh_rail_surviving_source"])
+    func requestedInputRefreshNeedsItsActualOriginalHeader(_ condition: String) async throws {
+        try await assertInputBusRenewal(number: 1, condition: condition)
+    }
+
     @Test(arguments: [1, 256])
     func registeredInputGraphDoesNotReadRetiredControlsAfterFocusMoves(number: Int) async throws {
         try await assertInputBusRenewal(number: number, condition: "retirement_census_lag", graph: true)
@@ -9929,6 +10452,68 @@ struct Issue965HeldSelectionAssociationTests {
         #expect(CFEqual(focus, f.strips[1]))
     }
 
+    @Test("Held native custody avoids global strip reclassification and still stops the next Help after loss",
+          arguments: ["none", "project", "editor", "transport", "retired"])
+    func heldNativeCustodyPrecedesGlobalFocusClassification(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        f.builder.setAttributeSettable(f.strips[1], kAXFocusedAttribute as String, true)
+        for (index, strip) in f.strips.enumerated() {
+            f.builder.setAttribute(strip, kAXInsertionPointLineNumberAttribute as String, 0)
+            let slot = f.builder.element(1_966_200 + index)
+            f.builder.setRole(slot, kAXButtonRole as String)
+            f.builder.setAttribute(slot, kAXDescriptionAttribute as String, "Audio Plug-in")
+            f.builder.setAttribute(slot, kAXHelpAttribute as String, "Audio Effect slot. Insert an audio effect.")
+            f.builder.setAttribute(slot, kAXPositionAttribute as String, axPoint(200 + CGFloat(index) * 70, 300))
+            f.builder.setAttribute(slot, kAXSizeAttribute as String, axSize(58, 16))
+            let children = f.builder.makeAXRuntime().children(strip)
+            f.builder.setChildren(strip, children + [slot])
+        }
+        f.routingReadResult = { element, attribute in
+            guard attribute == kAXHelpAttribute as String, AXHelpers.HelpReadGuard.current != nil else { return nil }
+            if f.focusOrderFaultInjected { f.helpReadsAfterFocusOrderFault += 1 }
+            do {
+                f.guardedEntryHelpReads += 1
+                if fault != "none", !f.focusOrderFaultInjected {
+                    f.focusOrderFaultInjected = true
+                    switch fault {
+                    case "project":
+                        f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///different.logicx/")
+                    case "editor":
+                        let editor = f.builder.element(1_965_996)
+                        f.builder.setRole(editor, kAXTextFieldRole as String)
+                        f.builder.setAttribute(editor, kAXValueAttribute as String, "typing")
+                        f.builder.setAttributeSettable(editor, kAXValueAttribute as String, true)
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, editor)
+                    case "transport":
+                        f.builder.setAttribute(f.builder.element(1_965_721), kAXValueAttribute as String, 1)
+                    case "retired":
+                        f.builder.setChildren(f.mixer, f.strips.filter { !CFEqual($0, f.strips[1]) })
+                    default: Issue.record("unknown focus-order fault")
+                    }
+                }
+            }
+            return nil
+        }
+        let body = try await inspect(f, domains: ["tracks", "strips", "associations", "routing"],
+                                     guardedPassiveFocus: true, scope: "selection")
+        #expect(f.guardedEntryHelpReads > 0, "The actual guarded native Help reader must be reached")
+        if fault == "none" {
+            let section = try #require(body["associations"] as? [String: Any])
+            let rows = try #require(section["rows"] as? [[String: Any]])
+            #expect(rows.compactMap { $0["track_index"] as? Int } == [0])
+            #expect(f.passiveFinalAppTupleReads > 0, "Fresh original-focus custody remains exercised")
+            #expect(f.globalFocusClassificationsDuringHeldEntry == 0,
+                    "A current held proof must precede the global hierarchy classifier")
+            #expect((body["ui_effects"] as? [String: Any])?["restoration"] as? String == "restored")
+        } else {
+            #expect(f.focusOrderFaultInjected)
+            #expect(f.helpReadsAfterFocusOrderFault == 0)
+            #expect(f.selections.isEmpty)
+            #expect(body["associations"] == nil)
+        }
+    }
+
     @Test("Native-shaped passive focus guarding permits only the observed original-focus inverse",
           arguments: [false, true])
     func originalFocusInverseRenewsBeforeThePassiveEditingGuard(ackOnly: Bool) async throws {
@@ -9988,6 +10573,333 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(f.selections == [1, 0], "Stop optional challenges, not the still-owned inverse")
             #expect(pairs.count == 2, "Retain only the independently verified subset")
             #expect(association.effects.restoration == "restored")
+        }
+    }
+
+    @Test("Requested native header is observed before optional peers within the unchanged collection reserve",
+          arguments: ["owned", "foreign_document", "foreign_window", "missing_header", "unrequested_census_change"])
+    func requestedNativeHeaderPrecedesOptionalCollection(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let start = ContinuousClock.now
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) },
+            deadline: start.advanced(by: .seconds(20)))
+        try await OperationTraceContext.$current.withValue(context) {
+            let association = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let target = AXTrackBinding.Binding(
+                window: fault == "foreign_window" ? f.builder.element(965_991_001) : f.window,
+                header: fault == "missing_header" ? f.builder.element(965_991_002) : f.headers[3],
+                document: fault == "foreign_document" ? "file:///Foreign.logicx" : association.document,
+                runtime: f.logic())
+            if fault == "unrequested_census_change" {
+                f.routingSelection = { index in
+                    if index == 3 {
+                        f.routingLateScopeInjected = true
+                        f.builder.setChildren(f.rail, [f.headers[0], f.headers[1], f.headers[3]])
+                    }
+                }
+            }
+            let pairs = await association.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, prioritizingHeader: target, collectionNow: {
+                    start.advanced(by: f.selections.isEmpty ? .zero : .seconds(6))
+                })
+            if fault == "owned" {
+                #expect(f.selections == [3, 0], "Spend optional collection time on the actual requested header first")
+                #expect(pairs.count == 2)
+                #expect(pairs.contains { CFEqual($0.track.header, target.header) })
+                #expect(association.effects.restoration == "restored")
+                #expect(association.headers.count == 4 && association.strips.count == 4,
+                    "Prioritizing a challenge does not narrow complete ownership custody")
+            } else {
+                #expect(pairs.isEmpty, "A priority hint supplies no foreign or incomplete ownership authority")
+                if fault == "unrequested_census_change" { #expect(f.routingLateScopeInjected) }
+                else { #expect(f.selections.isEmpty) }
+            }
+        }
+    }
+
+    @Test("Original-header renewal actually challenges its retained native source before optional peers")
+    func sourceRenewalPrioritizesItsActualNativeHeader() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let source = try #require(pairs.first { CFEqual($0.track.header, f.headers[3]) })
+            let selectionCount = f.selections.count
+            let renewal = await AccessibilityChannel.renewSourceThroughOriginalHeader(source, original: source.strip,
+                runtime: f.logic(), selectedHeaderRequired: false, sourceDisposition: .readObservation)
+            let actual = try #require(renewal.source)
+            #expect(actual.originalTrack.matches(source.track) && actual.pair.track.matches(source.track))
+            #expect(Array(f.selections.dropFirst(selectionCount)).first == 3,
+                "The input consumer must request the exact retained header priority, not merely expose an unused helper")
+            #expect(actual.observation.headers.count == 4 && actual.observation.strips.count == 4)
+            #expect(renewal.effects.restoration == "restored")
+        }
+    }
+
+    @Test("Optional peer discovery ends only after the requested native strips were actually associated",
+          arguments: ["owned", "missing_peer", "foreign_document", "unrequested_census_change"])
+    func requestedNativePeersEndOnlyOptionalDiscovery(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let originalPairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let first = try #require(originalPairs.first { CFEqual($0.track.header, f.headers[1]) })
+            let second = try #require(originalPairs.first { CFEqual($0.track.header, f.headers[2]) })
+            let absent = AXTrackBinding.Binding(window: f.window,
+                header: f.builder.element(965_992_001), document: initial.document, runtime: f.logic())
+            let foreign = AXTrackBinding.Binding(window: f.window,
+                header: second.track.header, document: "file:///Foreign.logicx", runtime: f.logic())
+            let targets = [first.track, fault == "missing_peer" ? absent : fault == "foreign_document" ? foreign : second.track]
+            let count = f.selections.count
+            if fault == "unrequested_census_change" {
+                f.routingSelection = { index in
+                    if index == 2 {
+                        f.routingLateScopeInjected = true
+                        f.builder.setChildren(f.rail, [f.headers[0], f.headers[1], f.headers[2]])
+                    }
+                }
+            }
+            let observation = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await observation.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, observingPeerHeaders: targets)
+            let selected = Array(f.selections.dropFirst(count))
+            if fault == "owned" {
+                #expect(selected == [1, 2, 0], "Do not navigate to unrelated header3 after both actual native peers were observed")
+                #expect(pairs.count == 3 && !pairs.contains { CFEqual($0.track.header, f.headers[3]) })
+                #expect(observation.headers.count == 4 && observation.strips.count == 4)
+                #expect(observation.effects.restoration == "restored")
+            } else if fault == "unrequested_census_change" {
+                #expect(f.routingLateScopeInjected && pairs.isEmpty)
+            } else {
+                #expect(selected == [1, 2, 3, 0], "Unobserved or foreign native peers must not terminate collection early")
+                #expect(pairs.count == 4)
+                #expect(!pairs.contains { $0.track.matches(fault == "missing_peer" ? absent : foreign) })
+            }
+        }
+    }
+
+    @Test("Input source renewal forwards actual peer custody without optional unrelated selections")
+    func inputRenewalForwardsActualNativePeerCollection() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let source = try #require(pairs.first { CFEqual($0.track.header, f.headers[3]) })
+            let peer = try #require(pairs.first { CFEqual($0.track.header, f.headers[1]) })
+            let count = f.selections.count
+            let renewed = await AccessibilityChannel.renewSourceThroughOriginalHeader(source, original: source.strip,
+                runtime: f.logic(), selectedHeaderRequired: false, sourceDisposition: .readObservation,
+                observingPeerHeaders: [peer.track])
+            let actual = try #require(renewed.source)
+            #expect(Array(f.selections.dropFirst(count)) == [3, 1, 0])
+            #expect(actual.pair.track.matches(source.track) && actual.observedPairs.count == 3)
+            #expect(actual.observation.headers.count == 4 && actual.observation.strips.count == 4)
+            #expect(renewed.effects.restoration == "restored")
+        }
+    }
+
+    @Test("A retained header read renews its exact original rail and lifetime without whole-window rediscovery",
+          arguments: ["owned", "foreign_scope", "missing_peer", "rail_role", "header_shape"])
+    func originalHeldRailRetainsHeaderIdentity(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let binding = AXTrackBinding.Binding(window: f.window, header: f.headers[0],
+                document: held.document, runtime: runtime, observedStackHeader: false, observedHeaders: held.headers)
+            #expect(binding.currentIndex() == 0)
+            var scope = held
+            if fault == "foreign_scope" {
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                scope = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                    logic: runtime, expectedProject: nil, requiresProjectReference: false))
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, held.document)
+            }
+            if fault == "missing_peer" { f.builder.setChildren(f.rail, Array(f.headers.dropLast())) }
+            if fault == "rail_role" { f.builder.setRole(f.rail, kAXButtonRole as String) }
+            if fault == "header_shape" {
+                let arrow = f.builder.element(965_992_002)
+                f.builder.setRole(arrow, kAXDisclosureTriangleRole as String)
+                f.builder.setAttribute(arrow, kAXValueAttribute as String, NSNumber(value: 1))
+                f.builder.setChildren(f.headers[0], f.builder.makeAXRuntime().children(f.headers[0]) + [arrow])
+            }
+            f.heldHeaderDiscoveryScans = 0
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            let actual = binding.currentIndex(in: scope)
+            if fault == "owned" {
+                #expect(actual == 0)
+                #expect(f.heldHeaderDiscoveryScans == 0, "Renew the original rail, not another global discovery")
+            } else { #expect(actual == nil) }
+            if fault == "foreign_scope" {
+                #expect(binding.currentIndex() == 0, "A foreign proof cannot retire an otherwise current original binding")
+            }
+            if fault == "missing_peer" {
+                f.builder.setChildren(f.rail, f.headers)
+                #expect(binding.currentIndex() == nil, "Restoration cannot erase an observed lifetime loss")
+            }
+            if fault == "rail_role" {
+                f.builder.setRole(f.rail, kAXGroupRole as String)
+                #expect(binding.currentIndex(in: scope) == nil, "A lost native scope cannot revive when its role returns")
+            }
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
+    @Test("A post-input source receipt renews its original native rail and Mixer without rediscovering the window",
+          arguments: ["owned", "foreign_scope", "missing_strip", "mixer_role"])
+    func renewedInputSourceUsesItsActualHeldRail(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let pairs = await held.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let pair = try #require(pairs.first { CFEqual($0.track.header, f.headers[0]) })
+            let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
+                runtime: runtime, sourceDisposition: .readObservation)
+            let originalSource = try #require(observed.source)
+            var source = originalSource
+            let originalMixerRole = try #require(AXHelpers.getRole(f.mixer, runtime: runtime.ax))
+            if fault == "foreign_scope" {
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                let foreign = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                    logic: runtime, expectedProject: nil, requiresProjectReference: false))
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, held.document)
+                source = .init(pair: source.pair, index: source.index, original: source.original,
+                    originalTrack: source.originalTrack, observation: foreign, observedPairs: source.observedPairs)
+            }
+            if fault == "missing_strip" { f.builder.setChildren(f.mixer, Array(f.strips.dropLast())) }
+            if fault == "mixer_role" { f.builder.setRole(f.mixer, kAXButtonRole as String) }
+            f.heldHeaderDiscoveryScans = 0
+            f.coupledGuardPopulationScans = 0
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            let permitted = source.permits(runtime: runtime)
+            if fault == "owned" {
+                #expect(permitted)
+                #expect(f.heldHeaderDiscoveryScans == 0, "The actual source consumer must use its retained native scope")
+                #expect(f.coupledGuardPopulationScans == 0, "An admitted original Mixer must use fresh bound census, not another whole-window discovery")
+            } else { #expect(!permitted) }
+            if fault == "foreign_scope" {
+                #expect(originalSource.permits(runtime: runtime), "A foreign proof cannot retire the valid original source")
+            }
+            if fault == "missing_strip" {
+                f.builder.setChildren(f.mixer, f.strips)
+                #expect(!source.permits(runtime: runtime), "An observed missing Mixer peer ends this scope even if it returns")
+            }
+            if fault == "mixer_role" {
+                f.builder.setRole(f.mixer, originalMixerRole)
+                #expect(!source.permits(runtime: runtime), "A positively observed foreign Mixer role cannot revive this read scope")
+            }
+        }
+    }
+
+    @Test("Association publication uses fresh original census rows and refuses late native scope loss",
+          arguments: ["owned", "late_peer", "late_rail_role"])
+    func associationPublicationKeepsItsActualNativeCensus(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            f.routingRead = { element, attribute in
+                if CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            f.routingChildrenRead = { element in
+                if fault != "owned", !f.routingLateScopeInjected, f.selections.count >= 4,
+                   f.selections.last == held.originalIndex, CFEqual(element, f.headers[2]) {
+                    f.routingLateScopeInjected = true
+                    if fault == "late_peer" { f.builder.setChildren(f.rail, Array(f.headers.dropLast())) }
+                    else { f.builder.setRole(f.rail, kAXButtonRole as String) }
+                }
+            }
+            let pairs = await held.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            if fault == "owned" {
+                #expect(pairs.count == 4 && held.effects.restoration == "restored")
+                #expect(held.headers.count == 4 && held.strips.count == 4)
+                #expect(f.heldHeaderDiscoveryScans == 0, "Use the producer's actual final strict census, not a new global population for each binding")
+            } else {
+                #expect(f.routingLateScopeInjected, "Inject the native change after the actual selection inverse")
+                #expect(pairs.isEmpty, "Late native scope loss must withhold the whole association result")
+            }
+        }
+    }
+
+    @Test("Original-header collection renews its reference through the same qualified rail")
+    func originalHeaderCollectionUsesItsActualReferenceScope() async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        f.useBulkReads = true
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let runtime = f.logic()
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            let pairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
+            let pair = try #require(pairs.first { CFEqual($0.track.header, f.headers[initial.originalIndex]) })
+            f.routingRead = { element, attribute in
+                if f.heldHeaderDiscoveryActive, CFEqual(element, f.window), attribute == kAXRoleAttribute as String,
+                   f.activeBulkAttributes == [kAXRoleAttribute, kAXIdentifierAttribute, kAXChildrenAttribute] as [String] {
+                    f.heldHeaderDiscoveryScans += 1
+                }
+            }
+            let observed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
+                runtime: runtime, sourceDisposition: .readObservation,
+                observingReadFocus: { _ in f.heldHeaderDiscoveryActive = true })
+            let source = try #require(observed.source)
+            #expect(f.heldHeaderDiscoveryActive && observed.effects.restoration == "restored")
+            #expect(source.originalTrack.matches(pair.track) && source.observation.headers.count == 4)
+            #expect(f.heldHeaderDiscoveryScans == 0, "After admission, reference checks and binding publication must renew the original native rail")
         }
     }
 
