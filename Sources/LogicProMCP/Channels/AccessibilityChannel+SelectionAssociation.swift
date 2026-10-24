@@ -369,8 +369,7 @@ extension AccessibilityChannel {
             }
             guard
                   windows.filter({ CFEqual($0, window) }).count == 1,
-                  CFEqual(main, window), focusedWindowMatches,
-                  currentWindowScopeMatches(), !AXLogicProElements.dialogPresent(runtime: logic) else {
+                  CFEqual(main, window), focusedWindowMatches else {
                 let focusedReading: String
                 switch application[3] {
                 case .failure(let error): focusedReading = "AX:\(error.raw)"
@@ -380,6 +379,21 @@ extension AccessibilityChannel {
                 Log.info("Held association ownership refused: window/dialog (main=\(CFEqual(main, window)), focused=\(focusedWindowMatches), reading=\(focusedReading))", subsystem: "ax")
                 lost = true; return false
             }
+            func refuseWindowScope(_ checkpoint: String) -> Bool {
+                let acquisition: String
+                do {
+                    try SessionPopulationObservation.requireOwnedAcquisition()
+                    acquisition = "current"
+                } catch { acquisition = String(describing: error) }
+                Log.info("Held association ownership refused: checkpoint=\(checkpoint), acquisition=\(acquisition)", subsystem: "ax")
+                lost = true
+                return false
+            }
+            guard currentWindowScopeMatches() else { return refuseWindowScope("window_scope") }
+            // dialogPresent delegates to this same read. Preserve its existing
+            // position after window scope, and retain the actual refusal reason.
+            let dialogReason = AXLogicProElements.dialogPresenceReason(runtime: logic)
+            guard !dialogReason.isBlocked else { return refuseWindowScope("dialog_" + dialogReason.rawValue) }
             guard railMatches() else {
                 Log.info("Held association ownership refused: original rail census", subsystem: "ax")
                 lost = true; return false
