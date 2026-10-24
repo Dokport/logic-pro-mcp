@@ -37,7 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   its "All MIDI Tracks as MIDI File" export with more than one unnamed chunk holding only tempo,
   meter, key and SMPTE metadata (5 and 8 were observed in two projects). Only the first was
   treated as the conductor, so every such project was refused `unsupported_midi_export_layout`.
-  Every unnamed, metadata-only chunk is now kept as conductor data in the extracted file. An
+  Every unnamed, metadata-only chunk is now kept as conductor data in the extracted file, with all
+  retained chunks in their original order (so same-tick meta events keep their precedence). An
   unnamed chunk carrying notes, controllers or SysEx is still refused, and the file must still
   start with conductor data.
 - **`export_track_midi` / `read_track_notes` accept Logic's single-track (format 0) export.** With

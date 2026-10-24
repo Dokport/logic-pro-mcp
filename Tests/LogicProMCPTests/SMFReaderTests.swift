@@ -462,6 +462,22 @@ func testSMFTrackExtractionRefusesUnownedOrAmbiguousFileLayout(fault: String) {
     }
 }
 
+@Test func testSMFTrackExtractionKeepsRetainedMetadataInInputOrder() throws {
+    // Review on #1405: a later unnamed metadata-only chunk must not move ahead of the
+    // target, or same-tick meter precedence (and so the note's bar and beat) changes.
+    let end: [UInt8] = [0, 0xFF, 0x2F, 0]
+    let conductor = trackData([0, 0xFF, 0x51, 3, 7, 0xA1, 0x20] + end)
+    let target = namedSMFTrack("Target", events: [0, 0xFF, 0x58, 4, 4, 2, 0x18, 8,
+        0x8B, 0x20, 0x90, 60, 100, 0x83, 0x60, 0x80, 60, 0] + end)
+    let lateMeter = trackData([0, 0xFF, 0x58, 4, 3, 2, 0x18, 8] + end)
+    let input = smfData(format: 1, tracks: [conductor, target, lateMeter])
+    let exported = try SMFReader.extractTracks(namedInstrument: "Target", from: input)
+    #expect(exported == input)
+    let note = try #require(try SMFReader.parse(exported).first)
+    #expect(note == (try SMFReader.parse(input).first))
+    #expect(note.startBar == 2 && note.startBeat == 1.0)
+}
+
 private func namedSMFTrack(_ instrument: String, events: [UInt8]) -> [UInt8] {
     let name = Array(instrument.utf8)
     return trackData([0, 0xFF, 4] + SMFWriter.encodeVLQ(name.count) + name + events)

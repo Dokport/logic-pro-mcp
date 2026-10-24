@@ -145,24 +145,32 @@ struct SMFReader {
               let first = document.fileTracks.first, isConductor(first) else {
             throw TrackExtractionError.unsupportedFileLayout
         }
-        let conductors = document.fileTracks.filter(isConductor)
+        // Retained chunks keep their input order: moving metadata relative to the target's
+        // chunks would change which same-tick meta event applies last.
         let expected = Data(name.utf8)
-        var matching: [FileTrack] = []
-        for track in document.fileTracks.dropFirst() where !isConductor(track) {
+        var retained: [FileTrack] = []
+        var matched = false
+        for track in document.fileTracks {
+            if isConductor(track) {
+                retained.append(track)
+                continue
+            }
             guard track.instrumentNames.count == 1, let observed = track.instrumentNames.first,
                   !track.hasUnownedEvents, !observed.bytes.isEmpty,
                   String(data: observed.bytes, encoding: .utf8) != nil else {
                 throw TrackExtractionError.unsupportedFileLayout
             }
-            if observed.bytes == expected { matching.append(track) }
+            if observed.bytes == expected {
+                retained.append(track)
+                matched = true
+            }
         }
-        guard !matching.isEmpty else { throw TrackExtractionError.instrumentNotFound }
+        guard matched else { throw TrackExtractionError.instrumentNotFound }
         var result = document.originalHeader
-        let trackCount = conductors.count + matching.count
+        let trackCount = retained.count
         result[10] = UInt8(truncatingIfNeeded: trackCount >> 8)
         result[11] = UInt8(truncatingIfNeeded: trackCount)
-        for track in conductors { result.append(track.originalChunk) }
-        for track in matching { result.append(track.originalChunk) }
+        for track in retained { result.append(track.originalChunk) }
         return result
     }
 
