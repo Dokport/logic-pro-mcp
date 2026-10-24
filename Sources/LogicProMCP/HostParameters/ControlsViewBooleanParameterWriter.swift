@@ -627,9 +627,14 @@ enum ControlsViewBooleanParameterWriter {
             if case .sliderDescription = error, let witness = headerBoundUndescribedView {
                 switch controlsViewStateIsBound(in: window, runtime: runtime) {
                 case .noTable:
-                    if witness(.editor),
-                       case .noTable = controlsViewStateIsBound(in: window, runtime: runtime),
-                       witness(.editor) { return .success(.editor) }
+                    let before = witness(.editor)
+                    if before {
+                        let afterStructure = controlsViewStateIsBound(in: window, runtime: runtime)
+                        if case .noTable = afterStructure, witness(.editor) { return .success(.editor) }
+                        noteUnconfirmedBoundView("editor second_structure=\(afterStructure)")
+                    } else {
+                        noteUnconfirmedBoundView("editor header_witness=false")
+                    }
                 case .controls:
                     // The read caller corroborates its named row, while the
                     // host's uniquely bound View switcher corroborates Controls.
