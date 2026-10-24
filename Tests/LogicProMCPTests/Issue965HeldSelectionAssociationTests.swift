@@ -642,6 +642,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingChangedPermissionControlWalks = 0
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
+        var routingInverseRenewedSendMenuOpens = 0
         var routingNamedSendBeforeInputCount: Int?
         var routingNamedSendPreInputPeerNameReads = 0
         var routingNamedSendPostInputObserverReads = 0
@@ -5262,6 +5263,17 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("The owned inverse corroborates its original expected Send in its deciding popup after Input renewal",
+          arguments: [false, true], [false, true])
+    func canonicalInverseUsesItsDecidingPopupAfterInputRenewal(named: Bool, bulk: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_inverse_read_renewal", canonicalName: named,
+                stableDestinationBulkReads: bulk, singleInverseWriterPopup: true)
+        }
+    }
+
     @Test("An occupied Send retains the actual pre-popup geometry through post-press source renewal")
     func occupiedSendRenewalRetainsPrePopupMixerGeometry() async throws {
         try await assertOccupiedSingleSendRenewal(sendGeometry: true)
@@ -5340,7 +5352,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                scopedInputAdditionalWindow: Bool = false,
                                                captureInputReadScope: String? = nil,
                                                measureNamedBusPreInput: Bool = false,
-                                               measureChangedPermissionCensus: Bool = false) async throws {
+                                               measureChangedPermissionCensus: Bool = false,
+                                               singleInverseWriterPopup: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             defer {
@@ -5824,6 +5837,9 @@ struct Issue965HeldSelectionAssociationTests {
                 if action == kAXPressAction as String, CFEqual(element, originalList) || CFEqual(element, renewedList)
                     || (canonicalSend != nil && CFEqual(element, b.element(1_965_2799)))
                     || (restoring && CFEqual(element, b.element(1_965_2663))) {
+                    if f.routingInputReadRenewed, f.routingDestinationPresses == 1 {
+                        f.routingInverseRenewedSendMenuOpens += 1
+                    }
                     if captureInputReadScope != nil, !f.routingInputReadRenewalArmed {
                         f.routingOutputOpenDiscoveryStart = f.coupledGuardPopulationScans
                     }
@@ -6878,6 +6894,13 @@ struct Issue965HeldSelectionAssociationTests {
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
+                if singleInverseWriterPopup {
+                    #expect(f.routingInputReadRenewed, "Reach the actual owned Input read that retired the source")
+                    #expect(f.routingInverseRenewedSendMenuOpens == 1,
+                        "Keep the deciding inverse popup; do not first open and Cancel another checked Send popup")
+                    #expect(f.routingBusLeafPresses == [2, 1], "The actual forward and owned inverse must both run")
+                    #expect(body["saga_state"] as? String == "fullyCompensated")
+                }
                 if let decidingSendFault {
                     if decidingSendFault == "healthy" {
                         #expect(f.routingBeforeSendMenuOpens == 4,

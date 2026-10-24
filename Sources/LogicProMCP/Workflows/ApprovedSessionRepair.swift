@@ -1483,7 +1483,19 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                       slots == (ownedChange?.footprint ?? task.footprint),
                       slots.count == 2, slots.filter({ $0.state == .occupiedUnknownDestination }).count == 1,
                       slots.filter({ $0.state == .observedEmpty }).count == 1 else { return nil }
-                if let before = corroboratingBeforeInWriter, ownedChange == nil,
+                if let ownedChange {
+                    // The verified forward effect, complete protected footprint
+                    // and actual original-header Input renewal retain only its
+                    // native custody. The deciding inverse already checks the
+                    // expected destination and mode at this exact control before
+                    // every leaf boundary; do not first open/Cancel another reader.
+                    stage = "continued_native_effect"
+                    guard let continued = ownedChange.continuingForDecidingInverse(after: renewal,
+                        control: current, slots: slots, runtime: runtime) else { return nil }
+                    continuedChange = continued
+                    finalControl = current
+                    Log.info("Canonical Send inverse retained its owned effect for the deciding popup", subsystem: "saga")
+                } else if let before = corroboratingBeforeInWriter,
                    sendNameUsesInputFootprint, expected == task.before {
                     // These are the actual independent Saga read's expectations,
                     // not write authority. The deciding writer checks them again
@@ -1510,12 +1522,6 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                           AXLogicProElements.sendSlotObservations(in: pair.strip.strip, runtime: runtime.ax) == slots,
                           sourceCurrent() else { return nil }
                     finalControl = final
-                    if let ownedChange {
-                        stage = "continued_native_effect"
-                        guard let continued = ownedChange.continuing(after: renewal, reading: read,
-                            slots: slots, runtime: runtime) else { return nil }
-                        continuedChange = continued
-                    }
                 }
             } else { finalControl = control }
             stage = "final_custody"
