@@ -4503,11 +4503,15 @@ func testIssue1396GainUsesExactApplicationFocusedWindowWhenEditorFlagsAreFalse(_
     #expect(fixture.sliderWriteCount.value == 0)
 }
 
-@Test func testIssue1396GainEditorDescriptionFailureStillReadsAndRestoresOwnedView() async throws {
+@Test(arguments: [false, true])
+func testIssue1396GainEditorDescriptionFailureStillReadsAndRestoresOwnedView(_ allSliderDescriptionsFail: Bool) async throws {
     let fixture = gainReadFixture(windowPresent: false, openOnPress: true)
     let b = fixture.builder
     let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
-        if CFEqual(element, b.element(1005)), attribute == kAXDescriptionAttribute as String {
+        let slider = allSliderDescriptionsFail
+            ? b.attributeValue(element, kAXRoleAttribute as String) as? String == kAXSliderRole as String
+            : CFEqual(element, b.element(1005))
+        if slider, attribute == kAXDescriptionAttribute as String {
             return .failure(AXHelpers.AXStatusError(raw: AXError.failure.rawValue))
         }
         return nil

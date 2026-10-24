@@ -652,7 +652,7 @@ struct ControlsViewBooleanParameterWriterTests {
         let fixture = viewFixture(entry: .editor, title: "50%", behavior: .switchesStructure,
                                   readFailure: .sliderDescription)
         let result = ControlsViewBooleanParameterWriter.prepareView(
-            .controls, in: fixture.window, headerBoundUndescribedEditor: { true }, runtime: fixture.runtime)
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in true }, runtime: fixture.runtime)
         let session: ControlsViewBooleanParameterWriter.ViewSession?
         if case let .ready(observed) = result { session = observed } else { session = nil }
         #expect(session != nil)
@@ -669,7 +669,7 @@ struct ControlsViewBooleanParameterWriterTests {
                                   readFailure: .sliderDescription)
         var reads = 0
         let result = ControlsViewBooleanParameterWriter.prepareView(
-            .controls, in: fixture.window, headerBoundUndescribedEditor: {
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in
                 reads += 1
                 return reads <= successfulWitnessReads
             }, runtime: fixture.runtime)
@@ -677,6 +677,29 @@ struct ControlsViewBooleanParameterWriterTests {
         if case .refused(.viewEvidenceReadFailed(.sliderDescription), restoration: nil) = result {
             refused = true
         } else { refused = false }
+        #expect(refused)
+        #expect(fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test(arguments: ["컨트롤", "편집기", "50%", "unknown"])
+    func boundReadStillRequiresAnAgreeingControlsSwitcherWhenDescriptionsFail(_ title: String) {
+        let fixture = viewFixture(entry: .controls, title: title, behavior: .switchesStructure,
+                                  additionalSliderDescriptionFailure: true)
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in true }, runtime: fixture.runtime)
+        let ready: Bool
+        if case .ready = result { ready = true } else { ready = false }
+        if title == "컨트롤" { #expect(ready) } else { #expect(!ready) }
+        #expect(fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test func boundReadDoesNotOverrideAnUnreadableViewSwitcher() {
+        let fixture = viewFixture(entry: .controls, title: "컨트롤", behavior: .switchesStructure,
+                                  allDescriptionReadsFail: true)
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in true }, runtime: fixture.runtime)
+        let refused: Bool
+        if case .refused = result { refused = true } else { refused = false }
         #expect(refused)
         #expect(fixture.builder.actionCalls.isEmpty)
     }

@@ -3485,12 +3485,22 @@ extension AccessibilityChannel {
             }
             return true
         }
+        func readViewIsBound(_ view: ControlsViewBooleanParameterWriter.PluginWindowView) -> Bool {
+            guard viewChangesAllowed() else { return false }
+            if view == .controls {
+                guard let controlsViewRowLabel,
+                      case let .success(controls) = ControlsViewBooleanParameterWriter.rowControls(
+                        label: controlsViewRowLabel, in: window, runtime: runtime.ax),
+                      !controls.isEmpty else { return false }
+            }
+            return viewChangesAllowed()
+        }
         switch ControlsViewBooleanParameterWriter.prepareView(
             requiredView,
             in: window,
             windowRefresher: refreshPluginWindowForViewSelection,
             allowingChanges: viewChangesAllowed,
-            headerBoundUndescribedEditor: access.isRead && controlsReadKind != nil ? viewChangesAllowed : nil,
+            headerBoundUndescribedView: access.isRead && controlsReadKind != nil ? readViewIsBound : nil,
             runtime: runtime.ax
         ) {
         case let .refused(failure, restoration):
