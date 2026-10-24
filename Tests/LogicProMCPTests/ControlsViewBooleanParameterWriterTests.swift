@@ -693,6 +693,38 @@ struct ControlsViewBooleanParameterWriterTests {
         #expect(fixture.builder.actionCalls.isEmpty)
     }
 
+    @Test(arguments: [false, true])
+    func boundViewStructuralTransitionIsUnconfirmedUntilStable(_ afterSelection: Bool) {
+        let fixture = viewFixture(entry: .editor, title: "50%", behavior: .neverChanges,
+            menuRevealAfterPolls: 0, readFailure: .sliderDescription,
+            additionalSliderDescriptionFailure: true, viewSettleDelay: 0)
+        var transitioned = false
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, confirmationTimeout: 0.25,
+            headerBoundUndescribedView: { view in
+                if view == .editor, !transitioned,
+                   !afterSelection || fixture.controlsSelections.value == 1 {
+                    fixture.builder.setChildren(fixture.window,
+                        [fixture.originalSwitcher, fixture.builder.element(916), fixture.controlsTable])
+                    fixture.builder.setAttribute(fixture.originalSwitcher, kAXTitleAttribute as String, "컨트롤")
+                    transitioned = true
+                }
+                return true
+            }, runtime: fixture.runtime)
+        #expect(transitioned)
+        if afterSelection {
+            let ready: Bool
+            if case .ready = result { ready = true } else { ready = false }
+            #expect(ready)
+            #expect(fixture.controlsSelections.value == 1)
+        } else {
+            let refused: Bool
+            if case .refused = result { refused = true } else { refused = false }
+            #expect(refused)
+            #expect(fixture.builder.actionCalls.isEmpty)
+        }
+    }
+
     @Test func boundReadDoesNotOverrideAnUnreadableViewSwitcher() {
         let fixture = viewFixture(entry: .controls, title: "컨트롤", behavior: .switchesStructure,
                                   allDescriptionReadsFail: true)

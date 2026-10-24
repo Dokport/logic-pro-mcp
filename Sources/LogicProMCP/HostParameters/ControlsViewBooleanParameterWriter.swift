@@ -631,6 +631,9 @@ enum ControlsViewBooleanParameterWriter {
                     if before {
                         let afterStructure = controlsViewStateIsBound(in: window, runtime: runtime)
                         if case .noTable = afterStructure, witness(.editor) { return .success(.editor) }
+                        // A proven structural change during our view selection
+                        // is not a failed attribute read. Wait for a stable view.
+                        if case .controls = afterStructure, witness(.editor) { return .success(nil) }
                         noteUnconfirmedBoundView("editor second_structure=\(afterStructure)")
                     } else {
                         noteUnconfirmedBoundView("editor header_witness=false")
