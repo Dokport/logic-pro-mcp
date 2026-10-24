@@ -834,6 +834,30 @@ enum ExactTrackNameAdapter {
             survivingReference: receipt.survivingReference, inverse: inverse, result: result)
     }
 
+    private static func groupNameAliases(_ mirror: CoupledMirror) -> [String]? {
+        guard operationPermitted() else { return nil }
+        let attributes = [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] as [String]
+        let readings = AXHelpers.getNonHelpAttributes(mirror.pair.strip.strip, attributes,
+            runtime: mirror.pair.track.runtime.ax, permittingRead: { operationPermitted() })
+        var names: [String] = []
+        for (attribute, reading) in zip(attributes, readings) {
+            switch reading {
+            case .success(.none): continue
+            case .failure(let error) where error.isDefinitiveAbsence: continue
+            case .success(.some(let raw)):
+                if CFGetTypeID(raw) == CFStringGetTypeID(), let name = raw as? String {
+                    names.append(name)
+                } else if attribute == kAXValueAttribute as String,
+                          CFGetTypeID(raw) == CFNumberGetTypeID() || CFGetTypeID(raw) == CFBooleanGetTypeID() {
+                    // A scalar group value is not a name alias.
+                    continue
+                } else { return nil }
+            case .failure: return nil
+            }
+        }
+        return operationPermitted() ? names : nil
+    }
+
     private static func applyChecked(
         _ action: Action, router: ChannelRouter, cache: StateCache, registry: TargetRegistry,
         liveTrackName: @escaping @Sendable (Int) -> String?,
@@ -1022,6 +1046,46 @@ enum ExactTrackNameAdapter {
                                           before: before, written: after, registry: registry, cache: cache, mirror: verifiedMirror,
                                           stripBefore: mirror.map { $0.retainedStripName ?? before }) : nil
         inverse?.restoresMixerFocus = restoringMixerFocus
+        if restoringMixerFocus, let owned = inverse, let current = owned.mirror,
+           let stripName = current.retainedStripName {
+            let previousStripName = mirror?.retainedStripName ?? before
+            if !previousStripName.utf8.elementsEqual(stripName.utf8) {
+                guard let aliases = groupNameAliases(current),
+                      await current.isCurrent(name: after, project: action.projectReference,
+                        target: action.targetReference, registry: registry) else {
+                    Log.info("Owned name presentation refused: aliases or current names", subsystem: "ax")
+                    return unverified()
+                }
+                if aliases.contains(where: { $0.utf8.elementsEqual(previousStripName.utf8) }) {
+                    // The actual owned name field has changed, but Logic can
+                    // retain its preceding name on the same physical group.
+                    // Reuse the original-header excursion, not another popup
+                    // or name write; optional peer associations are unnecessary.
+                    Log.info("Owned name presentation requires original-header refresh", subsystem: "ax")
+                    let pair = current.pair
+                    let refreshed = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair,
+                        original: pair.strip, runtime: pair.track.runtime,
+                        sourceDisposition: .survivingOriginal, observingPeerHeaders: [])
+                    guard let source = refreshed.source, source.pair.strip.matches(pair.strip),
+                          source.originalTrack.matches(pair.track), source.permits(runtime: pair.track.runtime),
+                          let renewed = await renewingOwnedCoupledName(owned, through: source),
+                          let renewedMirror = renewed.mirror else {
+                        Log.info("Owned name presentation refused: original-header refresh", subsystem: "ax")
+                        return unverified()
+                    }
+                    guard let aliases = groupNameAliases(renewedMirror),
+                          aliases.contains(where: { $0.utf8.elementsEqual(stripName.utf8) }),
+                          !aliases.contains(where: { $0.utf8.elementsEqual(previousStripName.utf8) }),
+                          await renewedMirror.isCurrent(name: after, project: action.projectReference,
+                            target: action.targetReference, registry: registry),
+                          source.permits(runtime: pair.track.runtime), preservingFootprint?(true, nil) ?? true else {
+                        Log.info("Owned name presentation refused: refreshed aliases or custody", subsystem: "ax")
+                        return unverified()
+                    }
+                    inverse = renewed
+                }
+            }
+        }
         return Receipt(status: wrote ? .applied : .alreadySatisfied, before: before, after: after,
                        survivingReference: action.targetReference, inverse: inverse, result: result)
     }

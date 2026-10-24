@@ -4385,6 +4385,32 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Named Bus Send compensation refreshes only its observed stale Mixer name through the original header",
+          arguments: [false, true])
+    func canonicalNamedBusSendRefreshesItsRestoredNameCaption(bulk: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            let caption = RestoredNameCaptionScenario()
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true, stableDestinationControls: true,
+                stableDestinationBulkReads: bulk, coupledMixerName: true, inverseNameMenu: true,
+                forwardNameMovesFocus: true, restoredNameCaption: caption)
+        }
+    }
+
+    @Test("Restored name presentation cannot hide lost original custody or an unchanged stale caption",
+          arguments: ["persistent", "project", "peer", "source"])
+    func canonicalNamedBusSendRefusesLostCaptionRestorationCustody(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            let caption = RestoredNameCaptionScenario(fault: fault)
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true, stableDestinationControls: true,
+                stableDestinationBulkReads: true, coupledMixerName: true, inverseNameMenu: true,
+                forwardNameMovesFocus: true, restoredNameCaption: caption)
+        }
+    }
+
     @Test("An owned cancellation menu still refuses changed editor, project and physical membership",
           arguments: ["foreign_rail", "missing_header", "foreign_focus", "project", "peer", "late_membership"])
     func canonicalNameSendCancellationRefusesLostEditorCustody(fault: String) async throws {
@@ -5341,6 +5367,63 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    private final class RestoredNameCaptionScenario: @unchecked Sendable {
+        private var refreshed = false
+        private let fault: String?
+
+        init(fault: String? = nil) { self.fault = fault }
+
+        func prepare(_ f: Fixture) {
+            f.builder.setAttribute(f.strips[1], kAXDescriptionAttribute as String, "Duplicate")
+        }
+
+        func nameWritten(_ f: Fixture, name: String) {
+            guard f.routingNameConfirms == 0 else { return }
+            // The forward caption propagates; the inverse changes only the
+            // actual name field until an observed header excursion occurs.
+            f.builder.setAttribute(f.strips[1], kAXDescriptionAttribute as String, name)
+        }
+
+        func headerSelected(_ f: Fixture, index: Int) {
+            guard f.routingNameConfirms == 2, index == 1 else { return }
+            refreshed = true
+            if fault == "persistent" { return }
+            f.builder.setAttribute(f.strips[1], kAXDescriptionAttribute as String, "Duplicate")
+            switch fault {
+            case "project":
+                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+            case "peer":
+                f.builder.setAttribute(f.headers[1], kAXTitleAttribute as String, "External Peer")
+            case "source":
+                let children = f.builder.makeAXRuntime().children(f.mixer)
+                f.builder.setChildren(f.mixer, children.filter { !CFEqual($0, f.strips[1]) })
+            default: break
+            }
+        }
+
+        func verifyRefusal(_ f: Fixture, body: [String: Any]) -> Bool {
+            guard let fault else { return false }
+            #expect(refreshed, "The actual original-header presentation path must reach the fault")
+            #expect(f.routingNameWrites == ["Selected Canonical", "Duplicate"])
+            #expect(f.routingDestinationPresses == 2)
+            let state = body["state"] as? String
+            let saga = body["saga_state"] as? String
+            #expect(state == "B")
+            #expect(saga != "fullyCompensated")
+            if fault == "peer" {
+                let name = f.builder.attributeValue(f.headers[1], kAXTitleAttribute as String) as? String
+                #expect(name == "External Peer", "The intervening peer edit must survive")
+            }
+            return true
+        }
+
+        func verify(_ f: Fixture) {
+            #expect(refreshed, "The restored group caption needs an actual original-header excursion")
+            let caption = f.builder.attributeValue(f.strips[1], kAXDescriptionAttribute as String) as? String
+            #expect(caption == "Duplicate")
+        }
+    }
+
     private func assertOccupiedSingleSendRenewal(_ fault: String? = nil, existingBus: Bool = false,
                                                removing: Bool = false, restoring: Bool = false,
                                                inverseFault: String? = nil, survivingSource: Bool = false,
@@ -5388,7 +5471,8 @@ struct Issue965HeldSelectionAssociationTests {
                                                measureChangedPermissionCensus: Bool = false,
                                                singleInverseWriterPopup: Bool = false,
                                                measureInverseAssociations: Bool = false,
-                                               forwardNameMovesFocus: Bool = false) async throws {
+                                               forwardNameMovesFocus: Bool = false,
+                                               restoredNameCaption: RestoredNameCaptionScenario? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(fourTracks: measureInverseAssociations), b = f.builder
             defer {
@@ -5403,6 +5487,7 @@ struct Issue965HeldSelectionAssociationTests {
             let nameField = b.element(1_971_400)
             let inverseEditor = b.element(1_971_402), renameItem = b.element(1_971_406)
             if canonicalName {
+                restoredNameCaption?.prepare(f)
                 // No real AX activation or mouse fallback from an injected fixture.
                 f.routingMenuRename = true
                 b.setRole(nameField, kAXTextFieldRole as String)
@@ -5455,6 +5540,7 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setAttribute(nameField, kAXValueAttribute as String, name)
                     b.setAttribute(f.headers[0], kAXTitleAttribute as String, name)
                     if coupledMixerName { b.setAttribute(b.element(1_965_711), kAXValueAttribute as String, name) }
+                    restoredNameCaption?.nameWritten(f, name: name)
                     if mixerNameAfterInputRead != nil, f.routingNamePropagatedDuringInputRead {
                         // Once the actual name has propagated, a later owned
                         // rename affects this same source, including its redraw.
@@ -6447,6 +6533,7 @@ struct Issue965HeldSelectionAssociationTests {
                     guard f.routingNameConfirms > 0 else { return }
                     b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String,
                         [index == 0 ? f.routingReplacement ?? f.strips[1] : f.routingOtherReplacement ?? f.strips[0]])
+                    restoredNameCaption?.headerSelected(f, index: index)
                 }
             }
             let before = try await inspect(f, cache: cache, registry: registry,
@@ -6664,6 +6751,7 @@ struct Issue965HeldSelectionAssociationTests {
                         }) { await apply(dependencies, arguments) }
                     } else { result = await apply(dependencies, arguments) }
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    if restoredNameCaption?.verifyRefusal(f, body: body) == true { return }
                     if sourceInputReadRenewal { #expect(f.routingInputReadRenewed, "Reach the actual owned Input source renewal") }
                     try f.expectNamedSendInputFootprint()
                     if expireInspectionBeforeSendDispatch {
@@ -6769,6 +6857,7 @@ struct Issue965HeldSelectionAssociationTests {
                                 let compensation = try #require(step["compensation"] as? [String: Any])
                                 #expect(compensation["disposition"] as? String == "verified")
                             }
+                            restoredNameCaption?.verify(f)
                         }
                     }
                     _ = await apply(dependencies, arguments)
