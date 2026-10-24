@@ -1592,6 +1592,35 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         return task.pair
     }
 
+    var sendNameUsesInputFootprint: Bool {
+        guard nameGoals.count == 1, changedNameGoals.count == 1,
+              let goal = changedNameGoals.first, let task = sendTask,
+              goal.reference == task.reference, goal.binding.matches(task.pair.track),
+              case .bus(let before) = task.before, case .bus(let after)? = task.desired else { return false }
+        return before != after
+    }
+
+    /// Check this plan's actual name effect before read-only Input acquisition.
+    /// Its complete protected footprint is checked in the resulting native
+    /// renewal; without that renewal the caller must keep the full name read.
+    func sendNameSourceCurrent(at pair: AccessibilityChannel.HeldSelectionAssociation.Pair) async -> Bool {
+        guard sendNameUsesInputFootprint, FeatureFlags.adr004MutationSaga,
+              let task = sendTask, let goal = changedNameGoals.first,
+              pair.track.matches(task.pair.track),
+              await projectIsCurrent(), await registry.resolveCurrentProject(projectRef) != nil,
+              let target = await registry.resolve(goal.reference), target.kind == .track,
+              target.physicalTrack?.matches(goal.binding) == true,
+              target.descriptor.trackName.utf8.elementsEqual(goal.name.utf8),
+              originalSelectionHeld(), sendNameHeld(at: pair.strip),
+              let effect = nameExecutions[goal.reference]?.inverse.flatMap(ExactTrackNameAdapter.recordedNameEffect),
+              goal.mixerRef == nil || effect.stripName.utf8.elementsEqual(goal.name.utf8),
+              let after = await registry.resolve(goal.reference),
+              after.physicalTrack?.matches(goal.binding) == true,
+              after.descriptor.trackName.utf8.elementsEqual(goal.name.utf8),
+              await projectIsCurrent(), originalSelectionHeld() else { return false }
+        return true
+    }
+
     /// Corroborate the owned name at the actual Send leaf, not just before
     /// dispatch. The caller still proves the original source/control and gate.
     func sendNameHeld(at source: AXMixerStripBinding.Binding) -> Bool {

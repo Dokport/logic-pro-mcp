@@ -440,9 +440,14 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                     // existing popup instead of opening and cancelling a second one.
                     requiredBefore = .init(footprint: footprint, nonRoutingChecks: checks)
                 }
-                if let approved = self.approved, approved.hasMatchingNameGoals,
-                   await approved.nameGoalEvidence(afterExecution: true) == nil {
-                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Approved name changed before Send")
+                let nameUsesInputFootprint = self.approved?.sendNameUsesInputFootprint == true
+                if let approved = self.approved, approved.hasMatchingNameGoals {
+                    let current = nameUsesInputFootprint
+                        ? await approved.sendNameSourceCurrent(at: held)
+                        : await approved.nameGoalEvidence(afterExecution: true) != nil
+                    guard current else {
+                        return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Approved name changed before Send")
+                    }
                 }
                 var readRenewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
                 var requiredControl = self.capturedControl
@@ -453,6 +458,10 @@ final class SendRemovalSagaAdapter: @unchecked Sendable {
                     }
                     held = custody.pair; self.pair = held
                     requiredControl = custody.control; readRenewal = custody.renewal
+                }
+                if nameUsesInputFootprint, readRenewal == nil,
+                   let approved = self.approved, await approved.nameGoalEvidence(afterExecution: true) == nil {
+                    return .init(state: .stateC, writeBoundaryCrossed: false, detail: "Approved name footprint unavailable before Send")
                 }
                 self.attempted = true
                 let nameCheck: (@Sendable (AXMixerStripBinding.Binding) -> Bool)?

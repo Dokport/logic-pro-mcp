@@ -532,6 +532,29 @@ struct Issue965HeldSelectionAssociationTests {
         var routingChangedSendPublished = false
         var routingInputReadRenewalArmed = false
         var routingInputReadRenewed = false
+        var routingNamedSendBeforeInputCount: Int?
+        var routingNamedSendPreInputPeerNameReads = 0
+        var measureNamedBusPreInput = false
+
+        func observeNamedSendBeforeRead() {
+            if measureNamedBusPreInput, routingNameWrites == ["Selected Canonical"],
+               routingNamedSendBeforeInputCount == nil,
+               SendRemovalSagaAdapter.requiredSendControl == nil {
+                // End of the real independent before-Send read, after
+                // the actual name write and before the first Input read.
+                routingNamedSendBeforeInputCount = routingCanonicalInputBuses.count
+            }
+        }
+
+        func expectNamedSendInputFootprint() throws {
+            guard measureNamedBusPreInput else { return }
+            let count = try #require(routingNamedSendBeforeInputCount,
+                "Reach the independent checked Send read after the actual name write")
+            #expect(routingCanonicalInputBuses.count > count,
+                "Reach actual Input acquisition after that independent Send read")
+            #expect(routingNamedSendPreInputPeerNameReads == 0,
+                "The renewed Input scope checks the complete footprint; do not duplicate it before acquisition")
+        }
         var routingInputOpenDiscoveryStart: Int?
         var routingInputOpenDiscoveryCounts: [Int] = []
         var routingOutputOpenDiscoveryStart: Int?
@@ -811,6 +834,11 @@ struct Issue965HeldSelectionAssociationTests {
                         footprintReads[key] = sample
                     }
                     routingRead?(element, attribute)
+                    if measureNamedBusPreInput, let count = routingNamedSendBeforeInputCount,
+                       routingCanonicalInputBuses.count == count,
+                       CFEqual(element, builder.element(1_965_710)), attribute == kAXValueAttribute as String {
+                        routingNamedSendPreInputPeerNameReads += 1
+                    }
                     if routingInputOpenDiscoveryStart != nil,
                        routingInputDiscoveryProbe.map({ CFEqual(element, $0) }) == true,
                        attribute == kAXRoleAttribute as String, activeBulkAttributes == nil {
@@ -5048,6 +5076,16 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test(arguments: ["forward", "cancel"], [false, true])
+    func canonicalNamedBusSendChecksItsFootprintAfterInputRenewal(mode: String, bulk: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_read_renewal", canonicalName: true,
+                stableDestinationBulkReads: bulk, measureNamedBusPreInput: true)
+        }
+    }
+
     @Test("Canonical Send corroborates its approved before-state in the deciding popup without a duplicate read lifecycle",
           arguments: ["healthy", "level", "bypass", "mode", "project",
                       "late_action_mode", "late_choice_mode", "late_bus_mode"])
@@ -5135,11 +5173,13 @@ struct Issue965HeldSelectionAssociationTests {
                                                sendGeometry: Bool = false,
                                                decidingSendFault: String? = nil,
                                                scopedInputAdditionalWindow: Bool = false,
-                                               captureInputReadScope: String? = nil) async throws {
+                                               captureInputReadScope: String? = nil,
+                                               measureNamedBusPreInput: Bool = false) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(), b = f.builder
             let inverseInputReadRenewal = canonicalBusReceiverFault?.hasPrefix("physical_source_inverse_read_renewal") == true
             let sourceInputReadRenewal = canonicalBusReceiverFault == "physical_source_read_renewal" || inverseInputReadRenewal
+            f.measureNamedBusPreInput = measureNamedBusPreInput
             if stableDestinationBulkReads { f.useBulkReads = true }
             let nameField = b.element(1_971_400)
             let inverseEditor = b.element(1_971_402), renameItem = b.element(1_971_406)
@@ -5648,6 +5688,7 @@ struct Issue965HeldSelectionAssociationTests {
                     b.setChildren(f.mixer, [f.strips[0], source, root]); return true
                 }
                 if action == kAXCancelAction as String, CFEqual(element, root) {
+                    f.observeNamedSendBeforeRead()
                     if let start = f.routingOutputOpenDiscoveryStart {
                         f.routingOutputOpenDiscoveryCounts.append(f.coupledGuardPopulationScans - start)
                         f.routingOutputOpenDiscoveryStart = nil
@@ -6357,6 +6398,7 @@ struct Issue965HeldSelectionAssociationTests {
                     let result = await apply(dependencies, arguments)
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
                     if sourceInputReadRenewal { #expect(f.routingInputReadRenewed, "Reach the actual owned Input source renewal") }
+                    try f.expectNamedSendInputFootprint()
                     if expireInspectionBeforeSendDispatch {
                         #expect(f.captureExpiredAtCheckedSendDispatch)
                         #expect(f.expireRetainedCapture)
