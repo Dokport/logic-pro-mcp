@@ -824,8 +824,8 @@ struct QualificationRunnerTests {
         let attestation = try await fixture.qualify()
         let operationCases = attestation.cases.filter { $0.id.hasPrefix("in-process/") }
 
-        // Oracle presence is not independent readback. The declared MIDI-port echo and
-        // same-host output-menu receipt checks are withheld; other semantic checks still pass.
+        // Oracle presence is not independent readback. Response-only plugin checks and
+        // same-host receipt checks are withheld; other semantic checks still pass.
         // DERIVED: one case per registry spec. It was `113` and read 114 the day main added
         // `system.setup_control_surface`.
         #expect(operationCases.count == OperationRegistry.specs.count)
@@ -833,7 +833,8 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges]))
+            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges,
+            .pluginsGetParamVerified, .pluginsGetChannelEQStateVerified]))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let markedIDs = Set(marked.map(\.rawValue))
         let passed = operationCases.filter { $0.status == .passed }
@@ -5267,7 +5268,8 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges]))
+            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges,
+            .pluginsGetParamVerified, .pluginsGetChannelEQStateVerified]))
         let markedIDs = Set(marked.map(\.rawValue))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let passed = operationCases.filter { $0.status == .passed }
