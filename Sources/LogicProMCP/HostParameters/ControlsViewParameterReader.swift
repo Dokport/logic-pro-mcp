@@ -8,6 +8,7 @@ enum ControlsViewParameterReader {
         case numericDisplay
         case sampleCount
         case radioPair(off: String, on: String)
+        case popupSelection(choices: [String])
     }
 
     enum Outcome {
@@ -27,17 +28,26 @@ enum ControlsViewParameterReader {
            let on = metadata.readbackOnTitle, !on.isEmpty, off != on {
             return .radioPair(off: off, on: on)
         }
+        if metadata.readbackMethod == "ax_controls_view_popup_value",
+           metadata.controlsViewControlRole == "AXPopUpButton",
+           let choices = metadata.readbackChoices, choices.count >= 2,
+           choices.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+           Set(choices).count == choices.count {
+            return .popupSelection(choices: choices)
+        }
         return nil
     }
 
     private enum Value: Equatable {
         case number(Double)
         case boolean(Bool)
+        case text(String)
 
         var raw: Any {
             switch self {
             case let .number(value): return value
             case let .boolean(value): return value
+            case let .text(value): return value
             }
         }
     }
@@ -171,6 +181,17 @@ enum ControlsViewParameterReader {
             }
             let value = states[onIndex]
             return Snapshot(value: .boolean(value), display: value ? on : off, controls: controls)
+        case let .popupSelection(choices):
+            guard controls.count == 1, roles == ["AXPopUpButton"] else {
+                throw ReadFailure(status: "control_shape_unconfirmed")
+            }
+            // The selected AXValue is read directly. Opening this popup would
+            // be an actuator and is deliberately not part of this provider.
+            guard let selected = try text(controls[0], kAXValueAttribute as String, runtime: runtime),
+                  choices.contains(selected) else {
+                throw ReadFailure(status: "popup_selection_unknown")
+            }
+            return Snapshot(value: .text(selected), display: selected, controls: controls)
         }
     }
 }

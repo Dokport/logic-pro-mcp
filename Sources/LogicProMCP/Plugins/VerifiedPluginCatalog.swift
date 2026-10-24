@@ -53,6 +53,18 @@ enum VerifiedPluginCatalog {
     /// while the catalog entry's parameter id is still `gain` (R5); both resolve
     /// to the catalog id so the capability lookup can find the parameter.
     private static let paramAliases: [String: [String: String]] = [
+        "logic.stock.effect.noise_gate": [
+            "threshold": "threshold",
+            "hysteresis": "hysteresis",
+            "reduction": "reduction",
+            "attack": "attack",
+            "hold": "hold",
+            "release": "release",
+            "high_cutoff": "high_cutoff",
+            "low_cutoff": "low_cutoff",
+            "lookahead": "lookahead",
+            "sidechain_filter_mode": "sidechain_filter_mode",
+        ],
         "logic.stock.effect.sample_delay": [
             "left_delay": "left_delay",
             "right_delay": "right_delay",

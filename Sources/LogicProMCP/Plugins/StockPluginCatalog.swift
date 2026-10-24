@@ -192,6 +192,8 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
     /// Exact measured titles of a two-choice Controls-view radio row.
     let readbackOffTitle: String?
     let readbackOnTitle: String?
+    /// Measured selected AXValue strings for a read-only popup observation.
+    let readbackChoices: [String]?
     /// Tolerance (in the parameter's own unit) for a verified write/readback
     /// round-trip: |observed - requested| <= tolerance ⇒ State A. nil when the
     /// parameter declares no verified write path (display/readback methods nil).
@@ -231,6 +233,7 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         case readbackUnit = "readback_unit"
         case readbackOffTitle = "readback_off_title"
         case readbackOnTitle = "readback_on_title"
+        case readbackChoices = "readback_choices"
         case tolerance
         case axDescription = "ax_description"
         case controlsViewRowLabel = "controls_view_row_label"
@@ -252,6 +255,7 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         readbackUnit: String? = nil,
         readbackOffTitle: String? = nil,
         readbackOnTitle: String? = nil,
+        readbackChoices: [String]? = nil,
         tolerance: Double? = nil,
         axDescription: String? = nil,
         controlsViewRowLabel: String? = nil,
@@ -271,6 +275,7 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         self.readbackUnit = readbackUnit
         self.readbackOffTitle = readbackOffTitle
         self.readbackOnTitle = readbackOnTitle
+        self.readbackChoices = readbackChoices
         self.tolerance = tolerance
         self.axDescription = axDescription
         self.controlsViewRowLabel = controlsViewRowLabel
@@ -1190,6 +1195,40 @@ enum StockPluginCatalog {
         )
     }
 
+    private static let noiseGateParameters = [
+        ("threshold", "Threshold", "dB", "Threshold:"),
+        ("hysteresis", "Hysteresis", "dB", "Hysteresis:"),
+        ("reduction", "Reduction", "dB", "Reduction:"),
+        ("attack", "Attack", "ms", "Attack:"),
+        ("hold", "Hold", "ms", "Hold:"),
+        ("release", "Release", "ms", "Release:"),
+        ("high_cutoff", "High Cutoff", "Hz", "High Cutoff:"),
+        ("low_cutoff", "Low Cutoff", "Hz", "Low Cutoff:"),
+        ("lookahead", "Lookahead", "ms", "Lookahead:"),
+    ].map { id, name, unit, row in
+        StockPluginParameterMetadata(id: id, displayName: name, unit: unit,
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_slider_display",
+            readbackUnit: "raw_ax_value", controlsViewRowLabel: row, controlsViewControlRole: "AXSlider",
+            availabilityState: .observed,
+            provenance: noiseGateReadObservation(["\(row) one display-bearing slider, one raw-only slider and its value indicator",
+                "AXValue is an opaque host value; the engineering display is preserved verbatim"]))
+    } + [
+        StockPluginParameterMetadata(id: "sidechain_filter_mode", displayName: "Sidechain Filter Mode", unit: "string",
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_popup_value",
+            readbackChoices: ["Bandpass", "Band Reject"],
+            controlsViewRowLabel: "Characteristics:", controlsViewControlRole: "AXPopUpButton",
+            availabilityState: .observed,
+            provenance: noiseGateReadObservation(["Characteristics: AXPopUpButton selected AXValue=Band Reject",
+                "observed choices: Bandpass, Band Reject; read-only access never opens the popup",
+                "configured filter selection and cutoff values do not establish whether the filter is enabled"]))
+    ]
+
+    private static func noiseGateReadObservation(_ evidence: [String]) -> StockPluginProvenance {
+        .observed(method: "controls_view_read_only_observation",
+            observedAt: "2026-10-24T22:23:23.601Z", logicVersion: nil, locale: "ko-KR",
+            evidence: evidence + ["read-only metadata; no parameter write qualification"])
+    }
+
     private static let sampleDelayParameters = [
         ("left_delay", "Left Delay", "Left Delay:"),
         ("right_delay", "Right Delay", "Right Delay:"),
@@ -1566,7 +1605,7 @@ enum StockPluginCatalog {
         fx("expander", "Expander", "Dynamics"),
         fx("limiter", "Limiter", "Dynamics"),
         fx("multipressor", "Multipressor", "Dynamics"),
-        fx("noise_gate", "Noise Gate", "Dynamics"),
+        fx("noise_gate", "Noise Gate", "Dynamics", parameters: noiseGateParameters),
         // Reverb
         fx("chromaverb", "ChromaVerb", "Reverb"),
         fx("quantec_room_simulator", "Quantec Room Simulator", "Reverb", notes: ["introduced in Logic Pro 11.1; absent on older installs"]),

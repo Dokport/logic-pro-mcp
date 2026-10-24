@@ -941,6 +941,9 @@ enum SemanticOracleTable {
             case let .radioPair(off, on):
                 guard JSONInspector.isBoolean(raw), let value = raw as? Bool,
                       display as? String == (value ? on : off) else { return false }
+            case let .popupSelection(choices):
+                guard let selected = raw as? String, choices.contains(selected),
+                      display as? String == selected else { return false }
             }
             guard displayStatus == "read", let text = display as? String, !text.isEmpty else { return false }
         } else {

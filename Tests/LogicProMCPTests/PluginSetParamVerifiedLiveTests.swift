@@ -4308,6 +4308,149 @@ private func gainReadFixture(_ param: String = "gain", controls: Bool = false,
     return fixture
 }
 
+private let noiseGateReadCases: [(String, String, Double, String)] = [
+    ("threshold", "Threshold:", 52, "-48 dB"),
+    ("hysteresis", "Hysteresis:", 35, "-2.5 dB"),
+    ("reduction", "Reduction:", 1, "-99 dB"),
+    ("attack", "Attack:", 4, "4 ms"),
+    ("hold", "Hold:", 5, "50 ms"),
+    ("release", "Release:", 11, "11.0 ms"),
+    ("high_cutoff", "High Cutoff:", 99, "19100 Hz"),
+    ("low_cutoff", "Low Cutoff:", 1, "21 Hz"),
+    ("lookahead", "Lookahead:", 1, "0.2 ms"),
+]
+
+private func noiseGateReadFixture(_ param: String, controls: Bool = false,
+                                  choice: String = "Band Reject") -> LiveFixture {
+    let row = noiseGateReadCases.first { $0.0 == param }
+    let fixture = LiveFixture(pluginSlotName: "Noise Gate",
+        controlsViewRowLabel: row?.1 ?? "Characteristics:",
+        controlsViewInitiallySelected: controls, viewSettleDelay: 0)
+    let b = fixture.builder
+    b.setAttribute(b.element(1001), kAXDocumentAttribute as String, URL(fileURLWithPath: expectedPath).absoluteString)
+    if let row {
+        for (id, role) in [(139_641, "AXSlider"), (139_642, "AXSlider"), (139_643, "AXValueIndicator")] {
+            b.setRole(b.element(id), role)
+            b.setAttribute(b.element(id), kAXValueAttribute as String, row.2)
+        }
+        b.setAttribute(b.element(139_641), kAXValueDescriptionAttribute as String, row.3)
+        b.setChildren(b.element(139_642), [b.element(139_643)])
+        b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_641), b.element(139_642)])
+    } else {
+        b.setRole(b.element(139_641), kAXPopUpButtonRole as String)
+        b.setAttribute(b.element(139_641), kAXValueAttribute as String, choice)
+        b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_641)])
+    }
+    return fixture
+}
+
+private func noiseGateReadParams(_ param: String) -> [String: String] {
+    var params = parameterReadParams(param)
+    params["plugin"] = "Noise Gate"
+    params["expected_plugin_identity"] = "logic.stock.effect.noise_gate"
+    return params
+}
+
+@Test(arguments: noiseGateReadCases.map { $0.0 }, [false, true])
+func testIssue1396NoiseGateReadsOpaqueRawWithActualDisplay(_ param: String, _ controls: Bool) async throws {
+    let expected = try #require(noiseGateReadCases.first { $0.0 == param })
+    let fixture = noiseGateReadFixture(param, controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams(param), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? Double == expected.2)
+    #expect(object["observed_display"] as? String == expected.3)
+    #expect(object["raw_unit"] as? String == "raw_ax_value")
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_641...139_643).contains($0.element) })
+}
+
+@Test(arguments: ["Bandpass", "Band Reject"], [false, true])
+func testIssue1396NoiseGateReadsSelectedFilterWithoutOpeningPopup(_ choice: String, _ controls: Bool) async throws {
+    let fixture = noiseGateReadFixture("sidechain_filter_mode", controls: controls, choice: choice)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams("sidechain_filter_mode"), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? String == choice)
+    #expect(object["observed_display"] as? String == choice)
+    #expect(object["raw_unit"] as? String == "string")
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(!fixture.axActions.value.contains { $0.element == 139_641 })
+}
+
+@Test(arguments: ["empty", "absent", "malformed", "unreadable", "drift", "duplicate", "wrong_role", "unobserved_choice"])
+func testIssue1396NoiseGateUncertainPopupIsUnknownWithoutActuation(_ kind: String) async throws {
+    let fixture = noiseGateReadFixture("sidechain_filter_mode")
+    let b = fixture.builder
+    switch kind {
+    case "empty": b.setAttribute(b.element(139_641), kAXValueAttribute as String, "")
+    case "absent": b.setAttribute(b.element(139_641), kAXValueAttribute as String, NSNull())
+    case "malformed": b.setAttribute(b.element(139_641), kAXValueAttribute as String, NSNumber(value: true))
+    case "unobserved_choice": b.setAttribute(b.element(139_641), kAXValueAttribute as String, "Unavailable selection")
+    case "wrong_role": b.setRole(b.element(139_641), kAXTextFieldRole as String)
+    case "duplicate":
+        b.setRole(b.element(139_642), kAXPopUpButtonRole as String)
+        b.setAttribute(b.element(139_642), kAXValueAttribute as String, "Band Reject")
+        b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_641), b.element(139_642)])
+    default: break
+    }
+    let reads = MutableBox(0)
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        guard CFEqual(element, b.element(139_641)), attribute == kAXValueAttribute as String else { return nil }
+        if kind == "unreadable" { return .failure(AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue)) }
+        if kind == "drift" {
+            reads.value += 1
+            return .success((reads.value == 1 ? "Band Reject" : "Bandpass") as NSString)
+        }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams("sidechain_filter_mode"), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(kind): \(object)")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(fixture.currentPluginViewTitle == "편집기")
+    #expect(!fixture.axActions.value.contains { (139_641...139_643).contains($0.element) })
+}
+
+@Test(arguments: noiseGateReadCases.map { $0.0 } + ["sidechain_filter_mode"])
+func testIssue1396NoiseGateReadDoesNotGrantAWriter(_ param: String) async throws {
+    let fixture = noiseGateReadFixture(param)
+    var params = noiseGateReadParams(param)
+    params.merge(["mode": "duplicate_applyback", "value": "1"]) { _, new in new }
+    let result = await AccessibilityChannel.defaultSetParamVerified(params: params, runtime: parameterReadRuntime(fixture), frontDocumentPath: { expectedPath })
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(fixture.axActions.value.isEmpty)
+}
+
+@Test func testIssue1396NoiseGatePopupProtocolRejectsWrongTypesUnknownChoicesAndContradictoryDisplay() async throws {
+    let fixture = noiseGateReadFixture("sidechain_filter_mode")
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams("sidechain_filter_mode"), runtime: parameterReadRuntime(fixture))
+    var object = try #require(sharedJSONObject(result.message))
+    // Synthetic transport fields do not provide independent native evidence.
+    object["target_ref"] = "ins_gate_fixture"
+    object["target_fingerprint"] = "gate_fixture_fingerprint"
+    let oracle = try #require(SemanticOracleTable.byOperationID[.pluginsGetParamVerified])
+    let valid = try #require(oracle.evaluate(responseData: JSONSerialization.data(withJSONObject: object), readbackData: Data()))
+    #expect(valid)
+    let corruptions: [[String: Any]] = [
+        ["observed_raw": true],
+        ["observed_raw": "Unavailable selection", "observed_display": "Unavailable selection"],
+        ["observed_raw": "Bandpass", "observed_display": "Band Reject"],
+        ["raw_unit": "raw_ax_value"],
+    ]
+    for corruption in corruptions {
+        var corrupted = object
+        corrupted.merge(corruption) { _, new in new }
+        let verdict = try #require(oracle.evaluate(responseData: JSONSerialization.data(withJSONObject: corrupted), readbackData: Data()))
+        #expect(!verdict)
+    }
+}
+
 private func sampleDelayReadFixture(_ param: String = "left_delay", samples: Bool = true,
                                     controls: Bool = false) -> LiveFixture {
     let fixture = LiveFixture(pluginSlotName: "SmpleDly",
