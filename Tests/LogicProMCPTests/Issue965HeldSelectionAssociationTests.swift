@@ -4953,14 +4953,15 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("An input read borrowing a held Mixer still uses the existing native-popup custody path",
-          arguments: ["unscoped", "owned", "foreign_scope", "guarded_ordinary", "guarded_ordinary_document",
+          arguments: ["unscoped", "unscoped_ordinary", "owned", "foreign_scope", "guarded_ordinary", "guarded_ordinary_document",
                       "guarded_ordinary_window", "guarded_ordinary_source", "guarded_ordinary_gate",
                       "guarded_native", "guarded_native_document",
                       "guarded_native_window", "guarded_native_source", "guarded_native_root",
                       "guarded_native_editor", "guarded_native_gate"])
     func heldInputReadPreservesNativePopupWithoutFocusedWindow(scope: String) async throws {
         let f = try Fixture(), b = f.builder
-        let ordinary = scope.hasPrefix("guarded_ordinary")
+        f.useBulkReads = scope == "guarded_ordinary" || scope == "unscoped_ordinary"
+        let ordinary = scope.hasPrefix("guarded_ordinary") || scope == "unscoped_ordinary"
         let input = b.element(1_971_980), root = b.element(1_971_981), echo = b.element(1_971_982)
         let parent = b.element(1_971_983), submenu = b.element(1_971_984), leaf = b.element(1_971_985)
         let wrapper = b.element(1_971_986), frame = CGRect(x: 20, y: 100, width: 230, height: 175)
@@ -5030,7 +5031,7 @@ struct Issue965HeldSelectionAssociationTests {
             let runtime = f.logic()
             let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
                 logic: runtime, expectedProject: nil, requiresProjectReference: false))
-            var borrowed = scope == "unscoped" || scope.hasPrefix("guarded_native") ? nil : held
+            var borrowed = scope.hasPrefix("unscoped") || scope.hasPrefix("guarded_native") ? nil : held
             if scope == "foreign_scope" {
                 b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                 borrowed = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
@@ -5047,12 +5048,20 @@ struct Issue965HeldSelectionAssociationTests {
                 if !permitted, f.routingForeignHelpFirstStack.isEmpty { f.routingForeignHelpFirstStack = Thread.callStackSymbols }
                 return !permitted
             })
+            let discoveriesBeforeRead = f.coupledGuardPopulationScans
             let read = await AXHelpers.HelpReadGuard.$current.withValue(readGuard) {
                 await AXMixerStripBinding.$current.withValue(owner) {
                     await AccessibilityChannel.getInputBusObservation(runtime: runtime, timing: .immediate,
                         observingPopupFocus: { f.routingPopupReadFocusRetained = $0 != nil; focus.retainRoutingPopupFocus($0) },
                         readingOriginalScope: readScope)
                 }
+            }
+            if scope == "guarded_ordinary" {
+                #expect(f.coupledGuardPopulationScans == discoveriesBeforeRead,
+                    "Use the actual original held census at entry as well as inside its ordinary Input popup")
+            } else if scope == "unscoped_ordinary" {
+                #expect(f.coupledGuardPopulationScans > discoveriesBeforeRead,
+                    "Unscoped/native readers retain their existing global discovery")
             }
             #expect(!f.routingPopupReadFocusRetained, "Every reader exit clears its temporary native focus proof")
             if scope.hasPrefix("guarded_native_") || scope.hasPrefix("guarded_ordinary_") {

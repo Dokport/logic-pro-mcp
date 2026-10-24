@@ -561,29 +561,36 @@ extension AccessibilityChannel {
         guard params.isEmpty, sendOrdinal.map({ $0 >= 0 }) != false, let physical = AXMixerStripBinding.current else {
             return refuse(.invalidParams, "A current physical Mixer target_ref is required; no write inputs or indices are accepted.")
         }
-        guard physical.currentIndex(runtime: runtime) != nil else {
-            return refuse(.staleTargetReference, "The original physical source is no longer in its bound project/window.")
+        if let readingOriginalScope {
+            guard physical.currentIndex(in: readingOriginalScope) != nil else {
+                return refuse(.staleTargetReference, "The original read scope no longer contains this physical source.")
+            }
+        } else {
+            guard physical.currentIndex(runtime: runtime) != nil else {
+                return refuse(.staleTargetReference, "The original physical source is no longer in its bound project/window.")
+            }
         }
         @Sendable func currentPhysicalMembership(ownedPopup: AXUIElement? = nil)
             -> (index: Int?, checkedInHeldScope: Bool) {
             if let readingOriginalScope {
                 if inputBusOnly {
-                    // Borrow identity only inside an ordinary, reciprocal Mixer
-                    // popup. Native Input windows retain their existing reader;
-                    // the held association's neutral-Output exception is not an
-                    // Input-popup capability, including AXFocusedWindow NoValue.
-                    guard let ownedPopup,
-                          let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax),
-                          menus.count == 1, CFEqual(menus[0], ownedPopup) else {
+                    // The original scope qualifies a popup-free main window or
+                    // one reciprocal ordinary Mixer popup. Native Input windows
+                    // retain their existing reader; neutral Output custody is
+                    // never an Input-popup capability (including NoValue focus).
+                    let menus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)
+                    if let ownedPopup, let menus, menus.count == 1, CFEqual(menus[0], ownedPopup) {
+                        return (physical.currentIndex(in: readingOriginalScope, ownedPopup: ownedPopup), true)
+                    }
+                    guard menus?.isEmpty == true, let pid = runtime.logicProPID(),
+                          runtime.onScreenWindowList().map({ LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 }) == true else {
                         return (physical.currentIndex(runtime: runtime), false)
                     }
+                    return (physical.currentIndex(in: readingOriginalScope), true)
                 }
                 return (physical.currentIndex(in: readingOriginalScope, ownedPopup: ownedPopup), true)
             }
             return (physical.currentIndex(runtime: runtime), false)
-        }
-        guard readingOriginalScope.map({ physical.currentIndex(in: $0) != nil }) ?? true else {
-            return refuse(.staleTargetReference, "The original read scope no longer contains this physical source.")
         }
         if refreshingOriginalSourceAfterCleanup {
             guard inputBusOnly, let pair = AXMixerStripBinding.outputAssociation,
