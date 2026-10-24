@@ -4886,7 +4886,7 @@ extension AccessibilityChannel {
             // slot's open control is a toggle, so raise the known editor instead.
             guard allowingChanges() else { return nil }
             _ = AXHelpers.performAction(window, kAXRaiseAction as String, runtime: runtime.ax)
-            if pluginWindowIsFront(window, runtime: runtime.ax) {
+            if pluginWindowIsFront(window, runtime: runtime) {
                 return AXUIElementSendable(window)
             }
         case .none:
@@ -4919,7 +4919,7 @@ extension AccessibilityChannel {
             case .unreadable:
                 return nil
             case let .unique(window):
-                guard pluginWindowIsFront(window, runtime: runtime.ax) else {
+                guard pluginWindowIsFront(window, runtime: runtime) else {
                     return nil
                 }
                 return AXUIElementSendable(window)
@@ -4947,26 +4947,35 @@ extension AccessibilityChannel {
         let focusCleared = AXHelpers.setAttribute(
             window, kAXFocusedAttribute as String, false as CFTypeRef, runtime: runtime.ax
         )
-        if mainCleared, focusCleared, !pluginWindowIsFront(window, runtime: runtime.ax) {
+        if mainCleared, focusCleared, !pluginWindowIsFront(window, runtime: runtime) {
             return true
         }
         guard let arrangeWindow = AXLogicProElements.mainWindow(runtime: runtime),
               allowingChanges(),
               AXHelpers.performAction(arrangeWindow, kAXRaiseAction as String, runtime: runtime.ax) else { return false }
-        return !pluginWindowIsFront(window, runtime: runtime.ax)
+        return !pluginWindowIsFront(window, runtime: runtime)
     }
 
     private static func pluginWindowIsFront(
         _ window: AXUIElement,
-        runtime: AXHelpers.Runtime
+        runtime: AXLogicProElements.Runtime
     ) -> Bool {
         let isMain: NSNumber? = AXHelpers.getAttribute(
-            window, kAXMainAttribute, runtime: runtime
+            window, kAXMainAttribute, runtime: runtime.ax
         )
         let isFocused: NSNumber? = AXHelpers.getAttribute(
-            window, kAXFocusedAttribute, runtime: runtime
+            window, kAXFocusedAttribute, runtime: runtime.ax
         )
-        return isMain?.boolValue == true || isFocused?.boolValue == true
+        if isMain?.boolValue == true || isFocused?.boolValue == true { return true }
+        // Gain's Editor can report both flags false while the application's
+        // AXFocusedWindow is this exact, already header-bound window. Use that
+        // observed reference, never its title or a different window's focus.
+        guard let app = AXLogicProElements.appRoot(runtime: runtime),
+              case let .success(.some(focusedWindow)) = AXHelpers.getAttributeResult(
+                app, kAXFocusedWindowAttribute as String, runtime: runtime.ax
+              ) as Result<AnyObject?, AXHelpers.AXStatusError>,
+              CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() else { return false }
+        return CFEqual(focusedWindow, window)
     }
 
     private static func targetPluginIdentityIsStable(
@@ -5347,9 +5356,9 @@ extension AccessibilityChannel {
                 summary["main"] = main.map { $0 as Any } ?? NSNull()
                 summary["focused"] = focused.map { $0 as Any } ?? NSNull()
                 summary["application_focused_window_matches"] = focusedWindow.map { CFEqual($0, window) } ?? false
-                // An editor can expose a non-static-text footer. Preserve the
-                // actual shallow fields when identity is refused; diagnostics
-                // never authenticate that footer or authorize an action.
+                // Preserve shallow header/frontness fields when acquisition
+                // is refused. Diagnostics never authenticate a candidate or
+                // authorize an action.
                 summary["direct_header_candidates"] = runtime.ax.children(window).prefix(24).map { child -> [String: Any] in
                     let value: String? = AXHelpers.getAttribute(child, kAXValueAttribute as String, runtime: runtime.ax)
                     return ["role": AXHelpers.getRole(child, runtime: runtime.ax) ?? "",

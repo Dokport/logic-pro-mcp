@@ -4469,6 +4469,40 @@ func testIssue1396GainUnfrontEditorRefusalRetainsOnlyNewWindowCleanup(_ alreadyO
     #expect(fixture.controlsCheckboxPressCount.value == 0)
 }
 
+@Test(arguments: ["same", "other", "absent", "malformed", "unreadable"])
+func testIssue1396GainUsesExactApplicationFocusedWindowWhenEditorFlagsAreFalse(_ kind: String) async throws {
+    let fixture = gainReadFixture(windowPresent: false, openOnPress: true)
+    let b = fixture.builder
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if CFEqual(element, b.element(1004)),
+           [kAXMainAttribute as String, kAXFocusedAttribute as String].contains(attribute) {
+            return .success(NSNumber(value: false))
+        }
+        if CFEqual(element, b.element(1000)), attribute == kAXFocusedWindowAttribute as String {
+            switch kind {
+            case "same": return .success(b.element(1004))
+            case "other": return .success(b.element(1001))
+            case "absent": return .success(nil)
+            case "malformed": return .success("not a window" as NSString)
+            default: return .failure(AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue))
+            }
+        }
+        return nil
+    }, legacyAttributeRead: true)
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == (kind == "same" ? "A" : "C"), "\(kind): \(object)")
+    if kind == "same" {
+        #expect(object["observed_raw"] as? Double == 959)
+        #expect(object["observed_display"] as? String == "-0.1 dB")
+    } else {
+        #expect(object["observed_raw"] == nil)
+    }
+    #expect(try #require(object["editor_close_observed"] as? Bool))
+    #expect(fixture.pluginCloseControlPressCount.value == 1)
+    #expect(fixture.sliderWriteCount.value == 0)
+}
+
 @Test func testIssue1396GainRadioFalseDoesNotReadAdjacentRowWithSameTitles() async throws {
     let fixture = gainReadFixture("phase_invert_left")
     let b = fixture.builder
