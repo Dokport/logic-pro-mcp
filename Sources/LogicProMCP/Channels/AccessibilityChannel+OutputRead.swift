@@ -1695,15 +1695,19 @@ extension AccessibilityChannel {
         // A fresh input observation must not scan the old owner's Help between
         // Cancel and its actual original-header re-observation. Popup absence
         // is a cleanup receipt, never replacement-source authority.
-        let closed = !refreshingOriginalSourceAfterCleanup
+        let popupClosed = !refreshingOriginalSourceAfterCleanup
             && originalSourcePresent() && originalInputFocusCurrent && sourceOwned()
             && checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax)?.isEmpty == true
             && runtime.onScreenWindowList().map { LogicOnScreenWindows.popupMenuCount($0, logicPID: pid) == 0 } == true
-        extras["popup_menu_state"] = closed ? "closed" : "not_restored"
         extras["popup_cancel_succeeded"] = cancelSucceeded
         extras["focus_restoration"] = restoredFocusReceipt ? "restored" : "not_restored"
         var sourceAfter = !refreshingOriginalSourceAfterCleanup
             && originalSourcePresent() && originalInputFocusCurrent && sourceOwned()
+        // The window-server census above may be the last read that observes
+        // a project change. Reuse the existing subsequent source proof before
+        // reporting closure in the original scope; no additional read is needed.
+        let closed = popupClosed && sourceAfter
+        extras["popup_menu_state"] = closed ? "closed" : "not_restored"
         var inputRenewal: OriginalHeaderSourceRenewal?
         var inputSlot: AXMixerInputSlotBinding?
         if inputBusOnly, !sourceAfter, dataOwned,
