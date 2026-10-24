@@ -365,7 +365,8 @@ extension AccessibilityChannel {
                 [kAXFrontmostAttribute, kAXWindowsAttribute, kAXMainWindowAttribute, kAXFocusedWindowAttribute] as [String],
                 runtime: logic.ax, permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
             guard case .success(.some(let frontmost)) = application[0], frontmost as? Bool == true,
-                  case .success(.some(let windowValues)) = application[1], CFGetTypeID(windowValues) == CFArrayGetTypeID(),
+                  case .success(.some(let windowValues)) = application[1],
+                  case .success(let windows) = AXHelpers.projectChildrenStatus(.success, windowValues),
                   case .success(.some(let mainValue)) = application[2], CFGetTypeID(mainValue) == AXUIElementGetTypeID() else {
                 let states = application.map { reading -> String in
                     switch reading {
@@ -377,7 +378,6 @@ extension AccessibilityChannel {
                 Log.info("Held association ownership refused: application window attributes [\(states)]", subsystem: "ax")
                 lost = true; return false
             }
-            let windows = AXHelpers.decodeChildrenArray(windowValues)
             let main = unsafeBitCast(mainValue, to: AXUIElement.self)
             let focusedWindowMatches: Bool
             if AccessibilityChannel.routingFocusedWindowMatches(application[3],
@@ -507,8 +507,9 @@ extension AccessibilityChannel {
                     let reads = AXHelpers.getNonHelpAttributes(parent, attributes, runtime: logic.ax,
                         permittingRead: acquired)
                     guard case .success(.some(let rawChildren)) = reads[0],
-                          CFGetTypeID(rawChildren) == CFArrayGetTypeID() else { return false }
-                    children = AXHelpers.decodeChildrenArray(rawChildren)
+                          case .success(let observed) = AXHelpers.projectChildrenStatus(.success, rawChildren)
+                    else { return false }
+                    children = observed
                     if CFEqual(parent, window) { next = nil }
                     else {
                         guard case .success(.some(let rawParent)) = reads[1],

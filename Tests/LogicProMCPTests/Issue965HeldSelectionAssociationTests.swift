@@ -105,6 +105,88 @@ private actor SelectedOutputSagaResultBoundary: Channel {
 
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
+    @Test func heldWindowMembershipRejectsNonAXMembers() throws {
+        let f = try Fixture(), gate = LogicMutationGate()
+        f.useBulkReads = true
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let applicationAttributes = [kAXFrontmostAttribute, kAXWindowsAttribute,
+            kAXMainWindowAttribute, kAXFocusedWindowAttribute] as [String]
+        f.routingReadResult = { element, attribute in
+            guard f.routingLateScopeInjected, CFEqual(element, f.app), attribute == kAXWindowsAttribute as String,
+                  f.activeBulkAttributes == applicationAttributes else { return nil }
+            return .success(NSArray(array: [f.window as AnyObject, NSNumber(value: 7)]))
+        }
+        let claim = try #require(gate.tryAcquire(operation: "typed-held-window-census"))
+        defer { gate.release(claim) }
+        try OperationTraceContext.$current.withValue(.init(mutationGateAcquired: true,
+            ownsGate: { gate.stillOwns(claim) })) {
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            #expect(held.permitsRead())
+            f.routingLateScopeInjected = true
+            #expect(!held.permitsRead(), "Known main/focused handles do not make a malformed window census complete")
+            f.routingLateScopeInjected = false
+            #expect(!held.permitsRead(), "A later valid window census cannot revive lost custody")
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
+    @Test(arguments: ["bar", "window", "record_branch"], [false, true])
+    func transportParentCensusRejectsNonAXMembers(parent: String, bulk: Bool) throws {
+        let f = try Fixture(), gate = LogicMutationGate()
+        f.useBulkReads = true
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let bar = f.builder.element(1_965_720), record = f.builder.element(1_965_722)
+        let wrapper = f.builder.element(1_971_904)
+        if parent == "record_branch" {
+            f.builder.setRole(wrapper, kAXGroupRole as String)
+            f.builder.setChildren(wrapper, [record])
+            f.builder.setChildren(bar, [f.builder.element(1_965_721), wrapper])
+        }
+        let corruptedParent = parent == "window" ? f.window : parent == "bar" ? bar : wrapper
+        let claim = try #require(gate.tryAcquire(operation: "typed-transport-parent-census"))
+        defer { gate.release(claim) }
+        try OperationTraceContext.$current.withValue(.init(mutationGateAcquired: true,
+            ownsGate: { gate.stillOwns(claim) })) {
+            let base = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: base, expectedProject: nil, requiresProjectReference: false))
+            let rawChildren: @Sendable () -> AnyObject = {
+                NSArray(array: f.builder.makeAXRuntime().children(corruptedParent).map { $0 as AnyObject }
+                    + [NSNumber(value: 7)])
+            }
+            let bulkRead = try #require(base.ax.attributeValuesResult)
+            let mixedBulkRead: @Sendable (AXUIElement, [String]) -> Result<[AnyObject], AXHelpers.AXStatusError> = { element, attributes in
+                let reading = bulkRead(element, attributes)
+                guard f.routingLateScopeInjected, CFEqual(element, corruptedParent),
+                      let index = attributes.firstIndex(of: kAXChildrenAttribute as String) else { return reading }
+                return reading.map { original in
+                    var changed = original; changed[index] = rawChildren(); return changed
+                }
+            }
+            let ax = AXHelpers.Runtime(axApp: base.ax.axApp, attributeValue: base.ax.attributeValue,
+                attributeIsSettable: base.ax.attributeIsSettable, setAttributeValue: base.ax.setAttributeValue,
+                children: base.ax.children, performAction: base.ax.performAction, childCount: base.ax.childCount,
+                actionNames: base.ax.actionNames, childrenResult: { element in
+                    if f.routingLateScopeInjected, CFEqual(element, corruptedParent) {
+                        return AXHelpers.projectChildrenStatus(.success, rawChildren())
+                    }
+                    return AXHelpers.childrenResult(element, runtime: base.ax)
+                }, attributeValueResult: base.ax.attributeValueResult,
+                attributeValuesResult: bulk ? mixedBulkRead : nil)
+            let runtime = AXLogicProElements.Runtime(logicProPID: base.logicProPID, ax: ax,
+                executeAppleScript: base.executeAppleScript, onScreenWindowList: base.onScreenWindowList,
+                postPopupMenuEscape: base.postPopupMenuEscape, focusedApplicationPID: base.focusedApplicationPID)
+            #expect(AccessibilityChannel.HeldSelectionAssociation.stoppedTransportPathsMatch(
+                held.transportPaths, activity: held.transport, window: f.window, logic: runtime))
+            f.routingLateScopeInjected = true
+            #expect(!AccessibilityChannel.HeldSelectionAssociation.stoppedTransportPathsMatch(
+                held.transportPaths, activity: held.transport, window: f.window, logic: runtime),
+                "Expected native children plus a non-AX member is an unreadable census in either path")
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
     @Test(arguments: [false, true])
     func aSharedTransportAncestorIsReadAfterItsSeparateChildBranch(bulk: Bool) throws {
         let f = try Fixture(), gate = LogicMutationGate()
@@ -653,6 +735,21 @@ struct Issue965HeldSelectionAssociationTests {
             let first = actual.first, last = actual.last
             #expect(first != nil && first != 0)
             #expect(last == 0)
+        }
+
+        func expectCanonicalInverseMeasurements(_ body: [String: Any], measuringAssociations: Bool,
+                                                singleWriterPopup: Bool) throws {
+            if measuringAssociations {
+                try expectMinimumInverseSourceChallenges()
+                #expect(body["saga_state"] as? String == "fullyCompensated")
+            }
+            if singleWriterPopup {
+                #expect(routingInputReadRenewed, "Reach the actual owned Input read that retired the source")
+                #expect(routingInverseRenewedSendMenuOpens == 1,
+                    "Keep the deciding inverse popup; do not first open and Cancel another checked Send popup")
+                #expect(routingBusLeafPresses == [2, 1], "The actual forward and owned inverse must both run")
+                #expect(body["saga_state"] as? String == "fullyCompensated")
+            }
         }
         var routingNamedSendBeforeInputCount: Int?
         var routingNamedSendPreInputPeerNameReads = 0
@@ -6751,6 +6848,8 @@ struct Issue965HeldSelectionAssociationTests {
                         }) { await apply(dependencies, arguments) }
                     } else { result = await apply(dependencies, arguments) }
                     let body = try #require(sharedJSONObject(sharedToolText(result)))
+                    try f.expectCanonicalInverseMeasurements(body, measuringAssociations: measureInverseAssociations,
+                        singleWriterPopup: singleInverseWriterPopup)
                     if restoredNameCaption?.verifyRefusal(f, body: body) == true { return }
                     if sourceInputReadRenewal { #expect(f.routingInputReadRenewed, "Reach the actual owned Input source renewal") }
                     try f.expectNamedSendInputFootprint()
@@ -7039,17 +7138,8 @@ struct Issue965HeldSelectionAssociationTests {
                     }) { await apply(dependencies, arguments) }
                 } else { result = await apply(dependencies, arguments) }
                 let body = try #require(sharedJSONObject(sharedToolText(result)))
-                if measureInverseAssociations {
-                    try f.expectMinimumInverseSourceChallenges()
-                    #expect(body["saga_state"] as? String == "fullyCompensated")
-                }
-                if singleInverseWriterPopup {
-                    #expect(f.routingInputReadRenewed, "Reach the actual owned Input read that retired the source")
-                    #expect(f.routingInverseRenewedSendMenuOpens == 1,
-                        "Keep the deciding inverse popup; do not first open and Cancel another checked Send popup")
-                    #expect(f.routingBusLeafPresses == [2, 1], "The actual forward and owned inverse must both run")
-                    #expect(body["saga_state"] as? String == "fullyCompensated")
-                }
+                try f.expectCanonicalInverseMeasurements(body, measuringAssociations: measureInverseAssociations,
+                    singleWriterPopup: singleInverseWriterPopup)
                 if let decidingSendFault {
                     if decidingSendFault == "healthy" {
                         #expect(f.routingBeforeSendMenuOpens == 4,
