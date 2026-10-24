@@ -648,6 +648,39 @@ struct ControlsViewBooleanParameterWriterTests {
         #expect(reportsRetriedEvidenceFailure)
     }
 
+    @Test func completeNoTableConfirmsEditorDespiteUnavailableSliderDescriptions() {
+        let fixture = viewFixture(entry: .editor, title: "50%", behavior: .switchesStructure,
+                                  readFailure: .sliderDescription)
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedEditor: { true }, runtime: fixture.runtime)
+        let session: ControlsViewBooleanParameterWriter.ViewSession?
+        if case let .ready(observed) = result { session = observed } else { session = nil }
+        #expect(session != nil)
+        guard let session else { return }
+        #expect(fixture.controlsSelections.value == 1)
+        let restored = session.restore()
+        #expect(restored.confirmed)
+        #expect(fixture.editorSelections.value == 1)
+    }
+
+    @Test(arguments: [0, 1])
+    func noTableCannotReplaceEndedHeaderBindingWhenDescriptionsFail(_ successfulWitnessReads: Int) {
+        let fixture = viewFixture(entry: .editor, title: "50%", behavior: .switchesStructure,
+                                  readFailure: .sliderDescription)
+        var reads = 0
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedEditor: {
+                reads += 1
+                return reads <= successfulWitnessReads
+            }, runtime: fixture.runtime)
+        let refused: Bool
+        if case .refused(.viewEvidenceReadFailed(.sliderDescription), restoration: nil) = result {
+            refused = true
+        } else { refused = false }
+        #expect(refused)
+        #expect(fixture.builder.actionCalls.isEmpty)
+    }
+
     @Test func failedSliderDescriptionRefusesRatherThanConfirmingAnUnrelatedTableAsControls() {
         let readFailure = AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue)
         let fixture = viewFixture(

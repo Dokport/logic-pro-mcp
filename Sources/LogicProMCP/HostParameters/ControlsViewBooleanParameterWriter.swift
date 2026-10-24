@@ -328,6 +328,7 @@ enum ControlsViewBooleanParameterWriter {
         private let entryView: PluginWindowView
         private let didSwitch: Bool
         private let menuAppearanceTimeout: TimeInterval
+        private let headerBoundUndescribedEditor: (() -> Bool)?
         private let runtime: AXHelpers.Runtime
         private var restorationFinished = false
 
@@ -337,6 +338,7 @@ enum ControlsViewBooleanParameterWriter {
             entryView: PluginWindowView,
             didSwitch: Bool,
             menuAppearanceTimeout: TimeInterval,
+            headerBoundUndescribedEditor: (() -> Bool)? = nil,
             runtime: AXHelpers.Runtime
         ) {
             self.window = window
@@ -344,6 +346,7 @@ enum ControlsViewBooleanParameterWriter {
             self.entryView = entryView
             self.didSwitch = didSwitch
             self.menuAppearanceTimeout = menuAppearanceTimeout
+            self.headerBoundUndescribedEditor = headerBoundUndescribedEditor
             self.runtime = runtime
         }
 
@@ -380,6 +383,7 @@ enum ControlsViewBooleanParameterWriter {
                 menuAppearanceTimeout: menuAppearanceTimeout,
                 confirmationTimeout: viewConfirmationTimeout,
                 allowingChanges: allowingChanges,
+                headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                 runtime: runtime
             ) {
             case let .confirmed(switched):
@@ -398,6 +402,7 @@ enum ControlsViewBooleanParameterWriter {
                 if case let .success(.some(value)) = observedView(
                     in: window,
                     windowRefresher: windowRefresher,
+                    headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                     runtime: runtime
                 ) {
                     observed = value
@@ -440,6 +445,10 @@ enum ControlsViewBooleanParameterWriter {
     /// enter the requested view only when necessary. AXPress status and AXTitle
     /// are not confirmation: the requested structure must appear before the
     /// bounded confirmation deadline.
+    /// A header-bound reader can supply a fresh occupied-instance witness for
+    /// an Editor whose slider descriptions fail. It is renewed around the
+    /// complete no-table proof and retained for restoration. Default writers
+    /// and callers without that witness retain description-failure refusal.
     static func prepareView(
         _ targetView: PluginWindowView,
         in window: AXUIElement,
@@ -447,6 +456,7 @@ enum ControlsViewBooleanParameterWriter {
         confirmationTimeout: TimeInterval = viewConfirmationTimeout,
         windowRefresher: (() -> AXUIElement?)? = nil,
         allowingChanges: () -> Bool = { true },
+        headerBoundUndescribedEditor: (() -> Bool)? = nil,
         runtime: AXHelpers.Runtime = .production
     ) -> ViewPreparationResult {
         let effectiveWindowRefresher = windowRefresher ?? { window }
@@ -454,6 +464,7 @@ enum ControlsViewBooleanParameterWriter {
         let entryObservation = observedView(
             in: window,
             windowRefresher: effectiveWindowRefresher,
+            headerBoundUndescribedEditor: headerBoundUndescribedEditor,
             runtime: runtime
         )
         switch entryObservation {
@@ -476,6 +487,7 @@ enum ControlsViewBooleanParameterWriter {
                 entryView: entryView,
                 didSwitch: false,
                 menuAppearanceTimeout: menuAppearanceTimeout,
+                headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                 runtime: runtime
             ))
         }
@@ -487,6 +499,7 @@ enum ControlsViewBooleanParameterWriter {
             menuAppearanceTimeout: menuAppearanceTimeout,
             confirmationTimeout: confirmationTimeout,
             allowingChanges: allowingChanges,
+            headerBoundUndescribedEditor: headerBoundUndescribedEditor,
             runtime: runtime
         ) {
         case let .confirmed(switched):
@@ -496,6 +509,7 @@ enum ControlsViewBooleanParameterWriter {
                 entryView: entryView,
                 didSwitch: switched,
                 menuAppearanceTimeout: menuAppearanceTimeout,
+                headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                 runtime: runtime
             ))
         case let .refused(failure, targetSelectionAttempted):
@@ -516,6 +530,7 @@ enum ControlsViewBooleanParameterWriter {
                     confirmationTimeout: confirmationTimeout,
                     forceSelection: true,
                     allowingChanges: allowingChanges,
+                    headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                     runtime: runtime
                 ) {
                 case let .confirmed(switched):
@@ -530,6 +545,7 @@ enum ControlsViewBooleanParameterWriter {
                     if case let .success(.some(value)) = observedView(
                         in: window,
                         windowRefresher: effectiveWindowRefresher,
+                        headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                         runtime: runtime
                     ) {
                         observed = value
@@ -559,9 +575,11 @@ enum ControlsViewBooleanParameterWriter {
     ///
     /// A successful nonempty AXDescription is positive Editor evidence. Once
     /// observed, it wins immediately over all later reads. Conversely, when no
-    /// described slider was observed, a slider census or description failure
-    /// leaves the view unknown: an unreadable editor candidate must not be
-    /// erased so an unrelated table can become Controls evidence.
+    /// described slider was observed, a failed slider census leaves the view
+    /// unknown. Description failures also refuse by default. A caller with a
+    /// fresh header-bound read witness can corroborate Editor through complete
+    /// absence of any table; this never turns an unread description into Controls
+    /// evidence or grants the default writer that read-only exception.
     ///
     /// Measured 2026-09-02, Compressor editor window "Absolute Zero": one
     /// AXTable at depth 2 had AXRows status 0 and 29 rows; every row had exactly
@@ -574,13 +592,14 @@ enum ControlsViewBooleanParameterWriter {
     private static func observedView(
         in window: AXUIElement,
         windowRefresher: @escaping () -> AXUIElement?,
+        headerBoundUndescribedEditor: (() -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> Result<PluginWindowView?, ViewEvidenceReadFailure> {
         var attempts = 0
         while true {
             attempts += 1
             let currentWindow = refreshedWindow(window, windowRefresher: windowRefresher)
-            let observation = observedViewOnce(in: currentWindow, runtime: runtime)
+            let observation = observedViewOnce(in: currentWindow, headerBoundUndescribedEditor: headerBoundUndescribedEditor, runtime: runtime)
             switch observation {
             case .success:
                 return observation
@@ -598,12 +617,19 @@ enum ControlsViewBooleanParameterWriter {
 
     private static func observedViewOnce(
         in window: AXUIElement,
+        headerBoundUndescribedEditor: (() -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> Result<PluginWindowView?, ViewEvidenceReadFailure> {
         switch describedNativeEditorSliderEvidence(in: window, runtime: runtime) {
         case .described:
             return .success(.editor)
         case let .readFailed(error):
+            if case .sliderDescription = error,
+               let headerBoundUndescribedEditor, headerBoundUndescribedEditor(),
+               case .noTable = controlsViewStateIsBound(in: window, runtime: runtime),
+               headerBoundUndescribedEditor() {
+                return .success(.editor)
+            }
             return .failure(error)
         case .notDescribed:
             break
@@ -765,6 +791,7 @@ enum ControlsViewBooleanParameterWriter {
         confirmationTimeout: TimeInterval,
         forceSelection: Bool = false,
         allowingChanges: () -> Bool = { true },
+        headerBoundUndescribedEditor: (() -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> ViewChangeResult {
         if !forceSelection {
@@ -786,6 +813,7 @@ enum ControlsViewBooleanParameterWriter {
             switch observedView(
                 in: window,
                 windowRefresher: windowRefresher,
+                headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                 runtime: runtime
             ) {
             case let .success(.some(observed)) where observed == targetView:
@@ -869,6 +897,7 @@ enum ControlsViewBooleanParameterWriter {
             in: window,
             windowRefresher: windowRefresher,
             timeout: confirmationTimeout,
+            headerBoundUndescribedEditor: headerBoundUndescribedEditor,
             runtime: runtime
         ) {
         case .confirmed:
@@ -1000,6 +1029,7 @@ enum ControlsViewBooleanParameterWriter {
         in window: AXUIElement,
         windowRefresher: @escaping () -> AXUIElement?,
         timeout: TimeInterval,
+        headerBoundUndescribedEditor: (() -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> ViewWaitResult {
         let started = Date()
@@ -1008,6 +1038,7 @@ enum ControlsViewBooleanParameterWriter {
             switch observedView(
                 in: window,
                 windowRefresher: windowRefresher,
+                headerBoundUndescribedEditor: headerBoundUndescribedEditor,
                 runtime: runtime
             ) {
             case let .success(.some(observed)) where observed == expected:

@@ -4503,6 +4503,28 @@ func testIssue1396GainUsesExactApplicationFocusedWindowWhenEditorFlagsAreFalse(_
     #expect(fixture.sliderWriteCount.value == 0)
 }
 
+@Test func testIssue1396GainEditorDescriptionFailureStillReadsAndRestoresOwnedView() async throws {
+    let fixture = gainReadFixture(windowPresent: false, openOnPress: true)
+    let b = fixture.builder
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if CFEqual(element, b.element(1005)), attribute == kAXDescriptionAttribute as String {
+            return .failure(AXHelpers.AXStatusError(raw: AXError.failure.rawValue))
+        }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? Double == 959)
+    #expect(object["observed_display"] as? String == "-0.1 dB")
+    #expect(try #require(object["plugin_view_restore_attempted"] as? Bool))
+    #expect(try #require(object["plugin_view_restore_observed"] as? Bool))
+    #expect(try #require(object["editor_close_observed"] as? Bool))
+    #expect(fixture.currentPluginViewTitle == "편집기")
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+}
+
 @Test func testIssue1396GainRadioFalseDoesNotReadAdjacentRowWithSameTitles() async throws {
     let fixture = gainReadFixture("phase_invert_left")
     let b = fixture.builder

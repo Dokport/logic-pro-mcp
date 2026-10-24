@@ -3490,6 +3490,7 @@ extension AccessibilityChannel {
             in: window,
             windowRefresher: refreshPluginWindowForViewSelection,
             allowingChanges: viewChangesAllowed,
+            headerBoundUndescribedEditor: access.isRead && controlsReadKind != nil ? viewChangesAllowed : nil,
             runtime: runtime.ax
         ) {
         case let .refused(failure, restoration):
