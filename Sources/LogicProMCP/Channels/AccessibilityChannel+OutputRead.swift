@@ -662,8 +662,11 @@ extension AccessibilityChannel {
             }
             if inputBusOnly {
                 let read = AXLogicProElements.inputSlotRead(in: physical.strip, runtime: runtime.ax)
-                guard case .source = read.reading else { return nil }
-                return read.control
+                guard case .source = read.reading, let control = read.control else {
+                    Log.info("Routing input control unavailable: reading=\(read.reading), help_guard_stopped=\(AXHelpers.HelpReadGuard.current?.stopped == true)", subsystem: "ax")
+                    return nil
+                }
+                return control
             }
             if let assigned {
                 guard let current = assignedControl(), assigned.matches(current),
@@ -674,12 +677,28 @@ extension AccessibilityChannel {
             }
             return AXLogicProElements.outputSlotButton(in: physical.strip, runtime: runtime.ax)
         }
-        guard let pid = runtime.logicProPID(), let windows = runtime.onScreenWindowList(),
-              LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0,
-              let beforeMenus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax), beforeMenus.isEmpty,
-              let slot = selectedControl(),
-              case .success(.some(let originalLabel)) = AXHelpers.getAttributeResult(slot, kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError> else {
+        func acquisitionRefusal(_ checkpoint: String) -> CheckedOutputReading {
+            if inputBusOnly {
+                extras["acquisition_checkpoint"] = checkpoint
+                extras["help_read_guard_stopped"] = AXHelpers.HelpReadGuard.current?.stopped == true
+                do {
+                    try SessionPopulationObservation.requireOwnedAcquisition()
+                    extras["acquisition_at_refusal"] = "current"
+                } catch { extras["acquisition_at_refusal"] = String(describing: error) }
+            }
             return refuse(.readbackUnavailable, "A unique output slot and absence of existing popups must be observed; nothing was pressed.")
+        }
+        // Preserve the original short-circuit read order. Checkpoints inspect
+        // only an already refused read; they add no native call or permission.
+        guard let pid = runtime.logicProPID() else { return acquisitionRefusal("logic_pid") }
+        guard let windows = runtime.onScreenWindowList() else { return acquisitionRefusal("on_screen_windows") }
+        guard LogicOnScreenWindows.popupMenuCount(windows, logicPID: pid) == 0 else { return acquisitionRefusal("native_popup_absence") }
+        guard let beforeMenus = checkedOutputPopupMenus(in: physical.mixer, runtime: runtime.ax) else { return acquisitionRefusal("mixer_popup_read") }
+        guard beforeMenus.isEmpty else { return acquisitionRefusal("mixer_popup_absence") }
+        guard let slot = selectedControl() else { return acquisitionRefusal("original_slot") }
+        guard case .success(.some(let originalLabel)) = AXHelpers.getAttributeResult(slot,
+            kAXDescriptionAttribute as String, runtime: runtime.ax) as Result<String?, AXHelpers.AXStatusError> else {
+            return acquisitionRefusal("original_slot_label")
         }
         guard requiringOriginalInputControl.map({ $0.matches(.init(owner: physical, control: slot, source: originalLabel)) }) ?? true else {
             return refuse(.staleTargetReference, "The previewed input control is no longer current; nothing was pressed.")
