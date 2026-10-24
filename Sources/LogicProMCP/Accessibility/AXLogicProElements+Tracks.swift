@@ -187,9 +187,10 @@ enum AXTrackBinding {
         }
 
         func currentIndex(in observation: AccessibilityChannel.HeldSelectionAssociation,
-                          requiringPassiveRead: Bool = false) -> Int? {
-            guard observation.retainsOriginalHeaderCarrier(self) else { return nil }
-            return currentIndex(using: observation, requiringPassiveRead: requiringPassiveRead)
+                          requiringPassiveRead: Bool = false, ownedPopup: AXUIElement? = nil) -> Int? {
+            guard !requiringPassiveRead || ownedPopup == nil,
+                  observation.retainsOriginalHeaderCarrier(self) else { return nil }
+            return currentIndex(using: observation, requiringPassiveRead: requiringPassiveRead, ownedPopup: ownedPopup)
         }
 
         func currentIndex() -> Int? {
@@ -197,25 +198,25 @@ enum AXTrackBinding {
         }
 
         private func currentIndex(using observation: AccessibilityChannel.HeldSelectionAssociation?,
-                                  requiringPassiveRead: Bool = false) -> Int? {
-            guard let index = currentScopeIndex(using: observation), ExactTrackNameAdapter.operationPermitted(),
+                                  requiringPassiveRead: Bool = false, ownedPopup: AXUIElement? = nil) -> Int? {
+            guard let index = currentScopeIndex(using: observation, ownedPopup: ownedPopup), ExactTrackNameAdapter.operationPermitted(),
                   shape.observe(AXValueExtractors.extractTrackStackState(
                     from: header, runtime: runtime.ax).isStackHeader),
                   // The deciding child-role reads may outlive the first scope
                   // proof. Renew the same window/document/unique membership.
-                  currentScopeIndex(using: observation, requiringPassiveRead: requiringPassiveRead) == index else { return nil }
+                  currentScopeIndex(using: observation, requiringPassiveRead: requiringPassiveRead, ownedPopup: ownedPopup) == index else { return nil }
             return index
         }
 
         private func currentScopeIndex(using observation: AccessibilityChannel.HeldSelectionAssociation?,
-                                       requiringPassiveRead: Bool = false) -> Int? {
+                                       requiringPassiveRead: Bool = false, ownedPopup: AXUIElement? = nil) -> Int? {
             let scopeClosesInsideObservation = observation != nil && requiringPassiveRead
             guard ExactTrackNameAdapter.operationPermitted(), shape.isCurrent, exposure?.isCurrent ?? true,
                   projectPath != nil, currentWindowAndDocumentMatch() else { exposure?.end(); return nil }
             let observed: [AXUIElement]?
             if let observation {
                 observed = observation.readOriginalHeaderPopulation(for: self,
-                    requiringPassiveRead: scopeClosesInsideObservation, observingPopulation: {
+                    requiringPassiveRead: scopeClosesInsideObservation, ownedPopup: ownedPopup, observingPopulation: {
                     _ = shape.observePopulation($0)
                 })
             } else if case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime) {

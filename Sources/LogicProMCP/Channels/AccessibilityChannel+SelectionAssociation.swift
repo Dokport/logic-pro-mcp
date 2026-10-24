@@ -528,8 +528,9 @@ extension AccessibilityChannel {
         /// Identity-only sampling of this already-observed native rail. It grants
         /// no Help, selection, popup, inverse or publication permission.
         func readOriginalHeaderPopulation(for binding: AXTrackBinding.Binding,
-            requiringPassiveRead: Bool = false, observingPopulation: ([AXUIElement]) -> Void) -> [AXUIElement]? {
-            guard retainsOriginalHeaderCarrier(binding),
+            requiringPassiveRead: Bool = false, ownedPopup: AXUIElement? = nil,
+            observingPopulation: ([AXUIElement]) -> Void) -> [AXUIElement]? {
+            guard !requiringPassiveRead || ownedPopup == nil, retainsOriginalHeaderCarrier(binding),
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
             guard let role = AXHelpers.getRole(rail, runtime: logic.ax),
                   [kAXGroupRole, kAXListRole, kAXScrollAreaRole, kAXOutlineRole, kAXTableRole]
@@ -547,7 +548,7 @@ extension AccessibilityChannel {
                   // requests passive permission. Close its binding window and
                   // document before the final full ownership/focus checks.
                   !requiringPassiveRead || (binding.currentWindowAndDocumentMatch() && passiveReadBegins()),
-                  owned(), !requiringPassiveRead || passiveReadEnds(),
+                  owned(ownedPopup: ownedPopup), !requiringPassiveRead || passiveReadEnds(),
                   binding.exposure?.isCurrent ?? true,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
                 lost = true; binding.exposure?.end(); return nil
@@ -846,7 +847,11 @@ extension AccessibilityChannel {
                   case .success(.some(let focusedWindow)) = windows[1], CFGetTypeID(focusedWindow) == AXUIElementGetTypeID(),
                   CFEqual(main, window), CFEqual(focusedWindow, window), currentWindowScopeMatches(),
                   logic.logicProPID() == pid, logic.focusedApplicationPID() == pid,
-                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  // Window/document reads can themselves move focus. The rail's
+                  // retained child is not permission for a later foreign focus.
+                  let afterWindow: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute as String,
+                    runtime: logic.ax), CFEqual(afterWindow, expectedFocus) else {
                 lost = true; return false
             }
             return true

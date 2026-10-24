@@ -609,11 +609,11 @@ extension AccessibilityChannel {
         /// Renew after the caller's deciding slot read; the pair itself is not permission.
         func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil,
                      nativeOutputPopup: Bool = false) -> Bool {
+            let usesOriginalHeaderScope = ownedPopup == nil || !nativeOutputPopup
             let sourceMatches: Bool
-            if ownedPopup == nil {
-                // The original Track identity reader below already authenticates
-                // this complete current Mixer census at both native bookends.
-                // Held CF/index metadata alone grants no current permission.
+            if usesOriginalHeaderScope {
+                // Both actual original-header bookends authenticate this complete
+                // current Mixer census. Held CF/index metadata alone is not permission.
                 sourceMatches = CFEqual(pair.strip.window, observation.window)
                     && CFEqual(pair.strip.mixer, observation.mixer)
                     && pair.strip.document.utf8.elementsEqual(observation.document.utf8)
@@ -625,18 +625,30 @@ extension AccessibilityChannel {
                 sourceMatches = pair.strip.currentIndex(runtime: runtime) == index
             }
             guard sourceMatches else { return false }
-            if let ownedPopup {
-                guard originalTrack.currentIndex() != nil,
-                      observation.permitsOwnedPopupRead(ownedPopup,
-                        nativeSource: nativeOutputPopup ? pair.strip : nil) else { return false }
-            } else {
-                guard originalTrack.currentIndex(in: observation, requiringPassiveRead: true) != nil else { return false }
+            func originalWindowCurrent() -> Bool {
+                guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
+                      CFEqual(window, original.window),
+                      case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(original.window, runtime: runtime),
+                      document.utf8.elementsEqual(original.document.utf8) else { return false }
+                return true
             }
-            guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
-                  CFEqual(window, original.window),
-                  case .success(.some(let document)) = AXLogicProElements.projectPickerDocumentRead(original.window, runtime: runtime),
-                  document.utf8.elementsEqual(original.document.utf8),
-                  runtime.logicProPID() == observation.pid, runtime.focusedApplicationPID() == observation.pid,
+            if usesOriginalHeaderScope {
+                // All deciding native window reads precede final focus/popup custody.
+                guard originalWindowCurrent() else { originalTrack.exposure?.end(); return false }
+                if let ownedPopup {
+                    guard originalTrack.currentIndex(in: observation, ownedPopup: ownedPopup) != nil,
+                          observation.permitsOwnedPopupRead(ownedPopup) else { return false }
+                } else {
+                    guard originalTrack.currentIndex(in: observation, requiringPassiveRead: true) != nil else { return false }
+                }
+            } else {
+                // The separately qualified native neutral-popup path retains its
+                // original global identity reads and native source exception.
+                guard originalTrack.currentIndex() != nil, let ownedPopup,
+                      observation.permitsOwnedPopupRead(ownedPopup, nativeSource: pair.strip),
+                      originalWindowCurrent() else { return false }
+            }
+            guard runtime.logicProPID() == observation.pid, runtime.focusedApplicationPID() == observation.pid,
                   (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
             return true
         }
