@@ -5321,11 +5321,23 @@ extension AccessibilityChannel {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
             .filter { !$0.isEmpty }
-            return [
+            var summary: [String: Any] = [
                 "title": AXHelpers.getTitle(window, runtime: runtime.ax) ?? "",
                 "role": AXHelpers.getRole(window, runtime: runtime.ax) ?? "",
                 "slider_descriptions": Array(sliderDescriptions.prefix(8)),
             ]
+            if AXHelpers.getTitle(window, runtime: runtime.ax) == trackName {
+                // An editor can expose a non-static-text footer. Preserve the
+                // actual shallow fields when identity is refused; diagnostics
+                // never authenticate that footer or authorize an action.
+                summary["direct_header_candidates"] = runtime.ax.children(window).prefix(24).map { child -> [String: Any] in
+                    let value: String? = AXHelpers.getAttribute(child, kAXValueAttribute as String, runtime: runtime.ax)
+                    return ["role": AXHelpers.getRole(child, runtime: runtime.ax) ?? "",
+                        "value": value ?? "", "title": AXHelpers.getTitle(child, runtime: runtime.ax) ?? "",
+                        "description": AXHelpers.getDescription(child, runtime: runtime.ax) ?? ""]
+                }
+            }
+            return summary
         }
         return [
             "opener_action_attempted": true,
