@@ -634,13 +634,23 @@ enum ControlsViewBooleanParameterWriter {
                     // The read caller corroborates its named row, while the
                     // host's uniquely bound View switcher corroborates Controls.
                     // Neither a title nor an unrelated table suffices alone.
-                    if witness(.controls),
-                       case let .found(switcher) = measuredViewSwitcher(
-                        in: window, windowRefresher: { window }, runtime: runtime),
-                       let title = AXHelpers.getTitle(switcher, runtime: runtime),
-                       PluginWindowView.controls.labels.matches(title, mode: .exactStrict),
-                       witness(.controls) { return .success(.controls) }
-                case .unconfirmed: break
+                    let rowBound = witness(.controls)
+                    if rowBound {
+                        switch measuredViewSwitcher(in: window, windowRefresher: { window }, runtime: runtime) {
+                        case let .found(switcher):
+                            let title = AXHelpers.getTitle(switcher, runtime: runtime)
+                            if PluginWindowView.controls.labels.matches(title, mode: .exactStrict),
+                               witness(.controls) { return .success(.controls) }
+                            noteUnconfirmedBoundView("controls title=\(title ?? "<unread>")")
+                        case let .refused(failure):
+                            noteUnconfirmedBoundView("controls switcher=\(failure.observation)")
+                        }
+                    } else {
+                        noteUnconfirmedBoundView("controls row_witness=false")
+                    }
+                case .unconfirmed:
+                    let shape = viewStructureObservation(in: window, waitedMilliseconds: 0, runtime: runtime)
+                    noteUnconfirmedBoundView("unconfirmed tables=\(shape.tableCount) rows=\(shape.rowCount)")
                 }
             }
             return .failure(error)
@@ -655,6 +665,10 @@ enum ControlsViewBooleanParameterWriter {
         case .unconfirmed:
             return .success(nil)
         }
+    }
+
+    private static func noteUnconfirmedBoundView(_ observation: String) {
+        FileHandle.standardError.write(Data("[BoundPluginView] \(observation)\n".utf8))
     }
 
     private enum SliderEvidence {
