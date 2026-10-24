@@ -3339,6 +3339,16 @@ extension AccessibilityChannel {
             )
         }
         guard let opened = openedCandidate else {
+            // The opener can observe the exact new editor and then refuse its
+            // frontness. That refusal must not discard custody of a window this
+            // read created. Never close a pre-existing or ambiguously new editor.
+            if access.isRead, acquisitionActionAttempted,
+               let before = pluginEditorWindowsBeforeNormalAcquisition,
+               case let .success(editors) = AXLogicProElements.matchingPluginEditorWindows(
+                    forTrackName: trackName, matchingPluginID: pluginID, runtime: runtime) {
+                let created = editors.filter { candidate in !before.contains { CFEqual($0, candidate) } }
+                if created.count == 1 { constructedWindowsNeedingCleanup = created }
+            }
             // A polling attempt may have observed a same-track editor with the
             // requested control but the wrong (or unreadable) header. Report
             // that identity failure directly; a concurrent popup-cleanup issue
@@ -5331,6 +5341,12 @@ extension AccessibilityChannel {
                 let closeButton: AXUIElement? = AXHelpers.getAttribute(window, kAXCloseButtonAttribute as String, runtime: runtime.ax)
                 summary["subrole"] = subrole ?? ""
                 summary["close_button_present"] = closeButton != nil
+                let main: NSNumber? = AXHelpers.getAttribute(window, kAXMainAttribute as String, runtime: runtime.ax)
+                let focused: NSNumber? = AXHelpers.getAttribute(window, kAXFocusedAttribute as String, runtime: runtime.ax)
+                let focusedWindow: AXUIElement? = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax)
+                summary["main"] = main.map { $0 as Any } ?? NSNull()
+                summary["focused"] = focused.map { $0 as Any } ?? NSNull()
+                summary["application_focused_window_matches"] = focusedWindow.map { CFEqual($0, window) } ?? false
                 // An editor can expose a non-static-text footer. Preserve the
                 // actual shallow fields when identity is refused; diagnostics
                 // never authenticate that footer or authorize an action.

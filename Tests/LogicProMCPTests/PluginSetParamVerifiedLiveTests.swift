@@ -4225,11 +4225,22 @@ private func parameterReadRuntime(
     _ fixture: LiveFixture,
     onScreenWindowList: @escaping @Sendable () -> [[String: Any]]? = { [] },
     actionNamesRead: (@Sendable (AXUIElement) -> Result<[String], AXHelpers.AXStatusError>?)? = nil,
-    attributeRead: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil
+    attributeRead: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil,
+    legacyAttributeRead: Bool = false
 ) -> AXLogicProElements.Runtime {
     let original = fixture.runtime.ax
     let ax = AXHelpers.Runtime(
-        axApp: original.axApp, attributeValue: original.attributeValue,
+        axApp: original.axApp, attributeValue: { element, attribute in
+            // Frontness still uses the legacy optional-value reader. A fault
+            // injected only into the Result reader must not pretend to cover it.
+            if legacyAttributeRead, let result = attributeRead?(element, attribute) {
+                switch result {
+                case let .success(value): return value
+                case .failure: return nil
+                }
+            }
+            return original.attributeValue(element, attribute)
+        },
         attributeIsSettable: original.attributeIsSettable, setAttributeValue: original.setAttributeValue,
         children: original.children, performAction: original.performAction, childCount: original.childCount,
         actionNames: original.actionNames, actionNamesResult: { element in
@@ -4262,10 +4273,12 @@ private func parameterReadParams(_ param: String = "threshold") -> [String: Stri
 // #1396: measured Gain Controls view has a display-bearing slider, a raw-only
 // sibling slider and its value indicator. Boolean rows contain two named radio
 // buttons. These reads must not borrow the writer's single-control authority.
-private func gainReadFixture(_ param: String = "gain", controls: Bool = false) -> LiveFixture {
+private func gainReadFixture(_ param: String = "gain", controls: Bool = false,
+                             windowPresent: Bool = true, openOnPress: Bool = false) -> LiveFixture {
     let labels = ["gain": "Gain:", "phase_invert_left": "Phase Left:",
         "phase_invert_right": "Phase Right:", "swap_lr": "Swap L/R:", "mono": "Make Mono:"]
-    let fixture = LiveFixture(pluginSlotName: "Gain", controlsViewRowLabel: labels[param],
+    let fixture = LiveFixture(pluginSlotName: "Gain", pluginWindowPresent: windowPresent,
+        openWindowOnSlotPress: openOnPress, controlsViewRowLabel: labels[param],
         controlsViewInitiallySelected: controls, viewSettleDelay: 0)
     let b = fixture.builder
     b.setAttribute(b.element(1001), kAXDocumentAttribute as String, URL(fileURLWithPath: expectedPath).absoluteString)
@@ -4427,6 +4440,33 @@ func testIssue1396GainReadMetadataNeverAuthorizesParameterWrites(_ param: String
     #expect(object["error"] as? String == "invalid_params")
     #expect(fixture.axActions.value.isEmpty)
     #expect(StockPluginCatalog.entry(id: "logic.stock.effect.gain")?.parameters.first?.unit == "dB")
+}
+
+@Test(arguments: [false, true])
+func testIssue1396GainUnfrontEditorRefusalRetainsOnlyNewWindowCleanup(_ alreadyOpen: Bool) async throws {
+    let fixture = gainReadFixture(windowPresent: alreadyOpen, openOnPress: true)
+    let b = fixture.builder
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if CFEqual(element, b.element(1004)),
+           [kAXMainAttribute as String, kAXFocusedAttribute as String].contains(attribute) {
+            return .success(NSNumber(value: false))
+        }
+        return nil
+    }, legacyAttributeRead: true)
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    if alreadyOpen {
+        #expect(object["state"] as? String == "A", "\(object)")
+        #expect(fixture.pluginCloseControlPressCount.value == 0)
+    } else {
+        #expect(object["state"] as? String == "C", "\(object)")
+        #expect(fixture.pluginCloseControlPressCount.value == 1)
+        #expect(try #require(object["editor_close_observed"] as? Bool))
+        let windows = try #require(b.attributeValue(b.element(1000), kAXWindowsAttribute as String) as? [AXUIElement])
+        #expect(!windows.contains { CFEqual($0, b.element(1004)) })
+    }
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
 }
 
 @Test func testIssue1396GainRadioFalseDoesNotReadAdjacentRowWithSameTitles() async throws {
