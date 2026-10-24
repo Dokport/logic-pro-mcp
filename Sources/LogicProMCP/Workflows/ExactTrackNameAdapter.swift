@@ -354,23 +354,34 @@ enum ExactTrackNameAdapter {
         let originalIndices = source.observation.strips.indices.filter {
             CFEqual(source.observation.strips[$0], source.original.strip)
         }
-        guard let mirror = proof.mirror,
-              mirror.pair.track.matches(source.originalTrack),
-              mirror.pair.strip.matches(source.original),
-              CFEqual(source.original.window, source.observation.window),
-              CFEqual(source.original.mixer, source.observation.mixer),
-              source.original.document.utf8.elementsEqual(source.observation.document.utf8),
-              source.permits(runtime: mirror.pair.track.runtime),
-              // A peer can redraw while this exact source survives. Retain its
-              // observed ordinal in that case; a different renewed source still
-              // requires retirement of the original in this freshly authenticated
-              // complete native census, never label-based rebinding or discovery.
-              (source.pair.strip.matches(source.original)
-                  ? originalIndices == [source.index] : originalIndices.isEmpty),
-              await proof.registry.resolve(mirror.reference)?.physicalMixerStrip?.matches(mirror.registryStrip ?? mirror.pair.strip) == true else {
-            Log.info("Owned name renewal refused: original source or registry continuity", subsystem: "ax")
+        func refusal(_ checkpoint: String) -> OwnedInverse? {
+            // Observe the existing cutoff only after refusal. No additional
+            // native read or permission is introduced by this diagnostic.
+            let acquisition: String
+            do {
+                try SessionPopulationObservation.requireOwnedAcquisition()
+                acquisition = "current"
+            } catch { acquisition = String(describing: error) }
+            Log.info("Owned name renewal refused: checkpoint=\(checkpoint), acquisition=\(acquisition)", subsystem: "ax")
             return nil
         }
+        // Preserve the original short-circuit order; a refused earlier condition
+        // never evaluates a later native or registry read just for diagnosis.
+        guard let mirror = proof.mirror else { return refusal("mirror") }
+        guard mirror.pair.track.matches(source.originalTrack) else { return refusal("original_track") }
+        guard mirror.pair.strip.matches(source.original) else { return refusal("original_strip") }
+        guard CFEqual(source.original.window, source.observation.window) else { return refusal("original_window") }
+        guard CFEqual(source.original.mixer, source.observation.mixer) else { return refusal("original_mixer") }
+        guard source.original.document.utf8.elementsEqual(source.observation.document.utf8) else { return refusal("original_document") }
+        guard source.permits(runtime: mirror.pair.track.runtime) else { return refusal("source_custody") }
+        // A peer can redraw while this exact source survives. Retain its
+        // observed ordinal in that case; a different renewed source still
+        // requires retirement of the original in this freshly authenticated
+        // complete native census, never label-based rebinding or discovery.
+        guard source.pair.strip.matches(source.original)
+            ? originalIndices == [source.index] : originalIndices.isEmpty else { return refusal("original_retirement") }
+        guard await proof.registry.resolve(mirror.reference)?.physicalMixerStrip?.matches(mirror.registryStrip ?? mirror.pair.strip) == true
+        else { return refusal("original_registry") }
         var retainedStripName = mirror.retainedStripName
         if retainedStripName?.utf8.elementsEqual(proof.before.utf8) == true {
             // The verified rename can precede its Mixer label propagation.
@@ -392,12 +403,10 @@ enum ExactTrackNameAdapter {
             preservedTracks: mirror.preservedTracks, preservedStrips: mirror.preservedStrips,
             registryStrip: mirror.registryStrip ?? mirror.pair.strip, renewal: source,
             retainedStripName: retainedStripName)
-        guard let renewed = updated.mirror,
-              await renewed.isCurrent(name: proof.written, project: proof.project, target: proof.target, registry: proof.registry),
-              source.permits(runtime: mirror.pair.track.runtime) else {
-            Log.info("Owned name renewal refused: renewed mirror or final source continuity", subsystem: "ax")
-            return nil
-        }
+        guard let renewed = updated.mirror else { return refusal("renewed_mirror") }
+        guard await renewed.isCurrent(name: proof.written, project: proof.project, target: proof.target, registry: proof.registry)
+        else { return refusal("renewed_names_or_registry") }
+        guard source.permits(runtime: mirror.pair.track.runtime) else { return refusal("final_source_custody") }
         return updated
     }
 
