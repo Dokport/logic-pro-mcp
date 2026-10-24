@@ -105,6 +105,115 @@ private actor SelectedOutputSagaResultBoundary: Channel {
 
 @Suite("#965 held selection association", .serialized)
 struct Issue965HeldSelectionAssociationTests {
+    @Test(arguments: [false, true])
+    func aSharedTransportAncestorIsReadAfterItsSeparateChildBranch(bulk: Bool) throws {
+        let f = try Fixture(), gate = LogicMutationGate()
+        f.useBulkReads = bulk
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let bar = f.builder.element(1_965_720), play = f.builder.element(1_965_721)
+        let record = f.builder.element(1_965_722), wrapper = f.builder.element(1_971_903)
+        f.builder.setRole(wrapper, kAXGroupRole as String)
+        f.builder.setChildren(wrapper, [record])
+        f.builder.setChildren(bar, [play, wrapper])
+        let claim = try #require(gate.tryAcquire(operation: "branched-native-transport"))
+        defer { gate.release(claim) }
+        try OperationTraceContext.$current.withValue(.init(mutationGateAcquired: true,
+            ownsGate: { gate.stillOwns(claim) })) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            #expect(held.permitsRead())
+            #expect(held.transportPaths[1].contains(where: { CFEqual($0, wrapper) }))
+            f.routingLateScopeInjected = false
+            f.routingRead = { element, attribute in
+                guard !f.routingLateScopeInjected, CFEqual(element, wrapper), attribute == kAXParentAttribute as String else { return }
+                f.routingLateScopeInjected = true
+                f.builder.setChildren(bar, [play])
+            }
+            #expect(!held.permitsRead(), "A later branch's native read must not reuse an earlier shared-parent census")
+            #expect(f.routingLateScopeInjected)
+            f.routingRead = nil
+            f.builder.setChildren(bar, [play, wrapper])
+            #expect(!held.permitsRead(), "Restored branches cannot revive refused transport custody")
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func aTransportDecisionReadsEachSharedAncestorOnce(deep: Bool) throws {
+        let f = try Fixture(), gate = LogicMutationGate()
+        f.useBulkReads = true
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let bar = f.builder.element(1_965_720)
+        if deep {
+            let wrapper = f.builder.element(1_971_901)
+            f.builder.setRole(wrapper, kAXGroupRole as String)
+            f.builder.setChildren(wrapper, [bar])
+            f.builder.setChildren(f.window, [f.rail, f.mixer, wrapper])
+        }
+        let claim = try #require(gate.tryAcquire(operation: "shared-native-transport"))
+        defer { gate.release(claim) }
+        try OperationTraceContext.$current.withValue(.init(mutationGateAcquired: true,
+            ownsGate: { gate.stillOwns(claim) })) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            #expect(held.permitsRead())
+            var ancestors: [AXUIElement] = []
+            for path in held.transportPaths {
+                for parent in path.dropFirst().dropLast() where !ancestors.contains(where: { CFEqual($0, parent) }) {
+                    ancestors.append(parent)
+                }
+            }
+            #expect(!ancestors.isEmpty)
+            f.reciprocalPathBatchCalls = 0
+            #expect(AccessibilityChannel.HeldSelectionAssociation.stoppedTransportPathsMatch(
+                held.transportPaths, activity: held.transport, window: f.window, logic: runtime))
+            #expect(f.reciprocalPathBatchCalls == ancestors.count,
+                "Each actual common ancestor needs one fresh reciprocal census within this decision")
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
+    @Test(arguments: ["play_value", "play_parent", "record_parent", "bar_parent", "bar_children"], [false, true])
+    func aRecordReadCannotPreserveEarlierTransportCustody(fault: String, bulk: Bool) throws {
+        let f = try Fixture(), gate = LogicMutationGate()
+        f.useBulkReads = bulk
+        defer { try? FileManager.default.removeItem(at: f.bundle) }
+        let claim = try #require(gate.tryAcquire(operation: "late-native-transport"))
+        defer { gate.release(claim) }
+        try OperationTraceContext.$current.withValue(.init(mutationGateAcquired: true,
+            ownsGate: { gate.stillOwns(claim) })) {
+            let runtime = f.logic()
+            let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: runtime, expectedProject: nil, requiresProjectReference: false))
+            #expect(held.permitsRead())
+            let bar = held.transport.controlBar, play = held.transport.play, record = held.transport.record
+            let foreign = f.builder.element(1_971_902)
+            f.routingLateScopeInjected = false
+            f.routingRead = { element, attribute in
+                guard !f.routingLateScopeInjected, CFEqual(element, record), attribute == kAXValueAttribute as String else { return }
+                f.routingLateScopeInjected = true
+                switch fault {
+                case "play_value": f.builder.setAttribute(play, kAXValueAttribute as String, NSNumber(value: 1))
+                case "play_parent": f.builder.setAttribute(play, kAXParentAttribute as String, foreign)
+                case "record_parent": f.builder.setAttribute(record, kAXParentAttribute as String, foreign)
+                case "bar_parent": f.builder.setAttribute(bar, kAXParentAttribute as String, foreign)
+                case "bar_children": f.builder.setChildren(bar, [record])
+                default: Issue.record("Unknown transport fault")
+                }
+            }
+            #expect(!held.permitsRead(), "The real held read must refuse transport custody lost during Record")
+            #expect(f.routingLateScopeInjected, "Reach the deciding native Record value")
+            f.routingRead = nil
+            f.builder.setAttribute(play, kAXValueAttribute as String, NSNumber(value: 0))
+            f.builder.setChildren(bar, [play, record])
+            f.builder.setAttribute(bar, kAXParentAttribute as String, f.window)
+            #expect(!held.permitsRead(), "Restoring controls cannot revive the refused held observation")
+            #expect(f.selections.isEmpty && f.focusRestorationWrites.isEmpty)
+        }
+    }
+
     @Test("One coupled-editor decision reuses its already-held stopped transport",
         arguments: ["held", "fallback", "play", "record", "bad_play", "bad_record", "play_role", "record_role",
                     "replaced_bar", "replaced_record", "competing_bar", "late_competing_bar",
@@ -621,6 +730,7 @@ struct Issue965HeldSelectionAssociationTests {
         var coupledGuardRecordReads = 0
         var coupledGuardCountDiscovery = false
         var measuringFootprintReads = false
+        var footprintTransportCensuses: [ObjectIdentifier: Int] = [:]
         // Retain the actual request-local guards so object IDs cannot be reused
         // between separate footprint reads. These are test observations only.
         var footprintReads: [ObjectIdentifier: (guardOwner: AXHelpers.HelpReadGuard,
@@ -961,6 +1071,11 @@ struct Issue965HeldSelectionAssociationTests {
                     return nil
                 }, childrenResultHandler: { [self] element in
                     routingChildrenRead?(element)
+                    if measuringFootprintReads, !routingNameWrites.isEmpty,
+                       CFEqual(element, builder.element(1_965_720)),
+                       let guardian = AXHelpers.HelpReadGuard.current {
+                        footprintTransportCensuses[ObjectIdentifier(guardian), default: 0] += 1
+                    }
                     guard inputRetirementCensusLag, CFEqual(element, mixer) else { return nil }
                     inputRetirementCensusLag = false
                     inputRetirementCensusLagObserved = true
@@ -1807,13 +1922,16 @@ struct Issue965HeldSelectionAssociationTests {
         let f = try Fixture()
         f.measuringFootprintReads = true
         try await assertCanonicalPhysicalOutput(mode: "coupled_menu_overlay", fixture: f)
-        let footprints = f.footprintReads.values.filter {
-            $0.names.count == f.strips.count && $0.help > 0 && $0.record > 0
+        let footprints = f.footprintReads.filter {
+            $0.value.names.count == f.strips.count && $0.value.help > 0 && $0.value.record > 0
         }
         #expect(!footprints.isEmpty, "Reach actual post-name complete protected reads and physical Help reads")
-        for sample in footprints {
-            #expect(sample.record <= sample.help,
-                "Keep one fresh stopped-transport/custody check per actual Help read, not additional complete censuses per non-Help row: record=\(sample.record), Help=\(sample.help)")
+        for (key, sample) in footprints {
+            let censuses = f.footprintTransportCensuses[key, default: 0]
+            #expect(censuses > 0 && censuses <= sample.help,
+                "Keep one fresh shared transport census per actual Help read, not additional complete censuses per non-Help row")
+            #expect(sample.record <= 2 * sample.help,
+                "Both fresh stopped-value bookends belong to that same single transport decision")
         }
         #expect(f.routingNameWrites == ["Selected Canonical"] && f.routingDestinationPresses == 1)
     }

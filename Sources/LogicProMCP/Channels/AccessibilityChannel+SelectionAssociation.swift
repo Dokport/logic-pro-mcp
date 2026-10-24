@@ -410,7 +410,7 @@ extension AccessibilityChannel {
             activity: AXLogicProElements.ObservedTransportActivity, window: AXUIElement,
             logic: AXLogicProElements.Runtime) -> Bool {
             guard paths.count == 2, !CFEqual(activity.play, activity.record),
-                  paths.allSatisfy({ !$0.isEmpty && CFEqual($0[$0.count - 1], window)
+                  paths.allSatisfy({ (2...32).contains($0.count) && CFEqual($0[$0.count - 1], window)
                       && $0.contains(where: { CFEqual($0, activity.controlBar) }) }),
                   CFEqual(paths[0][0], activity.play), CFEqual(paths[1][0], activity.record) else { return false }
             do { try SessionPopulationObservation.requireOwnedAcquisition() }
@@ -418,23 +418,87 @@ extension AccessibilityChannel {
                 Log.info("Routing transport acquisition refused: \(error)", subsystem: "ax")
                 return false
             }
-            return paths.allSatisfy({ held in
-                      guard let control = held.first, let current = Self.path(control, to: window, ax: logic.ax),
-                            Self.same(held, current) else {
-                          let expired = OperationTraceContext.current?.deadline.map { ContinuousClock.now >= $0 } ?? false
-                          Log.info("Routing transport native path unavailable or changed (deadline_expired=\(expired))", subsystem: "ax")
-                          return false
-                      }
-                      let attributes = AXHelpers.getNonHelpAttributes(control, [kAXRoleAttribute, kAXValueAttribute] as [String],
-                          runtime: logic.ax, permittingRead: { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil })
-                      guard case .success(.some(let role)) = attributes[0], role as? String == kAXCheckBoxRole as String,
-                            case .success(.some(let rawValue)) = attributes[1], let value = rawValue as? NSNumber else {
-                          Log.info("Routing transport checkbox role or value unavailable", subsystem: "ax")
-                          return false
-                      }
-                      if value != 0 { Log.info("Routing transport checkbox is active", subsystem: "ax") }
-                      return value == 0
-                  })
+            var edges: [(child: AXUIElement, parent: AXUIElement)] = []
+            var parents: [AXUIElement] = []
+            for path in paths {
+                for index in path.indices {
+                    guard !path[..<index].contains(where: { CFEqual($0, path[index]) }) else { return false }
+                    guard index + 1 < path.count else { continue }
+                    let child = path[index], parent = path[index + 1]
+                    if let prior = edges.first(where: { CFEqual($0.child, child) }) {
+                        guard CFEqual(prior.parent, parent) else { return false }
+                    } else { edges.append((child, parent)) }
+                    if !parents.contains(where: { CFEqual($0, parent) }) { parents.append(parent) }
+                }
+            }
+            func distanceToWindow(_ parent: AXUIElement) -> Int {
+                paths.compactMap { path in
+                    path.firstIndex(where: { CFEqual($0, parent) }).map { path.count - $0 }
+                }.max() ?? 0
+            }
+            // Read each separate branch before its shared ancestors. Otherwise
+            // a later branch read could invalidate an already sampled parent.
+            parents.sort { distanceToWindow($0) > distanceToWindow($1) }
+            func acquired() -> Bool { (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil }
+            func controlsCurrent() -> Bool {
+                for held in paths {
+                    let attributes = AXHelpers.getNonHelpAttributes(held[0],
+                        [kAXRoleAttribute, kAXValueAttribute, kAXParentAttribute] as [String],
+                        runtime: logic.ax, permittingRead: acquired)
+                    guard case .success(.some(let role)) = attributes[0], role as? String == kAXCheckBoxRole as String,
+                          case .success(.some(let rawValue)) = attributes[1], let value = rawValue as? NSNumber,
+                          value == 0,
+                          case .success(.some(let rawParent)) = attributes[2],
+                          CFGetTypeID(rawParent) == AXUIElementGetTypeID(),
+                          CFEqual(unsafeBitCast(rawParent, to: AXUIElement.self), held[1]) else { return false }
+                }
+                return acquired()
+            }
+            guard controlsCurrent() else { return false }
+            // One fresh reciprocal census per shared ancestor, confined to this
+            // decision. Neither a stored path nor a repeated Play/Record caption
+            // grants membership. Every original edge must still agree, including
+            // when reading the second control changed the first one's custody.
+            for parent in parents {
+                let children: [AXUIElement]
+                let next: AXUIElement?
+                if logic.ax.attributeValuesResult != nil {
+                    let attributes = CFEqual(parent, window) ? [kAXChildrenAttribute as String]
+                        : [kAXChildrenAttribute as String, kAXParentAttribute as String]
+                    let reads = AXHelpers.getNonHelpAttributes(parent, attributes, runtime: logic.ax,
+                        permittingRead: acquired)
+                    guard case .success(.some(let rawChildren)) = reads[0],
+                          CFGetTypeID(rawChildren) == CFArrayGetTypeID() else { return false }
+                    children = AXHelpers.decodeChildrenArray(rawChildren)
+                    if CFEqual(parent, window) { next = nil }
+                    else {
+                        guard case .success(.some(let rawParent)) = reads[1],
+                              CFGetTypeID(rawParent) == AXUIElementGetTypeID() else { return false }
+                        next = unsafeBitCast(rawParent, to: AXUIElement.self)
+                    }
+                } else {
+                    // Older injected runtimes retain their status-bearing
+                    // childrenResult seam; do not bridge an unread to absence.
+                    guard acquired(), case .success(let observed) = AXHelpers.childrenResult(parent, runtime: logic.ax) else { return false }
+                    children = observed
+                    if CFEqual(parent, window) { next = nil }
+                    else {
+                        guard acquired(), let observed: AXUIElement = AXHelpers.getAttribute(parent,
+                            kAXParentAttribute as String, runtime: logic.ax) else { return false }
+                        next = observed
+                    }
+                }
+                guard edges.filter({ CFEqual($0.parent, parent) }).allSatisfy({ edge in
+                    children.filter({ CFEqual($0, edge.child) }).count == 1
+                }) else { return false }
+                if !CFEqual(parent, window) {
+                    guard let expected = edges.first(where: { CFEqual($0.child, parent) }),
+                          let next, CFEqual(next, expected.parent) else { return false }
+                }
+            }
+            // Parent/children reads may themselves change a leaf or its stopped
+            // value. Corroborate both original controls after the deciding census.
+            return controlsCurrent()
         }
 
         /// The coupled writer already owns its editor. Renew this proof's
