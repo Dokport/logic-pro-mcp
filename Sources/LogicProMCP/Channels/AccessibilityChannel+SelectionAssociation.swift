@@ -489,6 +489,17 @@ extension AccessibilityChannel {
                 && headers.filter({ CFEqual($0, binding.header) }).count == 1
         }
 
+        /// Role metadata only; current membership still requires the original
+        /// header's native bookends and the final passive permission check.
+        func originalMixerRoleStillHeld() -> Bool {
+            guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+            guard AXLogicProElements.isMixerContainerRole(AXHelpers.getRole(mixer, runtime: logic.ax)) else {
+                lost = true
+                return false
+            }
+            return true
+        }
+
         /// Fresh identity metadata for this already-admitted native Mixer only.
         /// It grants no Help, popup, selection, inverse or reference permission.
         func readOriginalMixerIndex(for binding: AXMixerStripBinding.Binding,

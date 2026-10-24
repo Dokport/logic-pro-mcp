@@ -609,7 +609,22 @@ extension AccessibilityChannel {
         /// Renew after the caller's deciding slot read; the pair itself is not permission.
         func permits(runtime: AXLogicProElements.Runtime, ownedPopup: AXUIElement? = nil,
                      nativeOutputPopup: Bool = false) -> Bool {
-            guard (ownedPopup == nil ? pair.strip.currentIndex(in: observation) : pair.strip.currentIndex(runtime: runtime)) == index,
+            let sourceMatches: Bool
+            if ownedPopup == nil {
+                // The original Track identity reader below already authenticates
+                // this complete current Mixer census at both native bookends.
+                // Held CF/index metadata alone grants no current permission.
+                sourceMatches = CFEqual(pair.strip.window, observation.window)
+                    && CFEqual(pair.strip.mixer, observation.mixer)
+                    && pair.strip.document.utf8.elementsEqual(observation.document.utf8)
+                    && observation.strips.indices.contains(index)
+                    && CFEqual(observation.strips[index], pair.strip.strip)
+                    && observation.strips.filter({ CFEqual($0, pair.strip.strip) }).count == 1
+                    && observation.originalMixerRoleStillHeld()
+            } else {
+                sourceMatches = pair.strip.currentIndex(runtime: runtime) == index
+            }
+            guard sourceMatches,
                   (ownedPopup == nil ? originalTrack.currentIndex(in: observation) : originalTrack.currentIndex()) != nil,
                   ownedPopup.map({ observation.permitsOwnedPopupRead($0,
                     nativeSource: nativeOutputPopup ? pair.strip : nil) }) ?? observation.permitsRead(),

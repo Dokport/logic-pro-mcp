@@ -71,6 +71,7 @@ private final class ExactNameFixture: @unchecked Sendable {
     var boundaryCancellation = false
     var adapterPermissionReads = 0
     var passiveHeaderNameLabel = false
+    var passiveRailFocus = false
     var passiveMixerStripFocus: AXUIElement?
     var additionalPassiveMixerStrips: [AXUIElement] = []
     var unreadPassiveMixerMetadata = false
@@ -158,6 +159,11 @@ private final class ExactNameFixture: @unchecked Sendable {
                     return nil
                 },
                 attributeValueResultHandler: { [self] element, attribute in
+                    if passiveRailFocus, CFEqual(element, rail),
+                       [kAXValueAttribute, kAXSelectedTextAttribute, kAXNumberOfCharactersAttribute,
+                        kAXInsertionPointLineNumberAttribute].contains(where: { attribute == $0 as String }) {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
                     if passiveMixerStripFocus.map({ CFEqual(element, $0) }) == true
                         || additionalPassiveMixerStrips.contains(where: { CFEqual(element, $0) }) {
                         if [kAXValueAttribute as String, kAXSelectedTextAttribute as String].contains(attribute) {
@@ -2081,11 +2087,15 @@ struct Issue968ExactTrackNameAdapterTests {
     @Test(arguments: ["unrenewed", "renewed"].flatMap { scope in
         ["healthy", "primary", "mirror", "peer", "document", "gate"].map { "\(scope)/\($0)" }
     } + ["document", "selection", "transport", "population", "gate"].map { "renewed/late_\($0)" }
-        + ["healthy", "primary", "mirror", "peer", "document", "gate", "late_population"].map { "renewed_retired/\($0)" })
+        + ["healthy", "primary", "mirror", "peer", "document", "gate", "late_population"].map { "renewed_retired/\($0)" }
+        + ["renewed_rail/healthy", "renewed_retired_rail/healthy", "renewed/late_mixer_role", "renewed/late_rail_role",
+           "renewed_retired/late_mixer_role", "renewed_retired/late_rail_role", "renewed_rail/late_population",
+           "renewed_retired_rail/late_population"])
     func anOwnedNameReadUsesOnlyItsActualRenewedSourceScope(profile: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let renewed = profile.hasPrefix("renewed")
-            let retired = profile.hasPrefix("renewed_retired/")
+            let retired = profile.hasPrefix("renewed_retired")
+            let railEntry = profile.contains("_rail/")
             let fault = String(try #require(profile.split(separator: "/").last))
             let f = ExactNameFixture()
             f.useBulkReads = true
@@ -2096,6 +2106,8 @@ struct Issue968ExactTrackNameAdapterTests {
             f.builder.setAttributeSettable(f.rail, kAXSelectedChildrenAttribute as String, true)
             f.builder.setAttribute(f.rail, kAXSelectedChildrenAttribute as String, [f.header])
             let mixer = f.builder.element(968_170), peerStrip = f.builder.element(968_173)
+            let originalMixerRole = try #require(AXHelpers.getRole(mixer, runtime: f.builder.makeAXRuntime()))
+            let originalRailRole = try #require(AXHelpers.getRole(f.rail, runtime: f.builder.makeAXRuntime()))
             f.additionalPassiveMixerStrips = [peerStrip]
             f.builder.setAttribute(peerStrip, kAXNumberOfCharactersAttribute as String, NSNumber(value: 0))
             f.builder.setAttribute(peerStrip, kAXInsertionPointLineNumberAttribute as String, NSNumber(value: 0))
@@ -2139,12 +2151,18 @@ struct Issue968ExactTrackNameAdapterTests {
                         f.passiveMixerStripFocus = replacement
                         currentStrip = replacement
                     } else { currentStrip = strip }
+                    if railEntry {
+                        f.passiveRailFocus = true
+                        f.builder.setAttributeSettable(f.rail, kAXValueAttribute as String, false)
+                    }
                     f.onSelection = {
-                        let selected = f.selectionWrites.last.map { CFEqual($0, peerHeader) } == true ? peerStrip : currentStrip
-                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, selected)
+                        let peerSelected = f.selectionWrites.last.map { CFEqual($0, peerHeader) } == true
+                        let selected = peerSelected ? peerStrip : currentStrip
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                            railEntry && !peerSelected ? f.rail : selected)
                         f.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [selected])
                     }
-                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, currentStrip)
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, railEntry ? f.rail : currentStrip)
                     f.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [currentStrip])
                     let acquired = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
                         runtime: f.runtime, sourceDisposition: retired ? .retiredOriginal : .readObservation)
@@ -2152,6 +2170,27 @@ struct Issue968ExactTrackNameAdapterTests {
                     #expect(acquired.effects.restoration == "restored")
                     #expect(source.observedPairs.count == 2, "The actual producer must observe both native associations")
                     #expect(source.pair.strip.matches(pair.strip) == !retired)
+                    if fault == "healthy" {
+                        let native = source.pair.strip
+                        let foreign = f.builder.element(3_971_972)
+                        for mutation in ["index", "window", "mixer", "document"] {
+                            let binding = AXMixerStripBinding.Binding(
+                                window: mutation == "window" ? foreign : native.window,
+                                mixer: mutation == "mixer" ? foreign : native.mixer, strip: native.strip,
+                                document: mutation == "document" ? "file:///tmp/Foreign.logicx" : native.document)
+                            let unowned = AccessibilityChannel.OriginalHeaderSourceRenewal(
+                                pair: .init(track: source.pair.track, strip: binding),
+                                index: source.index + (mutation == "index" ? 1 : 0), original: source.original,
+                                originalTrack: source.originalTrack, observation: source.observation,
+                                observedPairs: source.observedPairs)
+                            #expect(!unowned.permits(runtime: f.runtime), "Foreign \(mutation) cannot borrow the actual source scope")
+                        }
+                        f.countedMixer = mixer
+                        f.mixerPopulationReads = 0
+                        #expect(source.permits(runtime: f.runtime))
+                        #expect(f.mixerPopulationReads == (railEntry ? 5 : 4),
+                            "Use original Track identity bookends and final passive custody; retain the extra rail-selected-child census")
+                    }
                     f.globalMixerDiscoveries = 0
                     proof = try #require(await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source))
                     if fault == "healthy" {
@@ -2180,10 +2219,19 @@ struct Issue968ExactTrackNameAdapterTests {
                     }
                     if fault == "late_transport" { f.builder.setAttribute(play, kAXValueAttribute as String, 1) }
                     if fault == "late_population" { f.builder.setChildren(mixer, [strip]) }
+                    if fault == "late_mixer_role" { f.builder.setRole(mixer, kAXButtonRole as String) }
+                    if fault == "late_rail_role" { f.builder.setRole(f.rail, kAXButtonRole as String) }
                     if fault == "late_gate" { f.boundaryOwnership = false }
                 }
                 f.globalMixerDiscoveries = 0
                 #expect(await ExactTrackNameAdapter.readOwnedCoupledName(proof) == (fault == "healthy" ? "C" : nil))
+                if fault == "late_mixer_role" || fault == "late_rail_role" {
+                    f.onMirrorReadAfterWrite = nil
+                    f.builder.setRole(mixer, originalMixerRole)
+                    f.builder.setRole(f.rail, originalRailRole)
+                    #expect(await ExactTrackNameAdapter.readOwnedCoupledName(proof) == nil,
+                        "Observed invalid native roles irreversibly end this scope even if their old values return")
+                }
                 if fault == "healthy" {
                     if renewed {
                         #expect(f.globalMixerDiscoveries == 0,
