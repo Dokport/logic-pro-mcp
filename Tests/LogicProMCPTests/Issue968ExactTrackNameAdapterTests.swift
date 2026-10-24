@@ -2080,10 +2080,12 @@ struct Issue968ExactTrackNameAdapterTests {
 
     @Test(arguments: ["unrenewed", "renewed"].flatMap { scope in
         ["healthy", "primary", "mirror", "peer", "document", "gate"].map { "\(scope)/\($0)" }
-    } + ["document", "selection", "transport", "population", "gate"].map { "renewed/late_\($0)" })
+    } + ["document", "selection", "transport", "population", "gate"].map { "renewed/late_\($0)" }
+        + ["healthy", "primary", "mirror", "peer", "document", "gate", "late_population"].map { "renewed_retired/\($0)" })
     func anOwnedNameReadUsesOnlyItsActualRenewedSourceScope(profile: String) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
-            let renewed = profile.hasPrefix("renewed/")
+            let renewed = profile.hasPrefix("renewed")
+            let retired = profile.hasPrefix("renewed_retired/")
             let fault = String(try #require(profile.split(separator: "/").last))
             let f = ExactNameFixture()
             f.useBulkReads = true
@@ -2126,13 +2128,36 @@ struct Issue968ExactTrackNameAdapterTests {
                 var proof = try #require(written.inverse)
                 if renewed {
                     let pair = try #require(capture.freshPopulation?.selectionAssociations.first)
-                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, strip)
+                    let currentStrip: AXUIElement
+                    if retired {
+                        let replacement = f.builder.element(3_971_971)
+                        f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                        f.builder.setChildren(replacement, AXHelpers.getChildren(strip, runtime: f.builder.makeAXRuntime()))
+                        f.builder.setChildren(mixer, [replacement, peerStrip])
+                        f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, NSNumber(value: 0))
+                        f.builder.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, NSNumber(value: 0))
+                        f.passiveMixerStripFocus = replacement
+                        currentStrip = replacement
+                    } else { currentStrip = strip }
+                    f.onSelection = {
+                        let selected = f.selectionWrites.last.map { CFEqual($0, peerHeader) } == true ? peerStrip : currentStrip
+                        f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, selected)
+                        f.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [selected])
+                    }
+                    f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, currentStrip)
+                    f.builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [currentStrip])
                     let acquired = await AccessibilityChannel.renewSourceThroughOriginalHeader(pair, original: pair.strip,
-                        runtime: f.runtime, sourceDisposition: .readObservation)
+                        runtime: f.runtime, sourceDisposition: retired ? .retiredOriginal : .readObservation)
                     let source = try #require(acquired.source, "Use the actual original-header producer and its verified selection inverse")
                     #expect(acquired.effects.restoration == "restored")
                     #expect(source.observedPairs.count == 2, "The actual producer must observe both native associations")
+                    #expect(source.pair.strip.matches(pair.strip) == !retired)
+                    f.globalMixerDiscoveries = 0
                     proof = try #require(await ExactTrackNameAdapter.renewingOwnedCoupledName(proof, through: source))
+                    if fault == "healthy" {
+                        #expect(f.globalMixerDiscoveries == 0,
+                            "Actual surviving/retired source membership is already authenticated by the complete renewed native census")
+                    }
                 }
                 if fault == "primary" { f.builder.setAttribute(f.field, kAXDescriptionAttribute as String, "External") }
                 if fault == "mirror" { f.builder.setAttribute(mirror, kAXValueAttribute as String, "External") }

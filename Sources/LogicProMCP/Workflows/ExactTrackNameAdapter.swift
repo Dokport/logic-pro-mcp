@@ -351,16 +351,22 @@ enum ExactTrackNameAdapter {
     static func renewingOwnedCoupledName(_ proof: OwnedInverse,
         through source: AccessibilityChannel.OriginalHeaderSourceRenewal
     ) async -> OwnedInverse? {
+        let originalIndices = source.observation.strips.indices.filter {
+            CFEqual(source.observation.strips[$0], source.original.strip)
+        }
         guard let mirror = proof.mirror,
               mirror.pair.track.matches(source.originalTrack),
               mirror.pair.strip.matches(source.original),
+              CFEqual(source.original.window, source.observation.window),
+              CFEqual(source.original.mixer, source.observation.mixer),
+              source.original.document.utf8.elementsEqual(source.observation.document.utf8),
+              source.permits(runtime: mirror.pair.track.runtime),
               // A peer can redraw while this exact source survives. Retain its
               // observed ordinal in that case; a different renewed source still
-              // requires retirement of the original, never label-based rebinding.
+              // requires retirement of the original in this freshly authenticated
+              // complete native census, never label-based rebinding or discovery.
               (source.pair.strip.matches(source.original)
-                  ? source.original.currentIndex(runtime: mirror.pair.track.runtime) == source.index
-                  : source.original.currentIndex(runtime: mirror.pair.track.runtime) == nil),
-              source.permits(runtime: mirror.pair.track.runtime),
+                  ? originalIndices == [source.index] : originalIndices.isEmpty),
               await proof.registry.resolve(mirror.reference)?.physicalMixerStrip?.matches(mirror.registryStrip ?? mirror.pair.strip) == true else {
             Log.info("Owned name renewal refused: original source or registry continuity", subsystem: "ax")
             return nil
