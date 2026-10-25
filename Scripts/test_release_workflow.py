@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import tempfile
 import tarfile
@@ -99,14 +100,19 @@ class FinalConsumerInputTypeTests(unittest.TestCase):
 
 class QualifiedInputPrivacyTests(unittest.TestCase):
     def test_qualified_zip_is_checked_before_any_member_is_written(self):
-        for shape in ("valid", "traversal", "symlink", "fifo", "duplicate"):
+        for shape in ("valid", "valid_nested", "valid_unicode", "traversal", "symlink", "fifo", "duplicate",
+                      "normalized_duplicate", "file_parent", "file_child",
+                      "case_duplicate", "unicode_duplicate", "case_file_parent", "case_file_child",
+                      "unicode_file_parent", "unicode_file_child",
+                      "member_size", "total_size", "member_count"):
             with self.subTest(shape=shape), tempfile.TemporaryDirectory(prefix="qualified-zip-") as directory:
                 root = Path(directory)
                 destination = root / "private"
                 destination.mkdir()
                 source = root / "bundle.zip"
+                first_name = "café.json" if shape in ("valid_unicode", "unicode_duplicate", "unicode_file_parent") else "safe-first.json"
                 with zipfile.ZipFile(source, "w") as archive:
-                    archive.writestr("safe-first.json", "first")
+                    archive.writestr(first_name, "first")
                     member = zipfile.ZipInfo("second.json")
                     if shape == "traversal":
                         member.filename = "../../escaped.json"
@@ -116,7 +122,50 @@ class QualifiedInputPrivacyTests(unittest.TestCase):
                         member.external_attr = (stat.S_IFIFO | 0o600) << 16
                     elif shape == "duplicate":
                         member.filename = "safe-first.json"
+                    elif shape == "normalized_duplicate":
+                        member.filename = "./safe-first.json"
+                    elif shape == "case_duplicate":
+                        member.filename = "SAFE-FIRST.JSON"
+                    elif shape == "unicode_duplicate":
+                        member.filename = "cafe\u0301.json"
+                    elif shape == "case_file_parent":
+                        member.filename = "SAFE-FIRST.JSON/child.json"
+                    elif shape == "case_file_child":
+                        archive.writestr("SECOND.JSON/child.json", "child")
+                    elif shape == "unicode_file_parent":
+                        member.filename = "cafe\u0301.json/child.json"
+                    elif shape == "unicode_file_child":
+                        archive.writestr("cafe\u0301.json/child.json", "child")
+                        member.filename = "café.json"
+                    elif shape == "file_parent":
+                        archive.writestr("safe-first.json-variant", "sibling")
+                        member.filename = "safe-first.json/child.json"
+                    elif shape == "file_child":
+                        archive.writestr("second.json/child.json", "child")
+                    elif shape == "valid_nested":
+                        archive.writestr("nested/", "")
+                        member.filename = "nested/second.json"
+                    elif shape == "valid_unicode":
+                        member.filename = "καφές/둘째.json"
                     archive.writestr(member, "second")
+                    if shape == "total_size":
+                        for index in range(3):
+                            archive.writestr(f"extra-{index}.json", "small")
+                    elif shape == "member_count":
+                        for index in range(9999):
+                            archive.writestr(f"extra-{index}.json", "")
+                if shape in ("member_size", "total_size"):
+                    # Change only the central-directory declared expansion size;
+                    # exercise the real ZIP reader without allocating gigabytes.
+                    with zipfile.ZipFile(source) as archive:
+                        offset, entries = archive.start_dir, archive.infolist()
+                    data = bytearray(source.read_bytes())
+                    for entry in entries:
+                        if shape == "total_size" or entry.filename == "second.json":
+                            size = (1 << 30) + (shape == "member_size")
+                            struct.pack_into("<I", data, offset + 24, size)
+                        offset += 46 + len(entry.filename.encode("utf-8")) + len(entry.extra) + len(entry.comment)
+                    source.write_bytes(data)
                 executable = root / "curl"
                 executable.write_text('''#!/bin/bash
 while [ "$#" -gt 0 ]; do
@@ -132,9 +181,10 @@ cp "$FETCH_SOURCE" "$output"
                         "QUALIFICATION_EVIDENCE_URL": "https://owner.invalid/private-bundle",
                         "QUALIFICATION_EVIDENCE_SHA256": hashlib.sha256(source.read_bytes()).hexdigest(),
                     }, capture_output=True, text=True, timeout=10, check=False)
-                if shape == "valid":
+                if shape in ("valid", "valid_nested", "valid_unicode"):
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual((destination / "bundle/safe-first.json").read_text(), "first")
+                    self.assertEqual((destination / "bundle" / first_name).read_text(), "first")
+                    self.assertEqual((destination / "bundle" / member.filename).read_text(), "second")
                 else:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(list((destination / "bundle").rglob("*")), [])
