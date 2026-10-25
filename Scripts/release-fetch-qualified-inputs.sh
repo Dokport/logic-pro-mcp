@@ -4,18 +4,29 @@
 set -euo pipefail
 umask 077
 mode="${1:-}"; destination="${2:-}"
-[[ "$mode" = stage || "$mode" = verify ]] && test -d "$destination"
+[[ "$mode" = stage || "$mode" = verify || "$mode" = public ]] && test -d "$destination"
 # Curl errors and ZIP integrity diagnostics can include private URLs/member
 # names. Preserve details only in the caller-owned private directory.
 exec 3>&2
 trap 'echo "Qualified private input fetch rejected" >&3' ERR
 exec > "$destination/fetch.stdout" 2> "$destination/fetch.stderr"
-test -n "${QUALIFICATION_EVIDENCE_URL:-}"
-[[ "${QUALIFICATION_EVIDENCE_SHA256:-}" =~ ^[a-f0-9]{64}$ ]]
+if [ "$mode" = public ]; then
+  input_url="${QUALIFICATION_PUBLIC_ASSETS_URL:-}"
+  input_sha="${QUALIFICATION_PUBLIC_ASSETS_SHA256:-}"
+  archive="$destination/public-assets.zip"
+  extracted="$destination/public"
+else
+  input_url="${QUALIFICATION_EVIDENCE_URL:-}"
+  input_sha="${QUALIFICATION_EVIDENCE_SHA256:-}"
+  archive="$destination/evidence.zip"
+  extracted="$destination/bundle"
+fi
+test -n "$input_url"
+[[ "$input_sha" =~ ^[a-f0-9]{64}$ ]]
 curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 120 \
-  "$QUALIFICATION_EVIDENCE_URL" --output "$destination/evidence.zip"
-printf '%s  %s\n' "$QUALIFICATION_EVIDENCE_SHA256" "$destination/evidence.zip" | shasum -a 256 --check
-python3 - "$destination/evidence.zip" "$destination/bundle" <<'PY'
+  "$input_url" --output "$archive"
+printf '%s  %s\n' "$input_sha" "$archive" | shasum -a 256 --check
+python3 - "$archive" "$extracted" <<'PY'
 import bisect, pathlib, shutil, stat, sys, unicodedata, zipfile
 archive, destination = sys.argv[1:]
 root = pathlib.Path(destination)

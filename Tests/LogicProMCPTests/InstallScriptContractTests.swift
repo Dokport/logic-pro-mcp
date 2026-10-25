@@ -93,7 +93,6 @@ import Testing
     #expect(!workflow.contains("Do not push stable tags manually"))
     #expect(!workflow.contains("ALLOW_ADHOC_STABLE"))
     #expect(workflow.contains("configured_credentials=("))
-    #expect(workflow.contains("bash Scripts/release-consume-final.sh stage"))
     #expect(workflow.contains("Notarized releases are disabled until privately validated"))
     #expect(!workflow.contains("Codesign binary (Developer ID)"))
     #expect(workflow.contains("if [ -n \"${!credential}\" ]; then"))
@@ -104,7 +103,7 @@ import Testing
     }
     #expect(!workflow.contains("Codesign binary (ADHOC)"))
     #expect(!workflow.contains("codesign --force"))
-    #expect(workflow.contains("bash Scripts/release-consume-final.sh verify"))
+    #expect(workflow.contains("bash Scripts/release-consume-final.sh verify-public"))
     #expect(workflow.contains("bash Scripts/release-verify-formula-install-paths.sh"))
     #expect(workflow.contains("validate-install"))
     #expect(workflow.contains("macos-15"))
