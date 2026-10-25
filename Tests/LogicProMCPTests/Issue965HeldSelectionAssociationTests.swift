@@ -8702,6 +8702,7 @@ struct Issue965HeldSelectionAssociationTests {
     private func runInputBusRenewal(number: Int, condition: String, graph: Bool, keep: Bool,
                                     readOutputAfterRenewal: Bool, inputGoal: Int?) async throws {
         let f = try Fixture(), registry = TargetRegistry()
+        let coldRailInput = condition.hasPrefix("cold_rail_input_")
         let captureNow = ContinuousClock.now
         let cache = StateCache(sessionCaptureNow: {
             f.expireRetainedCapture ? captureNow.advanced(by: StateCache.sessionCaptureLifetime) : captureNow
@@ -8822,8 +8823,11 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement] + unpairedRows + (condition == "popup_still_open" ? [root] : []))
                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
-                    condition.hasPrefix("force_fresh_rail_") ? f.rail
+                    condition.hasPrefix("force_fresh_rail_") || coldRailInput ? f.rail
                         : condition == "unselected_pair" ? f.strips[0] : replacement)
+                if coldRailInput {
+                    f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [replacement])
+                }
                 if graph, condition == "unselected_pair" {
                     f.builder.setAttribute(f.headers[0], kAXSelectedAttribute as String, false)
                     f.builder.setAttribute(f.headers[1], kAXSelectedAttribute as String, true)
@@ -8892,7 +8896,20 @@ struct Issue965HeldSelectionAssociationTests {
                 return false
             }
         }
-        if condition == "partial_restore" {
+        if condition == "cold_rail_input_peer_retired" {
+            f.routingSelection = { _ in
+                guard f.inputMenuCancels == 1, !f.routingLateScopeInjected else { return }
+                f.routingLateScopeInjected = true
+                // Native cold capture: Cancel retained the original rail focus,
+                // then a peer CF retired during the original-header excursion.
+                // The checked popup's earlier focus receipt cannot prove this
+                // later selection inverse, and lost custody forbids forcing it.
+                f.builder.setRole(otherReplacement, kAXLayoutItemRole as String)
+                f.builder.setChildren(otherReplacement, f.builder.makeAXRuntime().children(f.strips[0]))
+                f.routingOtherReplacement = otherReplacement
+                f.builder.setChildren(f.mixer, [otherReplacement, replacement])
+            }
+        } else if condition == "partial_restore" {
             f.routingSelection = { _ in
                 if f.selections.count == (graph ? 5 : 3) {
                     f.routingLateScopeInjected = true
@@ -9062,15 +9079,70 @@ struct Issue965HeldSelectionAssociationTests {
             return
         }
         if graph {
+            if coldRailInput {
+                f.selectionKeepsPassiveRailFocus = true
+                f.builder.setAttributeSettable(f.rail, kAXValueAttribute as String, false)
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+                f.builder.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
+                f.routingReadResult = { element, attribute in
+                    if CFEqual(element, f.rail), [kAXValueAttribute, kAXSelectedTextAttribute,
+                        kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute]
+                        .map({ $0 as String }).contains(attribute) {
+                        return .failure(.init(raw: AXError.noValue.rawValue))
+                    }
+                    return nil
+                }
+            }
             let body = try await inspect(f, navigation: condition != "navigation_disabled", cache: cache,
-                registry: registry, domains: keep ? ["tracks", "strips", "associations", "routing"]
+                registry: registry, domains: keep || coldRailInput ? ["tracks", "strips", "associations", "routing"]
                     : condition == "missing_pair" ? ["routing"] : ["associations", "routing"],
-                guardedRenewalFocus: true)
+                guardedRenewalFocus: !coldRailInput, scope: coldRailInput ? "selection" : "whole_project")
             let retained = if let id = body["snapshot_id"] as? String {
                 await cache.retainedInspection(id: id)?.capture
             } else { nil as SessionPopulationObservation.Capture? }
             let routing = retained.map { SessionPopulationObservation.routingGraph(capture: $0) }
             let edges = routing?.edges.filter { $0.kind == .inputAssignment } ?? []
+            if coldRailInput {
+                #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1)
+                #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
+                let effects = try #require(body["ui_effects"] as? [String: Any])
+                if condition == "cold_rail_input_peer_retired" {
+                    #expect(f.routingLateScopeInjected && f.selections == [1, 0, 1, 0, 1],
+                        "Reach the post-Cancel challenge, then refuse another write after its census retires")
+                    #expect(f.builder.attributeValue(f.headers[1], kAXSelectedAttribute as String) as? Bool == true,
+                        "The original header was not restored; a matching passive focus alone cannot claim otherwise")
+                    let incomplete = try #require(retained)
+                    #expect(incomplete.freshPopulation?.stable == false,
+                        "The report may retain an incomplete capture, but cannot preserve its earlier live authority")
+                    let associations = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+                    #expect(associations.isEmpty)
+                    #expect(effects["restoration"] as? String == "not_restored")
+                    #expect(effects["reason"] as? String == "association_restoration_unverified")
+                    guard case .issued(let originalProject)? = capture.projectIssuance else {
+                        Issue.record("The original prepared capture must issue its project reference"); return
+                    }
+                    let raw: [String: Value] = ["schema": .string(ProjectSessionAudit.intentPolicySchema),
+                        "project_ref": .string(originalProject.rawValue), "targets": .array([]),
+                        "presentation": .object(["mixer_visible": .bool(false)])]
+                    guard case .accepted(let policy) = ProjectSessionAudit.parseIntentPolicy(raw) else {
+                        Issue.record("The explicit visibility intent must parse"); return
+                    }
+                    let plan = try ProjectSessionAudit.buildCanonicalRepairPlan(policy: policy, policyValue: .object(raw),
+                        names: [], capture: incomplete,
+                        request: .init(scope: .selection, domains: [.tracks, .strips, .associations, .routing],
+                            allowUINavigation: true), snapshotCurrent: true)
+                    let preview = try #require(sharedJSONObject(plan.json))
+                    #expect(preview["executable"] as? Bool == false)
+                    #expect((preview["reasons"] as? [String])?.contains("project_view_binding_unavailable") == true,
+                        "A cache-current snapshot still cannot authorize a repair through its failed acquisition")
+                } else {
+                    #expect(retained != nil && edges.count == 1)
+                    #expect(f.selections == [1, 0, 1, 0, 1, 0])
+                    #expect(effects["restoration"] as? String == "restored")
+                    #expect(f.builder.attributeValue(f.headers[0], kAXSelectedAttribute as String) as? Bool == true)
+                }
+                return
+            }
             if let inputGoal {
                 let fresh = try #require(retained)
                 let observedGraph = try #require(routing)
@@ -10796,6 +10868,12 @@ struct Issue965HeldSelectionAssociationTests {
     @Test("An owned input renewal retains exact source authority for later checked output acquisition")
     func registeredInputRenewalPreservesLaterCheckedOutput() async throws {
         try await assertInputBusRenewal(number: 1, condition: "paired", graph: true, readOutputAfterRenewal: true)
+    }
+
+    @Test("A restored input popup cannot hide its later original-header inverse failure",
+          arguments: ["healthy", "peer_retired"])
+    func selectedInputCaptureReportsItsActualRenewalRestoration(_ outcome: String) async throws {
+        try await assertInputBusRenewal(number: 1, condition: "cold_rail_input_\(outcome)", graph: true)
     }
 
     @Test func registeredReceiverKeepRenewsOnlyItsOriginallyCapturedHeader() async throws {

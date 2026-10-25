@@ -98,6 +98,9 @@ extension AccessibilityChannel {
         var inputAssignment: InputAssignment? = nil
         var inputRenewal: OriginalHeaderSourceRenewal? = nil
         var inputSlot: AXMixerInputSlotBinding? = nil
+        /// Actual original-header navigation, including a failed selection inverse.
+        /// An earlier popup focus receipt cannot replace this restoration duty.
+        var renewalEffects: SessionPopulationObservation.UIEffects? = nil
         /// Raw checked non-routing root entries: preservation witness only,
         /// never a typed mode, destination or endpoint identity.
         var sendNonRoutingChecks: [String]? = nil
@@ -555,8 +558,10 @@ extension AccessibilityChannel {
             (inputBusOnly ? "mixer.get_input_bus_verified" : (sendOrdinal == nil ? "mixer.get_output_verified" : "mixer.get_send_destination_verified"))
         var extras: [String: Any] = ["operation": operation, "write_attempted": false,
                                    "navigation_attempted": false, "popup_menu_state": "not_opened"]
+        var renewalEffects: SessionPopulationObservation.UIEffects?
         func refuse(_ error: HonestContract.FailureError, _ hint: String) -> CheckedOutputReading {
-            .init(result: .error(HonestContract.encodeStateC(error: error, hint: hint, extras: extras)), assignment: nil)
+            .init(result: .error(HonestContract.encodeStateC(error: error, hint: hint, extras: extras)),
+                assignment: nil, renewalEffects: renewalEffects)
         }
         guard params.isEmpty, sendOrdinal.map({ $0 >= 0 }) != false, let physical = AXMixerStripBinding.current else {
             return refuse(.invalidParams, "A current physical Mixer target_ref is required; no write inputs or indices are accepted.")
@@ -1738,6 +1743,7 @@ extension AccessibilityChannel {
                     sourceDisposition: refreshingOriginalSourceAfterCleanup ? .readObservation : .retiredOriginal,
                     restoringMixerGeometry: restoringMixerGeometry, observingReadFocus: observingRenewedFocus,
                     observingPeerHeaders: observingPeerHeaders)
+                renewalEffects = observed.effects
                 extras["ui_effects"] = ["navigation_performed": observed.effects.navigationPerformed,
                     "attempted": observed.effects.attempted, "changed": observed.effects.changed,
                     "restoration": observed.effects.restoration, "reason": observed.effects.reason as Any? ?? NSNull()]
@@ -1825,7 +1831,7 @@ extension AccessibilityChannel {
                     let unsupported = refuse(.unsupportedState,
                         "The checked non-Bus input is outside the bus-only wire result; its internal observation grants no write authority.")
                     return .init(result: unsupported.result, assignment: nil, inputAssignment: firstInput,
-                        inputRenewal: inputRenewal, inputSlot: inputSlot)
+                        inputRenewal: inputRenewal, inputSlot: inputSlot, renewalEffects: renewalEffects)
                 }
             }
         }
@@ -1862,6 +1868,7 @@ extension AccessibilityChannel {
         }
         return .init(result: .success(HonestContract.encodeStateA(extras: extras)), assignment: first,
             inputAssignment: checkedInputFact, inputRenewal: inputRenewal, inputSlot: inputSlot,
+            renewalEffects: renewalEffects,
             sendNonRoutingChecks: sendChecks, sendMode: modeEvidence, observedBusNumbers: observedBusNumbers,
             sendControl: sendOrdinal != nil && closed && sourceAfter ? assigned : nil)
     }

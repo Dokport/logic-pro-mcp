@@ -654,10 +654,16 @@ actor AccessibilityChannel: Channel {
                             let restored = receipt?["popup_menu_state"] as? String == "closed"
                                 && (receipt?["focus_restoration"] as? String == "restored" || renewedOriginalFocus)
                             population.uiEffects.restoration = restored ? "restored" : "partially_restored"
+                            if let renewalEffects = read.renewalEffects {
+                                // The popup may have closed before a later owned
+                                // selection failed to return. Preserve that actual
+                                // duty even when no checked input can be retained.
+                                population.uiEffects = mergedEffects(population.uiEffects, renewalEffects)
+                            }
                             routingEffects = population.uiEffects
-                            if !restored {
+                            if population.uiEffects.restoration != "restored" {
                                 population.stable = false
-                                population.uiEffects.reason = "routing_popup_not_restored"
+                                population.uiEffects.reason = population.uiEffects.reason ?? "routing_popup_not_restored"
                                 break stripReads
                             }
                         }
