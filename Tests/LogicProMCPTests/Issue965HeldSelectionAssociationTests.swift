@@ -9120,10 +9120,12 @@ struct Issue965HeldSelectionAssociationTests {
                 if firstChallengeRetiresPeer {
                     #expect(f.routingLateScopeInjected && f.selections == [1, 0, 1, 0, 1],
                         "Reach the post-Cancel challenge, then refuse another write after its census retires")
-                    #expect(f.builder.attributeValue(f.headers[1], kAXSelectedAttribute as String) as? Bool == true,
+                    let peerIsSelected = try #require(f.builder.attributeValue(f.headers[1], kAXSelectedAttribute as String) as? Bool)
+                    #expect(peerIsSelected,
                         "The original header was not restored; a matching passive focus alone cannot claim otherwise")
                     let incomplete = try #require(retained)
-                    #expect(incomplete.freshPopulation?.stable == false,
+                    let populationIsStable = try #require(incomplete.freshPopulation?.stable)
+                    #expect(!populationIsStable,
                         "The report may retain an incomplete capture, but cannot preserve its earlier live authority")
                     let associations = (body["associations"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
                     #expect(associations.isEmpty)
@@ -9143,14 +9145,17 @@ struct Issue965HeldSelectionAssociationTests {
                         request: .init(scope: .selection, domains: [.tracks, .strips, .associations, .routing],
                             allowUINavigation: true), snapshotCurrent: true)
                     let preview = try #require(sharedJSONObject(plan.json))
-                    #expect(preview["executable"] as? Bool == false)
-                    #expect((preview["reasons"] as? [String])?.contains("project_view_binding_unavailable") == true,
+                    let executable = try #require(preview["executable"] as? Bool)
+                    let reasons = try #require(preview["reasons"] as? [String])
+                    #expect(!executable)
+                    #expect(reasons.contains("project_view_binding_unavailable"),
                         "A cache-current snapshot still cannot authorize a repair through its failed acquisition")
                 } else {
                     #expect(retained != nil && edges.count == 1)
                     #expect(f.selections == [1, 0, 1, 0, 1, 0])
                     #expect(effects["restoration"] as? String == "restored")
-                    #expect(f.builder.attributeValue(f.headers[0], kAXSelectedAttribute as String) as? Bool == true)
+                    let originalIsSelected = try #require(f.builder.attributeValue(f.headers[0], kAXSelectedAttribute as String) as? Bool)
+                    #expect(originalIsSelected)
                     if hasUnrequestedPeer {
                         #expect(!f.routingLateScopeInjected,
                             "The selected capture needs its original-header return, not an unrequested second peer excursion")
