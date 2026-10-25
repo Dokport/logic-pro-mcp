@@ -1492,6 +1492,20 @@ extension AccessibilityChannel {
             return false
         }
 
+        /// Match the original strip focus or the original passive rail's exact
+        /// selected child. These retained facts do not replace permitsRead().
+        func hasOriginalSourceFocus(_ source: AXMixerStripBinding.Binding) -> Bool {
+            guard !lost, expectedIndex == originalIndex, CFEqual(expectedFocus, originalFocus),
+                  CFEqual(source.window, window), CFEqual(source.mixer, mixer),
+                  source.document.utf8.elementsEqual(document.utf8),
+                  strips.filter({ CFEqual($0, source.strip) }).count == 1 else { return false }
+            if CFEqual(originalFocus, source.strip) { return true }
+            guard let originalRailFocus, CFEqual(originalRailFocus, originalFocus),
+                  originalSelectedChild.map({ CFEqual($0, source.strip) }) == true,
+                  expectedSelectedChild.map({ CFEqual($0, source.strip) }) == true else { return false }
+            return true
+        }
+
         /// Used only by the post-verified owned-name continuation. The new
         /// owner has kept the old native baseline; these are the existing
         /// guarded inverses, not an assumed ACK or arbitrary focus adoption.

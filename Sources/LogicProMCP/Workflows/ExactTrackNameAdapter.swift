@@ -911,8 +911,9 @@ enum ExactTrackNameAdapter {
             guard let pair = mirror?.pair,
                   let held = AccessibilityChannel.HeldSelectionAssociation(window: pair.track.window,
                     logic: pair.track.runtime, expectedProject: nil, requiresProjectReference: false,
+                    allowsSelectedChildRailEntry: true,
                     retainedMixerSource: pair.strip),
-                  CFEqual(held.originalFocus, pair.strip.strip), CFEqual(held.mixer, pair.strip.mixer),
+                  held.hasOriginalSourceFocus(pair.strip), CFEqual(held.mixer, pair.strip.mixer),
                   CFEqual(held.headers[held.originalIndex], pair.track.header), held.permitsRead() else {
                 return .init(status: .rejectedBeforeWrite, before: nil, after: nil, survivingReference: nil, inverse: nil,
                     result: TargetRefResolver.staleTargetReferenceResult(action.targetReference.rawValue, operation: "track.rename"))

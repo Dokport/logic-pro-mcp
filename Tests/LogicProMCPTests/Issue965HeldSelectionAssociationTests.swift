@@ -861,6 +861,7 @@ struct Issue965HeldSelectionAssociationTests {
         var sharedThirdStrip = false
         var thirdSharesOriginalStrip = false
         var thirdRetainsPreviousFocus = false
+        var selectionKeepsPassiveRailFocus = false
         var selectedChildrenReads = 0
         var selectedChildrenReadsAtWrite = 0
         var associationStopReads = 0
@@ -1223,10 +1224,16 @@ struct Issue965HeldSelectionAssociationTests {
                         builder.setAttribute(headers[1], kAXSelectedAttribute as String, true)
                     }
                     // The actual physical relationship is deliberately not positional.
-                    builder.setAttribute(app, kAXFocusedUIElementAttribute as String,
-                        index == 0 ? routingReplacement ?? strips[1]
+                    let selectedStrip = index == 0 ? routingReplacement ?? strips[1]
                             : index == 1 ? routingOtherReplacement ?? strips[0]
-                                : strips[index == 2 ? (thirdSharesOriginalStrip ? 1 : sharedThirdStrip ? 0 : 3) : 2])
+                                : strips[index == 2 ? (thirdSharesOriginalStrip ? 1 : sharedThirdStrip ? 0 : 3) : 2]
+                    builder.setAttribute(app, kAXFocusedUIElementAttribute as String, selectedStrip)
+                    if selectionKeepsPassiveRailFocus {
+                        builder.setAttribute(mixer, kAXSelectedChildrenAttribute as String, [selectedStrip])
+                        if let previousFocus, CFEqual(previousFocus as AnyObject, rail) {
+                            builder.setAttribute(app, kAXFocusedUIElementAttribute as String, rail)
+                        }
+                    }
                     if index == 2, thirdRetainsPreviousFocus, let previousFocus {
                         builder.setAttribute(app, kAXFocusedUIElementAttribute as String, previousFocus)
                     }
@@ -4482,6 +4489,18 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("A named Bus Send preserves its held passive rail focus through both owned names",
+          arguments: [false, true])
+    func canonicalNamedBusSendPreservesItsInitialRailFocus(bulk: Bool) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "cancel", canonicalBus: true,
+                canonicalBusChange: true, canonicalName: true, stableDestinationControls: true,
+                stableDestinationBulkReads: bulk, coupledMixerName: true, inverseNameMenu: true,
+                forwardNameMovesFocus: true, initialNameRailFocus: true)
+        }
+    }
+
     @Test("Named Bus Send compensation refreshes only its observed stale Mixer name through the original header",
           arguments: [false, true])
     func canonicalNamedBusSendRefreshesItsRestoredNameCaption(bulk: Bool) async throws {
@@ -5569,6 +5588,7 @@ struct Issue965HeldSelectionAssociationTests {
                                                singleInverseWriterPopup: Bool = false,
                                                measureInverseAssociations: Bool = false,
                                                forwardNameMovesFocus: Bool = false,
+                                               initialNameRailFocus: Bool = false,
                                                restoredNameCaption: RestoredNameCaptionScenario? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(fourTracks: measureInverseAssociations), b = f.builder
@@ -6122,7 +6142,8 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(stereo, "AXMenuItemMarkChar", "")
                         b.setAttribute(destination, "AXMenuItemMarkChar", "✓")
                         b.setChildren(f.mixer, f.strips)
-                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                            initialNameRailFocus ? f.rail : f.strips[1])
                         return true
                     }
                     f.routingDestinationPresses += 1; f.routingReplacement = replacement
@@ -6175,7 +6196,8 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(stereo, "AXMenuItemMarkChar", "✓")
                         b.setAttribute(destination, "AXMenuItemMarkChar", "")
                         b.setChildren(f.mixer, f.strips)
-                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.strips[1])
+                        b.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                            initialNameRailFocus ? f.rail : f.strips[1])
                         return true
                     }
                     f.routingDestinationPresses += 1; f.routingReplacement = restoredSource
@@ -6633,9 +6655,15 @@ struct Issue965HeldSelectionAssociationTests {
                     restoredNameCaption?.headerSelected(f, index: index)
                 }
             }
+            if initialNameRailFocus {
+                f.selectionKeepsPassiveRailFocus = true
+                b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
+                b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+            }
             let before = try await inspect(f, cache: cache, registry: registry,
                 domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"],
-                scope: captureInputReadScope ?? (canonicalBusReceiverFault == "physical_source_read_renewal" ? "selection" : "whole_project"))
+                scope: initialNameRailFocus ? "selection"
+                    : captureInputReadScope ?? (canonicalBusReceiverFault == "physical_source_read_renewal" ? "selection" : "whole_project"))
             if let captureInputReadScope {
                 #expect(f.routingDestinationPresses == 0 && f.routingNameWrites.isEmpty,
                     "Capture reads must not cross a data-write boundary")
@@ -6659,7 +6687,7 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(before["state"] as? String == "C")
                 return
             }
-            let id = try #require(before["snapshot_id"] as? String)
+            let id = try #require(before["snapshot_id"] as? String, "Actual initial capture: \(before)")
             let capture = try #require(await cache.retainedInspection(id: id)).capture
             let row = try #require(capture.channelStrips.indices.first {
                 capture.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, f.strips[1]) } == true
@@ -6801,6 +6829,12 @@ struct Issue965HeldSelectionAssociationTests {
                 }
                 if canonicalName {
                     try #require(executable, "The combined task must be executable, not a supported subset")
+                    if initialNameRailFocus {
+                        let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
+                            kAXFocusedUIElementAttribute as String, runtime: b.makeAXRuntime()))
+                        #expect(CFEqual(focus, f.rail), "The accepted capture must retain the observed initial rail focus")
+                        #expect(f.routingNameWrites.isEmpty && f.routingDestinationPresses == 0)
+                    }
                     #expect(preview.count == 2)
                     #expect(preview.first?["kind"] as? String == "name")
                     #expect(preview.last?["kind"] as? String == "local_send_output")
@@ -6943,13 +6977,13 @@ struct Issue965HeldSelectionAssociationTests {
                         #expect(f.routingMenuNameOpens == 1)
                         #expect(f.routingNameConfirms == (inverseNameFault == nil || inverseNameFault == "late_membership" ? 2 : 1))
                         if inverseNameFault == nil {
-                            let expectedClicks: [CGEventType] = forwardNameMovesFocus
+                            let expectedClicks: [CGEventType] = initialNameRailFocus ? [] : forwardNameMovesFocus
                                 ? [.leftMouseDown, .leftMouseUp, .leftMouseDown, .leftMouseUp]
                                 : [.leftMouseDown, .leftMouseUp]
                             #expect(f.routingFocusClickEvents == expectedClicks)
                             let focus: AXUIElement = try #require(AXHelpers.getAttribute(f.app,
                                 kAXFocusedUIElementAttribute as String, runtime: b.makeAXRuntime()))
-                            #expect(CFEqual(focus, f.strips[1]))
+                            #expect(CFEqual(focus, initialNameRailFocus ? f.rail : f.strips[1]))
                             let steps = try #require(body["steps"] as? [[String: Any]])
                             #expect(steps.count == 2)
                             for step in steps {
