@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import tempfile
 import tarfile
@@ -99,14 +100,19 @@ class FinalConsumerInputTypeTests(unittest.TestCase):
 
 class QualifiedInputPrivacyTests(unittest.TestCase):
     def test_qualified_zip_is_checked_before_any_member_is_written(self):
-        for shape in ("valid", "traversal", "symlink", "fifo", "duplicate"):
+        for shape in ("valid", "valid_nested", "valid_unicode", "traversal", "symlink", "fifo", "duplicate",
+                      "normalized_duplicate", "file_parent", "file_child",
+                      "case_duplicate", "unicode_duplicate", "case_file_parent", "case_file_child",
+                      "unicode_file_parent", "unicode_file_child",
+                      "member_size", "total_size", "member_count"):
             with self.subTest(shape=shape), tempfile.TemporaryDirectory(prefix="qualified-zip-") as directory:
                 root = Path(directory)
                 destination = root / "private"
                 destination.mkdir()
                 source = root / "bundle.zip"
+                first_name = "café.json" if shape in ("valid_unicode", "unicode_duplicate", "unicode_file_parent") else "safe-first.json"
                 with zipfile.ZipFile(source, "w") as archive:
-                    archive.writestr("safe-first.json", "first")
+                    archive.writestr(first_name, "first")
                     member = zipfile.ZipInfo("second.json")
                     if shape == "traversal":
                         member.filename = "../../escaped.json"
@@ -116,7 +122,50 @@ class QualifiedInputPrivacyTests(unittest.TestCase):
                         member.external_attr = (stat.S_IFIFO | 0o600) << 16
                     elif shape == "duplicate":
                         member.filename = "safe-first.json"
+                    elif shape == "normalized_duplicate":
+                        member.filename = "./safe-first.json"
+                    elif shape == "case_duplicate":
+                        member.filename = "SAFE-FIRST.JSON"
+                    elif shape == "unicode_duplicate":
+                        member.filename = "cafe\u0301.json"
+                    elif shape == "case_file_parent":
+                        member.filename = "SAFE-FIRST.JSON/child.json"
+                    elif shape == "case_file_child":
+                        archive.writestr("SECOND.JSON/child.json", "child")
+                    elif shape == "unicode_file_parent":
+                        member.filename = "cafe\u0301.json/child.json"
+                    elif shape == "unicode_file_child":
+                        archive.writestr("cafe\u0301.json/child.json", "child")
+                        member.filename = "café.json"
+                    elif shape == "file_parent":
+                        archive.writestr("safe-first.json-variant", "sibling")
+                        member.filename = "safe-first.json/child.json"
+                    elif shape == "file_child":
+                        archive.writestr("second.json/child.json", "child")
+                    elif shape == "valid_nested":
+                        archive.writestr("nested/", "")
+                        member.filename = "nested/second.json"
+                    elif shape == "valid_unicode":
+                        member.filename = "καφές/둘째.json"
                     archive.writestr(member, "second")
+                    if shape == "total_size":
+                        for index in range(3):
+                            archive.writestr(f"extra-{index}.json", "small")
+                    elif shape == "member_count":
+                        for index in range(9999):
+                            archive.writestr(f"extra-{index}.json", "")
+                if shape in ("member_size", "total_size"):
+                    # Change only the central-directory declared expansion size;
+                    # exercise the real ZIP reader without allocating gigabytes.
+                    with zipfile.ZipFile(source) as archive:
+                        offset, entries = archive.start_dir, archive.infolist()
+                    data = bytearray(source.read_bytes())
+                    for entry in entries:
+                        if shape == "total_size" or entry.filename == "second.json":
+                            size = (1 << 30) + (shape == "member_size")
+                            struct.pack_into("<I", data, offset + 24, size)
+                        offset += 46 + len(entry.filename.encode("utf-8")) + len(entry.extra) + len(entry.comment)
+                    source.write_bytes(data)
                 executable = root / "curl"
                 executable.write_text('''#!/bin/bash
 while [ "$#" -gt 0 ]; do
@@ -132,9 +181,10 @@ cp "$FETCH_SOURCE" "$output"
                         "QUALIFICATION_EVIDENCE_URL": "https://owner.invalid/private-bundle",
                         "QUALIFICATION_EVIDENCE_SHA256": hashlib.sha256(source.read_bytes()).hexdigest(),
                     }, capture_output=True, text=True, timeout=10, check=False)
-                if shape == "valid":
+                if shape in ("valid", "valid_nested", "valid_unicode"):
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual((destination / "bundle/safe-first.json").read_text(), "first")
+                    self.assertEqual((destination / "bundle" / first_name).read_text(), "first")
+                    self.assertEqual((destination / "bundle" / member.filename).read_text(), "second")
                 else:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(list((destination / "bundle").rglob("*")), [])
@@ -190,7 +240,8 @@ class ReleaseFinalArtifactConsumerTests(unittest.TestCase):
     def run_consumer(self, bundle_kind, *, candidate=None, bundle_path=None,
                      verifier=None, trusted_key=None, commit=None,
                      mutate_original_bundle=False, entrypoint="local",
-                     archive_mutation=None, public_input_shape=None, reverify_timeout=30):
+                     archive_mutation=None, public_input_shape=None, checksum_mutation=None,
+                     reverify_timeout=30, signing_key=None, public_fault=None):
         with tempfile.TemporaryDirectory(prefix="release-final-consumer-") as directory:
             root = Path(directory)
             repo = root / "repo"
@@ -268,12 +319,18 @@ fi
                             '  echo original-bundle-changed >> "$CONSUMER_CALLS"\nfi\n'
                             if mutate_original_bundle else '')
                 tool.write_text('#!/bin/bash\necho trusted-verifier >> "$CONSUMER_CALLS"\n'
+                                + 'echo "trusted-command $1" >> "$CONSUMER_CALLS"\n'
+                                + 'case "$1" in sign|export-public) ;; *)\n'
+                                + '  if [ -n "${LOGIC_PRO_MCP_QUALIFICATION_SIGNING_KEY:-}" ]; then\n'
+                                + '    echo signing-key-in-consumer >> "$CONSUMER_CALLS"\n'
+                                + '  fi ;; esac\n'
                                 + 'printf "verifier-build " >> "$CONSUMER_CALLS"\n'
                                 + 'shasum -a 256 ' + shlex.quote(str(verifier))
                                 + ' | awk \'{print $1}\' >> "$CONSUMER_CALLS"\n'
+                                + 'if [ "$1" != verify-public ]; then\n'
                                 + 'printf "trusted-candidate %s " "$3" >> "$CONSUMER_CALLS"\n'
                                 + 'shasum -a 256 "$3" | awk \'{print $1}\' >> "$CONSUMER_CALLS"\n'
-                                + mutation + 'exec '
+                                + 'fi\n' + mutation + 'exec '
                                 + shlex.quote(str(verifier)) + ' "$@"\n')
                 tool.chmod(0o755)
             environment = {
@@ -289,8 +346,8 @@ fi
             arguments = ["bash", str(scripts / "release.sh"), "v1.2.3"]
             if candidate is not None:
                 arguments.extend((str(candidate), str(bundle), str(tool)))
-            def run(arguments, timeout=30):
-                return run_bounded(arguments, cwd=repo, env=environment, timeout=timeout)
+            def run(arguments, timeout=30, env=None):
+                return run_bounded(arguments, cwd=repo, env=environment if env is None else env, timeout=timeout)
 
             if entrypoint == "stable":
                 arguments[1] = str(scripts / "release-stable.sh")
@@ -298,7 +355,58 @@ fi
                 (root / "bin/python3").write_text("#!/bin/bash\nexit 0\n")
                 (root / "bin/python3").chmod(0o755)
                 result = run(arguments)
-            elif entrypoint in ("hosted", "direct", "install"):
+            elif entrypoint in ("hosted", "direct", "install", "public"):
+                # The owner packages and signs once. Hosted steps must consume these
+                # exact archive/envelope bytes, without receiving the signing key.
+                owner_public = root / "owner-public"
+                prepared = run(["bash", str(scripts / "release-consume-final.sh"),
+                                "stage", "1.2.3", sha, str(candidate), str(bundle),
+                                str(tool), str(owner_public)])
+                if prepared.returncode != 0:
+                    return prepared, calls.read_text().splitlines()
+                projection_bundle = bundle
+                if public_fault == "other_manifest":
+                    projection_bundle = root / "other-accepted-bundle"
+                    shutil.copytree(bundle, projection_bundle)
+                    manifest = projection_bundle / "evidence-manifest.json"
+                    manifest.write_bytes(manifest.read_bytes() + b"\n")
+                    attestation = projection_bundle / "release-qualification-attestation.json"
+                    value = json.loads(attestation.read_text())
+                    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+                    value["evidenceManifestSHA256"] = digest
+                    value["provenance"]["evidenceManifestSHA256"] = digest
+                    value.pop("provenanceSignature", None)
+                    attestation.write_text(json.dumps(value))
+                    signed = run([str(tool), "sign", "--candidate", str(candidate),
+                                  "--bundle", str(projection_bundle), "--release-version", "1.2.3",
+                                  "--expected-commit", sha], env={**environment,
+                                  "LOGIC_PRO_MCP_QUALIFICATION_SIGNING_KEY": signing_key})
+                    if signed.returncode != 0:
+                        return signed, calls.read_text().splitlines()
+                exported = run([str(tool), "export-public", "--candidate", str(candidate),
+                                "--bundle", str(projection_bundle), "--public-directory", str(owner_public),
+                                "--release-version", "1.2.3", "--expected-commit", sha],
+                               env={**environment, "LOGIC_PRO_MCP_QUALIFICATION_SIGNING_KEY": signing_key})
+                if exported.returncode != 0:
+                    return exported, calls.read_text().splitlines()
+                axis = json.loads((projection_bundle / "release-qualification-attestation.json").read_text())["provenance"]["axis"]
+                accepted_public = run([str(tool), "verify-public", "--public-directory", str(owner_public),
+                                       "--release-version", "1.2.3", "--expected-commit", sha,
+                                       "--expected-axis", "/".join(axis[k] for k in
+                                                                  ("variant", "locale", "profile", "cache", "fixture"))])
+                if accepted_public.returncode != 0:
+                    return accepted_public, calls.read_text().splitlines()
+                original_public = (owner_public / "qualification-public.json").read_bytes()
+                # Keep preparation evidence distinguishable from the actual YAML stage.
+                calls.write_text("".join("owner-preparation " + line + "\n"
+                                         for line in calls.read_text().splitlines()))
+                public_zip = root / "public-owner-assets.zip"
+                public_files = ("LogicProMCP", "LogicProMCP-macOS-universal.tar.gz",
+                                "LogicProMCP-macOS-arm64.tar.gz", "RELEASE-METADATA.json",
+                                "SHA256SUMS.txt", "qualification-public.json")
+                with zipfile.ZipFile(public_zip, "w") as archive:
+                    for name in public_files:
+                        archive.write(owner_public / name, name)
                 shutil.copy2(candidate, repo / "LogicProMCP")
                 bundle_zip = root / "private-owner-bundle.zip"
                 with zipfile.ZipFile(bundle_zip, "w") as archive:
@@ -307,11 +415,14 @@ fi
                             archive.write(path, path.relative_to(bundle))
                 curl = root / "bin/curl"
                 curl.write_text('''#!/bin/bash
+printf 'fetch %s\n' "$*" >> "$CONSUMER_CALLS"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o|--output) output="$2"; shift 2 ;;
     owner-candidate) input="$TEST_OWNER_CANDIDATE"; shift ;;
     owner-bundle) input="$TEST_OWNER_BUNDLE"; shift ;;
+    owner-public) input="$TEST_OWNER_PUBLIC"; shift ;;
+    https://consumer.invalid/*) input="$TEST_PUBLISHED/${1##*/}"; shift ;;
     *) shift ;;
   esac
 done
@@ -326,18 +437,63 @@ cp "$input" "$output"
                     "QUALIFICATION_CANDIDATE_SHA256": hashlib.sha256(Path(candidate).read_bytes()).hexdigest(),
                     "QUALIFICATION_EVIDENCE_URL": "owner-bundle",
                     "QUALIFICATION_EVIDENCE_SHA256": hashlib.sha256(bundle_zip.read_bytes()).hexdigest(),
+                    "QUALIFICATION_PUBLIC_ASSETS_URL": "owner-public",
+                    "QUALIFICATION_PUBLIC_ASSETS_SHA256": hashlib.sha256(public_zip.read_bytes()).hexdigest(),
                     "TRUSTED_QUALIFICATION_PUBLIC_KEY": trusted_key,
                     "TEST_OWNER_CANDIDATE": str(candidate), "TEST_OWNER_BUNDLE": str(bundle_zip),
+                    "TEST_OWNER_PUBLIC": str(public_zip),
                     "OWNER_BINARY_SHA": hashlib.sha256(Path(candidate).read_bytes()).hexdigest(),
                     "OWNER_MANIFEST_SHA": hashlib.sha256((bundle / "evidence-manifest.json").read_bytes()).hexdigest(),
                 })
                 workflow = yaml.safe_load(WORKFLOW.read_text())
+                if public_fault == "omitted_publish":
+                    action = next(step for step in workflow["jobs"]["publish"]["steps"]
+                                  if step.get("name") == "Create GitHub Release")
+                    action["with"]["files"] = "\n".join(name for name in action["with"]["files"].splitlines()
+                                                         if name != "qualification-public.json")
+                elif public_fault == "omitted_upload":
+                    action = next(step for step in workflow["jobs"]["build-release"]["steps"]
+                                  if step.get("name") == "Upload verified release artifacts")
+                    action["with"]["path"] = "\n".join(name for name in action["with"]["path"].splitlines()
+                                                        if name != "qualification-public.json")
                 stage_step = next(step for step in workflow["jobs"]["build-release"]["steps"]
                                   if step.get("name") == "Package")
                 result = run(["bash", "-e", "-o", "pipefail", "-c", stage_step["run"]])
                 if result.returncode == 0:
-                    files = ("LogicProMCP", "LogicProMCP-macOS-universal.tar.gz",
-                             "LogicProMCP-macOS-arm64.tar.gz", "RELEASE-METADATA.json", "SHA256SUMS.txt")
+                    with calls.open("a") as log:
+                        if (repo / "qualification-public.json").is_file() and (repo / "qualification-public.json").read_bytes() == original_public:
+                            log.write("public-envelope-preserved\n")
+                        if all((repo / name).read_bytes() == (owner_public / name).read_bytes()
+                               for name in public_files[:3]):
+                            log.write("public-archives-preserved\n")
+                    manifest_step = next(step for step in workflow["jobs"]["build-release"]["steps"]
+                                         if step.get("name") == "Create release artifact SHA256 manifest")
+                    result = run(["bash", "-e", "-o", "pipefail", "-c", manifest_step["run"]])
+                    if result.returncode != 0:
+                        return result, calls.read_text().splitlines()
+                    upload = next(step for step in workflow["jobs"]["build-release"]["steps"]
+                                  if step.get("name") == "Upload verified release artifacts")
+                    uploaded_files = tuple(upload["with"]["path"].splitlines())
+                    build_artifact = root / "verified-build-artifact"
+                    build_artifact.mkdir()
+                    for name in uploaded_files:
+                        shutil.copy2(repo / name, build_artifact / name)
+                    # Model the actual artifact download before injecting corruption.
+                    # A file not uploaded cannot appear merely because it remained
+                    # in the test's producer working directory.
+                    for name in (*public_files, "release-artifacts.sha256"):
+                        (repo / name).unlink(missing_ok=True)
+                        if name in uploaded_files:
+                            shutil.copy2(build_artifact / name, repo / name)
+                    proof = repo / "qualification-public.json"
+                    if public_fault == "payload":
+                        proof.write_bytes(original_public.replace(b'"schema"', b'"changed_schema"', 1))
+                    elif public_fault == "metadata":
+                        metadata = json.loads((repo / "RELEASE-METADATA.json").read_text())
+                        metadata["team_id"] = "SUBSTITUTED"
+                        (repo / "RELEASE-METADATA.json").write_text(json.dumps(metadata))
+                    files = tuple(name for name in uploaded_files
+                                  if name != "release-artifacts.sha256")
                     # Model a coherent artifact replacement, not just a bad adjacent checksum.
                     if archive_mutation in ("bytes", "duplicate", "nonexec", "script"):
                         archive_path = repo / "LogicProMCP-macOS-universal.tar.gz"
@@ -370,9 +526,40 @@ cp "$input" "$output"
                         with calls.open("a") as log:
                             log.write("downloaded-mode644 " + before + " "
                                       + hashlib.sha256(binary.read_bytes()).hexdigest() + "\n")
+                    if checksum_mutation is not None:
+                        manifest, fault = checksum_mutation.split("_", 1)
+                        outside = root / "outside-release-file"
+                        if fault == "fifo":
+                            os.mkfifo(outside)
+                            digest = "0" * 64
+                        else:
+                            outside.write_bytes(b"controlled file outside the release directory")
+                            digest = hashlib.sha256(outside.read_bytes()).hexdigest()
+                        name = "SHA256SUMS.txt" if manifest == "sums" else "release-artifacts.sha256"
+                        if fault in ("parent", "absolute", "fifo"):
+                            path = str(outside) if fault == "absolute" else "../outside-release-file"
+                            replacement = digest + "  " + path + "\n"
+                        elif fault in ("empty", "duplicate", "missing", "reordered"):
+                            original = (repo / name).read_text().splitlines(keepends=True)
+                            replacement = ("" if fault == "empty" else
+                                           "".join(original + original[:1]) if fault == "duplicate" else
+                                           "".join(reversed(original)) if fault == "reordered" else
+                                           "".join(original[1:]))
+                        else:
+                            raise ValueError("Unknown checksum mutation: " + checksum_mutation)
+                        if manifest == "sums":
+                            (repo / name).write_text(replacement)
+                        with calls.open("a") as log:
+                            log.write("checksum-input-mutated " + checksum_mutation + "\n")
                     (repo / "release-artifacts.sha256").write_text("".join(
                         hashlib.sha256((repo / name).read_bytes()).hexdigest() + "  " + name + "\n"
                         for name in files))
+                    if checksum_mutation is not None and manifest == "manifest":
+                        (repo / "release-artifacts.sha256").write_text(replacement)
+                    if public_fault in ("missing", "fifo"):
+                        proof.unlink(missing_ok=True)
+                        if public_fault == "fifo":
+                            os.mkfifo(proof)
                     if public_input_shape is not None:
                         target = repo / public_input_shape
                         target.unlink()
@@ -392,6 +579,28 @@ cp "$input" "$output"
                     if result.returncode == 0:
                         with calls.open("a") as log:
                             log.write("hosted-release-action\n")
+                        if entrypoint == "public":
+                            verified = repo / "verified"
+                            published = root / "published-assets"
+                            shutil.copytree(build_artifact, verified)
+                            published.mkdir()
+                            action = next(step for step in workflow["jobs"]["publish"]["steps"]
+                                          if step.get("name") == "Create GitHub Release")
+                            for name in action["with"]["files"].splitlines():
+                                if (repo / name).is_file():
+                                    shutil.copy2(repo / name, published / name)
+                            if public_fault == "retrieved_missing":
+                                (published / "qualification-public.json").unlink(missing_ok=True)
+                            elif public_fault == "retrieved_payload":
+                                (published / "qualification-public.json").write_bytes(b"substituted public evidence")
+                            environment.update({"BASE": "https://consumer.invalid", "TAG": "v1.2.3",
+                                                "TEST_PUBLISHED": str(published)})
+                            step = next(step for step in workflow["jobs"]["verify-published"]["steps"]
+                                        if step.get("name") == "The published assets are byte-identical to the verified ones")
+                            result = run(["bash", "-e", "-o", "pipefail", "-c", step["run"]])
+                            if result.returncode == 0 and (repo / "published/qualification-public.json").is_file():
+                                with calls.open("a") as log:
+                                    log.write("retrieved-public-envelope-verified\n")
             else:
                 result = run(arguments)
             return result, calls.read_text().splitlines() if calls.exists() else []

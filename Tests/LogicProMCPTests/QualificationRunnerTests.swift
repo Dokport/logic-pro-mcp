@@ -824,8 +824,8 @@ struct QualificationRunnerTests {
         let attestation = try await fixture.qualify()
         let operationCases = attestation.cases.filter { $0.id.hasPrefix("in-process/") }
 
-        // Oracle presence is not independent readback. The declared MIDI-port echo and
-        // same-host output-menu receipt checks are withheld; other semantic checks still pass.
+        // Oracle presence is not independent readback. Response-only plugin checks and
+        // same-host receipt checks are withheld; other semantic checks still pass.
         // DERIVED: one case per registry spec. It was `113` and read 114 the day main added
         // `system.setup_control_surface`.
         #expect(operationCases.count == OperationRegistry.specs.count)
@@ -833,7 +833,8 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges]))
+            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges,
+            .pluginsGetParamVerified, .pluginsGetChannelEQStateVerified]))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let markedIDs = Set(marked.map(\.rawValue))
         let passed = operationCases.filter { $0.status == .passed }
@@ -2313,6 +2314,326 @@ struct QualificationRunnerTests {
         #expect(result.exitCode == 0, "\(result.stdout)")
     }
 
+    private func publicEvidenceDirectory(_ fixture: Fixture, archiveFault: String? = nil) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("public-evidence-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        do {
+            try FileManager.default.copyItem(at: fixture.executableURL, to: directory.appendingPathComponent("LogicProMCP"))
+            let program = #"""
+import io, pathlib, sys, tarfile
+root, fault = pathlib.Path(sys.argv[1]), sys.argv[2]
+data = (root / 'LogicProMCP').read_bytes()
+for name in ('LogicProMCP-macOS-universal.tar.gz', 'LogicProMCP-macOS-arm64.tar.gz'):
+    with tarfile.open(root / name, 'w:gz') as archive:
+        member = tarfile.TarInfo('LogicProMCP')
+        member.mode = 0o755
+        payload = b'wrong candidate' if fault == 'wrong_binary' else data
+        member.size = len(payload)
+        if fault == 'symlink':
+            member.type = tarfile.SYMTYPE
+            member.linkname = '/private/unowned'
+            member.size = 0
+        if fault != 'missing':
+            archive.addfile(member, io.BytesIO(payload))
+        if fault == 'duplicate':
+            archive.addfile(member, io.BytesIO(payload))
+        if fault == 'traversal':
+            other = tarfile.TarInfo('../escaped')
+            other.size = 1
+            archive.addfile(other, io.BytesIO(b'x'))
+        if fault in ('file_parent', 'file_child'):
+            pair = [('Companion', b'x'), ('companion/child', b'y')]
+            for path, content in pair if fault == 'file_parent' else reversed(pair):
+                other = tarfile.TarInfo(path)
+                other.size = len(content)
+                archive.addfile(other, io.BytesIO(content))
+"""#
+            let result = BoundedProcessRunner.run(executable: "/usr/bin/env",
+                arguments: ["-i", "PATH=/usr/bin:/bin", "/usr/bin/python3", "-I", "-c", program,
+                            directory.path, archiveFault ?? "healthy"], timeout: 10)
+            try #require(result.output?.exitCode == 0)
+            return directory
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+    }
+
+    private func publicEvidenceCommand(_ command: String, fixture: Fixture, directory: URL,
+                                       commit: String? = nil, version: String = "1.2.3",
+                                       axis: String = QualificationAxis.defaultAxis.key,
+                                       key: Data? = nil, bundleURL: URL? = nil) -> QualificationCommandResult {
+        var arguments = ["trusted-verifier", command, "--public-directory", directory.path,
+                         "--release-version", version, "--expected-commit", commit ?? fixture.commitSHA]
+        if command == "export-public" {
+            arguments += ["--candidate", fixture.executableURL.path, "--bundle", (bundleURL ?? fixture.directory).path]
+        } else { arguments += ["--expected-axis", axis] }
+        return QualificationRunner.runTrusted(arguments: arguments, environment: [
+            "LOGIC_PRO_MCP_QUALIFICATION_SIGNING_KEY": fixture.signingKeyData.base64EncodedString(),
+            "LOGIC_PRO_MCP_QUALIFICATION_TRUSTED_PUBLIC_KEY": (key ?? fixture.trustedPublicKeyData).base64EncodedString(),
+        ])
+    }
+
+    @Test func publicEvidenceAcceptsBoundArtifactsWithoutDisclosingPrivatePaths() async throws {
+        let fixture = try await signedTrustedFixture()
+        defer { fixture.remove() }
+        let directory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exported = publicEvidenceCommand("export-public", fixture: fixture, directory: directory)
+        try #require(exported.exitCode == 0, "\(exported.stdout)")
+        let verified = publicEvidenceCommand("verify-public", fixture: fixture, directory: directory)
+        #expect(verified.exitCode == 0, "\(verified.stdout)")
+        let envelope = try JSONSerialization.jsonObject(with: Data(contentsOf:
+            directory.appendingPathComponent("qualification-public.json"))) as? [String: Any]
+        let encoded = try #require(envelope?["payload"] as? String)
+        let data = try #require(Data(base64Encoded: encoded))
+        let payload = String(decoding: data, as: UTF8.self)
+        #expect(!payload.contains(fixture.directory.path))
+        #expect(!payload.contains(fixture.executableURL.path))
+        #expect(!payload.contains(fixture.signingKeyData.base64EncodedString()))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("raw-transcript.json").path))
+    }
+
+    @Test(arguments: ["candidate", "archive_and_digest", "payload_and_digest", "foreign_key",
+                      "source", "version", "axis", "missing_member"])
+    func publicEvidenceRejectsSubstitutionAgainstIndependentAnchor(fault: String) async throws {
+        let fixture = try await signedTrustedFixture()
+        defer { fixture.remove() }
+        let directory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try #require(publicEvidenceCommand("export-public", fixture: fixture, directory: directory).exitCode == 0)
+        let evidence = directory.appendingPathComponent("qualification-public.json")
+        if fault == "candidate" {
+            try Data("replacement".utf8).write(to: directory.appendingPathComponent("LogicProMCP"))
+        } else if fault == "archive_and_digest" {
+            let archive = directory.appendingPathComponent("LogicProMCP-macOS-arm64.tar.gz")
+            try Data("replacement".utf8).write(to: archive)
+            try Data(SupportBundleBuilder.sha256(Data("replacement".utf8)).utf8)
+                .write(to: directory.appendingPathComponent("SHA256SUMS.txt"))
+        } else if fault == "payload_and_digest" {
+            var object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: evidence)) as? [String: Any])
+            let encoded = try #require(object["payload"] as? String)
+            let originalPayload = try #require(Data(base64Encoded: encoded))
+            var payload = try #require(JSONSerialization.jsonObject(with: originalPayload) as? [String: Any])
+            payload["commitSHA"] = String(repeating: "b", count: 40)
+            let replacement = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            object["payload"] = replacement.base64EncodedString()
+            try JSONSerialization.data(withJSONObject: object).write(to: evidence)
+            try Data(SupportBundleBuilder.sha256(replacement).utf8).write(to:
+                directory.appendingPathComponent("qualification-public.sha256"))
+        } else if fault == "missing_member" {
+            try FileManager.default.removeItem(at: directory.appendingPathComponent("LogicProMCP-macOS-arm64.tar.gz"))
+        }
+        let result = publicEvidenceCommand("verify-public", fixture: fixture, directory: directory,
+            commit: fault == "source" ? String(repeating: "b", count: 40) : nil,
+            version: fault == "version" ? "9.9.9" : "1.2.3",
+            axis: fault == "axis" ? "desktop/ko-KR/core/cold/empty" : QualificationAxis.defaultAxis.key,
+            key: fault == "foreign_key" ? Data(repeating: 77, count: 32) : nil)
+        #expect(result.exitCode != 0, "\(fault): \(result.stdout)")
+    }
+
+    @Test(arguments: ["wrong_binary", "duplicate", "symlink", "traversal", "missing", "file_parent", "file_child"])
+    func publicEvidenceExportRequiresTheActualArchiveCandidate(fault: String) async throws {
+        let fixture = try await signedTrustedFixture()
+        defer { fixture.remove() }
+        let directory = try publicEvidenceDirectory(fixture, archiveFault: fault)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let result = publicEvidenceCommand("export-public", fixture: fixture, directory: directory)
+        #expect(result.exitCode != 0)
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("qualification-public.json").path))
+    }
+
+    @Test(arguments: ["same", "public_inside_private", "private_inside_public",
+                      "public_inside_private_via_alias", "private_inside_public_via_alias"])
+    func publicEvidenceRefusesPrivateBundleDestinationOverlap(shape: String) async throws {
+        let fixture = try await signedTrustedFixture()
+        defer { fixture.remove() }
+        let prepared = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: prepared) }
+        var directory = prepared, bundle = fixture.directory
+        let alias = FileManager.default.temporaryDirectory.appendingPathComponent("public-alias-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: alias) }
+        if shape == "same" {
+            for name in QualificationPublicEvidence.artifactNames.dropFirst() {
+                try FileManager.default.copyItem(at: prepared.appendingPathComponent(name),
+                    to: fixture.directory.appendingPathComponent(name))
+            }
+            directory = fixture.directory
+        } else if shape == "public_inside_private" {
+            directory = fixture.directory.appendingPathComponent("public-projection")
+            try FileManager.default.moveItem(at: prepared, to: directory)
+        } else if shape == "public_inside_private_via_alias" {
+            let nested = fixture.directory.appendingPathComponent("nested")
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: false)
+            try FileManager.default.moveItem(at: prepared, to: nested.appendingPathComponent("public"))
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: nested)
+            directory = alias.appendingPathComponent("public")
+        } else if shape == "private_inside_public_via_alias" {
+            let nested = prepared.appendingPathComponent("nested")
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: false)
+            try FileManager.default.copyItem(at: fixture.directory, to: nested.appendingPathComponent("private-bundle"))
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: nested)
+            bundle = alias.appendingPathComponent("private-bundle")
+        } else {
+            bundle = prepared.appendingPathComponent("private-bundle")
+            try FileManager.default.copyItem(at: fixture.directory, to: bundle)
+        }
+        let result = publicEvidenceCommand("export-public", fixture: fixture, directory: directory, bundleURL: bundle)
+        #expect(result.exitCode != 0)
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("qualification-public.json").path))
+    }
+
+    @Test func publicEvidenceValidatesTheSnapshotItActuallyProjects() async throws {
+        let fixture = try await signedTrustedFixture()
+        defer { fixture.remove() }
+        let directory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Model the actual load boundary: A was loaded, while accepted B is now
+        // at the same on-disk location. No timing/environment fault flag is used.
+        var object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture.attestationURL)) as? [String: Any])
+        let anotherCommit = String(repeating: "b", count: 40)
+        object["commitSHA"] = anotherCommit
+        let loaded = try JSONDecoder().decode(ReleaseQualificationAttestation.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        try #require(loaded.commitSHA == anotherCommit && loaded.commitSHA != fixture.commitSHA)
+        let acceptedB = QualificationRunner.verifyTrusted(candidateURL: fixture.executableURL, bundleURL: fixture.directory,
+            releaseVersion: "1.2.3", expectedCommitSHA: fixture.commitSHA, trustedPublicKeyData: fixture.trustedPublicKeyData)
+        try #require(acceptedB.exitCode == 0)
+        let controlDirectory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: controlDirectory) }
+        let original = try JSONDecoder().decode(ReleaseQualificationAttestation.self,
+            from: Data(contentsOf: fixture.attestationURL))
+        let control = try QualificationRunner.exportPublicEvidenceSnapshot(attestation: original,
+            manifestData: Data(contentsOf: fixture.manifestURL), candidate: fixture.executableURL,
+            bundle: fixture.directory, directory: controlDirectory, version: "1.2.3", commit: fixture.commitSHA,
+            key: Curve25519.Signing.PrivateKey(rawRepresentation: fixture.signingKeyData))
+        try #require(control.exitCode == 0, "\(control.stdout)")
+        let result = try QualificationRunner.exportPublicEvidenceSnapshot(attestation: loaded,
+            manifestData: Data(contentsOf: fixture.manifestURL), candidate: fixture.executableURL,
+            bundle: fixture.directory, directory: directory, version: "1.2.3", commit: fixture.commitSHA,
+            key: Curve25519.Signing.PrivateKey(rawRepresentation: fixture.signingKeyData))
+        #expect(result.exitCode != 0, "Unverified A must not inherit accepted B's authority")
+        if result.exitCode == 0 {
+            #expect(publicEvidenceCommand("verify-public", fixture: fixture, directory: directory,
+                commit: anotherCommit).exitCode != 0, "The public signature must not authenticate A's unverified source")
+        }
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("qualification-public.json").path))
+    }
+
+    @Test func publicEvidenceRefusalDoesNotDisclosePrivateVerifierDetails() async throws {
+        let fixture = try await signedTrustedFixture()
+        defer { fixture.remove() }
+        let directory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sentinel = "PRIVATE /Users/sentinel/project.logicx"
+        try Self.mutateJSONObject(at: fixture.attestationURL) { object in
+            var waivers = try #require(object["waivers"] as? [[String: Any]])
+            try #require(!waivers.isEmpty)
+            waivers[0]["caseID"] = sentinel
+            object["waivers"] = waivers
+        }
+        let result = publicEvidenceCommand("export-public", fixture: fixture, directory: directory)
+        #expect(result.exitCode != 0)
+        #expect(!(result.stdout + result.stderr).contains(sentinel))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("qualification-public.json").path))
+    }
+
+    @Test func publicEvidenceWithholdsActualPrivateWaiverText() async throws {
+        let fixture = try trustedFixture()
+        defer { fixture.remove() }
+        let sentinel = "PRIVATE-WAIVER /Users/private-owner/project.logicx"
+        let original = try JSONDecoder().decode([QualificationWaiver].self, from: Data(contentsOf: fixture.waiversURL))
+        try #require(!original.isEmpty)
+        let changed = original.map { item in
+            QualificationWaiver(caseID: item.caseID, reasonCode: item.reasonCode, owningIssue: item.owningIssue,
+                userImpact: sentinel, affectedCapability: item.affectedCapability,
+                affectsDefaultProfile: item.affectsDefaultProfile, expiryVersion: item.expiryVersion,
+                releaseNoteVisible: item.releaseNoteVisible)
+        }
+        try JSONEncoder().encode(changed).write(to: fixture.waiversURL)
+        let qualified = await fixture.runQualification(waiversURL: fixture.waiversURL)
+        try #require(qualified.exitCode == 0)
+        let signed = QualificationRunner.signTrusted(candidateURL: fixture.executableURL, bundleURL: fixture.directory,
+            releaseVersion: "1.2.3", expectedCommitSHA: fixture.commitSHA, signingPrivateKeyData: fixture.signingKeyData)
+        try #require(signed.exitCode == 0)
+        let directory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try #require(publicEvidenceCommand("export-public", fixture: fixture, directory: directory).exitCode == 0)
+        let data = try Data(contentsOf: directory.appendingPathComponent("qualification-public.json"))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let encoded = try #require(object["payload"] as? String)
+        let decoded = try #require(Data(base64Encoded: encoded))
+        let text = String(decoding: decoded, as: UTF8.self)
+        #expect(!text.contains(sentinel) && !text.contains("/Users/private-owner"))
+        #expect(text.contains(SupportBundleBuilder.sha256(Data(sentinel.utf8))))
+        #expect(publicEvidenceCommand("verify-public", fixture: fixture, directory: directory).exitCode == 0)
+    }
+
+    @Test(arguments: ["private_manifest", "existing_output", "projection_symlink", "artifact_fifo"])
+    func publicEvidenceRetainsPrivateGateAndSafeFileBoundaries(fault: String) async throws {
+        let fixture = try await signedTrustedFixture()
+        defer { fixture.remove() }
+        let directory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appendingPathComponent("qualification-public.json")
+        if fault == "private_manifest" {
+            try Data("forged".utf8).write(to: fixture.manifestURL)
+            #expect(publicEvidenceCommand("export-public", fixture: fixture, directory: directory).exitCode != 0)
+            #expect(!FileManager.default.fileExists(atPath: output.path))
+        } else if fault == "existing_output" {
+            try Data("original-owned-output".utf8).write(to: output)
+            #expect(publicEvidenceCommand("export-public", fixture: fixture, directory: directory).exitCode != 0)
+            #expect(try Data(contentsOf: output) == Data("original-owned-output".utf8))
+        } else {
+            try #require(publicEvidenceCommand("export-public", fixture: fixture, directory: directory).exitCode == 0)
+            let target = fault == "projection_symlink" ? output : directory.appendingPathComponent("LogicProMCP")
+            let original = directory.appendingPathComponent("saved-original")
+            try FileManager.default.moveItem(at: target, to: original)
+            if fault == "projection_symlink" {
+                try FileManager.default.createSymbolicLink(at: target, withDestinationURL: original)
+            } else { try #require(mkfifo(target.path, 0o600) == 0) }
+            #expect(publicEvidenceCommand("verify-public", fixture: fixture, directory: directory).exitCode != 0)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func publicEvidenceStandaloneConsumerNeverExecutesCandidate() async throws {
+        let sentinel = FileManager.default.temporaryDirectory.appendingPathComponent("public-candidate-executed-\(UUID())")
+        let fixture = try await signedTrustedFixture(candidateExecutionSentinelURL: sentinel)
+        defer { fixture.remove(); try? FileManager.default.removeItem(at: sentinel) }
+        let directory = try publicEvidenceDirectory(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try #require(FileManager.default.isExecutableFile(atPath: Self.trustedVerifierExecutableURL.path))
+        func run(_ command: String) throws -> QualificationCommandResult {
+            let process = Process()
+            process.executableURL = Self.trustedVerifierExecutableURL
+            var arguments = [command, "--public-directory", directory.path,
+                                 "--release-version", "1.2.3", "--expected-commit", fixture.commitSHA]
+            if command == "export-public" {
+                arguments += ["--candidate", fixture.executableURL.path, "--bundle", fixture.directory.path]
+            } else { arguments += ["--expected-axis", QualificationAxis.defaultAxis.key] }
+            process.arguments = arguments
+            process.environment = ["PATH": "/usr/bin:/bin",
+                "LOGIC_PRO_MCP_QUALIFICATION_SIGNING_KEY": fixture.signingKeyData.base64EncodedString(),
+                "LOGIC_PRO_MCP_QUALIFICATION_TRUSTED_PUBLIC_KEY": fixture.trustedPublicKeyData.base64EncodedString()]
+            process.standardInput = FileHandle.nullDevice
+            let stdout = Pipe(), stderr = Pipe()
+            process.standardOutput = stdout; process.standardError = stderr
+            try process.run()
+            let output = stdout.fileHandleForReading.readDataToEndOfFile()
+            let error = stderr.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return .init(exitCode: Int(process.terminationStatus), stdout: String(decoding: output, as: UTF8.self),
+                         stderr: String(decoding: error, as: UTF8.self))
+        }
+        let exported = try run("export-public")
+        try #require(exported.exitCode == 0, "\(exported.stdout)\(exported.stderr)")
+        let accepted = try run("verify-public")
+        #expect(accepted.exitCode == 0, "\(accepted.stdout)\(accepted.stderr)")
+        try Data("replaced".utf8).write(to: directory.appendingPathComponent("LogicProMCP-macOS-arm64.tar.gz"))
+        #expect(try run("verify-public").exitCode != 0)
+        #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+    }
+
     @Test func trustedVerifierRejectsNoOpReadbackInMutationArtifact() async throws {
         let fixture = try await signedTrustedFixture()
         defer { fixture.remove() }
@@ -3050,6 +3371,7 @@ struct QualificationRunnerTests {
             'supplied', candidate=sys.argv[1], bundle_path=sys.argv[2],
             verifier=sys.argv[3], trusted_key=sys.argv[4], commit=sys.argv[5],
             entrypoint='stable' if sys.argv[6].startswith('stable') else 'hosted',
+            signing_key=sys.argv[7],
             archive_mutation={'hosted_archive_substitution': 'bytes', 'hosted_download_mode': 'mode644',
                               'hosted_archive_duplicate': 'duplicate', 'hosted_archive_nonexec': 'nonexec',
                               'hosted_archive_script': 'script'}.get(sys.argv[6]))
@@ -3057,7 +3379,8 @@ struct QualificationRunnerTests {
                           'stdout': result.stdout, 'stderr': result.stderr}))
         """, fixture.executableURL.path, fixture.directory.path,
             verifier.path,
-            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario]
+            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario,
+            fixture.signingKeyData.base64EncodedString()]
         let output = Pipe()
         let diagnostics = Pipe()
         process.standardOutput = output
@@ -3104,10 +3427,85 @@ struct QualificationRunnerTests {
         }
     }
 
+    /// Drive the YAML's public distribution path with a real signed bundle and
+    /// envelope. Network/publication leaves use controlled copies, never a release.
+    @Test(.timeLimit(.minutes(2)), arguments: ["valid", "missing", "payload", "fifo",
+        "other_manifest", "metadata", "retrieved_missing", "retrieved_payload", "omitted_publish", "omitted_upload"])
+    func releasePublicationPreservesAndRetrievesSignedPublicEvidence(_ scenario: String) async throws {
+        let sentinel = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "public-release-candidate-executed-\(UUID().uuidString)")
+        let fixture = try await signedTrustedFixture(candidateExecutionSentinelURL: sentinel)
+        defer {
+            fixture.remove()
+            try? FileManager.default.removeItem(at: sentinel)
+        }
+        let verifier = Self.releaseConsumerVerifierURL
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", "-c", """
+        import json, sys
+        sys.path.insert(0, 'Scripts')
+        from test_release_workflow import ReleaseFinalArtifactConsumerTests
+        result, calls = ReleaseFinalArtifactConsumerTests().run_consumer(
+            'supplied', candidate=sys.argv[1], bundle_path=sys.argv[2], verifier=sys.argv[3],
+            trusted_key=sys.argv[4], commit=sys.argv[5], signing_key=sys.argv[6],
+            entrypoint='public', public_fault=None if sys.argv[7] == 'valid' else sys.argv[7],
+            reverify_timeout=5 if sys.argv[7] == 'fifo' else 30)
+        print(json.dumps({'exit': result.returncode, 'timed_out': result.timed_out,
+                          'calls': calls, 'stdout': result.stdout, 'stderr': result.stderr}))
+        """, fixture.executableURL.path, fixture.directory.path, verifier.path,
+            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA,
+            fixture.signingKeyData.base64EncodedString(), scenario]
+        let output = Pipe()
+        let diagnostics = Pipe()
+        process.standardOutput = output
+        process.standardError = diagnostics
+        try process.run()
+        let bytes = output.fileHandleForReading.readDataToEndOfFile()
+        let errors = diagnostics.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        try #require(process.terminationStatus == 0, "\(String(decoding: errors, as: UTF8.self))")
+        let result = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let calls = try #require(result["calls"] as? [String])
+        let code = try #require(result["exit"] as? Int)
+        let timedOut = try #require(result["timed_out"] as? Bool)
+        #expect(!timedOut, "\(result)")
+        #expect(calls.contains { $0 == "owner-preparation trusted-command verify-public" },
+                "the starting public copy must actually authenticate: \(result)")
+        if scenario == "valid" || scenario.hasPrefix("retrieved_") || scenario == "omitted_publish" {
+            #expect(calls.contains("public-envelope-preserved"), "\(result)")
+            #expect(calls.contains("public-archives-preserved"), "\(result)")
+            #expect(calls.filter { $0 == "trusted-command verify-public" }.count >= 2,
+                    "both build and publication must authenticate public evidence: \(result)")
+            #expect(calls.contains("hosted-release-action"), "\(result)")
+        }
+        if scenario == "valid" {
+            #expect(code == 0, "\(result)")
+            #expect(calls.contains("retrieved-public-envelope-verified"), "\(result)")
+        } else {
+            #expect(code != 0, "\(result)")
+            #expect(!calls.contains("retrieved-public-envelope-verified"), "\(result)")
+            if !scenario.hasPrefix("retrieved_") && scenario != "omitted_publish" {
+                #expect(!calls.contains("hosted-release-action"), "\(result)")
+            }
+        }
+        #expect(!calls.contains { $0.contains("Authorization:") || $0.contains("Bearer ") })
+        #expect(!calls.contains("signing-key-in-consumer"))
+        #expect(!calls.contains { $0.hasPrefix("swift build") || $0.hasPrefix("codesign --force") })
+        #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+    }
+
     /// Start with a real signed/verifier-accepted stage, then replace one public
-    /// input with an owned FIFO. The Python driver always reaps its child group.
+    /// input or its checksum rows. The Python driver always reaps its child group.
     @Test(.timeLimit(.minutes(2)), arguments: ["direct_binary", "direct_archive", "direct_sums",
         "hosted_binary", "hosted_archive", "hosted_manifest", "hosted_metadata", "install_archive",
+        "direct_checksum_sums_parent", "direct_checksum_sums_absolute", "direct_checksum_sums_fifo",
+        "direct_checksum_sums_empty", "direct_checksum_sums_duplicate", "direct_checksum_sums_missing",
+        "hosted_checksum_sums_parent",
+        "hosted_checksum_manifest_parent", "install_checksum_manifest_parent",
+        "hosted_checksum_manifest_fifo", "install_checksum_manifest_fifo",
+        "hosted_checksum_manifest_empty", "install_checksum_manifest_duplicate", "hosted_checksum_manifest_missing",
+        "direct_checksum_sums_reordered", "hosted_checksum_manifest_reordered", "install_checksum_manifest_reordered",
         "direct_healthy", "hosted_healthy", "install_healthy"])
     func finalConsumerRejectsNonregularPublicInputsBeforeReading(_ scenario: String) async throws {
         let verifier = Self.releaseConsumerVerifierURL
@@ -3123,20 +3521,24 @@ struct QualificationRunnerTests {
         sys.path.insert(0, 'Scripts')
         from test_release_workflow import ReleaseFinalArtifactConsumerTests
         entry, shape = sys.argv[6].split('_', 1)
+        checksum = shape[len('checksum_'):] if shape.startswith('checksum_') else None
         target = {'binary': 'LogicProMCP', 'archive': 'LogicProMCP-macOS-universal.tar.gz',
                   'sums': 'SHA256SUMS.txt', 'manifest': 'release-artifacts.sha256',
                   'metadata': 'RELEASE-METADATA.json'}.get(shape)
         result, calls = ReleaseFinalArtifactConsumerTests().run_consumer(
             'supplied', candidate=sys.argv[1], bundle_path=sys.argv[2], verifier=sys.argv[3],
             trusted_key=sys.argv[4], commit=sys.argv[5], entrypoint=entry,
+            signing_key=sys.argv[7],
             # Keep the tight liveness bound for every planted FIFO. Healthy
             # controls perform real archive/signature verification and use the
             # helper's ordinary bounded budget instead of the FIFO probe's.
-            public_input_shape=target, reverify_timeout=5 if target is not None else 30)
+            public_input_shape=target, checksum_mutation=checksum,
+            reverify_timeout=5 if target is not None or checksum is not None else 30)
         print(json.dumps({'exit': result.returncode, 'timed_out': result.timed_out,
                           'calls': calls, 'stdout': result.stdout, 'stderr': result.stderr}))
         """, fixture.executableURL.path, fixture.directory.path, verifier.path,
-            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario]
+            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario,
+            fixture.signingKeyData.base64EncodedString()]
         let output = Pipe()
         let diagnostics = Pipe()
         process.standardOutput = output
@@ -3148,7 +3550,8 @@ struct QualificationRunnerTests {
         try #require(process.terminationStatus == 0, "\(String(decoding: errors, as: UTF8.self))")
         let result = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         let calls = try #require(result["calls"] as? [String])
-        let fault = try #require(calls.firstIndex { $0.hasPrefix("public-input-fifo ") || $0 == "public-input-healthy" })
+        let fault = try #require(calls.firstIndex { $0.hasPrefix("public-input-fifo ")
+            || $0.hasPrefix("checksum-input-mutated ") || $0 == "public-input-healthy" })
         let stagedMembers = calls.prefix(upTo: fault).filter {
             $0.hasPrefix("trusted-candidate ") && $0.contains(".member/LogicProMCP ")
         }
@@ -3157,7 +3560,7 @@ struct QualificationRunnerTests {
         let timedOut = try #require(result["timed_out"] as? Bool)
         #expect(!timedOut, "public input reached a blocking read: \(scenario)")
         let code = try #require(result["exit"] as? Int)
-        if scenario.hasSuffix("healthy") {
+        if scenario.hasSuffix("healthy") || scenario.hasSuffix("reordered") {
             #expect(code == 0, "\(result)")
             #expect(calls.contains("hosted-release-action"))
         } else {
@@ -4448,8 +4851,9 @@ struct QualificationRunnerTests {
     }
 
     @Test(.enabled(
-        if: FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
-        "Requires `swift build -c release` before running the real-process qualification QA."
+        if: ProcessInfo.processInfo.environment["LOGIC_PRO_MCP_RUN_LIVE_QA"] == "1"
+            && FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
+        "Requires LOGIC_PRO_MCP_RUN_LIVE_QA=1 and a release build; use Scripts/release-qualify.sh."
     ))
     func realReleaseBinaryExecutesEveryOperationWithIndependentReadback() throws {
         let result = try QualificationTransport().drive(.init(
@@ -4770,8 +5174,9 @@ struct QualificationRunnerTests {
     /// failed case. (The generic "a failed required case is not promotable"
     /// rejection stays covered by `verificationEmitsEveryApplicableRejection`.)
     @Test(.enabled(
-        if: FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
-        "Requires `swift build -c release` before the Runner fault-exclusion probe."
+        if: ProcessInfo.processInfo.environment["LOGIC_PRO_MCP_RUN_LIVE_QA"] == "1"
+            && FileManager.default.isExecutableFile(atPath: Self.releaseExecutableURL.path),
+        "Requires LOGIC_PRO_MCP_RUN_LIVE_QA=1 and a release build; use Scripts/release-qualify.sh."
     ))
     func runnerIgnoresPartialStateFaultEnvOnRealServer() async throws {
         let spec = try #require(OperationRegistry.specs.first { $0.id == .transportPlay })
@@ -4865,8 +5270,9 @@ struct QualificationRunnerTests {
     /// `FAULT_TEST_SEAM` (see Package.swift) — references excluded symbols.
     #if FAULT_TEST_SEAM
     @Test(.enabled(
-        if: FileManager.default.isExecutableFile(atPath: Self.debugExecutableURL.path),
-        "Requires `swift build` (debug) before the Runner fault-seam probe."
+        if: ProcessInfo.processInfo.environment["LOGIC_PRO_MCP_RUN_LIVE_QA"] == "1"
+            && FileManager.default.isExecutableFile(atPath: Self.debugExecutableURL.path),
+        "Requires LOGIC_PRO_MCP_RUN_LIVE_QA=1 and a debug build with the fault seam."
     ))
     func runnerRejectsPartialStateObservedFromRealServer() async throws {
         let spec = try #require(OperationRegistry.specs.first { $0.id == .transportPlay })
@@ -5257,7 +5663,8 @@ struct QualificationRunnerTests {
         let marked = Set(SemanticOracleTable.all
             .filter { $0.independentReadbackDeferral != nil }.map(\.operationID))
         #expect(marked == Set<OperationID>([.midiListPorts, .mixerGetOutputVerified, .mixerGetSendDestinationVerified,
-            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges]))
+            .mixerGetInputBusVerified, .mixerGetSendBypassVerified, .pluginsPlanParameterChanges,
+            .pluginsGetParamVerified, .pluginsGetChannelEQStateVerified]))
         let markedIDs = Set(marked.map(\.rawValue))
         let readOnlyIDs = Set(OperationRegistry.specs.filter { $0.mutability == .readOnly }.map(\.id.rawValue))
         let passed = operationCases.filter { $0.status == .passed }
