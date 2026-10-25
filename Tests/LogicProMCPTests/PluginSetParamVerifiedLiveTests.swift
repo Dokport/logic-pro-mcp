@@ -4225,11 +4225,22 @@ private func parameterReadRuntime(
     _ fixture: LiveFixture,
     onScreenWindowList: @escaping @Sendable () -> [[String: Any]]? = { [] },
     actionNamesRead: (@Sendable (AXUIElement) -> Result<[String], AXHelpers.AXStatusError>?)? = nil,
-    attributeRead: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil
+    attributeRead: (@Sendable (AXUIElement, String) -> Result<AnyObject?, AXHelpers.AXStatusError>?)? = nil,
+    legacyAttributeRead: Bool = false
 ) -> AXLogicProElements.Runtime {
     let original = fixture.runtime.ax
     let ax = AXHelpers.Runtime(
-        axApp: original.axApp, attributeValue: original.attributeValue,
+        axApp: original.axApp, attributeValue: { element, attribute in
+            // Frontness still uses the legacy optional-value reader. A fault
+            // injected only into the Result reader must not pretend to cover it.
+            if legacyAttributeRead, let result = attributeRead?(element, attribute) {
+                switch result {
+                case let .success(value): return value
+                case .failure: return nil
+                }
+            }
+            return original.attributeValue(element, attribute)
+        },
         attributeIsSettable: original.attributeIsSettable, setAttributeValue: original.setAttributeValue,
         children: original.children, performAction: original.performAction, childCount: original.childCount,
         actionNames: original.actionNames, actionNamesResult: { element in
@@ -4257,6 +4268,596 @@ private func parameterReadParams(_ param: String = "threshold") -> [String: Stri
     ["track": "0", "insert": "6", "plugin": "Compressor", "param": param,
      "project_expected_path": expectedPath, "expected_track_name": trackName,
      "expected_slot_read_status": "ok", "expected_plugin_identity": "logic.stock.effect.compressor"]
+}
+
+// #1396: measured Gain Controls view has a display-bearing slider, a raw-only
+// sibling slider and its value indicator. Boolean rows contain two named radio
+// buttons. These reads must not borrow the writer's single-control authority.
+private func gainReadFixture(_ param: String = "gain", controls: Bool = false,
+                             windowPresent: Bool = true, openOnPress: Bool = false) -> LiveFixture {
+    let labels = ["gain": "Gain:", "phase_invert_left": "Phase Left:",
+        "phase_invert_right": "Phase Right:", "swap_lr": "Swap L/R:", "mono": "Make Mono:"]
+    let fixture = LiveFixture(pluginSlotName: "Gain", pluginWindowPresent: windowPresent,
+        openWindowOnSlotPress: openOnPress, controlsViewRowLabel: labels[param],
+        controlsViewInitiallySelected: controls, viewSettleDelay: 0)
+    let b = fixture.builder
+    b.setAttribute(b.element(1001), kAXDocumentAttribute as String, URL(fileURLWithPath: expectedPath).absoluteString)
+    let first = b.element(139_601), second = b.element(139_602)
+    if param == "gain" {
+        let container = b.element(139_603), indicator = b.element(139_604)
+        b.setRole(container, kAXGroupRole as String)
+        for slider in [first, second] {
+            b.setRole(slider, kAXSliderRole as String)
+            b.setAttribute(slider, kAXValueAttribute as String, 959.0)
+        }
+        b.setAttribute(first, kAXValueDescriptionAttribute as String, "-0.1 dB")
+        b.setRole(indicator, "AXValueIndicator")
+        b.setAttribute(indicator, kAXValueAttribute as String, 959.0)
+        b.setChildren(container, [first])
+        b.setChildren(second, [indicator])
+        b.setChildren(b.element(100_905), [b.element(100_907), container, second])
+    } else {
+        let titles = param == "mono" ? ("Stereo", "Mono") : param == "swap_lr" ? ("Norm", "Swap") : ("Norm", "Inv")
+        for (radio, title, value) in [(first, titles.0, 0), (second, titles.1, 1)] {
+            b.setRole(radio, kAXRadioButtonRole as String)
+            b.setAttribute(radio, kAXTitleAttribute as String, title)
+            b.setAttribute(radio, kAXValueAttribute as String, value)
+        }
+        b.setChildren(b.element(100_905), [b.element(100_907), first, second])
+    }
+    return fixture
+}
+
+private let noiseGateReadCases: [(String, String, Double, String)] = [
+    ("threshold", "Threshold:", 52, "-48 dB"),
+    ("hysteresis", "Hysteresis:", 35, "-2.5 dB"),
+    ("reduction", "Reduction:", 1, "-99 dB"),
+    ("attack", "Attack:", 4, "4 ms"),
+    ("hold", "Hold:", 5, "50 ms"),
+    ("release", "Release:", 11, "11.0 ms"),
+    ("high_cutoff", "High Cutoff:", 99, "19100 Hz"),
+    ("low_cutoff", "Low Cutoff:", 1, "21 Hz"),
+    ("lookahead", "Lookahead:", 1, "0.2 ms"),
+]
+
+private func noiseGateReadFixture(_ param: String, controls: Bool = false,
+                                  choice: String = "Band Reject") -> LiveFixture {
+    let row = noiseGateReadCases.first { $0.0 == param }
+    let fixture = LiveFixture(pluginSlotName: "Noise Gate",
+        controlsViewRowLabel: row?.1 ?? "Characteristics:",
+        controlsViewInitiallySelected: controls, viewSettleDelay: 0)
+    let b = fixture.builder
+    b.setAttribute(b.element(1001), kAXDocumentAttribute as String, URL(fileURLWithPath: expectedPath).absoluteString)
+    if let row {
+        for (id, role) in [(139_641, "AXSlider"), (139_642, "AXSlider"), (139_643, "AXValueIndicator")] {
+            b.setRole(b.element(id), role)
+            b.setAttribute(b.element(id), kAXValueAttribute as String, row.2)
+        }
+        b.setAttribute(b.element(139_641), kAXValueDescriptionAttribute as String, row.3)
+        b.setChildren(b.element(139_642), [b.element(139_643)])
+        b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_641), b.element(139_642)])
+    } else {
+        b.setRole(b.element(139_641), kAXPopUpButtonRole as String)
+        b.setAttribute(b.element(139_641), kAXValueAttribute as String, choice)
+        b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_641)])
+    }
+    return fixture
+}
+
+private func noiseGateReadParams(_ param: String) -> [String: String] {
+    var params = parameterReadParams(param)
+    params["plugin"] = "Noise Gate"
+    params["expected_plugin_identity"] = "logic.stock.effect.noise_gate"
+    return params
+}
+
+@Test(arguments: noiseGateReadCases.map { $0.0 }, [false, true])
+func testIssue1396NoiseGateReadsOpaqueRawWithActualDisplay(_ param: String, _ controls: Bool) async throws {
+    let expected = try #require(noiseGateReadCases.first { $0.0 == param })
+    let fixture = noiseGateReadFixture(param, controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams(param), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? Double == expected.2)
+    #expect(object["observed_display"] as? String == expected.3)
+    #expect(object["raw_unit"] as? String == "raw_ax_value")
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_641...139_643).contains($0.element) })
+}
+
+@Test(arguments: ["Bandpass", "Band Reject"], [false, true])
+func testIssue1396NoiseGateReadsSelectedFilterWithoutOpeningPopup(_ choice: String, _ controls: Bool) async throws {
+    let fixture = noiseGateReadFixture("sidechain_filter_mode", controls: controls, choice: choice)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams("sidechain_filter_mode"), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? String == choice)
+    #expect(object["observed_display"] as? String == choice)
+    #expect(object["raw_unit"] as? String == "string")
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(!fixture.axActions.value.contains { $0.element == 139_641 })
+}
+
+@Test(arguments: ["empty", "absent", "malformed", "unreadable", "drift", "duplicate", "wrong_role", "unobserved_choice"])
+func testIssue1396NoiseGateUncertainPopupIsUnknownWithoutActuation(_ kind: String) async throws {
+    let fixture = noiseGateReadFixture("sidechain_filter_mode")
+    let b = fixture.builder
+    switch kind {
+    case "empty": b.setAttribute(b.element(139_641), kAXValueAttribute as String, "")
+    case "absent": b.setAttribute(b.element(139_641), kAXValueAttribute as String, NSNull())
+    case "malformed": b.setAttribute(b.element(139_641), kAXValueAttribute as String, NSNumber(value: true))
+    case "unobserved_choice": b.setAttribute(b.element(139_641), kAXValueAttribute as String, "Unavailable selection")
+    case "wrong_role": b.setRole(b.element(139_641), kAXTextFieldRole as String)
+    case "duplicate":
+        b.setRole(b.element(139_642), kAXPopUpButtonRole as String)
+        b.setAttribute(b.element(139_642), kAXValueAttribute as String, "Band Reject")
+        b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_641), b.element(139_642)])
+    default: break
+    }
+    let reads = MutableBox(0)
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        guard CFEqual(element, b.element(139_641)), attribute == kAXValueAttribute as String else { return nil }
+        if kind == "unreadable" { return .failure(AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue)) }
+        if kind == "drift" {
+            reads.value += 1
+            return .success((reads.value == 1 ? "Band Reject" : "Bandpass") as NSString)
+        }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams("sidechain_filter_mode"), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(kind): \(object)")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(fixture.currentPluginViewTitle == "편집기")
+    #expect(!fixture.axActions.value.contains { (139_641...139_643).contains($0.element) })
+}
+
+@Test(arguments: noiseGateReadCases.map { $0.0 } + ["sidechain_filter_mode"])
+func testIssue1396NoiseGateReadDoesNotGrantAWriter(_ param: String) async throws {
+    let fixture = noiseGateReadFixture(param)
+    var params = noiseGateReadParams(param)
+    params.merge(["mode": "duplicate_applyback", "value": "1"]) { _, new in new }
+    let result = await AccessibilityChannel.defaultSetParamVerified(params: params, runtime: parameterReadRuntime(fixture), frontDocumentPath: { expectedPath })
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(fixture.axActions.value.isEmpty)
+}
+
+@Test func testIssue1396NoiseGatePopupProtocolRejectsWrongTypesUnknownChoicesAndContradictoryDisplay() async throws {
+    let fixture = noiseGateReadFixture("sidechain_filter_mode")
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: noiseGateReadParams("sidechain_filter_mode"), runtime: parameterReadRuntime(fixture))
+    var object = try #require(sharedJSONObject(result.message))
+    // Synthetic transport fields do not provide independent native evidence.
+    object["target_ref"] = "ins_gate_fixture"
+    object["target_fingerprint"] = "gate_fixture_fingerprint"
+    let oracle = try #require(SemanticOracleTable.byOperationID[.pluginsGetParamVerified])
+    let valid = try #require(oracle.evaluate(responseData: JSONSerialization.data(withJSONObject: object), readbackData: Data()))
+    #expect(valid)
+    let corruptions: [[String: Any]] = [
+        ["observed_raw": true],
+        ["observed_raw": "Unavailable selection", "observed_display": "Unavailable selection"],
+        ["observed_raw": "Bandpass", "observed_display": "Band Reject"],
+        ["raw_unit": "raw_ax_value"],
+    ]
+    for corruption in corruptions {
+        var corrupted = object
+        corrupted.merge(corruption) { _, new in new }
+        let verdict = try #require(oracle.evaluate(responseData: JSONSerialization.data(withJSONObject: corrupted), readbackData: Data()))
+        #expect(!verdict)
+    }
+}
+
+private func sampleDelayReadFixture(_ param: String = "left_delay", samples: Bool = true,
+                                    controls: Bool = false) -> LiveFixture {
+    let fixture = LiveFixture(pluginSlotName: "SmpleDly",
+        pluginWindowStaticTextValues: ["보기:", "Sample Delay", trackName],
+        controlsViewRowLabel: param == "left_delay" ? "Left Delay:" : "Right Delay:",
+        controlsViewInitiallySelected: controls, viewSettleDelay: 0)
+    let b = fixture.builder
+    b.setAttribute(b.element(1001), kAXDocumentAttribute as String, URL(fileURLWithPath: expectedPath).absoluteString)
+    let raw = samples && param == "left_delay" ? 1.0 : 0.0
+    for (id, role) in [(139_621, "AXSlider"), (139_622, "AXSlider"), (139_623, "AXValueIndicator")] {
+        b.setRole(b.element(id), role)
+        b.setAttribute(b.element(id), kAXValueAttribute as String, raw)
+    }
+    b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String,
+        samples ? "\(Int(raw)) samples" : "0.0 ms")
+    b.setChildren(b.element(139_622), [b.element(139_623)])
+    b.setChildren(b.element(100_905), [b.element(100_907), b.element(139_621), b.element(139_622)])
+    b.setRole(b.element(139_624), kAXRowRole as String)
+    b.setRole(b.element(139_625), kAXCellRole as String)
+    b.setRole(b.element(139_626), kAXStaticTextRole as String)
+    b.setAttribute(b.element(139_626), kAXValueAttribute as String, "Unit:")
+    for (id, title, value) in [(139_627, "Samples", samples ? 1 : 0), (139_628, "ms", samples ? 0 : 1)] {
+        b.setRole(b.element(id), kAXRadioButtonRole as String)
+        b.setAttribute(b.element(id), kAXTitleAttribute as String, title)
+        b.setAttribute(b.element(id), kAXValueAttribute as String, value)
+    }
+    b.setChildren(b.element(139_625), [b.element(139_626), b.element(139_627), b.element(139_628)])
+    b.setChildren(b.element(139_624), [b.element(139_625)])
+    let rows = [b.element(100_904), b.element(139_624)]
+    b.setChildren(b.element(100_903), rows)
+    b.setAttribute(b.element(100_903), kAXRowsAttribute as String, rows)
+    return fixture
+}
+
+private func sampleDelayReadParams(_ param: String = "left_delay") -> [String: String] {
+    var params = parameterReadParams(param)
+    params["plugin"] = "Sample Delay"
+    params["expected_plugin_identity"] = "logic.stock.effect.sample_delay"
+    return params
+}
+
+@Test(arguments: ["left_delay", "right_delay"], [false, true])
+func testIssue1396SampleDelayReadsOnlyConfirmedSamples(_ param: String, _ controls: Bool) async throws {
+    let fixture = sampleDelayReadFixture(param, controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: sampleDelayReadParams(param), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? Double == (param == "left_delay" ? 1 : 0))
+    #expect(object["observed_display"] as? String == (param == "left_delay" ? "1 samples" : "0 samples"))
+    #expect(object["raw_unit"] as? String == "samples")
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_621...139_628).contains($0.element) })
+}
+
+@Test(arguments: [false, true])
+func testIssue1396SampleDelayMillisecondsAreUnknownWithoutChangingUnits(_ controls: Bool) async throws {
+    let fixture = sampleDelayReadFixture(samples: false, controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: sampleDelayReadParams(), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(object)")
+    #expect(object["parameter_read_status"] as? String == "samples_unit_not_selected")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_621...139_628).contains($0.element) })
+}
+
+@Test(arguments: ["both_units_on", "both_units_off", "missing_unit_title", "duplicate_unit_row", "unit_drift", "display_ms", "display_count_mismatch", "fractional_samples"])
+func testIssue1396SampleDelayUncertainUnitOrCountNeverBecomesZero(_ kind: String) async throws {
+    let fixture = sampleDelayReadFixture()
+    let b = fixture.builder
+    switch kind {
+    case "both_units_on": b.setAttribute(b.element(139_628), kAXValueAttribute as String, 1)
+    case "both_units_off": b.setAttribute(b.element(139_627), kAXValueAttribute as String, 0)
+    case "missing_unit_title": b.setAttribute(b.element(139_627), kAXTitleAttribute as String, NSNull())
+    case "duplicate_unit_row":
+        b.setRole(b.element(139_629), kAXRowRole as String)
+        b.setChildren(b.element(139_629), [b.element(139_625)])
+        let rows = [b.element(100_904), b.element(139_624), b.element(139_629)]
+        b.setChildren(b.element(100_903), rows)
+        b.setAttribute(b.element(100_903), kAXRowsAttribute as String, rows)
+    case "display_ms": b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String, "0.0 ms")
+    case "display_count_mismatch": b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String, "0 samples")
+    case "fractional_samples":
+        for id in [139_621, 139_622, 139_623] { b.setAttribute(b.element(id), kAXValueAttribute as String, 0.5) }
+        b.setAttribute(b.element(139_621), kAXValueDescriptionAttribute as String, "0.5 samples")
+    default: break
+    }
+    let unitReads = MutableBox(0)
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        guard kind == "unit_drift", attribute == kAXValueAttribute as String else { return nil }
+        if CFEqual(element, b.element(139_627)) {
+            unitReads.value += 1
+            return .success(NSNumber(value: unitReads.value == 1 ? 1 : 0))
+        }
+        if CFEqual(element, b.element(139_628)) { return .success(NSNumber(value: unitReads.value == 1 ? 0 : 1)) }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: sampleDelayReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(kind): \(object)")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(fixture.currentPluginViewTitle == "편집기")
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_621...139_629).contains($0.element) })
+}
+
+@Test(arguments: ["left_delay", "right_delay"])
+func testIssue1396SampleDelayReadNeverGrantsWrites(_ param: String) async throws {
+    let fixture = sampleDelayReadFixture(param)
+    var params = sampleDelayReadParams(param)
+    params.merge(["mode": "duplicate_applyback", "value": "2", "unit": "samples"]) { _, new in new }
+    let result = await AccessibilityChannel.defaultSetParamVerified(params: params, runtime: parameterReadRuntime(fixture), frontDocumentPath: { expectedPath })
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(fixture.axActions.value.isEmpty)
+}
+
+private func gainReadParams(_ param: String = "gain") -> [String: String] {
+    var params = parameterReadParams(param)
+    params["plugin"] = "Gain"
+    params["expected_plugin_identity"] = "logic.stock.effect.gain"
+    return params
+}
+
+@Test(arguments: [false, true])
+func testIssue1396GainPreservesRawAndVerbatimDisplayWithoutAudioWrites(_ controls: Bool) async throws {
+    let fixture = gainReadFixture(controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? Double == 959)
+    #expect(object["observed_display"] as? String == "-0.1 dB")
+    #expect(object["raw_unit"] as? String == "raw_ax_value")
+    #expect(object["display_read_status"] as? String == "read")
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_601...139_604).contains($0.element) })
+}
+
+@Test(arguments: ["phase_invert_left", "phase_invert_right", "swap_lr", "mono"], [false, true])
+func testIssue1396GainReadsNamedOneHotRadioPairs(_ param: String, _ controls: Bool) async throws {
+    let fixture = gainReadFixture(param, controls: controls)
+    let beforeView = fixture.currentPluginViewTitle
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(param), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(try #require(object["observed_raw"] as? Bool))
+    #expect(object["raw_unit"] as? String == "boolean")
+    #expect(object["observed_display"] as? String == (param == "mono" ? "Mono" : param == "swap_lr" ? "Swap" : "Inv"))
+    #expect(fixture.currentPluginViewTitle == beforeView)
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+    #expect(!fixture.axActions.value.contains { (139_601...139_604).contains($0.element) })
+}
+
+@Test(arguments: ["duplicate_display", "malformed_other_display", "missing_raw", "different_raw", "malformed_raw", "no_display", "extra_control", "unreadable_description", "drift"])
+func testIssue1396GainUncertainNumericReadIsBAndRestoresView(_ kind: String) async throws {
+    let fixture = gainReadFixture()
+    let b = fixture.builder
+    switch kind {
+    case "duplicate_display": b.setAttribute(b.element(139_602), kAXValueDescriptionAttribute as String, "-0.1 dB")
+    case "malformed_other_display": b.setAttribute(b.element(139_602), kAXValueDescriptionAttribute as String, NSNumber(value: 7))
+    case "missing_raw": b.setAttribute(b.element(139_601), kAXValueAttribute as String, NSNull())
+    case "different_raw": b.setAttribute(b.element(139_602), kAXValueAttribute as String, 960)
+    case "malformed_raw": b.setAttribute(b.element(139_601), kAXValueAttribute as String, NSNumber(value: true))
+    case "no_display": b.setAttribute(b.element(139_601), kAXValueDescriptionAttribute as String, "")
+    case "extra_control":
+        let extra = b.element(139_605)
+        b.setRole(extra, kAXButtonRole as String)
+        b.setChildren(b.element(139_603), [b.element(139_601), extra])
+    default: break
+    }
+    let reads = MutableBox(0)
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if kind == "unreadable_description", CFEqual(element, b.element(139_602)), attribute == kAXValueDescriptionAttribute as String {
+            return .failure(AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue))
+        }
+        if kind == "drift", CFEqual(element, b.element(139_601)), attribute == kAXValueAttribute as String {
+            reads.value += 1
+            return .success(NSNumber(value: reads.value == 1 ? 959 : 960))
+        }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(kind): \(object)")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(object["parameter_read_status"] as? String != "read")
+    #expect(fixture.currentPluginViewTitle == "편집기")
+    #expect(try #require(object["plugin_view_restore_observed"] as? Bool))
+    #expect(fixture.sliderWriteCount.value == 0)
+}
+
+@Test(arguments: ["both_on", "both_off", "mixed", "missing", "duplicate_title", "wrong_title", "drift"])
+func testIssue1396GainUncertainRadioReadIsBWithoutDefault(_ kind: String) async throws {
+    let fixture = gainReadFixture("phase_invert_left")
+    let b = fixture.builder
+    switch kind {
+    case "both_on": b.setAttribute(b.element(139_601), kAXValueAttribute as String, 1)
+    case "both_off": b.setAttribute(b.element(139_602), kAXValueAttribute as String, 0)
+    case "mixed": b.setAttribute(b.element(139_602), kAXValueAttribute as String, 2)
+    case "missing": b.setAttribute(b.element(139_602), kAXValueAttribute as String, NSNull())
+    case "duplicate_title": b.setAttribute(b.element(139_601), kAXTitleAttribute as String, "Inv")
+    case "wrong_title": b.setAttribute(b.element(139_601), kAXTitleAttribute as String, "Other")
+    default: break
+    }
+    let reads = MutableBox(0)
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if kind == "drift", CFEqual(element, b.element(139_602)), attribute == kAXValueAttribute as String {
+            reads.value += 1
+            return .success(NSNumber(value: reads.value == 1 ? 1 : 0))
+        }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams("phase_invert_left"), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "B", "\(kind): \(object)")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(try #require(object["plugin_view_restore_observed"] as? Bool))
+    #expect(!fixture.axActions.value.contains { (139_601...139_604).contains($0.element) })
+}
+
+@Test(arguments: ["gain", "phase_invert_left", "phase_invert_right", "swap_lr", "mono"])
+func testIssue1396GainReadMetadataNeverAuthorizesParameterWrites(_ param: String) async throws {
+    let fixture = gainReadFixture(param)
+    var params = gainReadParams(param)
+    params.merge(["mode": "duplicate_applyback", "value": "1", "unit": param == "gain" ? "dB" : "boolean"]) { _, new in new }
+    let result = await AccessibilityChannel.defaultSetParamVerified(params: params,
+        runtime: parameterReadRuntime(fixture), frontDocumentPath: { expectedPath })
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(!fixture.axActions.value.contains { (139_601...139_604).contains($0.element) })
+    #expect(fixture.axActions.value.isEmpty)
+}
+
+@Test func testIssue1396GainReadRejectsEngineeringUnitBeforeUIAcquisition() async throws {
+    let fixture = gainReadFixture()
+    var params = gainReadParams()
+    params["unit"] = "dB"
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: params, runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(object["error"] as? String == "invalid_params")
+    #expect(fixture.axActions.value.isEmpty)
+    #expect(StockPluginCatalog.entry(id: "logic.stock.effect.gain")?.parameters.first?.unit == "dB")
+}
+
+@Test(arguments: [false, true])
+func testIssue1396GainUnfrontEditorRefusalRetainsOnlyNewWindowCleanup(_ alreadyOpen: Bool) async throws {
+    let fixture = gainReadFixture(windowPresent: alreadyOpen, openOnPress: true)
+    let b = fixture.builder
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if CFEqual(element, b.element(1004)),
+           [kAXMainAttribute as String, kAXFocusedAttribute as String].contains(attribute) {
+            return .success(NSNumber(value: false))
+        }
+        return nil
+    }, legacyAttributeRead: true)
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    if alreadyOpen {
+        #expect(object["state"] as? String == "A", "\(object)")
+        #expect(fixture.pluginCloseControlPressCount.value == 0)
+    } else {
+        #expect(object["state"] as? String == "C", "\(object)")
+        #expect(fixture.pluginCloseControlPressCount.value == 1)
+        #expect(try #require(object["editor_close_observed"] as? Bool))
+        let windows = try #require(b.attributeValue(b.element(1000), kAXWindowsAttribute as String) as? [AXUIElement])
+        #expect(!windows.contains { CFEqual($0, b.element(1004)) })
+    }
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+}
+
+@Test(arguments: ["same", "other", "absent", "malformed", "unreadable"])
+func testIssue1396GainUsesExactApplicationFocusedWindowWhenEditorFlagsAreFalse(_ kind: String) async throws {
+    let fixture = gainReadFixture(windowPresent: false, openOnPress: true)
+    let b = fixture.builder
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if CFEqual(element, b.element(1004)),
+           [kAXMainAttribute as String, kAXFocusedAttribute as String].contains(attribute) {
+            return .success(NSNumber(value: false))
+        }
+        if CFEqual(element, b.element(1000)), attribute == kAXFocusedWindowAttribute as String {
+            switch kind {
+            case "same": return .success(b.element(1004))
+            case "other": return .success(b.element(1001))
+            case "absent": return .success(nil)
+            case "malformed": return .success("not a window" as NSString)
+            default: return .failure(AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue))
+            }
+        }
+        return nil
+    }, legacyAttributeRead: true)
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == (kind == "same" ? "A" : "C"), "\(kind): \(object)")
+    if kind == "same" {
+        #expect(object["observed_raw"] as? Double == 959)
+        #expect(object["observed_display"] as? String == "-0.1 dB")
+    } else {
+        #expect(object["observed_raw"] == nil)
+    }
+    #expect(try #require(object["editor_close_observed"] as? Bool))
+    #expect(fixture.pluginCloseControlPressCount.value == 1)
+    #expect(fixture.sliderWriteCount.value == 0)
+}
+
+@Test(arguments: [false, true])
+func testIssue1396GainEditorDescriptionFailureStillReadsAndRestoresOwnedView(_ allSliderDescriptionsFail: Bool) async throws {
+    let fixture = gainReadFixture(windowPresent: false, openOnPress: true)
+    let b = fixture.builder
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        let slider = allSliderDescriptionsFail
+            ? b.attributeValue(element, kAXRoleAttribute as String) as? String == kAXSliderRole as String
+            : CFEqual(element, b.element(1005))
+        if slider, attribute == kAXDescriptionAttribute as String {
+            return .failure(AXHelpers.AXStatusError(raw: AXError.failure.rawValue))
+        }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    #expect(object["observed_raw"] as? Double == 959)
+    #expect(object["observed_display"] as? String == "-0.1 dB")
+    #expect(try #require(object["plugin_view_restore_attempted"] as? Bool))
+    #expect(try #require(object["plugin_view_restore_observed"] as? Bool))
+    #expect(try #require(object["editor_close_observed"] as? Bool))
+    #expect(fixture.currentPluginViewTitle == "편집기")
+    #expect(fixture.sliderWriteCount.value == 0)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+}
+
+@Test func testIssue1396GainRadioFalseDoesNotReadAdjacentRowWithSameTitles() async throws {
+    let fixture = gainReadFixture("phase_invert_left")
+    let b = fixture.builder
+    b.setAttribute(b.element(139_601), kAXValueAttribute as String, 1)
+    b.setAttribute(b.element(139_602), kAXValueAttribute as String, 0)
+    let row = b.element(139_610), cell = b.element(139_611), label = b.element(139_612)
+    let off = b.element(139_613), on = b.element(139_614)
+    b.setRole(row, kAXRowRole as String); b.setRole(cell, kAXCellRole as String)
+    b.setRole(label, kAXStaticTextRole as String)
+    b.setAttribute(label, kAXValueAttribute as String, "Phase Right:")
+    for (radio, title, value) in [(off, "Norm", 0), (on, "Inv", 1)] {
+        b.setRole(radio, kAXRadioButtonRole as String)
+        b.setAttribute(radio, kAXTitleAttribute as String, title)
+        b.setAttribute(radio, kAXValueAttribute as String, value)
+    }
+    b.setChildren(cell, [label, off, on]); b.setChildren(row, [cell])
+    let rows = [row, b.element(100_904)]
+    b.setChildren(b.element(100_903), rows)
+    b.setAttribute(b.element(100_903), kAXRowsAttribute as String, rows)
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams("phase_invert_left"), runtime: parameterReadRuntime(fixture))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "A", "\(object)")
+    let value = try #require(object["observed_raw"] as? Bool)
+    #expect(!value)
+    #expect(object["observed_display"] as? String == "Norm")
+}
+
+@Test func testIssue1396GainProjectLossDuringReadReturnsCWithoutRestoringIntoForeignProject() async throws {
+    let fixture = gainReadFixture()
+    let b = fixture.builder
+    let runtime = parameterReadRuntime(fixture, attributeRead: { element, attribute in
+        if CFEqual(element, b.element(139_601)), attribute == kAXValueAttribute as String {
+            b.setAttribute(b.element(1001), kAXDocumentAttribute as String, URL(fileURLWithPath: "/tmp/Other.logicx").absoluteString)
+        }
+        return nil
+    })
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(), runtime: runtime)
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(object["observed_raw"] == nil)
+    #expect(object["observed_display"] == nil)
+    #expect(fixture.editorViewMenuPressCount.value == 0)
+    #expect(fixture.sliderWriteCount.value == 0)
+}
+
+@Test(arguments: ["gain", "phase_invert_left"])
+func testIssue1396GainProtocolOracleChecksMeasuredRawTypeAndUnit(_ param: String) async throws {
+    let fixture = gainReadFixture(param)
+    let result = await AccessibilityChannel.defaultGetParamVerified(params: gainReadParams(param), runtime: parameterReadRuntime(fixture))
+    var object = try #require(sharedJSONObject(result.message))
+    // Synthetic transport binding for protocol validation, not native evidence.
+    object["target_ref"] = "ins_gain_fixture"
+    object["target_fingerprint"] = "gain_fixture_fingerprint"
+    let oracle = try #require(SemanticOracleTable.byOperationID[.pluginsGetParamVerified])
+    let valid = try #require(oracle.evaluate(responseData: JSONSerialization.data(withJSONObject: object), readbackData: Data()))
+    #expect(valid)
+    for (key, value) in [("raw_unit", "dB" as Any),
+        ("observed_raw", param == "gain" ? true as Any : 1.0 as Any),
+        ("observed_display", NSNull() as Any)] {
+        var corrupted = object; corrupted[key] = value
+        let verdict = try #require(oracle.evaluate(responseData: JSONSerialization.data(withJSONObject: corrupted), readbackData: Data()))
+        #expect(!verdict)
+    }
 }
 
 @Test func testIssue955ParameterPlanUsesActualAXReadersAndRestoresViewsWithoutAudioWrites() async throws {
@@ -4510,16 +5111,33 @@ func testIssue955PublicReadResolvesOccupiedInsertReference(_ contextEndsAfterRea
     }
 }
 
-@Test(arguments: [("limiter_on", false), ("limiter_on", true), ("auto_release", false), ("auto_release", true)], [false, true])
-func testIssue955ReadBooleanNeverPressesParameterAndRestoresView(_ configuration: (String, Bool), _ alreadyControls: Bool) async throws {
+private func readOnlyBooleanEntryLookup(_ param: String) throws -> VerifiedPluginCatalog.EntryLookup {
+    let original = try #require(StockPluginCatalog.entry(id: "logic.stock.effect.compressor"))
+    var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+    var parameters = try #require(object["parameters"] as? [[String: Any]])
+    let index = try #require(parameters.firstIndex { $0["id"] as? String == param })
+    parameters[index].removeValue(forKey: "write_method")
+    parameters[index].removeValue(forKey: "tolerance")
+    object["parameters"] = parameters
+    let entry = try JSONDecoder().decode(StockPluginCatalogEntry.self,
+        from: JSONSerialization.data(withJSONObject: object))
+    return { id in id == entry.id ? entry : StockPluginCatalog.entry(id: id) }
+}
+
+@Test(arguments: [("limiter_on", false), ("limiter_on", true), ("auto_release", false), ("auto_release", true)],
+      [(false, false), (false, true), (true, false), (true, true)])
+func testIssue955ReadBooleanNeverPressesParameterAndRestoresView(_ configuration: (String, Bool),
+                                                              _ viewAndMetadata: (Bool, Bool)) async throws {
     let (param, value) = configuration
+    let (alreadyControls, readOnlyMetadata) = viewAndMetadata
     let fixture = LiveFixture(controlsViewRowLabel: param == "limiter_on" ? "Limiter On" : "Auto Release", controlsCheckboxBefore: value,
                               controlsViewInitiallySelected: alreadyControls, viewSettleDelay: 0)
     fixture.builder.setAttribute(fixture.builder.element(1001), kAXDocumentAttribute as String,
                                  URL(fileURLWithPath: expectedPath).absoluteString)
     let initialView = fixture.currentPluginViewTitle
     let result = await AccessibilityChannel.defaultGetParamVerified(
-        params: parameterReadParams(param), runtime: parameterReadRuntime(fixture)
+        params: parameterReadParams(param), runtime: parameterReadRuntime(fixture),
+        entryLookup: readOnlyMetadata ? try readOnlyBooleanEntryLookup(param) : VerifiedPluginCatalog.productionEntryLookup
     )
     let object = try #require(sharedJSONObject(result.message))
     #expect(object["state"] as? String == "A", "Boolean read should use the existing observed control: \(object)")
@@ -4533,6 +5151,24 @@ func testIssue955ReadBooleanNeverPressesParameterAndRestoresView(_ configuration
     #expect(fixture.sliderWriteCount.value == 0)
     #expect(fixture.currentSliderValue == 51)
     #expect(try #require(object["plugin_view_restore_observed"] as? Bool))
+}
+
+@Test(arguments: ["limiter_on", "auto_release"])
+func testIssue1396ReadOnlyBooleanMetadataNeverAuthorizesAWrite(_ param: String) async throws {
+    let fixture = LiveFixture()
+    var params = parameterReadParams(param)
+    params.merge(["mode": "duplicate_applyback", "value": "1", "unit": "boolean"]) { _, new in new }
+    let result = await AccessibilityChannel.defaultSetParamVerified(params: params,
+        runtime: parameterReadRuntime(fixture), frontDocumentPath: { expectedPath },
+        entryLookup: try readOnlyBooleanEntryLookup(param))
+    let object = try #require(sharedJSONObject(result.message))
+    #expect(object["state"] as? String == "C")
+    #expect(object["error"] as? String == "unsupported_param_readback")
+    let writeAttempted = try #require(object["write_attempted"] as? Bool)
+    #expect(!writeAttempted)
+    #expect(fixture.axActions.value.isEmpty)
+    #expect(fixture.controlsCheckboxPressCount.value == 0)
+    #expect(fixture.sliderWriteCount.value == 0)
 }
 
 @Test func testIssue955ProjectLossAfterCleanupKeepsRestorationReceiptButNotValue() async throws {

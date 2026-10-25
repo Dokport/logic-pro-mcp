@@ -648,6 +648,94 @@ struct ControlsViewBooleanParameterWriterTests {
         #expect(reportsRetriedEvidenceFailure)
     }
 
+    @Test func completeNoTableConfirmsEditorDespiteUnavailableSliderDescriptions() {
+        let fixture = viewFixture(entry: .editor, title: "50%", behavior: .switchesStructure,
+                                  readFailure: .sliderDescription)
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in true }, runtime: fixture.runtime)
+        let session: ControlsViewBooleanParameterWriter.ViewSession?
+        if case let .ready(observed) = result { session = observed } else { session = nil }
+        #expect(session != nil)
+        guard let session else { return }
+        #expect(fixture.controlsSelections.value == 1)
+        let restored = session.restore()
+        #expect(restored.confirmed)
+        #expect(fixture.editorSelections.value == 1)
+    }
+
+    @Test(arguments: [0, 1])
+    func noTableCannotReplaceEndedHeaderBindingWhenDescriptionsFail(_ successfulWitnessReads: Int) {
+        let fixture = viewFixture(entry: .editor, title: "50%", behavior: .switchesStructure,
+                                  readFailure: .sliderDescription)
+        var reads = 0
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in
+                reads += 1
+                return reads <= successfulWitnessReads
+            }, runtime: fixture.runtime)
+        let refused: Bool
+        if case .refused(.viewEvidenceReadFailed(.sliderDescription), restoration: nil) = result {
+            refused = true
+        } else { refused = false }
+        #expect(refused)
+        #expect(fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test(arguments: ["컨트롤", "편집기", "50%", "unknown"])
+    func boundReadStillRequiresAnAgreeingControlsSwitcherWhenDescriptionsFail(_ title: String) {
+        let fixture = viewFixture(entry: .controls, title: title, behavior: .switchesStructure,
+                                  additionalSliderDescriptionFailure: true)
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in true }, runtime: fixture.runtime)
+        let ready: Bool
+        if case .ready = result { ready = true } else { ready = false }
+        if title == "컨트롤" { #expect(ready) } else { #expect(!ready) }
+        #expect(fixture.builder.actionCalls.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func boundViewStructuralTransitionIsUnconfirmedUntilStable(_ afterSelection: Bool) {
+        let fixture = viewFixture(entry: .editor, title: "50%", behavior: .neverChanges,
+            menuRevealAfterPolls: 0, readFailure: .sliderDescription,
+            additionalSliderDescriptionFailure: true, viewSettleDelay: 0)
+        var transitioned = false
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, confirmationTimeout: 0.25,
+            headerBoundUndescribedView: { view in
+                if view == .editor, !transitioned,
+                   !afterSelection || fixture.controlsSelections.value == 1 {
+                    fixture.builder.setChildren(fixture.window,
+                        [fixture.originalSwitcher, fixture.builder.element(916), fixture.controlsTable])
+                    fixture.builder.setAttribute(fixture.originalSwitcher, kAXTitleAttribute as String, "컨트롤")
+                    transitioned = true
+                }
+                return true
+            }, runtime: fixture.runtime)
+        #expect(transitioned)
+        if afterSelection {
+            let ready: Bool
+            if case .ready = result { ready = true } else { ready = false }
+            #expect(ready)
+            #expect(fixture.controlsSelections.value == 1)
+        } else {
+            let refused: Bool
+            if case .refused = result { refused = true } else { refused = false }
+            #expect(refused)
+            #expect(fixture.builder.actionCalls.isEmpty)
+        }
+    }
+
+    @Test func boundReadDoesNotOverrideAnUnreadableViewSwitcher() {
+        let fixture = viewFixture(entry: .controls, title: "컨트롤", behavior: .switchesStructure,
+                                  allDescriptionReadsFail: true)
+        let result = ControlsViewBooleanParameterWriter.prepareView(
+            .controls, in: fixture.window, headerBoundUndescribedView: { _ in true }, runtime: fixture.runtime)
+        let refused: Bool
+        if case .refused = result { refused = true } else { refused = false }
+        #expect(refused)
+        #expect(fixture.builder.actionCalls.isEmpty)
+    }
+
     @Test func failedSliderDescriptionRefusesRatherThanConfirmingAnUnrelatedTableAsControls() {
         let readFailure = AXHelpers.AXStatusError(raw: AXError.cannotComplete.rawValue)
         let fixture = viewFixture(

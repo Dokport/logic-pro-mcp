@@ -13,7 +13,7 @@ import Foundation
 /// choice can be named. Both roles are returned as
 /// explicit refusals and are never actuated here.
 enum ControlsViewBooleanParameterWriter {
-    enum LocatorFailure: String, Sendable, Equatable {
+    enum LocatorFailure: String, Error, Sendable, Equatable {
         case controlsViewTableNotFound
         case controlsViewTableAmbiguous
         case rowLabelMissing
@@ -328,6 +328,7 @@ enum ControlsViewBooleanParameterWriter {
         private let entryView: PluginWindowView
         private let didSwitch: Bool
         private let menuAppearanceTimeout: TimeInterval
+        private let headerBoundUndescribedView: ((PluginWindowView) -> Bool)?
         private let runtime: AXHelpers.Runtime
         private var restorationFinished = false
 
@@ -337,6 +338,7 @@ enum ControlsViewBooleanParameterWriter {
             entryView: PluginWindowView,
             didSwitch: Bool,
             menuAppearanceTimeout: TimeInterval,
+            headerBoundUndescribedView: ((PluginWindowView) -> Bool)? = nil,
             runtime: AXHelpers.Runtime
         ) {
             self.window = window
@@ -344,6 +346,7 @@ enum ControlsViewBooleanParameterWriter {
             self.entryView = entryView
             self.didSwitch = didSwitch
             self.menuAppearanceTimeout = menuAppearanceTimeout
+            self.headerBoundUndescribedView = headerBoundUndescribedView
             self.runtime = runtime
         }
 
@@ -380,6 +383,7 @@ enum ControlsViewBooleanParameterWriter {
                 menuAppearanceTimeout: menuAppearanceTimeout,
                 confirmationTimeout: viewConfirmationTimeout,
                 allowingChanges: allowingChanges,
+                headerBoundUndescribedView: headerBoundUndescribedView,
                 runtime: runtime
             ) {
             case let .confirmed(switched):
@@ -398,6 +402,7 @@ enum ControlsViewBooleanParameterWriter {
                 if case let .success(.some(value)) = observedView(
                     in: window,
                     windowRefresher: windowRefresher,
+                    headerBoundUndescribedView: headerBoundUndescribedView,
                     runtime: runtime
                 ) {
                     observed = value
@@ -440,6 +445,10 @@ enum ControlsViewBooleanParameterWriter {
     /// enter the requested view only when necessary. AXPress status and AXTitle
     /// are not confirmation: the requested structure must appear before the
     /// bounded confirmation deadline.
+    /// A header-bound reader can supply a fresh occupied-instance witness for
+    /// a view whose slider descriptions fail. It is renewed around the
+    /// structural proof and retained for restoration. Default writers
+    /// and callers without that witness retain description-failure refusal.
     static func prepareView(
         _ targetView: PluginWindowView,
         in window: AXUIElement,
@@ -447,6 +456,7 @@ enum ControlsViewBooleanParameterWriter {
         confirmationTimeout: TimeInterval = viewConfirmationTimeout,
         windowRefresher: (() -> AXUIElement?)? = nil,
         allowingChanges: () -> Bool = { true },
+        headerBoundUndescribedView: ((PluginWindowView) -> Bool)? = nil,
         runtime: AXHelpers.Runtime = .production
     ) -> ViewPreparationResult {
         let effectiveWindowRefresher = windowRefresher ?? { window }
@@ -454,6 +464,7 @@ enum ControlsViewBooleanParameterWriter {
         let entryObservation = observedView(
             in: window,
             windowRefresher: effectiveWindowRefresher,
+            headerBoundUndescribedView: headerBoundUndescribedView,
             runtime: runtime
         )
         switch entryObservation {
@@ -476,6 +487,7 @@ enum ControlsViewBooleanParameterWriter {
                 entryView: entryView,
                 didSwitch: false,
                 menuAppearanceTimeout: menuAppearanceTimeout,
+                headerBoundUndescribedView: headerBoundUndescribedView,
                 runtime: runtime
             ))
         }
@@ -487,6 +499,7 @@ enum ControlsViewBooleanParameterWriter {
             menuAppearanceTimeout: menuAppearanceTimeout,
             confirmationTimeout: confirmationTimeout,
             allowingChanges: allowingChanges,
+            headerBoundUndescribedView: headerBoundUndescribedView,
             runtime: runtime
         ) {
         case let .confirmed(switched):
@@ -496,6 +509,7 @@ enum ControlsViewBooleanParameterWriter {
                 entryView: entryView,
                 didSwitch: switched,
                 menuAppearanceTimeout: menuAppearanceTimeout,
+                headerBoundUndescribedView: headerBoundUndescribedView,
                 runtime: runtime
             ))
         case let .refused(failure, targetSelectionAttempted):
@@ -516,6 +530,7 @@ enum ControlsViewBooleanParameterWriter {
                     confirmationTimeout: confirmationTimeout,
                     forceSelection: true,
                     allowingChanges: allowingChanges,
+                    headerBoundUndescribedView: headerBoundUndescribedView,
                     runtime: runtime
                 ) {
                 case let .confirmed(switched):
@@ -530,6 +545,7 @@ enum ControlsViewBooleanParameterWriter {
                     if case let .success(.some(value)) = observedView(
                         in: window,
                         windowRefresher: effectiveWindowRefresher,
+                        headerBoundUndescribedView: headerBoundUndescribedView,
                         runtime: runtime
                     ) {
                         observed = value
@@ -559,9 +575,11 @@ enum ControlsViewBooleanParameterWriter {
     ///
     /// A successful nonempty AXDescription is positive Editor evidence. Once
     /// observed, it wins immediately over all later reads. Conversely, when no
-    /// described slider was observed, a slider census or description failure
-    /// leaves the view unknown: an unreadable editor candidate must not be
-    /// erased so an unrelated table can become Controls evidence.
+    /// described slider was observed, a failed slider census leaves the view
+    /// unknown. Description failures also refuse by default. A caller with a
+    /// fresh header-bound read witness can corroborate Editor through complete
+    /// absence of any table, or Controls through a bound parameter row and an
+    /// agreeing unique View switcher. Default writers retain strict refusal.
     ///
     /// Measured 2026-09-02, Compressor editor window "Absolute Zero": one
     /// AXTable at depth 2 had AXRows status 0 and 29 rows; every row had exactly
@@ -574,13 +592,14 @@ enum ControlsViewBooleanParameterWriter {
     private static func observedView(
         in window: AXUIElement,
         windowRefresher: @escaping () -> AXUIElement?,
+        headerBoundUndescribedView: ((PluginWindowView) -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> Result<PluginWindowView?, ViewEvidenceReadFailure> {
         var attempts = 0
         while true {
             attempts += 1
             let currentWindow = refreshedWindow(window, windowRefresher: windowRefresher)
-            let observation = observedViewOnce(in: currentWindow, runtime: runtime)
+            let observation = observedViewOnce(in: currentWindow, headerBoundUndescribedView: headerBoundUndescribedView, runtime: runtime)
             switch observation {
             case .success:
                 return observation
@@ -598,12 +617,50 @@ enum ControlsViewBooleanParameterWriter {
 
     private static func observedViewOnce(
         in window: AXUIElement,
+        headerBoundUndescribedView: ((PluginWindowView) -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> Result<PluginWindowView?, ViewEvidenceReadFailure> {
         switch describedNativeEditorSliderEvidence(in: window, runtime: runtime) {
         case .described:
             return .success(.editor)
         case let .readFailed(error):
+            if case .sliderDescription = error, let witness = headerBoundUndescribedView {
+                switch controlsViewStateIsBound(in: window, runtime: runtime) {
+                case .noTable:
+                    let before = witness(.editor)
+                    if before {
+                        let afterStructure = controlsViewStateIsBound(in: window, runtime: runtime)
+                        if case .noTable = afterStructure, witness(.editor) { return .success(.editor) }
+                        // A proven structural change during our view selection
+                        // is not a failed attribute read. Wait for a stable view.
+                        if case .controls = afterStructure, witness(.editor) { return .success(nil) }
+                        noteUnconfirmedBoundView("editor second_structure=\(afterStructure)")
+                    } else {
+                        noteUnconfirmedBoundView("editor header_witness=false")
+                    }
+                case .controls:
+                    // The read caller corroborates its named row, while the
+                    // host's uniquely bound View switcher corroborates Controls.
+                    // Neither a title nor an unrelated table suffices alone.
+                    let rowBound = witness(.controls)
+                    if rowBound {
+                        switch measuredViewSwitcher(in: window, windowRefresher: { window }, runtime: runtime) {
+                        case let .found(switcher):
+                            let title = AXHelpers.getTitle(switcher, runtime: runtime)
+                            if PluginWindowView.controls.labels.matches(title, mode: .exactStrict),
+                               witness(.controls) { return .success(.controls) }
+                            noteUnconfirmedBoundView("controls title=\(title ?? "<unread>")")
+                        case let .refused(failure):
+                            noteUnconfirmedBoundView("controls switcher=\(failure.observation)")
+                        }
+                    } else {
+                        noteUnconfirmedBoundView("controls row_witness=false")
+                    }
+                case .unconfirmed:
+                    let shape = viewStructureObservation(in: window, waitedMilliseconds: 0, runtime: runtime)
+                    noteUnconfirmedBoundView("unconfirmed tables=\(shape.tableCount) rows=\(shape.rowCount)")
+                }
+            }
             return .failure(error)
         case .notDescribed:
             break
@@ -616,6 +673,10 @@ enum ControlsViewBooleanParameterWriter {
         case .unconfirmed:
             return .success(nil)
         }
+    }
+
+    private static func noteUnconfirmedBoundView(_ observation: String) {
+        FileHandle.standardError.write(Data("[BoundPluginView] \(observation)\n".utf8))
     }
 
     private enum SliderEvidence {
@@ -765,6 +826,7 @@ enum ControlsViewBooleanParameterWriter {
         confirmationTimeout: TimeInterval,
         forceSelection: Bool = false,
         allowingChanges: () -> Bool = { true },
+        headerBoundUndescribedView: ((PluginWindowView) -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> ViewChangeResult {
         if !forceSelection {
@@ -786,6 +848,7 @@ enum ControlsViewBooleanParameterWriter {
             switch observedView(
                 in: window,
                 windowRefresher: windowRefresher,
+                headerBoundUndescribedView: headerBoundUndescribedView,
                 runtime: runtime
             ) {
             case let .success(.some(observed)) where observed == targetView:
@@ -869,6 +932,7 @@ enum ControlsViewBooleanParameterWriter {
             in: window,
             windowRefresher: windowRefresher,
             timeout: confirmationTimeout,
+            headerBoundUndescribedView: headerBoundUndescribedView,
             runtime: runtime
         ) {
         case .confirmed:
@@ -1000,6 +1064,7 @@ enum ControlsViewBooleanParameterWriter {
         in window: AXUIElement,
         windowRefresher: @escaping () -> AXUIElement?,
         timeout: TimeInterval,
+        headerBoundUndescribedView: ((PluginWindowView) -> Bool)? = nil,
         runtime: AXHelpers.Runtime
     ) -> ViewWaitResult {
         let started = Date()
@@ -1008,6 +1073,7 @@ enum ControlsViewBooleanParameterWriter {
             switch observedView(
                 in: window,
                 windowRefresher: windowRefresher,
+                headerBoundUndescribedView: headerBoundUndescribedView,
                 runtime: runtime
             ) {
             case let .success(.some(observed)) where observed == expected:
@@ -1154,11 +1220,11 @@ enum ControlsViewBooleanParameterWriter {
     /// `controlsViewRowLabel`. AX exposes no stronger table identity fact. In
     /// particular, this does not claim that an unrelated one-table plug-in
     /// window can be distinguished by table structure alone.
-    static func locate(
+    static func rowControls(
         label requestedLabel: String,
         in window: AXUIElement,
         runtime: AXHelpers.Runtime = .production
-    ) -> LocateResult {
+    ) -> Result<[AXUIElement], LocatorFailure> {
         let tables: [AXUIElement]
         switch AXHelpers.censusDescendantResult(
             of: window,
@@ -1169,22 +1235,22 @@ enum ControlsViewBooleanParameterWriter {
         case let .success(census):
             tables = census.matches
         case .failure:
-            return .refused(.accessibilityReadFailed)
+            return .failure(.accessibilityReadFailed)
         }
         guard tables.count == 1, let table = tables.first else {
-            return .refused(tables.isEmpty ? .controlsViewTableNotFound : .controlsViewTableAmbiguous)
+            return .failure(tables.isEmpty ? .controlsViewTableNotFound : .controlsViewTableAmbiguous)
         }
         let rows: [AXUIElement]
         switch controlsRows(in: table, runtime: runtime) {
         case let .success(observed):
             rows = observed
         case let .failure(error):
-            return .refused(error == .malformedAttribute
+            return .failure(error == .malformedAttribute
                 ? .accessibilityReadMalformed
                 : .accessibilityReadFailed)
         }
         guard !rows.isEmpty else {
-            return .refused(.controlsViewTableNotFound)
+            return .failure(.controlsViewTableNotFound)
         }
 
         let target = normalizedLabel(requestedLabel)
@@ -1197,7 +1263,7 @@ enum ControlsViewBooleanParameterWriter {
             case let .success(observed):
                 rowRole = observed
             case .failure:
-                return .refused(.accessibilityReadFailed)
+                return .failure(.accessibilityReadFailed)
             }
             guard rowRole == (kAXRowRole as String) else { continue }
             let cells: [AXUIElement]
@@ -1205,7 +1271,7 @@ enum ControlsViewBooleanParameterWriter {
             case let .success(observed):
                 cells = observed
             case .failure:
-                return .refused(.accessibilityReadFailed)
+                return .failure(.accessibilityReadFailed)
             }
             guard !cells.isEmpty else {
                 sawMissingLabel = true
@@ -1216,7 +1282,7 @@ enum ControlsViewBooleanParameterWriter {
             case let .success(observed):
                 labels = observed
             case .failure:
-                return .refused(.accessibilityReadFailed)
+                return .failure(.accessibilityReadFailed)
             }
             guard labels.count == 1, let label = labels.first else {
                 sawMissingLabel = sawMissingLabel || labels.isEmpty
@@ -1225,7 +1291,7 @@ enum ControlsViewBooleanParameterWriter {
             }
             if normalizedLabel(label.value) == target {
                 guard cells.count == 1 else {
-                    return .refused(.rowStructureInvalid)
+                    return .failure(.rowStructureInvalid)
                 }
                 let controls: [AXUIElement]
                 switch candidateControls(
@@ -1236,7 +1302,7 @@ enum ControlsViewBooleanParameterWriter {
                 case let .success(observed):
                     controls = observed
                 case .failure:
-                    return .refused(.accessibilityReadFailed)
+                    return .failure(.accessibilityReadFailed)
                 }
                 matchingRows.append(controls)
             }
@@ -1244,11 +1310,24 @@ enum ControlsViewBooleanParameterWriter {
 
         guard matchingRows.count == 1, let controls = matchingRows.first else {
             if matchingRows.count > 1 {
-                return .refused(.rowLabelAmbiguous)
+                return .failure(.rowLabelAmbiguous)
             }
-            if sawAmbiguousLabel { return .refused(.rowLabelAmbiguous) }
-            if sawMissingLabel { return .refused(.rowLabelMissing) }
-            return .refused(.rowLabelNotFound)
+            if sawAmbiguousLabel { return .failure(.rowLabelAmbiguous) }
+            if sawMissingLabel { return .failure(.rowLabelMissing) }
+            return .failure(.rowLabelNotFound)
+        }
+        return .success(controls)
+    }
+
+    static func locate(
+        label requestedLabel: String,
+        in window: AXUIElement,
+        runtime: AXHelpers.Runtime = .production
+    ) -> LocateResult {
+        let controls: [AXUIElement]
+        switch rowControls(label: requestedLabel, in: window, runtime: runtime) {
+        case let .success(observed): controls = observed
+        case let .failure(error): return .refused(error)
         }
         guard controls.count == 1, let control = controls.first else {
             return .refused(controls.isEmpty ? .controlMissing : .controlAmbiguous)

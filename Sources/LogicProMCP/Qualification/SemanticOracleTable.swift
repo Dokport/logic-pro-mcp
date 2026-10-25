@@ -903,7 +903,9 @@ enum SemanticOracleTable {
     // This does not independently qualify a native target or a whole-state snapshot.
     static let pluginsGetParamVerified = OperationOracle(
         custom: .pluginsGetParamVerified,
-        reason: "The catalog determines the raw unit and Boolean-versus-number representation; a single fixed numeric constraint would reject supported checkboxes or admit a Boolean slider. This checks the single-parameter response contract, not independent native qualification."
+        reason: "The catalog determines the raw unit and Boolean-versus-number representation; a single fixed numeric constraint would reject supported checkboxes or admit a Boolean slider. This checks the single-parameter response contract, not independent native qualification.",
+        independentReadbackDeferral: QualificationDeferral(code: .semanticValidatorUnavailable,
+            detail: "The single-parameter response and paired host AX reads do not supply independent typed plugin-parameter readback")
     ) { responseData, _ in
         guard let object = JSONInspector.parse(responseData) as? [String: Any],
               object["state"] as? String == "A",
@@ -927,11 +929,23 @@ enum SemanticOracleTable {
                   $0.id == (VerifiedPluginCatalog.canonicalParamKey(pluginID: pluginID, alias: param)
                     ?? param.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
               }),
-              object["raw_unit"] as? String == metadata.unit,
+              object["raw_unit"] as? String == (metadata.readbackUnit ?? metadata.unit),
               let raw = object["observed_raw"], let display = object["observed_display"],
               let displayStatus = object["display_read_status"] as? String else { return false }
         if metadata.readbackMethod == "ax_controls_view_checkbox_value" {
             guard metadata.controlsViewControlRole == "AXCheckBox", JSONInspector.isBoolean(raw) else { return false }
+        } else if let kind = ControlsViewParameterReader.kind(for: metadata) {
+            switch kind {
+            case .numericDisplay, .sampleCount:
+                guard let number = JSONInspector.number(of: raw), number.isFinite else { return false }
+            case let .radioPair(off, on):
+                guard JSONInspector.isBoolean(raw), let value = raw as? Bool,
+                      display as? String == (value ? on : off) else { return false }
+            case let .popupSelection(choices):
+                guard let selected = raw as? String, choices.contains(selected),
+                      display as? String == selected else { return false }
+            }
+            guard displayStatus == "read", let text = display as? String, !text.isEmpty else { return false }
         } else {
             guard metadata.readbackMethod == "ax_slider_axvalue", metadata.axDescription != nil,
                   let number = JSONInspector.number(of: raw), number.isFinite else { return false }
@@ -1003,7 +1017,9 @@ enum SemanticOracleTable {
     // matching response fields alone cannot prove the physical hosted instance.
     static let pluginsGetChannelEQStateVerified = OperationOracle(
         custom: .pluginsGetChannelEQStateVerified,
-        reason: "Eight ordered bands require raw numeric fields with actual host displays, Cut slope choices, Boolean band enables and explicit non-applicable fields. Plugin bypass is separate and conditional. This validates the declared non-atomic response contract, not independent native qualification."
+        reason: "Eight ordered bands require raw numeric fields with actual host displays, Cut slope choices, Boolean band enables and explicit non-applicable fields. Plugin bypass is separate and conditional. This validates the declared non-atomic response contract, not independent native qualification.",
+        independentReadbackDeferral: QualificationDeferral(code: .semanticValidatorUnavailable,
+            detail: "The eight-band response and its host AX observations do not supply independent typed plugin-state readback")
     ) { responseData, _ in
         func boolean(_ value: Any?, _ expected: Bool) -> Bool {
             guard let value, JSONInspector.isBoolean(value) else { return false }

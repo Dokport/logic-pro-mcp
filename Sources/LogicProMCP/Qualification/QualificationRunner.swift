@@ -1191,6 +1191,10 @@ package struct QualificationRunner: Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> QualificationCommandResult {
         do {
+            if let command = arguments.dropFirst().first,
+               command == "export-public" || command == "verify-public" {
+                return try runPublicCommand(command, arguments: Array(arguments.dropFirst(2)), environment: environment)
+            }
             guard let command = arguments.dropFirst().first,
                   command == "sign" || command == "verify" else {
                 return try typedFailure("invalidArguments", actual: "Expected sign or verify")
@@ -1242,6 +1246,191 @@ package struct QualificationRunner: Sendable {
         } catch {
             return (try? typedFailure("invalidArguments", actual: String(describing: error)))
                 ?? QualificationCommandResult(exitCode: 1, stdout: "", stderr: "trusted-verifier failed\n")
+        }
+    }
+
+    private static func runPublicCommand(_ command: String, arguments: [String],
+                                         environment: [String: String]) throws -> QualificationCommandResult {
+        do {
+            let allowed: Set<String> = command == "export-public"
+                ? ["--candidate", "--bundle", "--public-directory", "--release-version", "--expected-commit"]
+                : ["--public-directory", "--release-version", "--expected-commit", "--expected-axis"]
+            let values = try optionValues(arguments, allowed: allowed)
+            guard let path = values["--public-directory"], let version = values["--release-version"],
+                  SemanticVersion(version) != nil, let commit = values["--expected-commit"], isCommitSHA(commit) else {
+                return try typedFailure("publicEvidenceArguments")
+            }
+            let directory = URL(fileURLWithPath: path).standardizedFileURL
+            if command == "export-public" {
+                guard let candidate = values["--candidate"], let bundle = values["--bundle"],
+                      let keyData = environment[signingKeyEnvironmentKey].flatMap({ Data(base64Encoded: $0) }),
+                      let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: keyData) else {
+                    return try typedFailure("signingKeyUnavailable")
+                }
+                return try exportPublicEvidence(candidate: URL(fileURLWithPath: candidate),
+                    bundle: URL(fileURLWithPath: bundle), directory: directory, version: version, commit: commit, key: key)
+            }
+            guard let expectedAxis = values["--expected-axis"],
+                  let key = environment[trustedPublicKeyEnvironmentKey].flatMap({ Data(base64Encoded: $0) }) else {
+                return try typedFailure("trustedPublicKeyUnavailable")
+            }
+            let data = try readNoFollow(relativePath: QualificationPublicEvidence.filename, directory: directory, beforeRead: { _ in })
+            let payload = try QualificationPublicEvidence.verify(data, trustedKey: key)
+            guard payload.commitSHA == commit, payload.releaseVersion == version, payload.axis.key == expectedAxis else {
+                return try typedFailure("publicEvidenceContextMismatch")
+            }
+            let artifacts = try publicArtifacts(directory, binarySHA256: payload.binarySHA256, inspectArchives: false)
+            guard artifacts == payload.artifacts else { return try typedFailure("publicArtifactMismatch") }
+            return QualificationCommandResult(exitCode: 0,
+                stdout: String(decoding: try QualificationPublicEvidence.encode(payload), as: UTF8.self) + "\n", stderr: "")
+        } catch { return try typedFailure("publicEvidenceRejected") }
+    }
+
+    private static func exportPublicEvidence(candidate: URL, bundle: URL, directory: URL,
+                                              version: String, commit: String,
+                                              key: Curve25519.Signing.PrivateKey) throws -> QualificationCommandResult {
+        let (_, attestation) = try loadTrustedAttestation(bundleURL: bundle)
+        let manifestData = try readNoFollow(relativePath: manifestFilename, directory: bundle, beforeRead: { _ in })
+        return try exportPublicEvidenceSnapshot(attestation: attestation, manifestData: manifestData,
+            candidate: candidate, bundle: bundle, directory: directory, version: version, commit: commit, key: key)
+    }
+
+    /// The loaded input stays explicit through validation and projection.
+    static func exportPublicEvidenceSnapshot(attestation: ReleaseQualificationAttestation, manifestData: Data,
+                                              candidate: URL, bundle: URL, directory: URL,
+                                              version: String, commit: String,
+                                              key: Curve25519.Signing.PrivateKey) throws -> QualificationCommandResult {
+        guard publicDirectoryIsDisjoint(directory, from: bundle) else {
+            return try typedFailure("publicPrivateDirectoryOverlap")
+        }
+        guard SupportBundleBuilder.sha256(manifestData) == attestation.evidenceManifestSHA256 else {
+            return try typedFailure("publicManifestMismatch")
+        }
+        let rejections = try evaluateBundle(attestation: attestation, directory: bundle, candidateURL: candidate,
+            releaseVersion: version, expectedCommitSHA: commit, requiredArtifacts: trustedRequiredArtifacts,
+            requiredOperationIDs: Set(OperationRegistry.specs.map { $0.id.rawValue }), beforeEvidenceRead: { _ in },
+            signatureRequirement: .required(trustedPublicKeyData: key.publicKey.rawRepresentation))
+        guard rejections.isEmpty else { return try typedFailure("privateQualificationRejected") }
+        let manifest = try JSONDecoder().decode(EvidenceManifest.self, from: manifestData)
+        guard let provenance = attestation.provenance else { return try typedFailure("provenanceMissing") }
+        let artifacts = try publicArtifacts(directory, binarySHA256: attestation.binarySHA256, inspectArchives: true)
+        let registered = Set(OperationRegistry.specs.map { $0.id.rawValue })
+        func hash(_ value: String) -> String { SupportBundleBuilder.sha256(Data(value.utf8)) }
+        let cases = attestation.cases.map { item in
+            QualificationPublicEvidence.Case(caseIDHash: hash(item.id),
+                operationID: registered.contains(item.operationID) ? item.operationID : nil,
+                status: item.status, verificationKind: item.verificationKind,
+                liveCredited: PromotionGate.operationIsLiveCredited(item))
+        }.sorted { $0.caseIDHash < $1.caseIDHash }
+        let waivers = attestation.waivers.map { item in
+            QualificationPublicEvidence.Waiver(caseIDHash: hash(item.caseID), reasonCode: item.reasonCode,
+                owningIssue: item.owningIssue, capabilityHash: hash(item.affectedCapability),
+                userImpactHash: hash(item.userImpact), affectsDefaultProfile: item.affectsDefaultProfile,
+                expiryVersion: item.expiryVersion)
+        }.sorted { $0.caseIDHash < $1.caseIDHash }
+        let evidence = manifest.files.map { item in
+            QualificationPublicEvidence.Evidence(pathHash: hash(item.path), sha256: item.sha256,
+                caseIDHash: hash(item.caseID), kind: item.kind.rawValue)
+        }.sorted { $0.pathHash < $1.pathHash }
+        let counts = QualificationSummaryCounts(cases: attestation.cases)
+        let payload = QualificationPublicEvidence.Payload(schema: QualificationPublicEvidence.schema,
+            commitSHA: attestation.commitSHA, releaseVersion: version, binarySHA256: attestation.binarySHA256,
+            logicVersion: attestation.logicVersion, axis: provenance.axis, runIDHash: hash(provenance.runID),
+            startedAt: attestation.startedAt.timeIntervalSince1970, completedAt: attestation.completedAt.timeIntervalSince1970,
+            privateManifestSHA256: attestation.evidenceManifestSHA256, artifacts: artifacts, cases: cases,
+            waivers: waivers, evidence: evidence, total: counts.total, passed: counts.passed,
+            failed: counts.failed, waived: counts.waived,
+            disclosure: "Authenticated projection; raw evidence, paths, case/run identifiers and waiver impact text remain private. Raw semantics are not replayed by public verification.")
+        let data = try QualificationPublicEvidence.sign(payload, key: key)
+        guard try publicArtifacts(directory, binarySHA256: attestation.binarySHA256, inspectArchives: false) == artifacts else {
+            return try typedFailure("publicArtifactsChanged")
+        }
+        try writeNewPublicEvidence(data, directory: directory)
+        return QualificationCommandResult(exitCode: 0, stdout: "Exported qualification-public.json\n", stderr: "")
+    }
+
+    /// Compare actual directory identities, including /var aliases and volume
+    /// case rules. A lexical path-prefix check cannot establish this boundary.
+    private static func publicDirectoryIsDisjoint(_ first: URL, from second: URL) -> Bool {
+        let flags = O_SEARCH | O_CLOEXEC | O_NOFOLLOW
+        let firstFD = open(first.path, flags)
+        guard firstFD >= 0 else { return false }
+        defer { close(firstFD) }
+        let secondFD = open(second.path, flags)
+        guard secondFD >= 0 else { return false }
+        defer { close(secondFD) }
+        var a = stat(), b = stat()
+        guard fstat(firstFD, &a) == 0, fstat(secondFD, &b) == 0 else { return false }
+        func contains(_ target: stat, walking start: Int32) -> Bool? {
+            var current = fcntl(start, F_DUPFD_CLOEXEC, 0)
+            guard current >= 0 else { return nil }
+            defer { close(current) }
+            for _ in 0..<4096 {
+                var value = stat()
+                guard fstat(current, &value) == 0 else { return nil }
+                if value.st_dev == target.st_dev && value.st_ino == target.st_ino { return true }
+                let parent = openat(current, "..", flags)
+                guard parent >= 0 else { return nil }
+                var above = stat()
+                guard fstat(parent, &above) == 0 else { close(parent); return nil }
+                if above.st_dev == value.st_dev && above.st_ino == value.st_ino {
+                    close(parent)
+                    return false
+                }
+                close(current)
+                current = parent
+            }
+            return nil
+        }
+        return contains(a, walking: secondFD) == false && contains(b, walking: firstFD) == false
+    }
+
+    private static func publicArtifacts(_ directory: URL, binarySHA256: String,
+                                         inspectArchives: Bool) throws -> [QualificationPublicEvidence.Artifact] {
+        var result: [QualificationPublicEvidence.Artifact] = []
+        for name in QualificationPublicEvidence.artifactNames {
+            let data = try readNoFollow(relativePath: name, directory: directory,
+                beforeRead: { _ in }, maxBytes: 256 * 1024 * 1024)
+            let digest = SupportBundleBuilder.sha256(data)
+            if name == "LogicProMCP" {
+                guard digest == binarySHA256 else { throw QualificationPublicEvidence.Rejection.invalid }
+            } else if inspectArchives {
+                let snapshot = FileManager.default.temporaryDirectory.appendingPathComponent("public-archive-\(UUID())")
+                try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: false,
+                    attributes: [.posixPermissions: 0o700])
+                defer { try? FileManager.default.removeItem(at: snapshot) }
+                let archive = snapshot.appendingPathComponent("archive.tar.gz")
+                try data.write(to: archive, options: .withoutOverwriting)
+                // Isolated Python reads only our snapshot; no signing material,
+                // user site packages or bundle-provided helpers are inherited.
+                let check = BoundedProcessRunner.run(executable: "/usr/bin/env",
+                    arguments: ["-i", "PATH=/usr/bin:/bin", "/usr/bin/python3", "-I", "-c",
+                                QualificationPublicEvidence.archiveCheck, archive.path, binarySHA256],
+                    timeout: 30, outputLimitBytes: 1024)
+                guard let output = check.output, output.exitCode == 0, !output.stdoutTruncated,
+                      !output.stderrTruncated, output.stdout == "ok\n" else {
+                    throw QualificationPublicEvidence.Rejection.invalid
+                }
+            }
+            result.append(.init(name: name, sha256: digest))
+        }
+        return result
+    }
+
+    private static func writeNewPublicEvidence(_ data: Data, directory: URL) throws {
+        let root = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard root >= 0 else { throw QualificationPublicEvidence.Rejection.invalid }
+        defer { close(root) }
+        var held = stat(), current = stat()
+        guard fstat(root, &held) == 0 else { throw QualificationPublicEvidence.Rejection.invalid }
+        let temporary = ".qualification-public-\(UUID())"
+        let file = openat(root, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard file >= 0 else { throw QualificationPublicEvidence.Rejection.invalid }
+        defer { close(file); _ = unlinkat(root, temporary, 0) }
+        try FileHandle(fileDescriptor: file, closeOnDealloc: false).write(contentsOf: data)
+        guard lstat(directory.path, &current) == 0, current.st_dev == held.st_dev, current.st_ino == held.st_ino,
+              linkat(root, temporary, root, QualificationPublicEvidence.filename, 0) == 0 else {
+            throw QualificationPublicEvidence.Rejection.invalid
         }
     }
 

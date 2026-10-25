@@ -14,8 +14,7 @@ import Foundation
 ///      have a write method AND a display-readback parser? (R6 step 5 preflight;
 ///      Compressor `threshold` uses direct `ax_slider_axvalue`; named Channel
 ///      EQ controls use the separately measured increment-walk metadata. Gain
-///      still has neither — `writeMethod:nil, readbackMethod:nil` — so it stays
-///      the honest State C `unsupported_param_readback`.)
+///      has read-only metadata and no qualified parameter writer.)
 ///
 /// This module is deterministic and contains NO live AX interaction.
 enum VerifiedPluginCatalog {
@@ -29,7 +28,7 @@ enum VerifiedPluginCatalog {
     ///
     /// MVP scope (R5): the three allowlisted stock plugins. Compressor
     /// `threshold` and named Channel EQ parameters have distinct catalog write
-    /// methods; Gain remains identity/insert only. Display
+    /// methods; Gain parameter access is read-only. Display
     /// names are accepted as user-facing aliases but never become the identity
     /// themselves (requirements §5.2 "display name은 identity가 아니라 alias").
     private static let pluginAliases: [String: String] = [
@@ -43,6 +42,10 @@ enum VerifiedPluginCatalog {
         "noise gate": "logic.stock.effect.noise_gate",
         "noisegate": "logic.stock.effect.noise_gate",
         "logic.stock.effect.noise_gate": "logic.stock.effect.noise_gate",
+        "sample delay": "logic.stock.effect.sample_delay",
+        "sampledelay": "logic.stock.effect.sample_delay",
+        "smpledly": "logic.stock.effect.sample_delay",
+        "logic.stock.effect.sample_delay": "logic.stock.effect.sample_delay",
     ]
 
     /// Per-plugin parameter-key alias table: caller key → canonical catalog
@@ -50,9 +53,29 @@ enum VerifiedPluginCatalog {
     /// while the catalog entry's parameter id is still `gain` (R5); both resolve
     /// to the catalog id so the capability lookup can find the parameter.
     private static let paramAliases: [String: [String: String]] = [
+        "logic.stock.effect.noise_gate": [
+            "threshold": "threshold",
+            "hysteresis": "hysteresis",
+            "reduction": "reduction",
+            "attack": "attack",
+            "hold": "hold",
+            "release": "release",
+            "high_cutoff": "high_cutoff",
+            "low_cutoff": "low_cutoff",
+            "lookahead": "lookahead",
+            "sidechain_filter_mode": "sidechain_filter_mode",
+        ],
+        "logic.stock.effect.sample_delay": [
+            "left_delay": "left_delay",
+            "right_delay": "right_delay",
+        ],
         "logic.stock.effect.gain": [
             "gain": "gain",
             "gain_db": "gain",
+            "phase_invert_left": "phase_invert_left",
+            "phase_invert_right": "phase_invert_right",
+            "swap_lr": "swap_lr",
+            "mono": "mono",
         ],
         // Compressor `threshold` is the first verified-writable parameter (T5,
         // T0 spike). The public key and the catalog parameter id are both
