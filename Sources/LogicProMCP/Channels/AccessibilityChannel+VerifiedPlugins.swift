@@ -2633,7 +2633,9 @@ extension AccessibilityChannel {
         let nativeSlider = metadata.readbackMethod == "ax_slider_axvalue" && metadata.axDescription != nil
         let controlsCheckbox = metadata.readbackMethod == "ax_controls_view_checkbox_value"
             && metadata.controlsViewControlRole == "AXCheckBox" && metadata.controlsViewRowLabel != nil
-        guard nativeSlider || controlsCheckbox, let rawUnit = metadata.unit else {
+        let controlsReadKind = ControlsViewParameterReader.kind(for: metadata)
+        guard nativeSlider || controlsCheckbox || controlsReadKind != nil,
+              let rawUnit = metadata.readbackUnit ?? metadata.unit else {
             return .error(HonestContract.encodeV2StateC(error: .unsupportedParamReadback,
                 extras: ["operation": operation, "param": suppliedParam,
                     "parameter_read_status": "unsupported", "write_attempted": false]))
@@ -2668,7 +2670,7 @@ extension AccessibilityChannel {
             operation: operation, referenceParams: params, track: track, insert: insert,
             pluginID: pluginID, paramKey: paramKey, paramAlias: suppliedParam,
             access: .read(unit: rawUnit, contextIsCurrent: contextIsCurrent, openerOverride: pluginWindowOpener),
-            writeMethod: "", readsControlsCheckbox: controlsCheckbox,
+            writeMethod: "", readsControlsCheckbox: controlsCheckbox, controlsReadKind: controlsReadKind,
             runtime: runtime, entryLookup: entryLookup,
             pluginWindowOpener: pluginWindowOpener ?? livePluginWindowOpener, pluginPopupMenuCleaner: popupCheck
         )
@@ -2713,6 +2715,7 @@ extension AccessibilityChannel {
         access: VerifiedParameterAccess,
         writeMethod: String,
         readsControlsCheckbox: Bool = false,
+        controlsReadKind: ControlsViewParameterReader.Kind? = nil,
         runtime: AXLogicProElements.Runtime,
         entryLookup: VerifiedPluginCatalog.EntryLookup,
         pluginWindowOpener: PluginWindowOpener,
@@ -2722,7 +2725,8 @@ extension AccessibilityChannel {
         // Read metadata selects its plane without borrowing write qualification.
         let controlsViewCheckbox = access.isRead ? readsControlsCheckbox
             : writeMethod == "ax_controls_view_checkbox_press"
-        let controlsViewRowLabel = controlsViewCheckbox
+        let usesControlsView = controlsViewCheckbox || (access.isRead && controlsReadKind != nil)
+        let controlsViewRowLabel = usesControlsView
             ? VerifiedPluginCatalog.controlsViewRowLabel(
                 pluginID: pluginID,
                 paramKey: paramKey,
@@ -2731,7 +2735,7 @@ extension AccessibilityChannel {
             : nil
         let controlsViewEditorAnchor: String?
         let axDescription: String
-        if controlsViewCheckbox {
+        if usesControlsView {
             // An editor-view description can corroborate the header-bound
             // window when it happens to be present. It is not an acquisition
             // precondition: an editor may already be in Controls view, where
@@ -2768,7 +2772,7 @@ extension AccessibilityChannel {
         // by its measured track/plugin header first, then select and confirm
         // the view required by the write plane before any slider lookup.
         let requiringWindowSlider = false
-        if controlsViewCheckbox, controlsViewRowLabel == nil {
+        if usesControlsView, controlsViewRowLabel == nil {
             return .error(HonestContract.encodeV2StateC(
                 error: .unsupportedParamReadback,
                 extras: [
@@ -3310,7 +3314,7 @@ extension AccessibilityChannel {
             // It cannot require the native slider because the remembered view
             // may be Controls; the requested view is selected below.
             openedCandidate = AXUIElementSendable(boundWindow)
-        } else if controlsViewCheckbox || (access.isRead && access.readOpenerOverride == nil) {
+        } else if usesControlsView || (access.isRead && access.readOpenerOverride == nil) {
             openedCandidate = await openPluginWindowFromTargetSlot(
                 slots[insert].element,
                 pluginID: pluginID,
@@ -3335,6 +3339,16 @@ extension AccessibilityChannel {
             )
         }
         guard let opened = openedCandidate else {
+            // The opener can observe the exact new editor and then refuse its
+            // frontness. That refusal must not discard custody of a window this
+            // read created. Never close a pre-existing or ambiguously new editor.
+            if access.isRead, acquisitionActionAttempted,
+               let before = pluginEditorWindowsBeforeNormalAcquisition,
+               case let .success(editors) = AXLogicProElements.matchingPluginEditorWindows(
+                    forTrackName: trackName, matchingPluginID: pluginID, runtime: runtime) {
+                let created = editors.filter { candidate in !before.contains { CFEqual($0, candidate) } }
+                if created.count == 1 { constructedWindowsNeedingCleanup = created }
+            }
             // A polling attempt may have observed a same-track editor with the
             // requested control but the wrong (or unreadable) header. Report
             // that identity failure directly; a concurrent popup-cleanup issue
@@ -3438,7 +3452,7 @@ extension AccessibilityChannel {
                 safeToRetry: false
             ))
         }
-        let requiredView: ControlsViewBooleanParameterWriter.PluginWindowView = (controlsViewCheckbox || access.isEQStateRead)
+        let requiredView: ControlsViewBooleanParameterWriter.PluginWindowView = (usesControlsView || access.isEQStateRead)
             ? .controls
             : .editor
         // Logic can replace the editor's AX window/switcher during a View
@@ -3471,11 +3485,22 @@ extension AccessibilityChannel {
             }
             return true
         }
+        func readViewIsBound(_ view: ControlsViewBooleanParameterWriter.PluginWindowView) -> Bool {
+            guard viewChangesAllowed() else { return false }
+            if view == .controls {
+                guard let controlsViewRowLabel,
+                      case let .success(controls) = ControlsViewBooleanParameterWriter.rowControls(
+                        label: controlsViewRowLabel, in: window, runtime: runtime.ax),
+                      !controls.isEmpty else { return false }
+            }
+            return viewChangesAllowed()
+        }
         switch ControlsViewBooleanParameterWriter.prepareView(
             requiredView,
             in: window,
             windowRefresher: refreshPluginWindowForViewSelection,
             allowingChanges: viewChangesAllowed,
+            headerBoundUndescribedView: access.isRead && controlsReadKind != nil ? readViewIsBound : nil,
             runtime: runtime.ax
         ) {
         case let .refused(failure, restoration):
@@ -3505,6 +3530,50 @@ extension AccessibilityChannel {
         }
         restorePluginViewOnExit = { viewSession.restore(allowingChanges: viewChangesAllowed) }
         let resultAfterViewPreparation: ChannelResult = {
+        if let controlsReadKind, let controlsViewRowLabel,
+           case let .read(rawUnit, contextIsCurrent, _) = access {
+            func currentInstance() -> Bool {
+                contextIsCurrent() && targetPluginIdentityIsStable(
+                    target: target, insert: insert, pluginID: pluginID,
+                    originalSlot: slots[insert].element, runtime: runtime
+                ) && controlsViewAcquiredPluginWindowFailureStateC(
+                    acquiredWindow: window, operation: operation, identity: identity,
+                    pluginID: pluginID, trackName: trackName, runtime: runtime
+                ) == nil
+            }
+            guard currentInstance() else {
+                readContextEnded = true
+                return .error(windowIdentityUnresolvedStateC(operation, identity,
+                    "the acquired target/editor context ended before its Controls-view read"))
+            }
+            let observation = ControlsViewParameterReader.observe(kind: controlsReadKind,
+                label: controlsViewRowLabel, in: window, runtime: runtime.ax)
+            guard currentInstance() else {
+                readContextEnded = true
+                return .error(windowIdentityUnresolvedStateC(operation, identity,
+                    "the acquired target/editor context ended during its Controls-view read"))
+            }
+            var extras: [String: Any] = [
+                "operation": operation, "target_identity": identity, "param": paramAlias,
+                "raw_unit": rawUnit, "observation_scope": "current_insert_parameter",
+                "verify_source": "ax_plugin_window", "write_attempted": false,
+            ]
+            switch observation {
+            case let .read(raw, display):
+                extras["observed_raw"] = raw
+                extras["observed_display"] = display
+                extras["display_read_status"] = "read"
+                extras["parameter_read_status"] = "read"
+                return .success(verifiedParameterEnvelope(extras: extras))
+            case let .unavailable(status):
+                extras["parameter_read_status"] = status
+                // State B is a successful transport response, so explicitly
+                // finish the owned UI work before encoding it, as EQ reads do.
+                appendPluginViewRestoration(to: &extras)
+                appendOwnedEditorCleanup(to: &extras)
+                return .success(HonestContract.encodeV2StateB(reason: .readbackUnavailable, extras: extras))
+            }
+        }
         if access.isEQStateRead, let contextIsCurrent = access.readContextIsCurrent {
             let instanceIsCurrent: () -> Bool = {
                 contextIsCurrent() && targetPluginIdentityIsStable(
@@ -4124,7 +4193,7 @@ extension AccessibilityChannel {
         if access.isRead, readContextEnded {
             return parameterReadContextFailure(finished, error: .windowIdentityUnresolved, operation: operation)
         }
-        if access.isEQStateRead, let contextIsCurrent = access.readContextIsCurrent,
+        if (access.isEQStateRead || controlsReadKind != nil), let contextIsCurrent = access.readContextIsCurrent,
            (!contextIsCurrent() || !targetPluginIdentityIsStable(
                 target: target, insert: insert, pluginID: pluginID,
                 originalSlot: slots[insert].element, runtime: runtime
@@ -4828,7 +4897,7 @@ extension AccessibilityChannel {
             // slot's open control is a toggle, so raise the known editor instead.
             guard allowingChanges() else { return nil }
             _ = AXHelpers.performAction(window, kAXRaiseAction as String, runtime: runtime.ax)
-            if pluginWindowIsFront(window, runtime: runtime.ax) {
+            if pluginWindowIsFront(window, runtime: runtime) {
                 return AXUIElementSendable(window)
             }
         case .none:
@@ -4861,7 +4930,7 @@ extension AccessibilityChannel {
             case .unreadable:
                 return nil
             case let .unique(window):
-                guard pluginWindowIsFront(window, runtime: runtime.ax) else {
+                guard pluginWindowIsFront(window, runtime: runtime) else {
                     return nil
                 }
                 return AXUIElementSendable(window)
@@ -4889,26 +4958,35 @@ extension AccessibilityChannel {
         let focusCleared = AXHelpers.setAttribute(
             window, kAXFocusedAttribute as String, false as CFTypeRef, runtime: runtime.ax
         )
-        if mainCleared, focusCleared, !pluginWindowIsFront(window, runtime: runtime.ax) {
+        if mainCleared, focusCleared, !pluginWindowIsFront(window, runtime: runtime) {
             return true
         }
         guard let arrangeWindow = AXLogicProElements.mainWindow(runtime: runtime),
               allowingChanges(),
               AXHelpers.performAction(arrangeWindow, kAXRaiseAction as String, runtime: runtime.ax) else { return false }
-        return !pluginWindowIsFront(window, runtime: runtime.ax)
+        return !pluginWindowIsFront(window, runtime: runtime)
     }
 
     private static func pluginWindowIsFront(
         _ window: AXUIElement,
-        runtime: AXHelpers.Runtime
+        runtime: AXLogicProElements.Runtime
     ) -> Bool {
         let isMain: NSNumber? = AXHelpers.getAttribute(
-            window, kAXMainAttribute, runtime: runtime
+            window, kAXMainAttribute, runtime: runtime.ax
         )
         let isFocused: NSNumber? = AXHelpers.getAttribute(
-            window, kAXFocusedAttribute, runtime: runtime
+            window, kAXFocusedAttribute, runtime: runtime.ax
         )
-        return isMain?.boolValue == true || isFocused?.boolValue == true
+        if isMain?.boolValue == true || isFocused?.boolValue == true { return true }
+        // Gain's Editor can report both flags false while the application's
+        // AXFocusedWindow is this exact, already header-bound window. Use that
+        // observed reference, never its title or a different window's focus.
+        guard let app = AXLogicProElements.appRoot(runtime: runtime),
+              case let .success(.some(focusedWindow)) = AXHelpers.getAttributeResult(
+                app, kAXFocusedWindowAttribute as String, runtime: runtime.ax
+              ) as Result<AnyObject?, AXHelpers.AXStatusError>,
+              CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() else { return false }
+        return CFEqual(focusedWindow, window)
     }
 
     private static func targetPluginIdentityIsStable(
@@ -5273,11 +5351,33 @@ extension AccessibilityChannel {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
             .filter { !$0.isEmpty }
-            return [
+            var summary: [String: Any] = [
                 "title": AXHelpers.getTitle(window, runtime: runtime.ax) ?? "",
                 "role": AXHelpers.getRole(window, runtime: runtime.ax) ?? "",
                 "slider_descriptions": Array(sliderDescriptions.prefix(8)),
             ]
+            if AXHelpers.getTitle(window, runtime: runtime.ax) == trackName {
+                let subrole: String? = AXHelpers.getAttribute(window, kAXSubroleAttribute as String, runtime: runtime.ax)
+                let closeButton: AXUIElement? = AXHelpers.getAttribute(window, kAXCloseButtonAttribute as String, runtime: runtime.ax)
+                summary["subrole"] = subrole ?? ""
+                summary["close_button_present"] = closeButton != nil
+                let main: NSNumber? = AXHelpers.getAttribute(window, kAXMainAttribute as String, runtime: runtime.ax)
+                let focused: NSNumber? = AXHelpers.getAttribute(window, kAXFocusedAttribute as String, runtime: runtime.ax)
+                let focusedWindow: AXUIElement? = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute as String, runtime: runtime.ax)
+                summary["main"] = main.map { $0 as Any } ?? NSNull()
+                summary["focused"] = focused.map { $0 as Any } ?? NSNull()
+                summary["application_focused_window_matches"] = focusedWindow.map { CFEqual($0, window) } ?? false
+                // Preserve shallow header/frontness fields when acquisition
+                // is refused. Diagnostics never authenticate a candidate or
+                // authorize an action.
+                summary["direct_header_candidates"] = runtime.ax.children(window).prefix(24).map { child -> [String: Any] in
+                    let value: String? = AXHelpers.getAttribute(child, kAXValueAttribute as String, runtime: runtime.ax)
+                    return ["role": AXHelpers.getRole(child, runtime: runtime.ax) ?? "",
+                        "value": value ?? "", "title": AXHelpers.getTitle(child, runtime: runtime.ax) ?? "",
+                        "description": AXHelpers.getDescription(child, runtime: runtime.ax) ?? ""]
+                }
+            }
+            return summary
         }
         return [
             "opener_action_attempted": true,

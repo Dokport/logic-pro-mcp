@@ -186,6 +186,14 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
     let valueRange: StockPluginValueRange?
     let writeMethod: String?
     let readbackMethod: String?
+    /// A read can expose an AX index while the parameter's engineering unit
+    /// remains useful to discovery or a separately qualified writer.
+    let readbackUnit: String?
+    /// Exact measured titles of a two-choice Controls-view radio row.
+    let readbackOffTitle: String?
+    let readbackOnTitle: String?
+    /// Measured selected AXValue strings for a read-only popup observation.
+    let readbackChoices: [String]?
     /// Tolerance (in the parameter's own unit) for a verified write/readback
     /// round-trip: |observed - requested| <= tolerance ⇒ State A. nil when the
     /// parameter declares no verified write path (display/readback methods nil).
@@ -222,6 +230,10 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         case valueRange = "value_range"
         case writeMethod = "write_method"
         case readbackMethod = "readback_method"
+        case readbackUnit = "readback_unit"
+        case readbackOffTitle = "readback_off_title"
+        case readbackOnTitle = "readback_on_title"
+        case readbackChoices = "readback_choices"
         case tolerance
         case axDescription = "ax_description"
         case controlsViewRowLabel = "controls_view_row_label"
@@ -240,6 +252,10 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         valueRange: StockPluginValueRange?,
         writeMethod: String?,
         readbackMethod: String?,
+        readbackUnit: String? = nil,
+        readbackOffTitle: String? = nil,
+        readbackOnTitle: String? = nil,
+        readbackChoices: [String]? = nil,
         tolerance: Double? = nil,
         axDescription: String? = nil,
         controlsViewRowLabel: String? = nil,
@@ -256,6 +272,10 @@ struct StockPluginParameterMetadata: Codable, Sendable, Equatable {
         self.valueRange = valueRange
         self.writeMethod = writeMethod
         self.readbackMethod = readbackMethod
+        self.readbackUnit = readbackUnit
+        self.readbackOffTitle = readbackOffTitle
+        self.readbackOnTitle = readbackOnTitle
+        self.readbackChoices = readbackChoices
         self.tolerance = tolerance
         self.axDescription = axDescription
         self.controlsViewRowLabel = controlsViewRowLabel
@@ -1175,6 +1195,56 @@ enum StockPluginCatalog {
         )
     }
 
+    private static let noiseGateParameters = [
+        ("threshold", "Threshold", "dB", "Threshold:"),
+        ("hysteresis", "Hysteresis", "dB", "Hysteresis:"),
+        ("reduction", "Reduction", "dB", "Reduction:"),
+        ("attack", "Attack", "ms", "Attack:"),
+        ("hold", "Hold", "ms", "Hold:"),
+        ("release", "Release", "ms", "Release:"),
+        ("high_cutoff", "High Cutoff", "Hz", "High Cutoff:"),
+        ("low_cutoff", "Low Cutoff", "Hz", "Low Cutoff:"),
+        ("lookahead", "Lookahead", "ms", "Lookahead:"),
+    ].map { id, name, unit, row in
+        StockPluginParameterMetadata(id: id, displayName: name, unit: unit,
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_slider_display",
+            readbackUnit: "raw_ax_value", controlsViewRowLabel: row, controlsViewControlRole: "AXSlider",
+            availabilityState: .observed,
+            provenance: noiseGateReadObservation(["\(row) one display-bearing slider, one raw-only slider and its value indicator",
+                "AXValue is an opaque host value; the engineering display is preserved verbatim"]))
+    } + [
+        StockPluginParameterMetadata(id: "sidechain_filter_mode", displayName: "Sidechain Filter Mode", unit: "string",
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_popup_value",
+            readbackChoices: ["Bandpass", "Band Reject"],
+            controlsViewRowLabel: "Characteristics:", controlsViewControlRole: "AXPopUpButton",
+            availabilityState: .observed,
+            provenance: noiseGateReadObservation(["Characteristics: AXPopUpButton selected AXValue=Band Reject",
+                "observed choices: Bandpass, Band Reject; read-only access never opens the popup",
+                "configured filter selection and cutoff values do not establish whether the filter is enabled"]))
+    ]
+
+    private static func noiseGateReadObservation(_ evidence: [String]) -> StockPluginProvenance {
+        .observed(method: "controls_view_read_only_observation",
+            observedAt: "2026-10-24T22:23:23.601Z", logicVersion: nil, locale: "ko-KR",
+            evidence: evidence + ["read-only metadata; no parameter write qualification"])
+    }
+
+    private static let sampleDelayParameters = [
+        ("left_delay", "Left Delay", "Left Delay:"),
+        ("right_delay", "Right Delay", "Right Delay:"),
+    ].map { id, name, row in
+        StockPluginParameterMetadata(id: id, displayName: name, unit: "samples",
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_sample_count",
+            controlsViewRowLabel: row, controlsViewControlRole: "AXSlider",
+            availabilityState: .observed,
+            provenance: .observed(method: "controls_view_read_only_observation",
+                observedAt: "2026-10-24T22:05:20.252Z", logicVersion: nil, locale: "ko-KR",
+                evidence: ["Left Delay: raw=1, display=1 samples; Right Delay: raw=0, display=0 samples",
+                    "Unit: Samples/ms named one-hot radio pair",
+                    "ms mode changes AXValue representation; sample reads require Samples mode without actuating the selector",
+                    "read-only metadata; no parameter write qualification"]))
+    }
+
     private static let gainParameters = [
         StockPluginParameterMetadata(
             id: "gain",
@@ -1182,11 +1252,35 @@ enum StockPluginCatalog {
             unit: "dB",
             valueRange: StockPluginValueRange(min: -96, max: 24, defaultValue: 0),
             writeMethod: nil,
-            readbackMethod: nil,
-            availabilityState: .inferred,
-            provenance: .inferred(reason: "documented Gain parameter range; no write/readback path is claimed")
+            readbackMethod: "ax_controls_view_slider_display",
+            readbackUnit: "raw_ax_value",
+            controlsViewRowLabel: "Gain:",
+            controlsViewControlRole: "AXSlider",
+            availabilityState: .observed,
+            provenance: gainReadObservation([
+                "Gain: AXSlider raw=959; AXValueDescription=-0.1 dB",
+                "one display-bearing slider, one raw-only slider and its value indicator",
+            ])
         ),
-    ]
+    ] + [
+        ("phase_invert_left", "Phase Invert Left", "Phase Left:", "Norm", "Inv"),
+        ("phase_invert_right", "Phase Invert Right", "Phase Right:", "Norm", "Inv"),
+        ("swap_lr", "Swap L/R", "Swap L/R:", "Norm", "Swap"),
+        ("mono", "Mono", "Make Mono:", "Stereo", "Mono"),
+    ].map { id, name, row, off, on in
+        StockPluginParameterMetadata(id: id, displayName: name, unit: "boolean",
+            valueRange: nil, writeMethod: nil, readbackMethod: "ax_controls_view_radio_pair",
+            readbackOffTitle: off, readbackOnTitle: on,
+            controlsViewRowLabel: row, controlsViewControlRole: "AXRadioButton",
+            availabilityState: .observed,
+            provenance: gainReadObservation(["\(row) radio pair: \(off), \(on); AXValue 0/1"]))
+    }
+
+    private static func gainReadObservation(_ evidence: [String]) -> StockPluginProvenance {
+        .observed(method: "controls_view_read_only_observation",
+            observedAt: "2026-10-24T21:21:52.596Z", logicVersion: nil, locale: "ko-KR",
+            evidence: evidence + ["read-only metadata; no parameter write qualification"])
+    }
 
     /// The raw-value pair each parameter was actually driven between on 2026-09-14, and the
     /// walk that the sweep observed. These are readings, not a policy: a change here is a claim
@@ -1511,7 +1605,7 @@ enum StockPluginCatalog {
         fx("expander", "Expander", "Dynamics"),
         fx("limiter", "Limiter", "Dynamics"),
         fx("multipressor", "Multipressor", "Dynamics"),
-        fx("noise_gate", "Noise Gate", "Dynamics"),
+        fx("noise_gate", "Noise Gate", "Dynamics", parameters: noiseGateParameters),
         // Reverb
         fx("chromaverb", "ChromaVerb", "Reverb"),
         fx("quantec_room_simulator", "Quantec Room Simulator", "Reverb", notes: ["introduced in Logic Pro 11.1; absent on older installs"]),
@@ -1520,7 +1614,7 @@ enum StockPluginCatalog {
         // Delay
         fx("delay_designer", "Delay Designer", "Delay"),
         fx("echo", "Echo", "Delay"),
-        fx("sample_delay", "Sample Delay", "Delay"),
+        fx("sample_delay", "Sample Delay", "Delay", parameters: sampleDelayParameters),
         fx("stereo_delay", "Stereo Delay", "Delay"),
         fx("tape_delay", "Tape Delay", "Delay"),
         // Modulation
