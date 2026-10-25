@@ -1003,7 +1003,13 @@ extension AccessibilityChannel {
         }
 
         private func mixerViewportPosition(horizontal: Bool) -> MixerViewportPosition? {
-            guard let hitTest = logic.ax.elementAtPosition, permitsRead() else { return nil }
+            // Only observedMixerViewportGeometry calls this non-Help sampler.
+            // Its complete ownership checks bracket both axis/value rereads and
+            // every strip frame as one decision; no observation survives a lost
+            // scope. Repeating that full census inside each axis exhausted the
+            // native acquisition deadline before the restored report could land.
+            guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  let hitTest = logic.ax.elementAtPosition else { return nil }
             func frame(_ element: AXUIElement) -> CGRect? {
                 guard let point = AXHelpers.getPosition(element, runtime: logic.ax),
                       let size = AXHelpers.getSize(element, runtime: logic.ax),
@@ -1055,7 +1061,8 @@ extension AccessibilityChannel {
                   AXHelpers.getRole(control, runtime: logic.ax) == kAXScrollBarRole as String,
                   AXHelpers.getAttribute(control, kAXOrientationAttribute as String, runtime: logic.ax) as String? == orientation,
                   let decidingParent: AXUIElement = AXHelpers.getAttribute(control, kAXParentAttribute as String, runtime: logic.ax),
-                  CFEqual(decidingParent, owner), permitsRead() else { return nil }
+                  CFEqual(decidingParent, owner), !lost,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
             return .init(control: control, owner: owner, value: value.doubleValue,
                 windowFrame: windowFrame, mixerFrame: mixerFrame, ownerFrame: ownerFrame, controlFrame: controlFrame)
         }
