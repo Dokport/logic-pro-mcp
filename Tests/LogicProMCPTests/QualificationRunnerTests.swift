@@ -3468,7 +3468,8 @@ for name in ('LogicProMCP-macOS-universal.tar.gz', 'LogicProMCP-macOS-arm64.tar.
         let result = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         let calls = try #require(result["calls"] as? [String])
         let code = try #require(result["exit"] as? Int)
-        #expect(result["timed_out"] as? Bool == false, "\(result)")
+        let timedOut = try #require(result["timed_out"] as? Bool)
+        #expect(!timedOut, "\(result)")
         #expect(calls.contains { $0 == "owner-preparation trusted-command verify-public" },
                 "the starting public copy must actually authenticate: \(result)")
         if scenario == "valid" || scenario.hasPrefix("retrieved_") || scenario == "omitted_publish" {
