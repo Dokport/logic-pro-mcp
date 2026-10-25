@@ -1978,7 +1978,8 @@ final class ApprovedSessionRepair: @unchecked Sendable {
     }
 
     /// Preserve every captured field and peer owner. Only this task's independently checked
-    /// output may differ; neither a fresh row nor a displayed label becomes a new baseline.
+    /// output may differ. Unrequested unknown routing displays need two fresh agreeing
+    /// observations; no already-known field or native source may become a new baseline.
     private func outputFootprintHeld(pair: AccessibilityChannel.HeldSelectionAssociation.Pair,
                                      assignment: OutputAssignment, popup: AXUIElement? = nil,
                                      ownedNamePreview: [String]? = nil, ownedNameEditor: AXUIElement? = nil,
@@ -2022,15 +2023,18 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let metadataStopped: @Sendable () -> Bool = {
             (try? SessionPopulationObservation.requireOwnedAcquisition()) == nil
         }
-        let fields = AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
-            let tracks = AccessibilityChannel.readTrackStates(from: proof.headers, in: pair.track.window,
-                runtime: runtime, readingTypeHelp: false, stoppingWhen: metadataStopped).states
-            let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer, runtime: runtime.ax)
-                .flatMap { AccessibilityChannel.readChannelStrips(from: $0.strips, runtime: runtime,
-                    window: pair.strip.window, mixer: pair.strip.mixer, readingScalarHelp: false,
-                    stoppingWhen: metadataStopped) }
-            return (tracks, strips)
+        func sampleFields() -> ([TrackState]?, [ChannelStripState]?) {
+            return AXHelpers.HelpReadGuard.$current.withValue(.init(allowHelpReads: true, stop: { !permitted() })) {
+                let tracks = AccessibilityChannel.readTrackStates(from: proof.headers, in: pair.track.window,
+                    runtime: runtime, readingTypeHelp: false, stoppingWhen: metadataStopped).states
+                let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: pair.strip.mixer, runtime: runtime.ax)
+                    .flatMap { AccessibilityChannel.readChannelStrips(from: $0.strips, runtime: runtime,
+                        window: pair.strip.window, mixer: pair.strip.mixer, readingScalarHelp: false,
+                        stoppingWhen: metadataStopped) }
+                return (tracks, strips)
+            }
         }
+        let fields = sampleFields()
         stage = "sampled_owners_counts_output"
         guard let tracks = fields.0, let strips = fields.1, permitted(),
               tracks.count == task.capture.tracks.count,
@@ -2147,7 +2151,51 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         guard let expectedTracks = try? encoder.encode(expectedTrackRows),
               let currentTracks = try? encoder.encode(tracks),
               let expectedStrips = try? encoder.encode(expected), let currentStrips = try? encoder.encode(strips) else { return false }
-        if expectedTracks != currentTracks || expectedStrips != currentStrips {
+        var valuesAgree = expectedTracks == currentTracks && expectedStrips == currentStrips
+        if !valuesAgree, expectedTracks == currentTracks, taskOverride != nil, let sendTask,
+           case .bus = sendTask.before, case .bus? = sendTask.desired,
+           changedNameGoals.count == 1, outputRenewal != nil {
+            // This bounded named Send owns only its source. Protect every captured
+            // selected/checked row through the already-validated ordered renewal;
+            // a newly readable peer supplies no receiver or write authority.
+            var protected = [task.pair.strip, pair.strip]
+            if let population = task.capture.freshPopulation {
+                protected += population.selectionAssociations.map(\.strip)
+                protected += population.checkedOutputs.map(\.source)
+                protected += population.checkedInputs.map(\.receiver)
+            }
+            for row in expected.indices {
+                if let owner = expected[row].physicalBinding,
+                   protected.contains(where: { $0.matches(owner) }), let current = strips[row].physicalBinding {
+                    protected.append(current)
+                }
+            }
+            if AccessibilityChannel.onlyPeerDisplaysBecameReadable(before: expected, after: strips, protecting: protected) {
+                stage = "corroborating_peer_displays"
+                let corroborated = sampleFields()
+                guard let nextTracks = corroborated.0, let nextStrips = corroborated.1, permitted(),
+                      nextTracks.count == tracks.count, nextStrips.count == strips.count,
+                      (try? encoder.encode(nextTracks)) == currentTracks,
+                      (try? encoder.encode(nextStrips)) == currentStrips,
+                      zip(tracks, nextTracks).allSatisfy({ old, new in
+                          guard let a = old.physicalBinding, let b = new.physicalBinding,
+                                a.exposure?.isCurrent ?? true, b.exposure?.isCurrent ?? true else { return false }
+                          return a.matches(b)
+                      }),
+                      zip(strips, nextStrips).allSatisfy({ old, new in
+                          guard let owner = old.physicalBinding, new.physicalBinding?.matches(owner) == true,
+                                old.volumeReadback == new.volumeReadback, old.panReadback == new.panReadback,
+                                new.pluginsFullyObserved == true else { return false }
+                          switch (old.inputSlotBinding, new.inputSlotBinding) {
+                          case (nil, nil): return true
+                          case (.some(let a), .some(let b)): return a.matches(b)
+                          default: return false
+                          }
+                      }) else { return false }
+                valuesAgree = true
+            }
+        }
+        if !valuesAgree {
             // Compare already-sampled schema fields only; no extra host reads
             // or value/name disclosure, and no acceptance change.
             var changed: [String] = []

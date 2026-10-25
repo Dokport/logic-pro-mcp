@@ -693,6 +693,8 @@ struct Issue965HeldSelectionAssociationTests {
         var inputReadReplacementPeer: AXUIElement?
         var routingOtherReplacement: AXUIElement?
         var routingAction: (@Sendable (AXUIElement, String) -> Bool)?
+        var peerHydrationSamples: [AXHelpers.StripHelpSamples] = []
+        var peerHydrationFaultInjected = false
         var routingSetter: (@Sendable (AXUIElement, String, CFTypeRef) -> Bool?)?
         var routingMenuRename = false
         var routingNameReturn: (@Sendable () -> Bool)?
@@ -5396,6 +5398,28 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Named Bus Send corroborates an unrequested peer becoming readable after its actual Input renewal",
+          arguments: ["forward", "cancel"])
+    func canonicalNamedBusSendCorroboratesNewlyReadablePeer(mode: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: mode, canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_read_renewal", canonicalName: true,
+                peerDisplayHydration: true)
+        }
+    }
+
+    @Test("Named Bus Send refuses a peer or custody change in its corroborating native sample",
+          arguments: ["input", "slot", "owner", "project"])
+    func canonicalNamedBusSendRejectsChangedCorroboratingPeer(fault: String) async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_read_renewal", canonicalName: true,
+                peerDisplayHydration: true, peerDisplaySecondSampleFault: fault)
+        }
+    }
+
     @Test(arguments: [false, true])
     func canonicalNamedBusSendCorroboratesModeAfterInputRenewal(bulk: Bool) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -5589,9 +5613,13 @@ struct Issue965HeldSelectionAssociationTests {
                                                measureInverseAssociations: Bool = false,
                                                forwardNameMovesFocus: Bool = false,
                                                initialNameRailFocus: Bool = false,
+                                               peerDisplayHydration: Bool = false,
+                                               peerDisplaySecondSampleFault: String? = nil,
                                                restoredNameCaption: RestoredNameCaptionScenario? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
             let f = try Fixture(fourTracks: measureInverseAssociations), b = f.builder
+            let hydrationPeer = peerDisplayHydration ? b.element(1_971_800) : nil
+            let hydrationInput = b.element(1_971_801), hydrationOutput = b.element(1_971_802)
             defer {
                 if measureChangedPermissionCensus {
                     #expect(f.routingChangedSendPublished, "Every measured case must reach the actual native effect publisher")
@@ -6556,7 +6584,14 @@ struct Issue965HeldSelectionAssociationTests {
                             b.setAttribute(peer, kAXInsertionPointLineNumberAttribute as String, 0)
                             b.setChildren(peer, b.makeAXRuntime().children(f.strips[0]))
                             f.routingOtherReplacement = peer
-                            b.setChildren(f.mixer, [peer, readSource, receiver])
+                            b.setChildren(f.mixer, [peer, readSource, receiver] + (hydrationPeer.map { [$0] } ?? []))
+                            if hydrationPeer != nil {
+                                #expect(f.routingNameWrites == ["Selected Canonical"],
+                                    "The peer must become readable only after the actual owned name and Input renewal")
+                                b.setAttribute(hydrationInput, kAXDescriptionAttribute as String, "Bus 9")
+                                b.setAttribute(hydrationInput, kAXHelpAttribute as String, "Input slot. Choose the channel strip input.")
+                                b.setAttribute(hydrationOutput, kAXDescriptionAttribute as String, "Stereo Output")
+                            }
                             b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, readSource)
                             switch canonicalBusReceiverFault {
                             case "physical_source_inverse_read_renewal_peer_volume":
@@ -6619,11 +6654,66 @@ struct Issue965HeldSelectionAssociationTests {
                         b.setAttribute(destination, "AXMenuItemMarkChar", forward ? "" : "✓")
                         b.setAttribute(busTwo, "AXMenuItemMarkChar", forward && !canonicalBusStereoReturn ? "✓" : "")
                     }
-                    let children = b.makeAXRuntime().children(f.mixer)
-                    if !children.contains(where: { CFEqual($0, receiver) }) {
-                        b.setChildren(f.mixer, children + [receiver])
+                    for owner in [receiver] + (hydrationPeer.map { [$0] } ?? []) {
+                        let children = b.makeAXRuntime().children(f.mixer)
+                        if !children.contains(where: { CFEqual($0, owner) }) {
+                            b.setChildren(f.mixer, children + [owner])
+                        }
                     }
                     return acknowledged
+                }
+            }
+            if let hydrationPeer {
+                b.setRole(hydrationPeer, kAXLayoutItemRole as String)
+                b.setAttribute(hydrationPeer, kAXNumberOfCharactersAttribute as String, 0)
+                b.setAttribute(hydrationPeer, kAXInsertionPointLineNumberAttribute as String, 0)
+                let peerName = b.element(1_971_803)
+                b.setRole(peerName, kAXTextFieldRole as String)
+                b.setAttribute(peerName, kAXDescriptionAttribute as String, "Name")
+                b.setAttribute(peerName, kAXValueAttribute as String, "Unrequested Peer")
+                b.setChildren(peerName, [])
+                b.setButton(hydrationInput, description: "Input", help: "", x: 0, y: 0, width: 1, height: 1)
+                b.setButton(hydrationOutput, description: "Output",
+                    help: "Output slot. Choose the channel strip output.", x: 0, y: 0, width: 1, height: 1)
+                b.setChildren(hydrationInput, []); b.setChildren(hydrationOutput, [])
+                b.setChildren(hydrationPeer, [peerName, hydrationInput, hydrationOutput])
+                b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer) + [hydrationPeer])
+                if let fault = peerDisplaySecondSampleFault {
+                    let originalRead = f.routingRead
+                    f.routingRead = { element, attribute in
+                        originalRead?(element, attribute)
+                        guard f.routingInputReadRenewed, f.routingNameWrites.first == "Selected Canonical",
+                              f.routingDestinationPresses == 0, CFEqual(element, peerName),
+                              attribute == kAXValueAttribute as String,
+                              let sample = AXHelpers.StripHelpSamples.current else { return }
+                        // Retain each actual row sampler, so a recycled address
+                        // cannot manufacture a distinct corroborating read.
+                        if !f.peerHydrationSamples.contains(where: { $0 === sample }) {
+                            f.peerHydrationSamples.append(sample)
+                        }
+                        guard f.peerHydrationSamples.count == 2, !f.peerHydrationFaultInjected else { return }
+                        f.peerHydrationFaultInjected = true
+                        switch fault {
+                        case "input": b.setAttribute(hydrationInput, kAXDescriptionAttribute as String, "Bus 10")
+                        case "slot":
+                            let replacement = b.element(1_971_804)
+                            b.setButton(replacement, description: "Bus 9", help: "Input slot. Choose the channel strip input.",
+                                x: 0, y: 0, width: 1, height: 1)
+                            b.setChildren(replacement, [])
+                            b.setChildren(hydrationPeer, [peerName, replacement, hydrationOutput])
+                        case "owner":
+                            let replacement = b.element(1_971_805)
+                            b.setRole(replacement, kAXLayoutItemRole as String)
+                            b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                            b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                            b.setChildren(replacement, [peerName, hydrationInput, hydrationOutput])
+                            b.setChildren(f.mixer, b.makeAXRuntime().children(f.mixer).map {
+                                CFEqual($0, hydrationPeer) ? replacement : $0
+                            })
+                        case "project": b.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        default: Issue.record("Unknown corroborating peer fault")
+                        }
+                    }
                 }
             }
             if sendGeometry {
@@ -6689,6 +6779,13 @@ struct Issue965HeldSelectionAssociationTests {
             }
             let id = try #require(before["snapshot_id"] as? String, "Actual initial capture: \(before)")
             let capture = try #require(await cache.retainedInspection(id: id)).capture
+            if let hydrationPeer {
+                let peer = try #require(capture.channelStrips.first {
+                    $0.physicalBinding.map { CFEqual($0.strip, hydrationPeer) } == true
+                })
+                #expect(peer.input == nil && peer.inputObservation?.state == .unreadable)
+                #expect(peer.output == "Output")
+            }
             let row = try #require(capture.channelStrips.indices.first {
                 capture.channelStrips[$0].physicalBinding.map { CFEqual($0.strip, f.strips[1]) } == true
             })
@@ -6886,6 +6983,24 @@ struct Issue965HeldSelectionAssociationTests {
                         singleWriterPopup: singleInverseWriterPopup)
                     if restoredNameCaption?.verifyRefusal(f, body: body) == true { return }
                     if sourceInputReadRenewal { #expect(f.routingInputReadRenewed, "Reach the actual owned Input source renewal") }
+                    if let fault = peerDisplaySecondSampleFault {
+                        #expect(f.peerHydrationFaultInjected && f.peerHydrationSamples.count >= 2,
+                            "The fault must reach two distinct actual native population samplers after the owned name")
+                        #expect(f.routingNameWrites.first == "Selected Canonical")
+                        #expect(f.routingDestinationPresses == 0 && f.routingBusLeafPresses.isEmpty)
+                        #expect(body["state"] as? String != "A" && body["saga_state"] as? String != "completed",
+                            "Actual corroboration refusal: \(sharedToolText(result))")
+                        if fault == "input" {
+                            #expect(b.attributeValue(hydrationInput, kAXDescriptionAttribute as String) as? String == "Bus 10")
+                        }
+                        if fault == "slot" {
+                            #expect(b.makeAXRuntime().children(hydrationPeer!).contains { CFEqual($0, b.element(1_971_804)) })
+                        }
+                        if fault == "project" {
+                            #expect(b.attributeValue(f.window, kAXDocumentAttribute as String) as? String == "file:///tmp/Foreign.logicx")
+                        }
+                        return
+                    }
                     try f.expectNamedSendInputFootprint()
                     if expireInspectionBeforeSendDispatch {
                         #expect(f.captureExpiredAtCheckedSendDispatch)

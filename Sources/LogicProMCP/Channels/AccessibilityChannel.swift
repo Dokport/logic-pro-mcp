@@ -709,43 +709,13 @@ actor AccessibilityChannel: Channel {
                     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
                     let originalValues = try? encoder.encode(population.strips)
                     var valuesAgree = originalValues != nil && originalValues == (try? encoder.encode(current.strips))
-                    func onlyPeerDisplaysBecameReadable() -> Bool {
-                        guard request.scope == .selection, request.domains.contains(.associations),
-                              let before = population.strips, let after = current.strips,
-                              before.count == after.count else { return false }
-                        let protected = population.selectionAssociations.map(\.strip)
-                            + renewals.flatMap { [$0.original, $0.pair.strip] }
-                            + checked.map(\.source) + checkedInputs.map(\.receiver)
-                        var refined = false
-                        for (old, new) in zip(before, after) {
-                            guard let oldBytes = try? encoder.encode(old), let newBytes = try? encoder.encode(new) else { return false }
-                            if oldBytes == newBytes { continue }
-                            guard let oldOwner = old.physicalBinding, let newOwner = new.physicalBinding,
-                                  !protected.contains(where: { $0.matches(oldOwner) || $0.matches(newOwner) }) else { return false }
-                            var comparable = new
-                            if old.input == nil, old.inputObservation == .init(state: .unreadable, source: nil),
-                               new.inputObservation?.state == .observedSource,
-                               let source = new.inputObservation?.source, !source.isEmpty,
-                               new.input?.utf8.elementsEqual(source.utf8) == true,
-                               let slot = new.inputSlotBinding, slot.owner.matches(newOwner),
-                               slot.source.utf8.elementsEqual(source.utf8) {
-                                comparable.input = old.input; comparable.inputObservation = old.inputObservation
-                            }
-                            // Reuse the existing MAMixer Output word for the
-                            // observed generic caption, not the type-filter row.
-                            // This comparison identifies no control or destination.
-                            if let oldOutput = old.output,
-                               AXLocalePolicy.outputPopupOutputSubmenuTitle.matches(oldOutput, mode: .exact),
-                               OutputAssignment.observed(slotLabel: oldOutput) == nil,
-                               let newOutput = new.output, OutputAssignment.observed(slotLabel: newOutput) != nil {
-                                comparable.output = old.output
-                            }
-                            guard (try? encoder.encode(comparable)) == oldBytes else { return false }
-                            refined = true
-                        }
-                        return refined
-                    }
-                    if !valuesAgree, current.stable, onlyPeerDisplaysBecameReadable() {
+                    let protectedPeers = population.selectionAssociations.map(\.strip)
+                        + renewals.flatMap { [$0.original, $0.pair.strip] }
+                        + checked.map(\.source) + checkedInputs.map(\.receiver)
+                    if !valuesAgree, current.stable,
+                       request.scope == .selection, request.domains.contains(.associations),
+                       let before = population.strips, let after = current.strips,
+                       Self.onlyPeerDisplaysBecameReadable(before: before, after: after, protecting: protectedPeers) {
                         // The earlier unreadable display proved no preserved value.
                         // Corroborate the new raw rows once, without another popup
                         // or setter; every known field and protected row stayed exact.
@@ -1087,6 +1057,41 @@ actor AccessibilityChannel: Channel {
             presentationBinding: .init(window: window, title: title, document: document,
                 mixer: lookup.binding?.mixer, transport: transport, runtime: logic, uiLocale: locale,
                 mixerOwners: lookup.binding?.owners ?? []))
+    }
+
+    /// Only unknown, unrequested routing displays may gain information. Callers
+    /// retain complete native custody and corroborate the result with a second
+    /// fresh read; this comparison grants no binding or mutation authority.
+    static func onlyPeerDisplaysBecameReadable(before: [ChannelStripState], after: [ChannelStripState],
+                                             protecting protected: [AXMixerStripBinding.Binding]) -> Bool {
+        guard before.count == after.count else { return false }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var refined = false
+        for (old, new) in zip(before, after) {
+            guard let oldBytes = try? encoder.encode(old), let newBytes = try? encoder.encode(new) else { return false }
+            if oldBytes == newBytes { continue }
+            guard let oldOwner = old.physicalBinding, let newOwner = new.physicalBinding,
+                  !protected.contains(where: { $0.matches(oldOwner) || $0.matches(newOwner) }) else { return false }
+            var comparable = new
+            if old.input == nil, old.inputObservation == .init(state: .unreadable, source: nil),
+               new.inputObservation?.state == .observedSource,
+               let source = new.inputObservation?.source, !source.isEmpty,
+               new.input?.utf8.elementsEqual(source.utf8) == true,
+               let slot = new.inputSlotBinding, slot.owner.matches(newOwner),
+               slot.source.utf8.elementsEqual(source.utf8) {
+                comparable.input = old.input; comparable.inputObservation = old.inputObservation
+            }
+            // The generic Output caption identifies no control or destination.
+            if let oldOutput = old.output,
+               AXLocalePolicy.outputPopupOutputSubmenuTitle.matches(oldOutput, mode: .exact),
+               OutputAssignment.observed(slotLabel: oldOutput) == nil,
+               let newOutput = new.output, OutputAssignment.observed(slotLabel: newOutput) != nil {
+                comparable.output = old.output
+            }
+            guard (try? encoder.encode(comparable)) == oldBytes else { return false }
+            refined = true
+        }
+        return refined
     }
 
     private func readExposedSessionPopulation(
