@@ -8701,7 +8701,8 @@ struct Issue965HeldSelectionAssociationTests {
 
     private func runInputBusRenewal(number: Int, condition: String, graph: Bool, keep: Bool,
                                     readOutputAfterRenewal: Bool, inputGoal: Int?) async throws {
-        let f = try Fixture(), registry = TargetRegistry()
+        let hasUnrequestedPeer = condition.hasPrefix("cold_rail_input_unrequested_peer")
+        let f = try Fixture(fourTracks: hasUnrequestedPeer), registry = TargetRegistry()
         let coldRailInput = condition.hasPrefix("cold_rail_input_")
         let captureNow = ContinuousClock.now
         let cache = StateCache(sessionCaptureNow: {
@@ -8821,7 +8822,8 @@ struct Issue965HeldSelectionAssociationTests {
                     f.inputRetirementCensusLag = true
                     f.inputRetiredSourceReadable = true
                 }
-                f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement] + unpairedRows + (condition == "popup_still_open" ? [root] : []))
+                f.builder.setChildren(f.mixer, [f.routingOtherReplacement ?? f.strips[0], replacement]
+                    + Array(f.strips.dropFirst(2)) + unpairedRows + (condition == "popup_still_open" ? [root] : []))
                 f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
                     condition.hasPrefix("force_fresh_rail_") || coldRailInput ? f.rail
                         : condition == "unselected_pair" ? f.strips[0] : replacement)
@@ -8896,18 +8898,26 @@ struct Issue965HeldSelectionAssociationTests {
                 return false
             }
         }
-        if condition == "cold_rail_input_peer_retired" {
-            f.routingSelection = { _ in
+        let firstChallengeRetiresPeer = condition == "cold_rail_input_peer_retired"
+            || condition == "cold_rail_input_unrequested_peer_changed"
+        if firstChallengeRetiresPeer || condition == "cold_rail_input_unrequested_peer" {
+            f.routingSelection = { index in
                 guard f.inputMenuCancels == 1, !f.routingLateScopeInjected else { return }
+                if !firstChallengeRetiresPeer, index != 2 { return }
                 f.routingLateScopeInjected = true
                 // Native cold capture: Cancel retained the original rail focus,
                 // then a peer CF retired during the original-header excursion.
                 // The checked popup's earlier focus receipt cannot prove this
                 // later selection inverse, and lost custody forbids forcing it.
                 f.builder.setRole(otherReplacement, kAXLayoutItemRole as String)
-                f.builder.setChildren(otherReplacement, f.builder.makeAXRuntime().children(f.strips[0]))
-                f.routingOtherReplacement = otherReplacement
-                f.builder.setChildren(f.mixer, [otherReplacement, replacement])
+                f.builder.setChildren(otherReplacement,
+                    f.builder.makeAXRuntime().children(f.strips[hasUnrequestedPeer ? 3 : 0]))
+                if hasUnrequestedPeer {
+                    f.builder.setChildren(f.mixer, [f.strips[0], replacement, f.strips[2], otherReplacement])
+                } else {
+                    f.routingOtherReplacement = otherReplacement
+                    f.builder.setChildren(f.mixer, [otherReplacement, replacement])
+                }
             }
         } else if condition == "partial_restore" {
             f.routingSelection = { _ in
@@ -8968,7 +8978,8 @@ struct Issue965HeldSelectionAssociationTests {
                 }
             }
         }
-        let before = try await inspect(f, cache: cache, registry: registry)
+        let before = try await inspect(f, cache: cache, registry: registry,
+            scope: hasUnrequestedPeer ? "selection" : "whole_project")
         let id = try #require(before["snapshot_id"] as? String)
         let capture = try #require(await cache.retainedInspection(id: id)).capture
         let row = try #require(capture.channelStrips.indices.first {
@@ -9106,7 +9117,7 @@ struct Issue965HeldSelectionAssociationTests {
                 #expect(f.inputMenuPresses == 1 && f.inputMenuCancels == 1)
                 #expect(!f.routingWrongSourcePressed && f.routingDestinationPresses == 0 && f.scrollWrites.isEmpty)
                 let effects = try #require(body["ui_effects"] as? [String: Any])
-                if condition == "cold_rail_input_peer_retired" {
+                if firstChallengeRetiresPeer {
                     #expect(f.routingLateScopeInjected && f.selections == [1, 0, 1, 0, 1],
                         "Reach the post-Cancel challenge, then refuse another write after its census retires")
                     #expect(f.builder.attributeValue(f.headers[1], kAXSelectedAttribute as String) as? Bool == true,
@@ -9140,6 +9151,10 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(f.selections == [1, 0, 1, 0, 1, 0])
                     #expect(effects["restoration"] as? String == "restored")
                     #expect(f.builder.attributeValue(f.headers[0], kAXSelectedAttribute as String) as? Bool == true)
+                    if hasUnrequestedPeer {
+                        #expect(!f.routingLateScopeInjected,
+                            "The selected capture needs its original-header return, not an unrequested second peer excursion")
+                    }
                 }
                 return
             }
@@ -10871,7 +10886,7 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("A restored input popup cannot hide its later original-header inverse failure",
-          arguments: ["healthy", "peer_retired"])
+          arguments: ["healthy", "peer_retired", "unrequested_peer", "unrequested_peer_changed"])
     func selectedInputCaptureReportsItsActualRenewalRestoration(_ outcome: String) async throws {
         try await assertInputBusRenewal(number: 1, condition: "cold_rail_input_\(outcome)", graph: true)
     }

@@ -592,6 +592,8 @@ actor AccessibilityChannel: Channel {
                         }
                         let owner = heldOwner
                         let pair = heldPair
+                        let capturedPeerHeaders = request.scope == .selection && pair != nil
+                            ? population.selectionAssociations.map(\.track) : nil
                         // A selection request qualifies only its captured pairs,
                         // not the unselected challenge or other raw physical rows.
                         // Whole-project outputs retain their broader observation;
@@ -612,12 +614,14 @@ actor AccessibilityChannel: Channel {
                                             restoringMixerGeometry: inputRestorationGeometry,
                                             observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
                                             observingRenewedFocus: { readFocusScope?.retainAssociation($0) },
+                                            observingPeerHeaders: capturedPeerHeaders,
                                             readingOriginalScope: readingScope)
                                     }
                                     return await Self.getInputBusObservation(runtime: runtime.logicRuntime,
                                         restoringMixerGeometry: inputRestorationGeometry,
                                         observingPopupFocus: { readFocusScope?.retainRoutingPopupFocus($0) },
                                         observingRenewedFocus: { readFocusScope?.retainAssociation($0) },
+                                        observingPeerHeaders: capturedPeerHeaders,
                                         readingOriginalScope: readingScope)
                                 }
                             }
