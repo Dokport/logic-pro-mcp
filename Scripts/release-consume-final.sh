@@ -7,12 +7,12 @@ set -euo pipefail
 umask 077
 
 if [ "$#" != 7 ]; then
-  echo "Usage: $0 stage|verify VERSION COMMIT CANDIDATE BUNDLE TRUSTED_VERIFIER PUBLIC_DIRECTORY" >&2
+  echo "Usage: $0 stage|verify|verify-public VERSION COMMIT CANDIDATE BUNDLE TRUSTED_VERIFIER PUBLIC_DIRECTORY" >&2
   exit 1
 fi
 mode="$1"; version="$2"; commit="$3"; candidate="$4"; bundle="$5"; verifier="$6"; public="$7"
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
-[[ "$mode" = stage || "$mode" = verify ]] || exit 1
+[[ "$mode" = stage || "$mode" = verify || "$mode" = verify-public ]] || exit 1
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || exit 1
 [[ "$commit" =~ ^[a-f0-9]{40}$ ]] || exit 1
 if [ ! -f "$candidate" ] || [ -L "$candidate" ]; then
@@ -75,6 +75,14 @@ for artifact in LogicProMCP LogicProMCP-macOS-universal.tar.gz LogicProMCP-macOS
     exit 1
   fi
 done
+if [ "$mode" = verify-public ]; then
+  for artifact in RELEASE-METADATA.json qualification-public.json; do
+    if [ ! -f "$public/$artifact" ] || [ -L "$public/$artifact" ]; then
+      echo "Final-artifact input must be a regular non-link file" >&2
+      exit 1
+    fi
+  done
+fi
 cmp "$private/LogicProMCP" "$public/LogicProMCP"
 codesign --verify --strict --verbose=2 "$public/LogicProMCP"
 verify_candidate "$public/LogicProMCP"
@@ -131,6 +139,55 @@ done
   LogicProMCP-macOS-arm64.tar.gz LogicProMCP | LC_ALL=C sort) > "$private/expected-checksums"
 LC_ALL=C sort "$public/SHA256SUMS.txt" > "$private/supplied-checksums"
 cmp "$private/expected-checksums" "$private/supplied-checksums"
+if [ "$mode" = verify-public ]; then
+  # The expected axis comes from the already trusted private snapshot, never
+  # from the downloaded public envelope. Detailed diagnostics remain private.
+  if ! python3 - "$private/bundle/release-qualification-attestation.json" \
+      > "$private/public-axis" 2> "$private/public-context.stderr" <<'PY'
+import json, pathlib, sys
+axis = json.loads(pathlib.Path(sys.argv[1]).read_bytes())['provenance']['axis']
+print('/'.join(axis[key] for key in ('variant', 'locale', 'profile', 'cache', 'fixture')))
+PY
+  then
+    echo "Final-artifact public context rejected" >&2
+    exit 1
+  fi
+  axis=$(cat "$private/public-axis")
+  if ! "$verifier" verify-public --public-directory "$public" \
+      --release-version "$version" --expected-commit "$commit" --expected-axis "$axis" \
+      > "$private/public-verification.json" 2> "$private/public-verification.stderr"; then
+    echo "Final-artifact public evidence rejected" >&2
+    exit 1
+  fi
+  # Tie the authenticated projection to THIS accepted bundle and independently
+  # derive distribution metadata from the same candidate. Adjacent checksums
+  # cannot authorize another bundle, version, signer or architecture claim.
+  if ! python3 - "$private/public-verification.json" "$private/bundle/evidence-manifest.json" \
+      "$public/RELEASE-METADATA.json" "$public/LogicProMCP" "$version" \
+      > "$private/public-binding.stdout" 2> "$private/public-binding.stderr" <<'PY'
+import hashlib, json, pathlib, re, subprocess, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+if payload['privateManifestSHA256'] != hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest():
+    raise ValueError('Different accepted private bundle')
+with open(sys.argv[3], 'rb') as source:
+    raw = source.read(4097)
+if len(raw) > 4096:
+    raise ValueError('Oversized release metadata')
+metadata = json.loads(raw)
+info = subprocess.run(['lipo', '-info', sys.argv[4]], check=True, capture_output=True,
+                      text=True, timeout=10).stdout.strip()
+single = re.search(r'Non-fat file: .* is architecture: ([A-Za-z0-9_]+)$', info)
+multiple = re.search(r'Architectures in the fat file: .* are: ([A-Za-z0-9_ ]+)$', info)
+architectures = [single.group(1)] if single else multiple.group(1).split() if multiple else None
+if not architectures or metadata != {'version': 'v' + sys.argv[5], 'team_id': 'ADHOC',
+                                      'signing': 'adhoc', 'architectures': architectures}:
+    raise ValueError('Release metadata differs from accepted candidate')
+PY
+  then
+    echo "Final-artifact public binding rejected" >&2
+    exit 1
+  fi
+fi
 if [ "$mode" = stage ]; then
   (cd "$public" && shasum -a 256 LogicProMCP LogicProMCP-macOS-universal.tar.gz \
     LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt > release-artifacts.sha256)

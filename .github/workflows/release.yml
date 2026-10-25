@@ -73,14 +73,14 @@ jobs:
       - name: Checkout authenticated trusted verifier
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: fa73358acc837b4d0d33c1b52bf3337232cb7a76
+          ref: 119da60a105de7401d39181347017ed48f57d13b
           path: trusted-verifier-src
 
       - name: Resolve and build trusted verifier without changing pins
         working-directory: trusted-verifier-src
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = fa73358acc837b4d0d33c1b52bf3337232cb7a76
+          test "$(git rev-parse HEAD)" = 119da60a105de7401d39181347017ed48f57d13b
           test -z "$(git status --porcelain)"
           swift package resolve --force-resolved-versions
           git diff --exit-code Package.resolved
@@ -123,23 +123,26 @@ jobs:
           QUALIFICATION_EVIDENCE_URL: ${{ secrets.QUALIFICATION_EVIDENCE_URL }}
           QUALIFICATION_EVIDENCE_SHA256: ${{ secrets.QUALIFICATION_EVIDENCE_SHA256 }}
           TRUSTED_QUALIFICATION_PUBLIC_KEY: ${{ secrets.TRUSTED_QUALIFICATION_PUBLIC_KEY }}
+          QUALIFICATION_PUBLIC_ASSETS_URL: ${{ secrets.QUALIFICATION_PUBLIC_ASSETS_URL }}
+          QUALIFICATION_PUBLIC_ASSETS_SHA256: ${{ secrets.QUALIFICATION_PUBLIC_ASSETS_SHA256 }}
         run: |
           set -euo pipefail
           private=$(mktemp -d)
           trap 'rm -rf "$private"' EXIT
           bash Scripts/release-fetch-qualified-inputs.sh stage "$private"
+          bash Scripts/release-fetch-qualified-inputs.sh public "$private"
           tag_body=$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")
           test "$(printf '%s\n' "$tag_body" | grep -c '^Final-candidate-SHA256: ')" = 1
           test "$(printf '%s\n' "$tag_body" | grep -c '^Qualification-manifest-SHA256: ')" = 1
           export EXPECTED_BINARY_SHA256=$(printf '%s\n' "$tag_body" | sed -n 's/^Final-candidate-SHA256: //p')
           export EXPECTED_MANIFEST_SHA256=$(printf '%s\n' "$tag_body" | sed -n 's/^Qualification-manifest-SHA256: //p')
           export LOGIC_PRO_MCP_QUALIFICATION_TRUSTED_PUBLIC_KEY="$TRUSTED_QUALIFICATION_PUBLIC_KEY"
-          bash Scripts/release-consume-final.sh stage "${GITHUB_REF_NAME#v}" "$GITHUB_SHA" \
+          bash Scripts/release-consume-final.sh verify-public "${GITHUB_REF_NAME#v}" "$GITHUB_SHA" \
             "$private/LogicProMCP" "$private/bundle" \
             "$PWD/trusted-verifier-src/.build/release/trusted-verifier" "$private/public"
           # ONLY public distribution assets. Raw evidence/reports stay private.
           for asset in LogicProMCP LogicProMCP-macOS-universal.tar.gz \
-                       LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt release-artifacts.sha256; do
+                       LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt qualification-public.json; do
             cp "$private/public/$asset" "$asset"
           done
 
@@ -165,6 +168,7 @@ jobs:
             LogicProMCP-macOS-arm64.tar.gz
             RELEASE-METADATA.json
             SHA256SUMS.txt
+            qualification-public.json
           )
           shasum -a 256 "${files[@]}" > release-artifacts.sha256
 
@@ -184,6 +188,7 @@ jobs:
             LogicProMCP-macOS-arm64.tar.gz
             RELEASE-METADATA.json
             SHA256SUMS.txt
+            qualification-public.json
             release-artifacts.sha256
 
   publish:
@@ -199,14 +204,14 @@ jobs:
       - name: Checkout authenticated trusted verifier
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: fa73358acc837b4d0d33c1b52bf3337232cb7a76
+          ref: 119da60a105de7401d39181347017ed48f57d13b
           path: trusted-verifier-src
 
       - name: Resolve and build trusted verifier without changing pins
         working-directory: trusted-verifier-src
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = fa73358acc837b4d0d33c1b52bf3337232cb7a76
+          test "$(git rev-parse HEAD)" = 119da60a105de7401d39181347017ed48f57d13b
           test -z "$(git status --porcelain)"
           swift package resolve --force-resolved-versions
           git diff --exit-code Package.resolved
@@ -228,7 +233,7 @@ jobs:
         run: |
           set -euo pipefail
           # Check declared outer file types before checksums can open them.
-          for artifact in LogicProMCP LogicProMCP-macOS-universal.tar.gz LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt release-artifacts.sha256; do
+          for artifact in LogicProMCP LogicProMCP-macOS-universal.tar.gz LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt qualification-public.json release-artifacts.sha256; do
             if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
               echo "Downloaded release input must be a regular non-link file" >&2
               exit 1
@@ -238,7 +243,7 @@ jobs:
           trap 'rm -rf "$private"' EXIT
           # Never let downloaded checksum rows choose filesystem paths to read.
           shasum -a 256 LogicProMCP LogicProMCP-macOS-universal.tar.gz \
-            LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt \
+            LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt qualification-public.json \
             | LC_ALL=C sort > "$private/expected-checksums"
           LC_ALL=C sort release-artifacts.sha256 > "$private/supplied-checksums"
           cmp "$private/expected-checksums" "$private/supplied-checksums"
@@ -250,7 +255,7 @@ jobs:
           export EXPECTED_BINARY_SHA256=$(printf '%s\n' "$tag_body" | sed -n 's/^Final-candidate-SHA256: //p')
           export EXPECTED_MANIFEST_SHA256=$(printf '%s\n' "$tag_body" | sed -n 's/^Qualification-manifest-SHA256: //p')
           export LOGIC_PRO_MCP_QUALIFICATION_TRUSTED_PUBLIC_KEY="$TRUSTED_QUALIFICATION_PUBLIC_KEY"
-          bash Scripts/release-consume-final.sh verify "${GITHUB_REF_NAME#v}" "$GITHUB_SHA" \
+          bash Scripts/release-consume-final.sh verify-public "${GITHUB_REF_NAME#v}" "$GITHUB_SHA" \
             "$PWD/LogicProMCP" "$private/bundle" \
             "$PWD/trusted-verifier-src/.build/release/trusted-verifier" "$PWD"
 
@@ -265,6 +270,7 @@ jobs:
             LogicProMCP-macOS-arm64.tar.gz
             RELEASE-METADATA.json
             SHA256SUMS.txt
+            qualification-public.json
 
   validate-install:
     # BEFORE `publish`, not after. Until 2026-09-18 this ran downstream of the GitHub Release,
@@ -300,7 +306,7 @@ jobs:
         run: |
           set -euo pipefail
           # Check declared outer file types before checksums can open them.
-          for artifact in LogicProMCP LogicProMCP-macOS-universal.tar.gz LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt release-artifacts.sha256; do
+          for artifact in LogicProMCP LogicProMCP-macOS-universal.tar.gz LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt qualification-public.json release-artifacts.sha256; do
             if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
               echo "Downloaded release input must be a regular non-link file" >&2
               exit 1
@@ -310,7 +316,7 @@ jobs:
           trap 'rm -rf "$private"' EXIT
           # Never let downloaded checksum rows choose filesystem paths to read.
           shasum -a 256 LogicProMCP LogicProMCP-macOS-universal.tar.gz \
-            LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt \
+            LogicProMCP-macOS-arm64.tar.gz RELEASE-METADATA.json SHA256SUMS.txt qualification-public.json \
             | LC_ALL=C sort > "$private/expected-checksums"
           LC_ALL=C sort release-artifacts.sha256 > "$private/supplied-checksums"
           cmp "$private/expected-checksums" "$private/supplied-checksums"
@@ -409,7 +415,7 @@ jobs:
           set -euo pipefail
           mkdir -p published
           for asset in LogicProMCP LogicProMCP-macOS-universal.tar.gz \
-                       LogicProMCP-macOS-arm64.tar.gz SHA256SUMS.txt RELEASE-METADATA.json; do
+                       LogicProMCP-macOS-arm64.tar.gz SHA256SUMS.txt RELEASE-METADATA.json qualification-public.json; do
             curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
                  -o "published/$asset" "$BASE/$TAG/$asset"
           done
@@ -418,7 +424,7 @@ jobs:
           # against the file this run built and installed from.
           status=0
           for asset in LogicProMCP LogicProMCP-macOS-universal.tar.gz \
-                       LogicProMCP-macOS-arm64.tar.gz SHA256SUMS.txt RELEASE-METADATA.json; do
+                       LogicProMCP-macOS-arm64.tar.gz SHA256SUMS.txt RELEASE-METADATA.json qualification-public.json; do
             built=$(shasum -a 256 "verified/$asset" | awk '{print $1}')
             live=$(shasum -a 256 "published/$asset" | awk '{print $1}')
             if [ "$built" != "$live" ]; then

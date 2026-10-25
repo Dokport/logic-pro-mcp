@@ -3371,6 +3371,7 @@ for name in ('LogicProMCP-macOS-universal.tar.gz', 'LogicProMCP-macOS-arm64.tar.
             'supplied', candidate=sys.argv[1], bundle_path=sys.argv[2],
             verifier=sys.argv[3], trusted_key=sys.argv[4], commit=sys.argv[5],
             entrypoint='stable' if sys.argv[6].startswith('stable') else 'hosted',
+            signing_key=sys.argv[7],
             archive_mutation={'hosted_archive_substitution': 'bytes', 'hosted_download_mode': 'mode644',
                               'hosted_archive_duplicate': 'duplicate', 'hosted_archive_nonexec': 'nonexec',
                               'hosted_archive_script': 'script'}.get(sys.argv[6]))
@@ -3378,7 +3379,8 @@ for name in ('LogicProMCP-macOS-universal.tar.gz', 'LogicProMCP-macOS-arm64.tar.
                           'stdout': result.stdout, 'stderr': result.stderr}))
         """, fixture.executableURL.path, fixture.directory.path,
             verifier.path,
-            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario]
+            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario,
+            fixture.signingKeyData.base64EncodedString()]
         let output = Pipe()
         let diagnostics = Pipe()
         process.standardOutput = output
@@ -3425,6 +3427,73 @@ for name in ('LogicProMCP-macOS-universal.tar.gz', 'LogicProMCP-macOS-arm64.tar.
         }
     }
 
+    /// Drive the YAML's public distribution path with a real signed bundle and
+    /// envelope. Network/publication leaves use controlled copies, never a release.
+    @Test(.timeLimit(.minutes(2)), arguments: ["valid", "missing", "payload", "fifo",
+        "other_manifest", "metadata", "retrieved_missing", "retrieved_payload", "omitted_publish", "omitted_upload"])
+    func releasePublicationPreservesAndRetrievesSignedPublicEvidence(_ scenario: String) async throws {
+        let sentinel = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "public-release-candidate-executed-\(UUID().uuidString)")
+        let fixture = try await signedTrustedFixture(candidateExecutionSentinelURL: sentinel)
+        defer {
+            fixture.remove()
+            try? FileManager.default.removeItem(at: sentinel)
+        }
+        let verifier = Self.releaseConsumerVerifierURL
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", "-c", """
+        import json, sys
+        sys.path.insert(0, 'Scripts')
+        from test_release_workflow import ReleaseFinalArtifactConsumerTests
+        result, calls = ReleaseFinalArtifactConsumerTests().run_consumer(
+            'supplied', candidate=sys.argv[1], bundle_path=sys.argv[2], verifier=sys.argv[3],
+            trusted_key=sys.argv[4], commit=sys.argv[5], signing_key=sys.argv[6],
+            entrypoint='public', public_fault=None if sys.argv[7] == 'valid' else sys.argv[7],
+            reverify_timeout=5 if sys.argv[7] == 'fifo' else 30)
+        print(json.dumps({'exit': result.returncode, 'timed_out': result.timed_out,
+                          'calls': calls, 'stdout': result.stdout, 'stderr': result.stderr}))
+        """, fixture.executableURL.path, fixture.directory.path, verifier.path,
+            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA,
+            fixture.signingKeyData.base64EncodedString(), scenario]
+        let output = Pipe()
+        let diagnostics = Pipe()
+        process.standardOutput = output
+        process.standardError = diagnostics
+        try process.run()
+        let bytes = output.fileHandleForReading.readDataToEndOfFile()
+        let errors = diagnostics.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        try #require(process.terminationStatus == 0, "\(String(decoding: errors, as: UTF8.self))")
+        let result = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let calls = try #require(result["calls"] as? [String])
+        let code = try #require(result["exit"] as? Int)
+        #expect(result["timed_out"] as? Bool == false, "\(result)")
+        #expect(calls.contains { $0 == "owner-preparation trusted-command verify-public" },
+                "the starting public copy must actually authenticate: \(result)")
+        if scenario == "valid" || scenario.hasPrefix("retrieved_") || scenario == "omitted_publish" {
+            #expect(calls.contains("public-envelope-preserved"), "\(result)")
+            #expect(calls.contains("public-archives-preserved"), "\(result)")
+            #expect(calls.filter { $0 == "trusted-command verify-public" }.count >= 2,
+                    "both build and publication must authenticate public evidence: \(result)")
+            #expect(calls.contains("hosted-release-action"), "\(result)")
+        }
+        if scenario == "valid" {
+            #expect(code == 0, "\(result)")
+            #expect(calls.contains("retrieved-public-envelope-verified"), "\(result)")
+        } else {
+            #expect(code != 0, "\(result)")
+            #expect(!calls.contains("retrieved-public-envelope-verified"), "\(result)")
+            if !scenario.hasPrefix("retrieved_") && scenario != "omitted_publish" {
+                #expect(!calls.contains("hosted-release-action"), "\(result)")
+            }
+        }
+        #expect(!calls.contains { $0.contains("Authorization:") || $0.contains("Bearer ") })
+        #expect(!calls.contains("signing-key-in-consumer"))
+        #expect(!calls.contains { $0.hasPrefix("swift build") || $0.hasPrefix("codesign --force") })
+        #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+    }
+
     /// Start with a real signed/verifier-accepted stage, then replace one public
     /// input or its checksum rows. The Python driver always reaps its child group.
     @Test(.timeLimit(.minutes(2)), arguments: ["direct_binary", "direct_archive", "direct_sums",
@@ -3458,6 +3527,7 @@ for name in ('LogicProMCP-macOS-universal.tar.gz', 'LogicProMCP-macOS-arm64.tar.
         result, calls = ReleaseFinalArtifactConsumerTests().run_consumer(
             'supplied', candidate=sys.argv[1], bundle_path=sys.argv[2], verifier=sys.argv[3],
             trusted_key=sys.argv[4], commit=sys.argv[5], entrypoint=entry,
+            signing_key=sys.argv[7],
             # Keep the tight liveness bound for every planted FIFO. Healthy
             # controls perform real archive/signature verification and use the
             # helper's ordinary bounded budget instead of the FIFO probe's.
@@ -3466,7 +3536,8 @@ for name in ('LogicProMCP-macOS-universal.tar.gz', 'LogicProMCP-macOS-arm64.tar.
         print(json.dumps({'exit': result.returncode, 'timed_out': result.timed_out,
                           'calls': calls, 'stdout': result.stdout, 'stderr': result.stderr}))
         """, fixture.executableURL.path, fixture.directory.path, verifier.path,
-            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario]
+            fixture.trustedPublicKeyData.base64EncodedString(), fixture.commitSHA, scenario,
+            fixture.signingKeyData.base64EncodedString()]
         let output = Pipe()
         let diagnostics = Pipe()
         process.standardOutput = output
