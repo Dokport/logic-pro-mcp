@@ -164,8 +164,14 @@ extension AccessibilityChannel {
     /// The Tracks area's Functions button: the second from the left of the menu buttons in the row
     /// nearest above the track list (Edit, Functions, View, then tool menus; measured on 12.4).
     private static func stripSilenceFunctionsButton(anchor header: AXUIElement, runtime: AXLogicProElements.Runtime) -> AXUIElement? {
+        // The menu row sits above the track LIST, not above the target track: anchor on the
+        // list's scroll area (measured: on a 21-track session, Voc at row 11 sat far below it).
+        var ancestor: AXUIElement? = AXHelpers.getAttribute(header, kAXParentAttribute as String, runtime: runtime.ax)
+        while let current = ancestor, AXHelpers.getRole(current, runtime: runtime.ax) != kAXScrollAreaRole as String {
+            ancestor = AXHelpers.getAttribute(current, kAXParentAttribute as String, runtime: runtime.ax)
+        }
         guard let window = AXLogicProElements.mainWindow(runtime: runtime),
-              let top = AXHelpers.getPosition(header, runtime: runtime.ax)?.y else { return nil }
+              let top = AXHelpers.getPosition(ancestor ?? header, runtime: runtime.ax)?.y else { return nil }
         let buttons = AXHelpers.findAllDescendants(of: window, role: kAXMenuButtonRole as String, maxDepth: 14, runtime: runtime.ax)
             .compactMap { button -> (AXUIElement, CGPoint)? in AXHelpers.getPosition(button, runtime: runtime.ax).map { (button, $0) } }
             .filter { $0.1.y < top && top - $0.1.y < 160 }
