@@ -1593,6 +1593,7 @@ extension AccessibilityChannel {
                      narrowChallengeHeaders: [AXTrackBinding.Binding] = [],
                      prioritizingHeader: AXTrackBinding.Binding? = nil,
                      observingPeerHeaders: [AXTrackBinding.Binding]? = nil,
+                     observingPeerStrips: [AXMixerStripBinding.Binding]? = nil,
                      populationReadDuration: Duration = .zero,
                      collectionNow: @Sendable () -> ContinuousClock.Instant = { .now }) async -> [Pair] {
             var preferredIndex: Int?
@@ -1655,10 +1656,11 @@ extension AccessibilityChannel {
             } else { collectionEnd = nil }
             var observed: [(Int, AXUIElement)] = []
             func requestedPeersWereObserved() -> Bool {
-                guard allHeldHeaders, let observingPeerHeaders, !observed.isEmpty else { return false }
+                guard allHeldHeaders, !observed.isEmpty,
+                      observingPeerHeaders != nil || observingPeerStrips != nil else { return false }
                 if let preferredIndex, preferredIndex != originalIndex,
                    !observed.contains(where: { $0.0 == preferredIndex }) { return false }
-                return observingPeerHeaders.allSatisfy { peer in
+                let headersObserved = observingPeerHeaders?.allSatisfy { peer in
                     guard CFEqual(peer.window, window),
                           peer.document.utf8.elementsEqual(document.utf8), peer.exposure?.hasEnded != true,
                           headers.filter({ CFEqual($0, peer.header) }).count == 1,
@@ -1667,7 +1669,18 @@ extension AccessibilityChannel {
                     // strip return below. This only ends optional discovery;
                     // no pair survives a failed full-custody inverse or viewport.
                     return index == originalIndex || observed.contains(where: { $0.0 == index })
-                }
+                } ?? true
+                guard headersObserved else { return false }
+                return observingPeerStrips?.allSatisfy { peer in
+                    guard CFEqual(peer.window, window), CFEqual(peer.mixer, mixer),
+                          peer.document.utf8.elementsEqual(document.utf8),
+                          strips.filter({ CFEqual($0, peer.strip) }).count == 1 else { return false }
+                    // Captured physical receivers are expected candidates only.
+                    // Their actual singleton header relationships must have
+                    // been observed; the original still needs its inverse below.
+                    return CFEqual(peer.strip, originalAssociationStrip)
+                        || observed.filter({ CFEqual($0.1, peer.strip) }).count == 1
+                } ?? true
             }
             var restored = true
             var selectionsVerified = true

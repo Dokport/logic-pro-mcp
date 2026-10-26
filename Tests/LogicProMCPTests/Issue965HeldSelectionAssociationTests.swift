@@ -11606,6 +11606,82 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("Captured physical receivers end discovery only after actual original-header relationships",
+          arguments: ["owned", "foreign_document", "foreign_window", "foreign_mixer",
+                      "same_label_foreign_strip", "required_retired", "unrelated_retired"])
+    func capturedNativeReceiversAvoidUnrelatedSelectionRetirement(fault: String) async throws {
+        let f = try Fixture(withViewport: true, fourTracks: true)
+        let gate = LogicMutationGate()
+        let claim = try #require(gate.tryAcquire(operation: "logic_project.inspect_session"))
+        defer { gate.release(claim) }
+        let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
+        try await OperationTraceContext.$current.withValue(context) {
+            let initial = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
+                logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
+            let pairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
+                allHeldHeaders: true, observingPeerHeaders: [])
+            let source = try #require(pairs.first { CFEqual($0.track.header, f.headers[0]) })
+            let peer = AXMixerStripBinding.Binding(window: f.window, mixer: f.mixer,
+                strip: f.strips[0], document: initial.document)
+            let foreign = f.builder.element(965_992_100)
+            f.builder.setRole(foreign, kAXLayoutItemRole as String)
+            let capturedName = try #require(f.builder.attributeValue(f.builder.element(1_965_713),
+                kAXValueAttribute as String) as? String)
+            let foreignName = f.builder.element(965_992_102)
+            f.builder.setRole(foreignName, kAXTextFieldRole as String)
+            f.builder.setAttribute(foreignName, kAXDescriptionAttribute as String, "Name")
+            f.builder.setAttribute(foreignName, kAXValueAttribute as String, capturedName)
+            f.builder.setChildren(foreign, [foreignName])
+            let foreignWindow = f.builder.element(965_992_103), foreignMixer = f.builder.element(965_992_104)
+            f.builder.setRole(foreignWindow, kAXWindowRole as String)
+            f.builder.setRole(foreignMixer, kAXGroupRole as String)
+            f.builder.setChildren(foreignWindow, [foreignMixer]); f.builder.setChildren(foreignMixer, [])
+            let second = AXMixerStripBinding.Binding(window: fault == "foreign_window" ? foreignWindow : f.window,
+                mixer: fault == "foreign_mixer" ? foreignMixer : f.mixer,
+                strip: fault == "same_label_foreign_strip" ? foreign : f.strips[3],
+                document: fault == "foreign_document" ? "file:///Foreign.logicx" : initial.document)
+            let count = f.selections.count
+            f.routingSetter = { element, attribute, value in
+                let challenge = fault == "required_retired" || fault == "unrelated_retired" ? 2 : 3
+                guard !f.routingLateScopeInjected, CFEqual(element, f.rail),
+                      attribute == kAXSelectedChildrenAttribute as String,
+                      let chosen = value as? [AXUIElement], chosen.count == 1,
+                      CFEqual(chosen[0], f.headers[challenge]) else { return nil }
+                f.routingLateScopeInjected = true
+                f.selections.append(challenge)
+                let changed = fault == "required_retired" ? 3 : 2
+                let replacement = f.builder.element(965_992_101)
+                for name in [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
+                             kAXNumberOfCharactersAttribute, kAXInsertionPointLineNumberAttribute] as [String] {
+                    if let current = f.builder.attributeValue(f.strips[changed], name) {
+                        f.builder.setAttribute(replacement, name, current)
+                    }
+                }
+                f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[changed]))
+                f.builder.setChildren(f.mixer, f.strips.enumerated().map { $0.offset == changed ? replacement : $0.element })
+                for (index, header) in f.headers.enumerated() {
+                    f.builder.setAttribute(header, kAXSelectedAttribute as String, index == challenge)
+                }
+                f.builder.setAttribute(f.app, kAXFocusedUIElementAttribute as String,
+                    fault == "unrelated_retired" ? f.strips[3] : replacement)
+                return true
+            }
+            let renewed = await AccessibilityChannel.renewSourceThroughOriginalHeader(source, original: source.strip,
+                runtime: f.logic(), sourceDisposition: .readObservation, observingPeerStrips: [peer, second])
+            if fault == "owned" {
+                let actual = try #require(renewed.source)
+                #expect(Array(f.selections.dropFirst(count)) == [1, 2, 0])
+                #expect(!f.routingLateScopeInjected, "Do not select the unrelated header whose native strip retires")
+                #expect(actual.pair.track.matches(source.track) && actual.pair.strip.matches(source.strip))
+                #expect(actual.observedPairs.count == 3 && actual.observation.strips.count == 4)
+                #expect(renewed.effects.restoration == "restored")
+            } else {
+                #expect(f.routingLateScopeInjected, "Reach the actual native retirement instead of trusting invalid candidates")
+                #expect(renewed.source == nil)
+            }
+        }
+    }
+
     @Test("Input source renewal forwards actual peer custody without optional unrelated selections")
     func inputRenewalForwardsActualNativePeerCollection() async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
