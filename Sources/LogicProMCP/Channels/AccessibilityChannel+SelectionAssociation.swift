@@ -1107,6 +1107,37 @@ extension AccessibilityChannel {
             return true
         }
 
+        private func retainMixerViewportAfterOwnedRestore(of control: AXUIElement, value: Double) -> Bool {
+            guard let expected = expectedMixerViewport else { return true }
+            guard let current = observedMixerViewportGeometry() else { lost = true; return false }
+            let horizontal = expected.horizontal.map { CFEqual($0.control, control) } ?? false
+            let vertical = expected.vertical.map { CFEqual($0.control, control) } ?? false
+            func positionMatches(_ before: MixerViewportPosition?, _ after: MixerViewportPosition?) -> Bool {
+                guard let before, let after else {
+                    return MixerViewportGeometry.samePosition(before, after)
+                }
+                if CFEqual(before.control, control) {
+                    return before.sameControlAndLayout(as: after) && after.value == value
+                }
+                return MixerViewportGeometry.samePosition(before, after)
+            }
+            guard positionMatches(expected.horizontal, current.horizontal),
+                  positionMatches(expected.vertical, current.vertical),
+                  let before = expected.frames.first, let after = current.frames.first else {
+                lost = true; return false
+            }
+            let dx = after.minX - before.minX, dy = after.minY - before.minY
+            guard dx.isFinite, dy.isFinite, (horizontal || dx == 0), (vertical || dy == 0),
+                  zip(expected.frames, current.frames).allSatisfy({ old, new in
+                      old.size == new.size && new.minX - old.minX == dx && new.minY - old.minY == dy
+                  }) else { lost = true; return false }
+            // An exposed control can also be found by the native sampler. Only
+            // this verified ordinary inverse may advance its native receipt;
+            // the other axis and all unrelated positions remain unchanged.
+            expectedMixerViewport = current
+            return true
+        }
+
         /// The installed Scroll To menu exposes existing physical rows without
         /// selecting a channel, synthesizing keys or changing a routing value.
         /// Success still requires the exact original layout and native census.
@@ -1483,6 +1514,10 @@ extension AccessibilityChannel {
                 // R965-VIEW-C001: the deciding AX reads can retire the request's
                 // reference without changing physical custody. Renew it last,
                 // then require pure acquisition/cancellation authority before writing.
+                if expectedMixerViewport != nil {
+                    guard !stop(), await referenceIsCurrent(), mixerViewportIsExpected(),
+                          (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
+                }
                 if !effects.attempted.contains("viewport") { effects.attempted.append("viewport") }
                 let accepted = AXHelpers.setAttribute(control, kAXValueAttribute as String,
                     NSNumber(value: original), runtime: logic.ax)
@@ -1493,6 +1528,7 @@ extension AccessibilityChannel {
                           entry.0 == index || entry.1.1 == expectedViewport[entry.0].1
                       }), permitsRead(), owned(), !stop() else { return false }
                 expectedViewport = after
+                guard retainMixerViewportAfterOwnedRestore(of: control, value: original) else { return false }
             }
             return Self.sameViewport(expectedViewport, viewport)
         }
@@ -1862,7 +1898,7 @@ extension AccessibilityChannel {
                 }
                 expectedMixerViewport = originalMixerViewport
             }
-            effects.restoration = "restored"
+            effects.restoration = expectedMixerViewport == nil ? "restored" : "not_restored"
             guard selectionsVerified, !observed.isEmpty else {
                 effects.reason = "association_selection_unverified"; return []
             }
@@ -1894,6 +1930,17 @@ extension AccessibilityChannel {
                   await referenceIsCurrent(), !stop() else {
                 effects.reason = "association_selection_unverified"; return []
             }
+            // Reference/stop callbacks and binding construction above can read
+            // or move the omitted native axes. Prove the original presentation
+            // after those final reads, without adopting a newer position.
+            if expectedMixerViewport != nil {
+                guard mixerViewportIsExpected(),
+                      (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else {
+                    effects.reason = "association_mixer_viewport_restoration_unverified"
+                    return []
+                }
+            }
+            effects.restoration = "restored"
             return pairs
         }
     }

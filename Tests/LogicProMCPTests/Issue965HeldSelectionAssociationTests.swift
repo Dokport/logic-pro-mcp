@@ -1759,7 +1759,13 @@ struct Issue965HeldSelectionAssociationTests {
                       "native_hidden_horizontal_initial_observation", "native_hidden_vertical_initial_observation",
                       "native_hidden_horizontal_initial_observation_late_reference_value",
                       "native_hidden_horizontal_initial_observation_before_selection",
-                      "native_hidden_horizontal_initial_observation_stop_reference"])
+                      "native_hidden_horizontal_initial_observation_stop_reference",
+                      "native_hidden_horizontal_initial_observation_exposed",
+                      "native_hidden_vertical_initial_observation_exposed",
+                      "native_hidden_horizontal_initial_observation_exposed_mixed",
+                      "native_hidden_horizontal_initial_observation_exposed_mixed_late_peer",
+                      "native_hidden_horizontal_initial_observation_publication_reference",
+                      "native_hidden_horizontal_initial_observation_publication_stop"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1776,10 +1782,13 @@ struct Issue965HeldSelectionAssociationTests {
             var initialStopCalls = 0
             var initialStopsAtWrite: Int?
             var referenceCurrent = true
+            var referencesAfterInverse = 0
+            var stopsAfterInverse = 0
             var rootAvailableAt: ContinuousClock.Instant?
         }
         func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false,
-                 stopFault: Int? = nil) async throws -> Probe {
+                 stopFault: Int? = nil, publicationReferenceFault: Int? = nil,
+                 publicationStopFault: Int? = nil) async throws -> Probe {
             let f = try Fixture(), gate = LogicMutationGate(), probe = Probe()
             defer { try? FileManager.default.removeItem(at: f.bundle) }
             for (index, strip) in f.strips.enumerated() {
@@ -1819,6 +1828,8 @@ struct Issue965HeldSelectionAssociationTests {
             let nativeVertical = fault.hasPrefix("native_hidden_vertical")
             let nativeViewport = nativeHorizontal || nativeVertical
             let horizontal = f.builder.element(1_975_510), thumb = f.builder.element(1_975_511)
+            let mixedViewport = fault.contains("_mixed")
+            let otherAxis = f.builder.element(1_975_513), otherThumb = f.builder.element(1_975_514)
             if nativeViewport {
                 let owner = f.builder.element(1_975_512)
                 f.builder.setRole(owner, kAXGroupRole as String)
@@ -1843,25 +1854,52 @@ struct Issue965HeldSelectionAssociationTests {
                     width: nativeVertical ? 15 : 700, height: nativeVertical ? 400 : 15)
                 f.builder.setChildren(horizontal, [thumb]); f.builder.setChildren(thumb, [])
                 // Like the observed native bar, its owner omits it from AXChildren.
-                f.routingFocusHit = { _, _ in .success(thumb) }
+                if fault.contains("_exposed") {
+                    f.builder.setChildren(owner, [f.mixer, controls, horizontal])
+                }
+                if mixedViewport {
+                    f.builder.setRole(otherAxis, kAXScrollBarRole as String)
+                    f.builder.setAttribute(otherAxis, kAXOrientationAttribute as String, kAXVerticalOrientationValue as String)
+                    f.builder.setAttribute(otherAxis, kAXWindowAttribute as String, f.window)
+                    f.builder.setAttribute(otherAxis, kAXParentAttribute as String, owner)
+                    f.builder.setAttribute(otherAxis, kAXValueAttribute as String, NSNumber(value: 0.25))
+                    f.builder.setAttributeSettable(otherAxis, kAXValueAttribute as String, true)
+                    f.builder.setFrame(otherAxis, x: 983, y: 300, width: 17, height: 530)
+                    f.builder.setRole(otherThumb, kAXValueIndicatorRole as String)
+                    f.builder.setAttribute(otherThumb, kAXWindowAttribute as String, f.window)
+                    f.builder.setFrame(otherThumb, x: 984, y: 350, width: 15, height: 400)
+                    f.builder.setChildren(otherAxis, [otherThumb]); f.builder.setChildren(otherThumb, [])
+                }
+                f.routingFocusHit = { _, point in .success(mixedViewport && point.y < 800 ? otherThumb : thumb) }
                 for (index, strip) in f.strips.enumerated() {
                     f.builder.setFrame(strip, x: CGFloat(index) * 100 - (nativeVertical ? 0 : 55),
-                        y: nativeVertical ? 337 : 350, width: 100, height: 300)
+                        y: nativeVertical || mixedViewport ? 337 : 350, width: 100, height: 300)
                 }
                 f.routingSetter = { element, attribute, value in
-                    guard CFEqual(element, horizontal), attribute == kAXValueAttribute as String,
+                    guard (CFEqual(element, horizontal) || mixedViewport && CFEqual(element, otherAxis)),
+                          attribute == kAXValueAttribute as String,
                           let number = value as? NSNumber else { return nil }
                     probe.viewportWrites += 1
                     if f.builder.attributeValue(f.window, kAXDocumentAttribute as String) as? String == "file:///tmp/Foreign.logicx" {
                         probe.foreignActions += 1
                     }
                     if fault.hasSuffix("_ack_only") { return true }
-                    f.builder.setAttribute(horizontal, attribute, number)
+                    f.builder.setAttribute(element, attribute, number)
+                    if fault.hasSuffix("_mixed_late_peer"), probe.viewportWrites == 1 {
+                        probe.injected = true
+                        f.builder.setAttribute(otherAxis, kAXValueAttribute as String, NSNumber(value: 0.5))
+                    }
                     f.builder.setFrame(thumb, x: nativeVertical ? 984 : 75, y: nativeVertical ? 350 : 814,
                         width: nativeVertical ? 15 : 700, height: nativeVertical ? 400 : 15)
                     for (index, strip) in f.strips.enumerated() {
-                        f.builder.setFrame(strip, x: CGFloat(index) * 100 - (nativeVertical ? 0 : 55),
-                            y: nativeVertical ? 337 : 350, width: 100, height: 300)
+                        let x = mixedViewport
+                            ? ((f.builder.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25 ? 55 : 0)
+                            : (nativeVertical ? 0 : 55)
+                        let otherValue = (f.builder.attributeValue(otherAxis, kAXValueAttribute as String) as? NSNumber)?.doubleValue
+                        let y = mixedViewport ? (otherValue == 0.25 ? 337 : otherValue == 0.5 ? 324 : 350)
+                            : (nativeVertical ? 337 : 350)
+                        f.builder.setFrame(strip, x: CGFloat(index) * 100 - CGFloat(x),
+                            y: CGFloat(y), width: 100, height: 300)
                     }
                     return true
                 }
@@ -1874,7 +1912,8 @@ struct Issue965HeldSelectionAssociationTests {
                     logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
                 let geometry = try #require(held.observedMixerViewportGeometry())
                 f.routingReadResult = { element, attribute in
-                    if nativeViewport, CFEqual(element, horizontal), attribute == kAXValueAttribute as String {
+                    if nativeViewport, (CFEqual(element, horizontal) || mixedViewport && CFEqual(element, otherAxis)),
+                       attribute == kAXValueAttribute as String {
                         if probe.leafPresses == 2, fault.hasSuffix("_late_document") {
                             f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                             probe.injected = true
@@ -1882,7 +1921,7 @@ struct Issue965HeldSelectionAssociationTests {
                         if probe.leafPresses == 2, fault.hasSuffix("_boolean") { return .success(NSNumber(value: false)) }
                         // Preserve native numeric zero; the generic fixture's
                         // convenience bridge otherwise coerces NSNumber(0) to Bool.
-                        return .success(f.builder.attributeValue(horizontal, attribute) as? NSNumber)
+                        return .success(f.builder.attributeValue(element, attribute) as? NSNumber)
                     }
                     if fault == "unread_parent", CFEqual(element, root), attribute == kAXParentAttribute as String {
                         return .failure(.init(raw: AXError.cannotComplete.rawValue))
@@ -1940,6 +1979,7 @@ struct Issue965HeldSelectionAssociationTests {
                         if probe.firstLeafChildrenRead == nil { probe.firstLeafChildrenRead = probe.viewChildrenReads }
                         if nativeViewport, CFEqual(element, audio) {
                             f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0))
+                            if mixedViewport { f.builder.setAttribute(otherAxis, kAXValueAttribute as String, NSNumber(value: 0)) }
                             f.builder.setFrame(thumb, x: nativeVertical ? 984 : 0, y: nativeVertical ? 300 : 814,
                                 width: nativeVertical ? 15 : 700, height: nativeVertical ? 400 : 15)
                             for (index, strip) in f.strips.enumerated() {
@@ -1951,6 +1991,16 @@ struct Issue965HeldSelectionAssociationTests {
                     return false
                 }
                 let referenceIsCurrent: @Sendable () async -> Bool = {
+                    if probe.viewportWrites > 0 {
+                        probe.referencesAfterInverse += 1
+                        if probe.referencesAfterInverse == publicationReferenceFault {
+                            probe.injected = true
+                            f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.5))
+                            for (index, strip) in f.strips.enumerated() {
+                                f.builder.setFrame(strip, x: CGFloat(index) * 100 - 110, y: 350, width: 100, height: 300)
+                            }
+                        }
+                    }
                     if fault.hasSuffix("_before_selection"), f.selections.isEmpty {
                         probe.initialReferenceCalls += 1
                         if probe.initialReferenceCalls == 2 {
@@ -1982,6 +2032,7 @@ struct Issue965HeldSelectionAssociationTests {
                         guard !probe.initialSelectionMoved else { return }
                         probe.initialSelectionMoved = true
                         f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0))
+                        if mixedViewport { f.builder.setAttribute(otherAxis, kAXValueAttribute as String, NSNumber(value: 0)) }
                         for (index, strip) in f.strips.enumerated() {
                             f.builder.setFrame(strip, x: CGFloat(index) * 100, y: 350, width: 100, height: 300)
                         }
@@ -1989,13 +2040,30 @@ struct Issue965HeldSelectionAssociationTests {
                     let pairs = await held.observe(referenceIsCurrent: referenceIsCurrent,
                         stoppingWhen: {
                             probe.initialStopCalls += 1
+                            if probe.viewportWrites > 0 {
+                                probe.stopsAfterInverse += 1
+                                if probe.stopsAfterInverse == publicationStopFault {
+                                    probe.injected = true
+                                    f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.5))
+                                    for (index, strip) in f.strips.enumerated() {
+                                        f.builder.setFrame(strip, x: CGFloat(index) * 100 - 110, y: 350, width: 100, height: 300)
+                                    }
+                                }
+                            }
                             if f.selections.isEmpty, probe.initialStopCalls == stopFault {
                                 probe.injected = true
                                 probe.referenceCurrent = false
                             }
                             return false
                         }, allHeldHeaders: true)
-                    if stopFault != nil {
+                    if fault.hasSuffix("_mixed_late_peer") {
+                        #expect(probe.injected && pairs.isEmpty && probe.viewportWrites == 1 && probe.leafPresses == 0)
+                        #expect((f.builder.attributeValue(otherAxis, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.5)
+                    } else if publicationReferenceFault != nil || publicationStopFault != nil {
+                        #expect(probe.injected && probe.initialSelectionMoved && f.selections == [1, 0])
+                        #expect(pairs.isEmpty && probe.viewportWrites == 1 && probe.leafPresses == 2)
+                        #expect((f.builder.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.5)
+                    } else if stopFault != nil {
                         #expect(probe.injected && !probe.initialSelectionMoved && f.selections.isEmpty)
                         #expect(pairs.isEmpty && probe.viewportWrites == 0 && probe.leafPresses == 0)
                     } else if fault.hasSuffix("_before_selection") {
@@ -2023,9 +2091,16 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(!recovered)
                     #expect(probe.cancels == 1)
                     #expect(f.builder.makeAXRuntime().children(view).isEmpty)
+                } else if publicationReferenceFault != nil || publicationStopFault != nil || fault.hasSuffix("_mixed_late_peer") {
+                    #expect(!recovered)
+                    #expect(probe.foreignActions == 0)
                 } else if nativeViewport && !["native_hidden_horizontal", "native_hidden_vertical",
                     "native_hidden_horizontal_initial_observation", "native_hidden_vertical_initial_observation",
-                    "native_hidden_horizontal_initial_observation_stop_reference"].contains(fault) || stopFault != nil {
+                    "native_hidden_horizontal_initial_observation_stop_reference",
+                    "native_hidden_horizontal_initial_observation_exposed", "native_hidden_vertical_initial_observation_exposed",
+                    "native_hidden_horizontal_initial_observation_exposed_mixed",
+                    "native_hidden_horizontal_initial_observation_publication_reference",
+                    "native_hidden_horizontal_initial_observation_publication_stop"].contains(fault) || stopFault != nil {
                     #expect(!recovered)
                     #expect(probe.viewportWrites == (fault.hasSuffix("_ack_only") ? 1 : 0))
                     #expect(probe.foreignActions == 0)
@@ -2033,7 +2108,8 @@ struct Issue965HeldSelectionAssociationTests {
                 } else {
                     #expect(recovered)
                     if nativeViewport {
-                        #expect(probe.leafPresses == 2 && probe.viewportWrites == 1)
+                        #expect(probe.leafPresses == (fault.hasSuffix("_exposed") ? 0 : 2))
+                        #expect(probe.viewportWrites == (mixedViewport ? 3 : 1))
                         #expect((f.builder.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25)
                         #expect(held.observedMixerViewportGeometry()?.frames == geometry.frames)
                     }
@@ -2048,6 +2124,14 @@ struct Issue965HeldSelectionAssociationTests {
         if fault == "failed_open" { _ = try await run(failedOpen: true) }
         if fault.hasSuffix("_stop_reference") {
             _ = try await run(stopFault: try #require(calibration.initialStopsAtWrite))
+        }
+        if fault.hasSuffix("_publication_reference") {
+            #expect(calibration.referencesAfterInverse > 1)
+            _ = try await run(publicationReferenceFault: calibration.referencesAfterInverse)
+        }
+        if fault.hasSuffix("_publication_stop") {
+            #expect(calibration.stopsAfterInverse > 1)
+            _ = try await run(publicationStopFault: calibration.stopsAfterInverse)
         }
     }
 
