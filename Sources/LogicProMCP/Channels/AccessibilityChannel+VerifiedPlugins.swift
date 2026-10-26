@@ -5569,7 +5569,7 @@ extension AccessibilityChannel {
                     "operation": operation,
                     "target_identity": preResolutionIdentity,
                     "what_was_attempted": "resolve insertable plugin identity '\(pluginAlias)'",
-                    "what_was_observed": "not an insertable allowlisted stock plugin (Gain / Channel EQ / Compressor)",
+                    "what_was_observed": "not an insertable allowlisted stock plugin (Gain / Channel EQ / Compressor / ChromaVerb / Stereo Delay)",
                     "safe_to_retry": false,
                     "write_attempted": false,
                 ]
@@ -7351,6 +7351,10 @@ extension AccessibilityChannel {
         "logic.stock.effect.gain",
         "logic.stock.effect.channel_eq",
         "logic.stock.effect.compressor",
+        // Mix-prep FX returns (2026-10-26): inserted by display name like the three above and
+        // read back by the same inventory; their parameters stay outside the verified surface.
+        "logic.stock.effect.chromaverb",
+        "logic.stock.effect.stereo_delay",
     ]
 
     private static func invalidParamsStateC(_ operation: String, _ detail: String) -> String {

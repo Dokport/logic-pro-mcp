@@ -324,6 +324,9 @@ enum SemanticOracleTable {
             // this exclusion is pending an oracle, not structural.
             "live State-A contract pending — State A is the whole track rail read back in the "
             + "measured stack shape; no oracle pinning that envelope has been written yet",
+        .mixerCreateTrackForStrip:
+            "live State-A contract pending — State A is the track list gaining exactly one track "
+            + "carrying the strip's name; no oracle pinning it yet",
         .mixerCreateSend:
             // Mix-prep, post-closure. State A is the strip's own send census plus the Mixer's
             // strip census; pending an oracle, not structural.

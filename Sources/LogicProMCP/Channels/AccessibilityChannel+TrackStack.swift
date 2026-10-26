@@ -200,7 +200,7 @@ extension AccessibilityChannel {
         case unreadable
     }
 
-    private static func trackStackRailRead(runtime: AXLogicProElements.Runtime) -> TrackStackRailRead {
+    static func trackStackRailRead(runtime: AXLogicProElements.Runtime) -> TrackStackRailRead {
         guard case .found(let window) = AXLogicProElements.arrangeWindowVerifiedRead(runtime: runtime),
               case .read(let headers) = AXLogicProElements.allTrackHeadersVerifiedRead(in: window, runtime: runtime) else {
             return .unreadable

@@ -46,6 +46,12 @@ enum VerifiedPluginCatalog {
         "sampledelay": "logic.stock.effect.sample_delay",
         "smpledly": "logic.stock.effect.sample_delay",
         "logic.stock.effect.sample_delay": "logic.stock.effect.sample_delay",
+        // Mix-prep FX returns: insertion only (no parameter is read or written through them).
+        "chromaverb": "logic.stock.effect.chromaverb",
+        "logic.stock.effect.chromaverb": "logic.stock.effect.chromaverb",
+        "stereo delay": "logic.stock.effect.stereo_delay",
+        "stereodelay": "logic.stock.effect.stereo_delay",
+        "logic.stock.effect.stereo_delay": "logic.stock.effect.stereo_delay",
     ]
 
     /// Per-plugin parameter-key alias table: caller key → canonical catalog

@@ -387,6 +387,9 @@ extension OperationRegistry {
                                         sample: .string("red")),
                 "readback": .enforced(.scalar, .string("ax"), allowed: TrackDispatcher.colorReadbackModes),
             ], required: [indexGroup, ["color"], ["expected_name", "target_ref"]]),
+            "mixer.create_track_for_strip": .init(params: [
+                "strip": .enforced(.string, .string("Aux 1")),
+            ], required: [["strip"]]),
             "mixer.create_send": .init(params: [
                 "strip": .enforced(.string, .string("Vox Lead")),
                 "bus": .enforced(.integer, .int(6)),

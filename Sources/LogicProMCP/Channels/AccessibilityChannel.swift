@@ -1759,6 +1759,8 @@ actor AccessibilityChannel: Channel {
             // Measured on Logic 12.4: the palette opens through its menu item, takes a native
             // click on an AX-derived swatch, and offers no AX readback (see +TrackColor).
             return await Self.defaultSetTrackColor(params: params, runtime: runtime.logicRuntime)
+        case "mixer.create_track_for_strip":
+            return await Self.defaultCreateTrackForStrip(params: params, runtime: runtime.logicRuntime)
         case "mixer.create_send":
             return await Self.defaultCreateSend(params: params, runtime: runtime.logicRuntime)
         case "mixer.create_aux":

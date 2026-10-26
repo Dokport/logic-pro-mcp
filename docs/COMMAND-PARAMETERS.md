@@ -63,6 +63,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `bank` | `count`: integer, `direction`: scalar (left, right) | `direction` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `create_aux` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `create_send` | `bus`: integer, `create_receiver`: boolean, `strip`: string | `strip`; `bus` | closed | mutating | none | none | readback_required | never_automatic | default_install |
+| `create_track_for_strip` | `strip`: string | `strip` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `get_input_bus_verified` | `project_ref`, `target_ref`: string | `target_ref` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `get_output_verified` | `project_ref`, `target_ref`: string | `target_ref` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `get_send_bypass_verified` | `ordinal`: integer, `project_ref`, `target_ref`: string | `target_ref`; `ordinal` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |

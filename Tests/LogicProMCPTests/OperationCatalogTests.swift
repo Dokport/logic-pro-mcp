@@ -122,6 +122,7 @@ struct OperationCatalogTests {
         .mixerBank: ["count", "direction"],
         .mixerCreateAux: [],
         .mixerCreateSend: ["bus", "create_receiver", "strip"],
+        .mixerCreateTrackForStrip: ["strip"],
         .mixerSetPluginParam: ["insert", "param", "value"],
         .mixerInsertPlugin: [
             // #871 `configuration` (and its alias) name the CHANNEL CONFIGURATION, used only when

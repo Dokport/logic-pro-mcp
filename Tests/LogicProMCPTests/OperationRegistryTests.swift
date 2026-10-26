@@ -32,6 +32,7 @@ struct OperationRegistryTests {
         (.mixerBank, "bank"),
         (.mixerCreateAux, "create_aux"),
         (.mixerCreateSend, "create_send"),
+        (.mixerCreateTrackForStrip, "create_track_for_strip"),
         (.mixerSetOutputVerified, "set_output_verified"),
         (.mixerGetOutputVerified, "get_output_verified"),
         (.mixerGetInputBusVerified, "get_input_bus_verified"),

@@ -56,45 +56,13 @@ extension AccessibilityChannel {
         }
         evidence["strips_before"] = before
 
-        // The Mixer's own menu buttons (measured on 12.4: Edit, Options, View) are the row of menu
-        // buttons nearest above the Mixer area, in a sibling group; Options is the second from the
-        // left. Only that one is pressed, and its item is still matched by label before anything is
-        // pressed in it: pressing other menus to look for it left Logic's menu tracking unsettled.
-        var pressed = false
-        let window = AXLogicProElements.mainWindow(runtime: runtime) ?? toolbar
-        let mixerTop = AXHelpers.getPosition(currentMixer, runtime: runtime.ax)?.y ?? 0
-        let candidates = AXHelpers.findAllDescendants(of: window, role: kAXMenuButtonRole as String, maxDepth: 14, runtime: runtime.ax)
-            .compactMap { button -> (button: AXUIElement, at: CGPoint)? in
-                AXHelpers.getPosition(button, runtime: runtime.ax).map { (button, $0) }
-            }
-            .filter { $0.at.y < mixerTop && mixerTop - $0.at.y < 80 }
-        let rowY = candidates.map(\.at.y).max()
-        let row = candidates.filter { abs($0.at.y - (rowY ?? 0)) < 1 }.sorted { $0.at.x < $1.at.x }
-        evidence["mixer_menu_buttons"] = row.count
-        if row.count == 3 {
-            let options = row[1].button
-            _ = AXHelpers.performAction(options, kAXPressAction as String, runtime: runtime.ax)
-            var items: [AXUIElement] = []
-            for _ in 0..<10 {
-                usleep(100_000)
-                items = AXHelpers.findAllDescendants(of: options, role: kAXMenuItemRole as String, maxDepth: 3, runtime: runtime.ax)
-                    .filter { AXLocalePolicy.mixerCreateAuxiliaryChannelStrip.matches(AXHelpers.getTitle($0, runtime: runtime.ax)) }
-                if !items.isEmpty { break }
-            }
-            if items.count == 1 {
-                let enabled: Bool? = AXHelpers.getAttribute(items[0], kAXEnabledAttribute as String, runtime: runtime.ax)
-                guard enabled == true else {
-                    AXMouseHelper.pressEscape()
-                    restoreView()
-                    return refuse(.unsupportedState, "menu_item_disabled", "Create New Auxiliary Channel Strip is not enabled.", evidence)
-                }
-                _ = AXHelpers.performAction(items[0], kAXPressAction as String, runtime: runtime.ax)
-                pressed = true
-            } else {
-                AXMouseHelper.pressEscape()
-            }
+        let pressed: MixerOptionsPress = pressMixerOptionsItem(
+            AXLocalePolicy.mixerCreateAuxiliaryChannelStrip, mixer: currentMixer, evidence: &evidence, runtime: runtime)
+        if case .disabled = pressed {
+            restoreView()
+            return refuse(.unsupportedState, "menu_item_disabled", "Create New Auxiliary Channel Strip is not enabled.", evidence)
         }
-        guard pressed else {
+        guard case .pressed = pressed else {
             restoreView()
             return refuse(.elementNotFound, "menu_item_absent", "No Mixer menu offers Create New Auxiliary Channel Strip.", evidence)
         }
@@ -125,6 +93,131 @@ extension AccessibilityChannel {
             evidence["detail"] = why
             return .success(HonestContract.encodeStateB(reason: .readbackMismatch, extras: evidence))
         }
+    }
+
+    enum MixerOptionsPress { case pressed, disabled, absent }
+
+    /// Presses the item labelled `label` in the Mixer's Options menu.
+    ///
+    /// The Mixer's own menu buttons (measured on 12.4: Edit, Options, View) are the row of menu
+    /// buttons nearest above the Mixer area, in a sibling group; Options is the second from the
+    /// left. Only that one is pressed, and its item is still matched by label before anything is
+    /// pressed in it: pressing other menus to look for it left Logic's menu tracking unsettled.
+    static func pressMixerOptionsItem(
+        _ label: AXLocalePolicy.LabelSet,
+        mixer: AXUIElement,
+        evidence: inout [String: Any],
+        runtime: AXLogicProElements.Runtime
+    ) -> MixerOptionsPress {
+        guard let window = AXLogicProElements.mainWindow(runtime: runtime) else { return .absent }
+        let mixerTop = AXHelpers.getPosition(mixer, runtime: runtime.ax)?.y ?? 0
+        let candidates = AXHelpers.findAllDescendants(of: window, role: kAXMenuButtonRole as String, maxDepth: 14, runtime: runtime.ax)
+            .compactMap { button -> (button: AXUIElement, at: CGPoint)? in
+                AXHelpers.getPosition(button, runtime: runtime.ax).map { (button, $0) }
+            }
+            .filter { $0.at.y < mixerTop && mixerTop - $0.at.y < 80 }
+        let rowY = candidates.map(\.at.y).max()
+        let row = candidates.filter { abs($0.at.y - (rowY ?? 0)) < 1 }.sorted { $0.at.x < $1.at.x }
+        evidence["mixer_menu_buttons"] = row.count
+        guard row.count == 3 else { return .absent }
+        let options = row[1].button
+        _ = AXHelpers.performAction(options, kAXPressAction as String, runtime: runtime.ax)
+        var items: [AXUIElement] = []
+        for _ in 0..<10 {
+            usleep(100_000)
+            items = AXHelpers.findAllDescendants(of: options, role: kAXMenuItemRole as String, maxDepth: 3, runtime: runtime.ax)
+                .filter { label.matches(AXHelpers.getTitle($0, runtime: runtime.ax)) }
+            if !items.isEmpty { break }
+        }
+        guard items.count == 1 else {
+            AXMouseHelper.pressEscape()
+            return .absent
+        }
+        let enabled: Bool? = AXHelpers.getAttribute(items[0], kAXEnabledAttribute as String, runtime: runtime.ax)
+        guard enabled == true else {
+            AXMouseHelper.pressEscape()
+            return .disabled
+        }
+        _ = AXHelpers.performAction(items[0], kAXPressAction as String, runtime: runtime.ax)
+        return .pressed
+    }
+
+    /// `mixer.create_track_for_strip`: select one Mixer strip by its exact name (a plain click on its
+    /// name field), Options > Create Tracks for Selected Channel Strips, and read the track list
+    /// back: exactly one new track carrying the strip's name, every other track unchanged in order.
+    /// Measured on Logic 12.4: an aux created by a send becomes a track this way, so the track tools
+    /// (rename, colour, plug-in insertion) reach it.
+    static func defaultCreateTrackForStrip(
+        params: [String: String],
+        runtime: AXLogicProElements.Runtime = .production
+    ) async -> ChannelResult {
+        var evidence: [String: Any] = ["operation": "mixer.create_track_for_strip", "write_attempted": false]
+        func refuse(_ error: HonestContract.FailureError, _ reason: String, _ hint: String) -> ChannelResult {
+            evidence["reason"] = reason
+            return .error(HonestContract.encodeStateC(error: error, hint: hint, extras: evidence))
+        }
+        guard let stripName = params["strip"], !stripName.isEmpty else {
+            return refuse(.invalidParams, "strip_missing", "create_track_for_strip requires 'strip': the Mixer strip's name")
+        }
+        evidence["strip"] = stripName
+        guard let mixer = AXLogicProElements.getMixerArea(runtime: runtime),
+              let strips = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: runtime.ax)?.strips else {
+            return refuse(.elementNotFound, "mixer_not_visible", "The Mixer is not shown or its strips did not read; nothing was pressed.")
+        }
+        let matches = strips.filter { (AXHelpers.getDescription($0, runtime: runtime.ax) ?? "").utf8.elementsEqual(stripName.utf8) }
+        guard matches.count == 1 else {
+            return refuse(matches.isEmpty ? .elementNotFound : .ambiguousTargetName,
+                          matches.isEmpty ? "strip_not_found" : "strip_ambiguous",
+                          "Exactly one Mixer strip must be named '\(stripName)'; found \(matches.count).")
+        }
+        guard case .read(let before) = trackStackRailRead(runtime: runtime) else {
+            return refuse(.readbackUnavailable, "rail_unreadable", "The track list did not read; nothing was pressed.")
+        }
+        let namesBefore = before.map(\.name)
+        guard !namesBefore.contains(where: { $0.utf8.elementsEqual(stripName.utf8) }) else {
+            return refuse(.unsupportedState, "track_exists", "A track named '\(stripName)' already exists; nothing was pressed.")
+        }
+        guard let field = AXHelpers.getChildren(matches[0], runtime: runtime.ax)
+                .first(where: { AXHelpers.getRole($0, runtime: runtime.ax) == kAXTextFieldRole as String }),
+              let origin = AXHelpers.getPosition(field, runtime: runtime.ax),
+              let size = AXHelpers.getSize(field, runtime: runtime.ax) else {
+            return refuse(.elementNotFound, "name_field_unreadable", "The strip's name field did not read; nothing was pressed.")
+        }
+        let front = FrontmostGate.prepareObserved(
+            observe: runtime.observeFrontmost,
+            activate: { ProcessUtils.activateLogicPro() },
+            sleepMicros: { usleep($0) }
+        )
+        guard front.preparation.isReady else {
+            return refuse(.unsupportedState, "logic_not_frontmost", "Logic Pro could not be brought to the front; nothing was pressed.")
+        }
+        AXMouseHelper.click(at: CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2))
+        usleep(400_000)
+        switch pressMixerOptionsItem(AXLocalePolicy.mixerAppendTracksForSelectedStrips, mixer: mixer, evidence: &evidence, runtime: runtime) {
+        case .pressed:
+            break
+        case .disabled:
+            return refuse(.unsupportedState, "menu_item_disabled",
+                "Create Tracks for Selected Channel Strips is not enabled: the strip did not become selected. Only the strip was clicked.")
+        case .absent:
+            return refuse(.elementNotFound, "menu_item_absent", "The Mixer's Options menu does not offer Create Tracks for Selected Channel Strips.")
+        }
+        evidence["write_attempted"] = true
+        var after: [String] = []
+        for _ in 0..<15 {
+            usleep(100_000)
+            guard case .read(let rows) = trackStackRailRead(runtime: runtime) else { continue }
+            after = rows.map(\.name)
+            if after.count == namesBefore.count + 1 { break }
+        }
+        evidence["after_order"] = after
+        if case .created(let name, let position) = CreateAuxVerifier.verdict(before: namesBefore, after: after),
+           name.utf8.elementsEqual(stripName.utf8) {
+            evidence["track_index"] = position
+            return .success(HonestContract.encodeStateA(extras: evidence))
+        }
+        evidence["hint"] = "The menu was pressed; the track list does not show exactly one new track named '\(stripName)'."
+        return .success(HonestContract.encodeStateB(reason: .readbackMismatch, extras: evidence))
     }
 
     /// The Single / Tracks / All radio group: the toolbar's only group of exactly three radios.

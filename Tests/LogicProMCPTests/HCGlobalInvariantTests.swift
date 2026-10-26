@@ -117,6 +117,7 @@ struct HCGlobalInvariantTests {
             RouteCase(tool: "logic_mixer", command: "set_volume", params: ["track": .int(0), "value": .double(0.5)], operation: "mixer.set_volume", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_pan", params: ["track": .int(0), "value": .double(0)], operation: "mixer.set_pan", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_master_volume", params: ["value": .double(0.5)], operation: "mixer.set_master_volume", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_mixer", command: "create_track_for_strip", params: ["strip": .string("Aux 1")], operation: "mixer.create_track_for_strip", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "create_send", params: ["strip": .string("Snare"), "bus": .int(6)], operation: "mixer.create_send", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "create_aux", params: [:], operation: "mixer.create_aux", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "bank", params: ["direction": .string("right")], operation: "mixer.bank", destinations: [], invariant: .minimumV1),

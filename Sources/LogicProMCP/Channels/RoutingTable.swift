@@ -100,6 +100,7 @@ extension ChannelRouter {
         "track.create_stack_verified": [.accessibility],
         "mixer.create_aux":           [.accessibility],
         "mixer.create_send":          [.accessibility],
+        "mixer.create_track_for_strip": [.accessibility],
         "track.set_automation":       [.mcu],  // §4.3.1 new command
         "track.create_stack":         [.midiKeyCommands, .cgEvent],
         "track.set_instrument":       [.accessibility],  // Library panel via AX + CGEvent
