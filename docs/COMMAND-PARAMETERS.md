@@ -169,6 +169,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `mute` | `enabled`: booleanLike, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `record_sequence` | `bar`: integer, `instrument`, `instrument_path`, `notes`: string, `tempo`: number | `notes` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `rename` | `index`: integer, `name`: scalar, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `name` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
+| `reorder_tracks` | `order`: array | `order` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `resolve_path` | `path`: scalar | `path` | closed | read_only | none | none | none | never_automatic | default_install |
 | `scan_library` | `mode` | none | closed | read_only | none | none | none | never_automatic | default_install |
 | `scan_plugin_presets` | `submenuOpenDelayMs`: integer | none | closed | read_only | none | none | none | never_automatic | default_install |

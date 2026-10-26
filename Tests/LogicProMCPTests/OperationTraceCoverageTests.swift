@@ -235,7 +235,7 @@ private let operationTraceCensusInternalWriteRoutes: Set<String> = [
     "mmc.play", "mmc.record_strobe", "mmc.stop",
     "nav.capture_markers", "nav.delete_marker", "nav.open_marker_list", "nav.rename_marker", "nav.zoom_to_fit",
     "plugin.insert", "plugin.insert_verified", "plugin.set_eq_band_verified", "plugin.set_param_verified",
-    "mixer.create_send", "mixer.create_track_for_strip", "track.strip_silence", "track.move_verified", "track.color_regions_by_track",
+    "mixer.create_send", "mixer.create_track_for_strip", "track.strip_silence", "track.move_verified", "track.reorder_verified", "track.color_regions_by_track",
     "region.move_to_playhead", "region.set_color",
     "track.create_audio", "track.create_stack_verified", "track.set_color", "track.create_drummer", "track.create_external_midi", "track.create_instrument",
     "track.rename", "track.select", "track.set_arm", "track.set_automation", "track.set_instrument",
@@ -1148,6 +1148,8 @@ private func operationTraceCoverageParams(
         ]
     case .tracksColorRegionsByTrack:
         return [:]
+    case .tracksReorderTracks:
+        return ["order": .array([.string(operationTraceCoverageTrackName)])]
     case .tracksMoveTrack:
         return ["name": .string(operationTraceCoverageTrackName), "after": .string("Other")]
     case .tracksCreateStack:

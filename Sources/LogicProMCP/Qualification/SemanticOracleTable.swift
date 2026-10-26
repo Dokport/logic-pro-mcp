@@ -328,6 +328,11 @@ enum SemanticOracleTable {
             // title naming a region colour change is the designed answer.
             "live State-B contract pending — no AX region-colour readback; the Undo title naming "
             + "a region colour change is the witness",
+        .tracksReorderTracks:
+            // Mix-prep, post-closure. State A is the whole track rail read back in the requested
+            // order with each stack's own members; pending an oracle, not structural.
+            "live State-A contract pending — State A is the whole track rail read back in the "
+            + "requested top-level order with every stack's members; no oracle pinning it yet",
         .tracksMoveTrack:
             // Mix-prep, post-closure. State A is the whole track rail read back in the expected
             // order; pending an oracle, not structural.

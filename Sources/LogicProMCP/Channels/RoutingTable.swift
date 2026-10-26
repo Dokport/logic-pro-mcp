@@ -98,6 +98,7 @@ extension ChannelRouter {
         "region.set_color":           [.accessibility],
         "track.strip_silence":        [.accessibility],
         "track.move_verified":        [.accessibility],
+        "track.reorder_verified":     [.accessibility],
         "track.color_regions_by_track": [.accessibility],
         "track.create_stack_verified": [.accessibility],
         "mixer.create_aux":           [.accessibility],

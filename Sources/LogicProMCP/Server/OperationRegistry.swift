@@ -137,6 +137,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case tracksCreateStack = "tracks.create_stack"
     case tracksStripSilence = "tracks.strip_silence"
     case tracksMoveTrack = "tracks.move_track"
+    case tracksReorderTracks = "tracks.reorder_tracks"
     case tracksColorRegionsByTrack = "tracks.color_regions_by_track"
     case tracksSetAutomation = "tracks.set_automation"
     case tracksSetInstrument = "tracks.set_instrument"
@@ -373,7 +374,7 @@ enum OperationRegistry {
             "tracks.select", "tracks.create_audio", "tracks.create_instrument",
             "tracks.create_drummer", "tracks.create_external_midi", "tracks.delete",
             "tracks.duplicate", "tracks.rename", "tracks.mute", "tracks.solo", "tracks.arm",
-            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.create_stack", "tracks.strip_silence", "tracks.move_track", "tracks.color_regions_by_track", "tracks.set_automation",
+            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.create_stack", "tracks.strip_silence", "tracks.move_track", "tracks.reorder_tracks", "tracks.color_regions_by_track", "tracks.set_automation",
             "tracks.set_instrument", "tracks.list_library", "tracks.scan_library",
             "tracks.resolve_path", "tracks.scan_plugin_presets",
         ],
@@ -429,7 +430,7 @@ enum OperationRegistry {
         ToolID.logicTracks.rawValue: [
             "select", "create_audio", "create_instrument", "create_drummer",
             "create_external_midi", "delete", "duplicate", "rename", "mute", "solo", "arm",
-            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "color_regions_by_track", "set_automation", "set_instrument", "list_library",
+            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "reorder_tracks", "color_regions_by_track", "set_automation", "set_instrument", "list_library",
             "scan_library", "resolve_path", "scan_plugin_presets",
         ],
     ]
@@ -1048,6 +1049,8 @@ enum OperationRegistry {
         // Every region takes its track's colour (Select All + Functions > Color Regions/Cells by
         // Track Color); State B with the Undo-title witness, as for every colour write.
         (.tracksColorRegionsByTrack, "color_regions_by_track", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.none, []),
+        // The whole top-level order by header drags (stacks closed, reopened and read back).
+        (.tracksReorderTracks, "reorder_tracks", Mutability.`mutating`, DeadlineClass.long, VerificationPolicy.readbackRequired, TargetPolicy.none, ["order"]),
         (.tracksMoveTrack, "move_track", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.none, ["after", "name"]),
         (.tracksCreateStack, "create_stack", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.none, ["kind", "members", "name"]),
         // Remove Silence on every audio region of one track; State A when the track holds exactly

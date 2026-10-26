@@ -1771,6 +1771,9 @@ actor AccessibilityChannel: Channel {
         case "track.color_regions_by_track":
             // Edit > Select All, then the Tracks area's Functions > Color Regions/Cells by Track Color.
             return await Self.defaultColorRegionsByTrack(params: params, runtime: runtime.logicRuntime)
+        case "track.reorder_verified":
+            // Stacks closed, top-level headers dragged into order, stacks reopened; whole rail read back.
+            return await Self.defaultReorderTracks(params: params, runtime: runtime.logicRuntime)
         case "track.move_verified":
             // A temporary folder stack of the anchor and the track, flattened again; rail read back.
             return await Self.defaultMoveTrack(params: params, runtime: runtime.logicRuntime)

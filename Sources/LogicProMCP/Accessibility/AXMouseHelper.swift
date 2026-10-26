@@ -288,6 +288,34 @@ enum AXMouseHelper {
         return true
     }
 
+    /// Press at `start`, move to `end` in small steps with the button held, release there. Measured
+    /// on Logic 12.4 for track headers: a press on the header's free area right of the name, about
+    /// 20 drag steps, and a release on a row's top edge moves the track (a stack header carries its
+    /// members) to just above that row. Ends with a flag-free move so nothing stays latched.
+    @discardableResult
+    static func drag(from start: CGPoint, to end: CGPoint, steps: Int = 20) -> Bool {
+        let source = CGEventSource(stateID: .hidSystemState)
+        func post(_ type: CGEventType, _ point: CGPoint) -> Bool {
+            guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else { return false }
+            event.post(tap: .cghidEventTap)
+            return true
+        }
+        guard post(.mouseMoved, start) else { return false }
+        usleep(100_000)
+        guard post(.leftMouseDown, start) else { return false }
+        usleep(250_000)
+        for step in 1...max(1, steps) {
+            let t = CGFloat(step) / CGFloat(max(1, steps))
+            _ = post(.leftMouseDragged, CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+            usleep(30_000)
+        }
+        usleep(250_000)
+        let released = post(.leftMouseUp, end)
+        usleep(150_000)
+        _ = post(.mouseMoved, end)
+        return released
+    }
+
     /// Post a sequence of keystrokes representing the given string. Only
     /// ASCII digits, `.`, `-` and `Return` are supported — sufficient for
     /// tempo / locator numeric entry.

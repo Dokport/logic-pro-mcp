@@ -99,7 +99,7 @@ struct OperationRegistryCoverageTests {
 
         // Exact target membership below covers additions without a redundant global count.
         #expect(targetBearingIDs == expectedTargetBearingIDs)
-        #expect(targetless.count == 86)   // #971 internally binds a retained project approval; mix-prep adds create_stack and create_aux
+        #expect(targetless.count == 87)   // #971 internally binds a retained project approval; mix-prep adds create_stack and create_aux
         #expect(targetBearingIDs.count + targetless.count == mutating.count)
         #expect(readOnly.count + mutating.count == OperationRegistry.specs.count)
         #expect(readOnly.contains { $0.id == .pluginsGetParamVerified })

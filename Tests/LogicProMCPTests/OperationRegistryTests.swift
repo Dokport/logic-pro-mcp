@@ -1140,6 +1140,7 @@ struct OperationRegistryTests {
         ("tracks.create_stack", "create_stack", .mutating, .medium, .readbackRequired),
         ("tracks.strip_silence", "strip_silence", .mutating, .medium, .readbackRequired),
         ("tracks.move_track", "move_track", .mutating, .medium, .readbackRequired),
+        ("tracks.reorder_tracks", "reorder_tracks", .mutating, .long, .readbackRequired),
         ("tracks.color_regions_by_track", "color_regions_by_track", .mutating, .medium, .readbackRequired),
         ("tracks.set_automation", "set_automation", .mutating, .short, .readbackRequired),
         ("tracks.set_instrument", "set_instrument", .mutating, .medium, .readbackRequired),
@@ -1214,7 +1215,7 @@ struct OperationRegistryTests {
         #expect(expected == Set([
             "select", "create_audio", "create_instrument", "create_drummer", "create_external_midi",
             "delete", "duplicate", "rename", "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified",
-            "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "color_regions_by_track", "set_automation", "set_instrument",
+            "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "reorder_tracks", "color_regions_by_track", "set_automation", "set_instrument",
         ]))
         #expect(OperationRegistry.mutatingCommands(tool: tool) == expected)
         for command in ["list_library", "scan_library", "resolve_path", "scan_plugin_presets"] {
