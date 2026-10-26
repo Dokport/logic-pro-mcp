@@ -151,7 +151,14 @@ Uafhængig kontrol efter kørslerne (`logic://mixer`): Kick…OH R → Bus 1 →
     - `StockPluginCatalog` factory-settings: Logic 12.4 har plug-in-mapper, som det 12.3-pinnede katalog ikke kender, fx "UltraPitch Shift (m)" og "Silk Vocal (m)".
     - 2 CoreMIDI-smoke-tests: et CoreMIDI-endpoint på denne Mac kunne ikke læses (-50). Det er miljøafhængigt.
   - Python-guard-tests, der kræver Python ≥ 3.10 og `yaml`, fejler også i baseline.
-- De målrettede suiter for mix-prep (545 tests) er grønne.
+- **Branch `5d2ea2fe` (endelig kode, Logic lukket, hosten stoppet, `--no-parallel`), 2026-10-26:**
+  - 7309 tests på 1804 s: 7290 beståede, 10 fejlede, 7 known issues.
+  - Ingen nye fejl. Alle 10 hører til de klasser, der også fejlede ved `b6641915` og i baseline:
+    - 9 × `RegionDragSpike*` (miljøafhængige).
+    - 1 × `StockPluginCatalog` factory-settings (12.4-mapper, som det 12.3-pinnede katalog ikke kender).
+  - De to CoreMIDI-smoke-tests, der fejlede ved `b6641915`, bestod denne gang.
+  - Kørt parallelt fejler nogle tests af og til (`MixerStripBindingTests`, `HCGlobalInvariant`, `OperationTraceCoverage` og `registeredSendLevel…`). De deler en global låsning, og hver af dem består alene.
+- De målrettede suiter for mix-prep er grønne.
 
 ## Stop-betingelser ramt
 
