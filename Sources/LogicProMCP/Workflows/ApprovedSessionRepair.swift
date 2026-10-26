@@ -1244,6 +1244,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         let pair: AccessibilityChannel.HeldSelectionAssociation.Pair
         let control: AXLogicProElements.AssignedSendMenuControl
         let renewal: AccessibilityChannel.OriginalHeaderSourceRenewal?
+        var checkedPeerHeaders: [AXTrackBinding.Binding]? = nil
         var continuedChange: AccessibilityChannel.ChangedSendObservation? = nil
     }
 
@@ -1385,6 +1386,7 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                 stage = "source_input_bookend"
                 guard sourceCurrent() else { return nil }
             }
+            var checkedPeerHeaders: [AXTrackBinding.Binding] = []
             for bus in buses {
                 stage = "receiver_\(bus)"
                 var checked = false
@@ -1470,6 +1472,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
                     }
                     stage = "receiver_\(bus)_source_bookend"
                     guard sourceCurrent() else { return nil }
+                    if let currentPair, !checkedPeerHeaders.contains(where: { $0.matches(currentPair.track) }) {
+                        checkedPeerHeaders.append(currentPair.track)
+                    }
                     checked = true
                     break
                 }
@@ -1543,7 +1548,9 @@ final class ApprovedSessionRepair: @unchecked Sendable {
             stage = "final_custody"
             guard await projectIsCurrent(allowPendingCancellation: true), sourceCurrent() else { return nil }
             accepted = true
-            return .init(pair: pair, control: finalControl, renewal: renewal, continuedChange: continuedChange)
+            return .init(pair: pair, control: finalControl, renewal: renewal,
+                checkedPeerHeaders: checkedPeerHeaders.isEmpty ? nil : checkedPeerHeaders,
+                continuedChange: continuedChange)
         })
     }
 

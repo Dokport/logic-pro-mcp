@@ -1614,6 +1614,17 @@ extension AccessibilityChannel {
                         && binding.exposure?.hasEnded != true
                 }.count == 1
             }
+            if let observingPeerHeaders {
+                let requested = Set(headers.indices.filter { index in
+                    observingPeerHeaders.contains { peer in
+                        CFEqual(peer.window, window) && peer.document.utf8.elementsEqual(document.utf8)
+                            && peer.exposure?.hasEnded != true && CFEqual(peer.header, headers[index])
+                            && headers.filter({ CFEqual($0, peer.header) }).count == 1
+                    }
+                })
+                eligibleChallenges = eligibleChallenges.filter { requested.contains($0) }
+                    + eligibleChallenges.filter { !requested.contains($0) }
+            }
             if let preferredIndex, preferredIndex != originalIndex {
                 eligibleChallenges.removeAll { $0 == preferredIndex }
                 eligibleChallenges.insert(preferredIndex, at: 0)

@@ -728,6 +728,7 @@ struct Issue965HeldSelectionAssociationTests {
         var routingInputReadRenewed = false
         var routingInverseRenewedSendMenuOpens = 0
         var routingSelectionsAtInverseLeaf: Int?
+        var routingForwardSelections: [Int] = []
 
         func expectMinimumInverseSourceChallenges() throws {
             let start = try #require(routingSelectionsAtInverseLeaf, "Reach the actual inverse leaf")
@@ -5128,6 +5129,15 @@ struct Issue965HeldSelectionAssociationTests {
         }
     }
 
+    @Test("An occupied Send forward uses its actual checked peer headers for source verification")
+    func occupiedSendForwardUsesItsCheckedPeerHeaders() async throws {
+        try await FeatureFlags.withAdr004MutationSagaForTests(true) {
+            try await assertOccupiedSingleSendRenewal(existingBus: true, restoring: true, emptyModeMenu: true,
+                noOpDestination: .bus(1), canonicalSend: "forward", canonicalBus: true, canonicalBusChange: true,
+                canonicalBusReceiverFault: "physical_source_read_renewal", measureForwardAssociations: true)
+        }
+    }
+
     @Test(arguments: ["forward", "cancel"])
     func canonicalBusStereoDepartureUsesCapturedInputsAndOwnEffect(mode: String) async throws {
         try await FeatureFlags.withAdr004MutationSagaForTests(true) {
@@ -5625,16 +5635,23 @@ struct Issue965HeldSelectionAssociationTests {
                                                measureChangedPermissionCensus: Bool = false,
                                                singleInverseWriterPopup: Bool = false,
                                                measureInverseAssociations: Bool = false,
+                                               measureForwardAssociations: Bool = false,
                                                forwardNameMovesFocus: Bool = false,
                                                initialNameRailFocus: Bool = false,
                                                peerDisplayHydration: Bool = false,
                                                peerDisplaySecondSampleFault: String? = nil,
                                                restoredNameCaption: RestoredNameCaptionScenario? = nil) async throws {
         try await FeatureFlags.withAdr002TargetRefForTests(true) {
-            let f = try Fixture(fourTracks: measureInverseAssociations), b = f.builder
+            let f = try Fixture(fourTracks: measureInverseAssociations || measureForwardAssociations), b = f.builder
             let hydrationPeer = peerDisplayHydration ? b.element(1_971_800) : nil
             let hydrationInput = b.element(1_971_801), hydrationOutput = b.element(1_971_802)
             defer {
+                if measureForwardAssociations {
+                    #expect(f.routingBusLeafPresses == [2] && f.routingDestinationPresses == 1,
+                        "The real occupied Send Bus leaf must execute exactly once")
+                    #expect(f.routingForwardSelections == [1, 0],
+                        "Verify the actual source and checked receiver without unrelated post-write headers")
+                }
                 if measureChangedPermissionCensus {
                     #expect(f.routingChangedSendPublished, "Every measured case must reach the actual native effect publisher")
                 }
@@ -6598,7 +6615,8 @@ struct Issue965HeldSelectionAssociationTests {
                             b.setAttribute(peer, kAXInsertionPointLineNumberAttribute as String, 0)
                             b.setChildren(peer, b.makeAXRuntime().children(f.strips[0]))
                             f.routingOtherReplacement = peer
-                            b.setChildren(f.mixer, [peer, readSource, receiver] + (hydrationPeer.map { [$0] } ?? []))
+                            b.setChildren(f.mixer, [peer, readSource] + Array(f.strips.dropFirst(2))
+                                + [receiver] + (hydrationPeer.map { [$0] } ?? []))
                             if hydrationPeer != nil {
                                 #expect(f.routingNameWrites == ["Selected Canonical"],
                                     "The peer must become readable only after the actual owned name and Input renewal")
@@ -6763,6 +6781,13 @@ struct Issue965HeldSelectionAssociationTests {
                 f.selectionKeepsPassiveRailFocus = true
                 b.setAttribute(f.mixer, kAXSelectedChildrenAttribute as String, [f.strips[1]])
                 b.setAttribute(f.app, kAXFocusedUIElementAttribute as String, f.rail)
+            }
+            if measureForwardAssociations {
+                let selection = f.routingSelection
+                f.routingSelection = { index in
+                    selection?(index)
+                    if f.routingDestinationPresses == 1 { f.routingForwardSelections.append(index) }
+                }
             }
             let before = try await inspect(f, cache: cache, registry: registry,
                 domains: inspectSendWitness == nil && canonicalSend == nil ? ["associations"] : ["tracks", "strips", "associations", "routing"],
@@ -11559,7 +11584,7 @@ struct Issue965HeldSelectionAssociationTests {
     }
 
     @Test("Optional peer discovery ends only after the requested native strips were actually associated",
-          arguments: ["owned", "missing_peer", "foreign_document", "unrequested_census_change"])
+          arguments: ["owned", "late_peer", "missing_peer", "foreign_document", "unrequested_census_change"])
     func requestedNativePeersEndOnlyOptionalDiscovery(fault: String) async throws {
         let f = try Fixture(withViewport: true, fourTracks: true)
         let gate = LogicMutationGate()
@@ -11571,13 +11596,25 @@ struct Issue965HeldSelectionAssociationTests {
                 logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
             let originalPairs = await initial.observe(referenceIsCurrent: { true }, stoppingWhen: { false }, allHeldHeaders: true)
             let first = try #require(originalPairs.first { CFEqual($0.track.header, f.headers[1]) })
-            let second = try #require(originalPairs.first { CFEqual($0.track.header, f.headers[2]) })
+            let second = try #require(originalPairs.first { CFEqual($0.track.header, f.headers[fault == "late_peer" ? 3 : 2]) })
             let absent = AXTrackBinding.Binding(window: f.window,
                 header: f.builder.element(965_992_001), document: initial.document, runtime: f.logic())
             let foreign = AXTrackBinding.Binding(window: f.window,
                 header: second.track.header, document: "file:///Foreign.logicx", runtime: f.logic())
             let targets = [first.track, fault == "missing_peer" ? absent : fault == "foreign_document" ? foreign : second.track]
             let count = f.selections.count
+            if fault == "late_peer" {
+                f.routingSelection = { index in
+                    guard index == 2 else { return }
+                    f.routingLateScopeInjected = true
+                    let replacement = f.builder.element(965_992_210)
+                    f.builder.setRole(replacement, kAXLayoutItemRole as String)
+                    f.builder.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
+                    f.builder.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
+                    f.builder.setChildren(replacement, f.builder.makeAXRuntime().children(f.strips[3]))
+                    f.builder.setChildren(f.mixer, [f.strips[0], f.strips[1], f.strips[2], replacement])
+                }
+            }
             if fault == "unrequested_census_change" {
                 f.routingSelection = { index in
                     if index == 2 {
@@ -11591,9 +11628,11 @@ struct Issue965HeldSelectionAssociationTests {
             let pairs = await observation.observe(referenceIsCurrent: { true }, stoppingWhen: { false },
                 allHeldHeaders: true, observingPeerHeaders: targets)
             let selected = Array(f.selections.dropFirst(count))
-            if fault == "owned" {
-                #expect(selected == [1, 2, 0], "Do not navigate to unrelated header3 after both actual native peers were observed")
-                #expect(pairs.count == 3 && !pairs.contains { CFEqual($0.track.header, f.headers[3]) })
+            if fault == "owned" || fault == "late_peer" {
+                #expect(selected == (fault == "late_peer" ? [1, 3, 0] : [1, 2, 0]),
+                    "Observe requested native peers before unrelated headers")
+                #expect(!f.routingLateScopeInjected)
+                #expect(pairs.count == 3 && !pairs.contains { CFEqual($0.track.header, f.headers[fault == "late_peer" ? 2 : 3]) })
                 #expect(observation.headers.count == 4 && observation.strips.count == 4)
                 #expect(observation.effects.restoration == "restored")
             } else if fault == "unrequested_census_change" {
