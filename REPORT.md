@@ -13,7 +13,8 @@ _Sidst opdateret: 2026-10-26_
 | LogicProMCPHost (rettigheder kun til én proces) | Implementeret og bevist: claude har ingen Accessibility, og serveren gennem hosten har |
 | `tracks.create_stack` (summing/folder + navn) | Implementeret. State A 3 gange i træk fra ren kopi (DRUMS) med debug-serveren. Bekræftelse gennem hosten mangler |
 | `mixer.create_aux` | Implementeret. State A 3 gange i træk fra ren kopi med debug-serveren. Bekræftelse gennem hosten mangler |
-| `set_output`, `set_send`, `move_track` | Ikke startet. Mekanismerne er målt i FINDINGS.md |
+| `set_output_verified` + `create_receiver` (output til ubrugt bus, Logic opretter aux) | Implementeret. State A 3 gange i træk fra ren kopi (debug-server). `set_output` forbliver "not exposed" efter upstreams beslutning (#291 R2) |
+| `set_send`, `move_track` | Ikke startet. Mekanismerne er målt i FINDINGS.md |
 | `apply_mix_layout` | Ikke startet |
 | "3 gange i træk fra ren kopi" | Ikke kørt endnu |
 
