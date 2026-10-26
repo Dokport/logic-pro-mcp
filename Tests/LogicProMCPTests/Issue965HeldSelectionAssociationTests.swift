@@ -1907,7 +1907,7 @@ struct Issue965HeldSelectionAssociationTests {
             let claim = try #require(gate.tryAcquire(operation: "scroll-to-readback"))
             defer { gate.release(claim) }
             let context = OperationTraceContext(mutationGateAcquired: true, ownsGate: { gate.stillOwns(claim) })
-            try await OperationTraceContext.$current.withValue(context) {
+            try await OperationTraceContext.$current.withValue(context) { @Sendable in
                 let held = try #require(AccessibilityChannel.HeldSelectionAssociation(window: f.window,
                     logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
                 let geometry = try #require(held.observedMixerViewportGeometry())
