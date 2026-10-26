@@ -1755,7 +1755,11 @@ struct Issue965HeldSelectionAssociationTests {
                       "native_hidden_vertical", "native_hidden_vertical_ack_only", "native_hidden_vertical_foreign",
                       "native_hidden_vertical_boolean", "native_hidden_vertical_late_document",
                       "native_hidden_vertical_late_reference_project", "native_hidden_vertical_late_reference_control",
-                      "native_hidden_vertical_late_reference_value"])
+                      "native_hidden_vertical_late_reference_value",
+                      "native_hidden_horizontal_initial_observation", "native_hidden_vertical_initial_observation",
+                      "native_hidden_horizontal_initial_observation_late_reference_value",
+                      "native_hidden_horizontal_initial_observation_before_selection",
+                      "native_hidden_horizontal_initial_observation_stop_reference"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1767,9 +1771,15 @@ struct Issue965HeldSelectionAssociationTests {
             var cancels = 0
             var leafPresses = 0
             var viewportWrites = 0
+            var initialSelectionMoved = false
+            var initialReferenceCalls = 0
+            var initialStopCalls = 0
+            var initialStopsAtWrite: Int?
+            var referenceCurrent = true
             var rootAvailableAt: ContinuousClock.Instant?
         }
-        func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false) async throws -> Probe {
+        func run(parentFault: Int? = nil, childrenFault: Int? = nil, failedOpen: Bool = false,
+                 stopFault: Int? = nil) async throws -> Probe {
             let f = try Fixture(), gate = LogicMutationGate(), probe = Probe()
             defer { try? FileManager.default.removeItem(at: f.bundle) }
             for (index, strip) in f.strips.enumerated() {
@@ -1940,20 +1950,67 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     return false
                 }
-                let recovered = await held.recoverMixerReadability(restoring: geometry,
-                    referenceIsCurrent: {
-                        if probe.leafPresses == 2, fault.contains("_late_reference_"), !probe.injected {
+                let referenceIsCurrent: @Sendable () async -> Bool = {
+                    if fault.hasSuffix("_before_selection"), f.selections.isEmpty {
+                        probe.initialReferenceCalls += 1
+                        if probe.initialReferenceCalls == 2 {
                             probe.injected = true
-                            if fault.hasSuffix("_project") {
-                                f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
-                            } else if fault.hasSuffix("_control") {
-                                f.builder.setAttribute(horizontal, kAXParentAttribute as String, foreignControls)
-                            } else {
-                                f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.5))
+                            f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.5))
+                            for (index, strip) in f.strips.enumerated() {
+                                f.builder.setFrame(strip, x: CGFloat(index) * 100 - 110, y: 350, width: 100, height: 300)
                             }
                         }
-                        return true
-                    }, stoppingWhen: { false })
+                    }
+                    if probe.leafPresses == 2, fault.contains("_late_reference_"), !probe.injected {
+                        probe.injected = true
+                        if fault.hasSuffix("_project") {
+                            f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
+                        } else if fault.hasSuffix("_control") {
+                            f.builder.setAttribute(horizontal, kAXParentAttribute as String, foreignControls)
+                        } else {
+                            f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.5))
+                        }
+                    }
+                    return probe.referenceCurrent
+                }
+                let recovered: Bool
+                if fault.contains("_initial_observation") {
+                    // Native selection can move an omitted Mixer scrollbar
+                    // before any later original-header renewal takes a sample.
+                    f.routingSelection = { _ in
+                        if probe.initialStopsAtWrite == nil { probe.initialStopsAtWrite = probe.initialStopCalls }
+                        guard !probe.initialSelectionMoved else { return }
+                        probe.initialSelectionMoved = true
+                        f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0))
+                        for (index, strip) in f.strips.enumerated() {
+                            f.builder.setFrame(strip, x: CGFloat(index) * 100, y: 350, width: 100, height: 300)
+                        }
+                    }
+                    let pairs = await held.observe(referenceIsCurrent: referenceIsCurrent,
+                        stoppingWhen: {
+                            probe.initialStopCalls += 1
+                            if f.selections.isEmpty, probe.initialStopCalls == stopFault {
+                                probe.injected = true
+                                probe.referenceCurrent = false
+                            }
+                            return false
+                        }, allHeldHeaders: true)
+                    if stopFault != nil {
+                        #expect(probe.injected && !probe.initialSelectionMoved && f.selections.isEmpty)
+                        #expect(pairs.isEmpty && probe.viewportWrites == 0 && probe.leafPresses == 0)
+                    } else if fault.hasSuffix("_before_selection") {
+                        #expect(probe.injected && !probe.initialSelectionMoved && f.selections.isEmpty)
+                        #expect(pairs.isEmpty && probe.viewportWrites == 0 && probe.leafPresses == 0)
+                        #expect((f.builder.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.5)
+                    } else {
+                        #expect(probe.initialSelectionMoved && f.selections == [1, 0])
+                        #expect(pairs.count == (fault.contains("_late_reference_") ? 0 : 2))
+                    }
+                    recovered = held.effects.restoration == "restored"
+                } else {
+                    recovered = await held.recoverMixerReadability(restoring: geometry,
+                        referenceIsCurrent: referenceIsCurrent, stoppingWhen: { false })
+                }
                 if parentFault != nil || childrenFault != nil {
                     #expect(probe.injected, "Reach the actual last deciding native path/menu read")
                     #expect(probe.foreignActions == 0, "No opening, leaf or cleanup action in a foreign document")
@@ -1966,7 +2023,9 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(!recovered)
                     #expect(probe.cancels == 1)
                     #expect(f.builder.makeAXRuntime().children(view).isEmpty)
-                } else if nativeViewport && !["native_hidden_horizontal", "native_hidden_vertical"].contains(fault) {
+                } else if nativeViewport && !["native_hidden_horizontal", "native_hidden_vertical",
+                    "native_hidden_horizontal_initial_observation", "native_hidden_vertical_initial_observation",
+                    "native_hidden_horizontal_initial_observation_stop_reference"].contains(fault) || stopFault != nil {
                     #expect(!recovered)
                     #expect(probe.viewportWrites == (fault.hasSuffix("_ack_only") ? 1 : 0))
                     #expect(probe.foreignActions == 0)
@@ -1987,6 +2046,9 @@ struct Issue965HeldSelectionAssociationTests {
         if fault == "late_leaf" { _ = try await run(childrenFault: try #require(calibration.firstLeafChildrenRead)) }
         if fault == "late_competing_root" { _ = try await run(childrenFault: try #require(calibration.firstLeafChildrenRead)) }
         if fault == "failed_open" { _ = try await run(failedOpen: true) }
+        if fault.hasSuffix("_stop_reference") {
+            _ = try await run(stopFault: try #require(calibration.initialStopsAtWrite))
+        }
     }
 
     @Test("An existing Bus output goal uses the current checked receiver and owns only its conditional inverse",
