@@ -11,8 +11,8 @@ _Sidst opdateret: 2026-10-26_
 | `tracks.set_color` | Implementeret og live-testet. Projektfil-tilbagelæsning gav State A på testprojektet |
 | `tracks.set_region_color` | Implementeret og live-testet på brugerens session gennem LogicProMCPHost (State B med undo-vidne) |
 | LogicProMCPHost (rettigheder kun til én proces) | Implementeret og bevist: claude har ingen Accessibility, og serveren gennem hosten har |
-| `tracks.create_stack` (summing/folder + navn) | Implementeret. State A 3 gange i træk fra ren kopi (DRUMS) med debug-serveren. Bekræftelse gennem hosten mangler |
-| `mixer.create_aux` | Implementeret. State A 3 gange i træk fra ren kopi med debug-serveren. Bekræftelse gennem hosten mangler |
+| `tracks.create_stack` (summing/folder + navn) | Implementeret. State A 3 gange i træk fra ren kopi (DRUMS) med debug-serveren. Også kørt gennem hosten (State A) |
+| `mixer.create_aux` | Implementeret. State A 3 gange i træk fra ren kopi med debug-serveren. Også kørt gennem hosten (State A) |
 | `set_output_verified` + `create_receiver` (output til ubrugt bus, Logic opretter aux) | Implementeret. State A 3 gange i træk fra ren kopi (debug-server). `set_output` forbliver "not exposed" efter upstreams beslutning (#291 R2) |
 | `mixer.create_send` (send til bus, evt. med oprettet FX-aux) | Implementeret. State A 3 gange i træk fra ren kopi (debug-server) |
 | `set_send_level_verified` med vilkårlige dB (−144…+6, komma eller punktum, 0,2 dB tolerance) | Udvidet. −12 og −18 dB gav State A 3 gange i træk. Kildesporet skal være valgt først |
@@ -21,7 +21,7 @@ _Sidst opdateret: 2026-10-26_
 | `insert_verified` udvidet til alle målte stock-effekter | 67 af 68 stock-effekter indsat og læst tilbage på 12.4 (`research/plugin-census-12.4.jsonl`); 34 forkortede slot-navne kortlagt. Slot N > 0 via Logics append-knap |
 | `tracks.move_track` (stak + flatten) | Implementeret. State A 3 gange i træk fra ren kopi. Kun opad; øverste position kræver drag og er ikke lavet |
 | `project.apply_mix_layout` (preflight → execute → status) | Implementeret. CLAUDE.md-specen (54 trin) kørt 3 gange i træk fra ren kopi, se Live-kørsler |
-| "3 gange i træk fra ren kopi" | Opfyldt med debug-serveren (claude med Accessibility) for alle operationer og `apply_mix_layout`. Bekræftelse gennem LogicProMCPHost mangler |
+| "3 gange i træk fra ren kopi" | Opfyldt for `apply_mix_layout` gennem LogicProMCPHost med claude uden Accessibility (State A 3/3), og med debug-serveren for alle enkeltoperationer |
 
 ## Rettighedsmodel (ændret 2026-10-26 efter brugerens ønske)
 
@@ -75,6 +75,18 @@ Brugeren vil ikke give en bred Tilgængelighed-rettighed til Claude eller termin
 | 2 × "70 BPM So Rey Dry" | dark green | `Change Track Color` | 1 + 2 regions, `Change Region Color` |
 
 De to Dry-spor har samme navn og blev derfor afvist af bindingen (`ambiguous_target_name`). De blev midlertidigt omdøbt til `·A` og `·B`, farvet og omdøbt tilbage. Alle fire omdøbninger gav State A.
+
+### Slutbekræftelse gennem LogicProMCPHost (2026-10-26)
+
+Claude (terminalen) havde **ingen** Accessibility (`AXIsProcessTrusted False`); kun LogicProMCPHost havde. Hosten blev bygget med den aktuelle kode, `tccutil reset Accessibility com.logicpro.mcp.host` kørt af brugeren, og hostens egen tilladelses-prompt brugt til at give adgangen igen. (Et "til"-flag i Systemindstillinger, der hører til en tidligere ad hoc-signatur, virker ikke; listen skulle genindlæses.)
+
+| Hvad | Resultat gennem hosten |
+|---|---|
+| `create_aux`, `strip_silence`, `move_track`, `create_stack` (navngivet summing-stak) | State A hver (fra ren kopi) |
+| FX-return-kæde: `create_send` + modtager, `create_track_for_strip`, `rename` | State A |
+| `set_color` (ax) | State B med undo-vidne, som designet |
+| `insert_verified` ChromaVerb | Operationens egen læsning: C (`operation_timeout`); uafhængig `get_inventory`: ChromaVerb i slot 0 |
+| `apply_mix_layout`, CLAUDE.md-specen, `color_readback: project_file` | **State A 3 gange i træk** fra ren kopi, 54/54 trin; Mixer-kontrollen bagefter identisk alle tre gange |
 
 ### `apply_mix_layout` med CLAUDE.md-specen (2026-10-26)
 
