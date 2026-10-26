@@ -352,6 +352,8 @@ enum OperationHandlerRegistry {
                             try await dependencies.poller.acquireSessionPopulation(request: request, targetRegistry: dependencies.targetRegistry)
                         }, applySessionRepair: { request in
                             await ApprovedSessionRepair.apply(request: request, dependencies: dependencies)
+                        }, applyMixLayout: { params in
+                            await MixLayoutSaga.handle(params: params, dependencies: dependencies)
                         }
                     )
                 }
@@ -367,6 +369,8 @@ enum OperationHandlerRegistry {
                         try await dependencies.poller.acquireSessionPopulation(request: request, targetRegistry: dependencies.targetRegistry)
                     }, applySessionRepair: { request in
                         await ApprovedSessionRepair.apply(request: request, dependencies: dependencies)
+                    }, applyMixLayout: { params in
+                        await MixLayoutSaga.handle(params: params, dependencies: dependencies)
                     }
                 )
             }

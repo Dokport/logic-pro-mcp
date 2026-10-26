@@ -110,6 +110,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 
 | Command | Parameters | Required | Unknown parameters | Mutability | Confirmation | Target | Verification | Retry | Availability |
 |---|---|---|---|---|---|---|---|---|---|
+| `apply_mix_layout` | `color_readback`: scalar (ax, project_file), `confirmed_plan_hash`: string, `idempotency_key`: string, `mode`: scalar (preflight, execute, status), `spec` | none | closed | mutating | l1 | none | readback_required | never_automatic | default_install |
 | `apply_session_repair` | `confirmed`, `digest`, `idempotency_key`, `plan_id` | `plan_id`; `digest`; `confirmed`; `idempotency_key` | closed | mutating | l1 | none | readback_required | never_automatic | default_install |
 | `audit` | none | none | closed | read_only | none | none | none | never_automatic | default_install |
 | `bounce` | `confirmed`: boolean | none | closed | mutating | l2 | none | readback_required | never_automatic | default_install |
@@ -163,6 +164,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `delete` | `expected_name`, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `expected_name` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `duplicate` | `expected_name`, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `expected_name` or `target_ref` | closed | mutating | none | accepts_stable_target | none | never_automatic | default_install |
 | `list_library` | none | none | closed | read_only | none | none | none | never_automatic | default_install |
+| `move_track` | `after`: string, `name`: string | `name`; `after` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `mute` | `enabled`: booleanLike, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `record_sequence` | `bar`: integer, `instrument`, `instrument_path`, `notes`: string, `tempo`: number | `notes` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `rename` | `index`: integer, `name`: scalar, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `name` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |

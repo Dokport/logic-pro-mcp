@@ -1381,15 +1381,35 @@ extension AXLogicProElements {
                     for leaf in walk where leaf.depth == 4 {
                         guard let children = childrenIfRead(leaf.element, runtime: runtime), children.isEmpty else { return nil }
                     }
+                    // Mix-prep (Logic 12.4, two sends on one strip): the run lists every group,
+                    // then every knob. Each group's knob is the one on its own row; only an exact
+                    // one-to-one pairing by row carries a level and the knob control, otherwise
+                    // the slots stay level-less as before.
+                    let rowKnobs: [Int]? = {
+                        let groupRows = groups.map { AXHelpers.getPosition(walk[$0].element, runtime: runtime)?.y }
+                        let knobRows = knobs.map { AXHelpers.getPosition(walk[$0].element, runtime: runtime)?.y }
+                        var paired: [Int] = []
+                        for row in groupRows {
+                            guard let row else { return nil }
+                            let hits = knobs.indices.filter { knobRows[$0].map { abs($0 - row) < 1 } ?? false }
+                            guard hits.count == 1 else { return nil }
+                            paired.append(knobs[hits[0]])
+                        }
+                        return Set(paired).count == paired.count ? paired : nil
+                    }()
                     for (offset, group) in groups.enumerated() {
                         consumedGroups.insert(group)
                         let originalParent: AXUIElement? = AXHelpers.getAttribute(walk[group].element, kAXParentAttribute as String, runtime: runtime)
-                        retainMenuControl(at: group, ordinal: observations.count, bypass: bypassControls[offset])
-                        observations.append(SendSlotObservation(
-                            ordinal: observations.count, state: .occupiedUnknownDestination,
-                            bypassed: observedSendBypass(group: walk[group].element, control: bypassControls[offset], runtime: runtime),
-                            destinationDisplay: observedSendDisplay(group: walk[group].element, control: bypassControls[offset], sourcePath: sourcePath(at: group), originalParent: originalParent, runtime: runtime)
-                        ))
+                        var observation = SendSlotObservation(ordinal: observations.count, state: .occupiedUnknownDestination)
+                        if let knob = rowKnobs?[offset] {
+                            observation = occupiedSendSlot(ordinal: observations.count, knob: walk[knob].element, runtime: runtime)
+                            retainMenuControl(at: group, ordinal: observations.count, bypass: bypassControls[offset], level: walk[knob].element)
+                        } else {
+                            retainMenuControl(at: group, ordinal: observations.count, bypass: bypassControls[offset])
+                        }
+                        observation.bypassed = observedSendBypass(group: walk[group].element, control: bypassControls[offset], runtime: runtime)
+                        observation.destinationDisplay = observedSendDisplay(group: walk[group].element, control: bypassControls[offset], sourcePath: sourcePath(at: group), originalParent: originalParent, runtime: runtime)
+                        observations.append(observation)
                     }
                     continue
                 }

@@ -862,6 +862,18 @@ enum AXLocalePolicy {
         item: createTrackStackMenuItem
     )
 
+    static let flattenStackMenuItem = LabelSet(
+        canonical: "Flatten Stack",
+        variants: ["스택 평탄화", "スタックをフラット化", "Spurstapel reduzieren", "Compactar pila", "Aplatir la pile", "Compatta pila", "Nivelar Stack", "展平堆栈", "壓平堆疊"],
+        rationale: "Track > Flatten Stack removes the selected stack's main track and leaves its members in place; move_track uses it after a temporary folder stack. Read off an en-US Logic 12.4 menu bar on 2026-10-26 (research/ax/menubar-noproject.txt) and pressed live there; every other locale is the value of the row named below in this installed Logic.framework. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Flatten%20Stack#value"
+    )
+
+    static let flattenStackMenuPath = MenuPath(
+        bar: trackMenuBar,
+        item: flattenStackMenuItem
+    )
+
     static let removeSilenceMenuItem = LabelSet(
         canonical: "Remove Silence from Audio Region…",
         variants: ["오디오 리전에서 무음 구간 제거…", "オーディオリージョンから無音部分を削除…", "Stille von Audioregion entfernen …", "Eliminar silencio de pasaje de audio…", "Supprimer le silence de la région audio…", "Rimuovi silenzio dalla regione audio…", "Remover Silêncio da Região de Áudio…", "将无声片段从音频片段中移除…", "從音訊區段移除靜音⋯"],
@@ -3736,6 +3748,7 @@ enum AXLocalePolicy {
         viewColorsMenuItem,
         changeRegionColorUndoOperation,
         createTrackStackMenuItem,
+        flattenStackMenuItem,
         removeSilenceMenuItem,
         stripSilenceUndoOperation,
         sortTracksByMIDIChannelMenuItem,

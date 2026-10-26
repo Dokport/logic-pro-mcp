@@ -116,6 +116,40 @@ extension AXLogicProElements {
         return screenOrderedInsertSlots(slots, children: children, runtime: runtime)
     }
 
+    /// The insert slots plus, when every recognised slot is occupied, the strip's short append
+    /// button as the next slot (index = occupied count).
+    ///
+    /// Measured on Logic 12.4 (and in the 12.3 fixture above): once a strip holds a plug-in, the
+    /// only empty affordance is a ~9 px "Audio Plug-in" button directly below the lowest occupied
+    /// slot; there is no full-height empty row. `audioPluginInsertSlots` leaves it out, so a strip
+    /// could only ever be filled at slot 0. Offered here only for a contiguous, fully occupied,
+    /// screen-ordered chain, with the button below the lowest slot; the insert path still proves by
+    /// inventory diff which slot the plug-in actually landed in.
+    static func audioPluginInsertSlotsWithAppend(
+        in strip: AXUIElement,
+        runtime: AXHelpers.Runtime = .production
+    ) -> [PluginInsertSlot]? {
+        guard let children = childrenIfRead(strip, runtime: runtime) else { return nil }
+        let slots = audioPluginInsertSlots(children: children, runtime: runtime)
+        guard !slots.isEmpty, slots.allSatisfy({ $0.occupied && $0.readStatus != .unclassified }),
+              let lowest = slots.compactMap({ elementFrame($0.element, runtime: runtime) }).max(by: { $0.minY < $1.minY }),
+              slots.count == slots.compactMap({ elementFrame($0.element, runtime: runtime) }).count else {
+            return slots
+        }
+        let appends = children.filter { child in
+            guard (AXHelpers.getRole(child, runtime: runtime) ?? "") == (kAXButtonRole as String),
+                  let frame = elementFrame(child, runtime: runtime), frame.height > 0, frame.height < 12,
+                  frame.minY > lowest.minY, frame.minY - lowest.maxY < 24,
+                  abs(frame.minX - lowest.minX) <= 3 else { return false }
+            let text = (elementSearchMetadata(child, runtime: runtime) + [AXHelpers.getHelp(child, runtime: runtime)])
+                .compactMap { $0 }.joined(separator: " ").lowercased()
+            return AXLocalePolicy.audioPluginSlotLabel.containsAny(in: text)
+                && !AXLocalePolicy.sendOrIOControlLabel.containsAny(in: text)
+        }
+        guard appends.count == 1 else { return slots }
+        return slots + [PluginInsertSlot(index: slots.count, element: appends[0], name: nil, isBypassed: nil, readStatus: .empty)]
+    }
+
     /// Number the recognised slots from the top of the strip down, and take a software
     /// instrument's instrument slot out of them.
     ///

@@ -191,16 +191,26 @@ extension AccessibilityChannel {
         guard front.preparation.isReady else {
             return refuse(.unsupportedState, "logic_not_frontmost", "Logic Pro could not be brought to the front; nothing was pressed.")
         }
-        AXMouseHelper.click(at: CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2))
-        usleep(400_000)
-        switch pressMixerOptionsItem(AXLocalePolicy.mixerAppendTracksForSelectedStrips, mixer: mixer, evidence: &evidence, runtime: runtime) {
-        case .pressed:
-            break
-        case .disabled:
-            return refuse(.unsupportedState, "menu_item_disabled",
-                "Create Tracks for Selected Channel Strips is not enabled: the strip did not become selected. Only the strip was clicked.")
-        case .absent:
-            return refuse(.elementNotFound, "menu_item_absent", "The Mixer's Options menu does not offer Create Tracks for Selected Channel Strips.")
+        // Measured: the first click on a strip that has just appeared is sometimes not taken as a
+        // selection, and the menu item then reads disabled; one more click (outside the
+        // double-click interval, which would start a rename) settles it.
+        var pressed = false
+        for attempt in 1...2 where !pressed {
+            evidence["select_clicks"] = attempt
+            AXMouseHelper.click(at: CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2))
+            usleep(attempt == 1 ? 400_000 : 900_000)
+            switch pressMixerOptionsItem(AXLocalePolicy.mixerAppendTracksForSelectedStrips, mixer: mixer, evidence: &evidence, runtime: runtime) {
+            case .pressed:
+                pressed = true
+            case .disabled:
+                if attempt == 2 {
+                    return refuse(.unsupportedState, "menu_item_disabled",
+                        "Create Tracks for Selected Channel Strips is not enabled: the strip did not become selected. Only the strip was clicked.")
+                }
+                usleep(300_000)
+            case .absent:
+                return refuse(.elementNotFound, "menu_item_absent", "The Mixer's Options menu does not offer Create Tracks for Selected Channel Strips.")
+            }
         }
         evidence["write_attempted"] = true
         var after: [String] = []

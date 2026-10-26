@@ -98,6 +98,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case projectInspectSession = "project.inspect_session"
     case projectPlanSessionRepair = "project.plan_session_repair"
     case projectApplySessionRepair = "project.apply_session_repair"
+    case projectApplyMixLayout = "project.apply_mix_layout"
     case projectCleanupApply = "project.cleanup_apply"
     case midiSendNote = "midi.send_note"
     case midiSendChord = "midi.send_chord"
@@ -135,6 +136,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case tracksSetRegionColor = "tracks.set_region_color"
     case tracksCreateStack = "tracks.create_stack"
     case tracksStripSilence = "tracks.strip_silence"
+    case tracksMoveTrack = "tracks.move_track"
     case tracksSetAutomation = "tracks.set_automation"
     case tracksSetInstrument = "tracks.set_instrument"
     case tracksListLibrary = "tracks.list_library"
@@ -356,7 +358,7 @@ enum OperationRegistry {
             "project.bounce", "project.is_running", "project.launch", "project.quit",
             "project.get_regions", "project.export_plan", "project.export_run",
             "project.export_resume", "project.audit", "project.cleanup_plan",
-            "project.inspect_session", "project.plan_session_repair", "project.apply_session_repair", "project.cleanup_apply",
+            "project.inspect_session", "project.plan_session_repair", "project.apply_session_repair", "project.apply_mix_layout", "project.cleanup_apply",
         ],
         ToolID.logicMidi.rawValue: [
             "midi.send_note", "midi.send_chord", "midi.send_cc", "midi.send_program_change",
@@ -370,7 +372,7 @@ enum OperationRegistry {
             "tracks.select", "tracks.create_audio", "tracks.create_instrument",
             "tracks.create_drummer", "tracks.create_external_midi", "tracks.delete",
             "tracks.duplicate", "tracks.rename", "tracks.mute", "tracks.solo", "tracks.arm",
-            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.create_stack", "tracks.strip_silence", "tracks.set_automation",
+            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.create_stack", "tracks.strip_silence", "tracks.move_track", "tracks.set_automation",
             "tracks.set_instrument", "tracks.list_library", "tracks.scan_library",
             "tracks.resolve_path", "tracks.scan_plugin_presets",
         ],
@@ -414,7 +416,7 @@ enum OperationRegistry {
         ToolID.logicProject.rawValue: [
             "new", "open", "save", "save_as", "close", "bounce", "is_running", "launch",
             "quit", "get_regions", "export_plan", "export_run", "export_resume", "audit",
-            "cleanup_plan", "inspect_session", "plan_session_repair", "apply_session_repair", "cleanup_apply",
+            "cleanup_plan", "inspect_session", "plan_session_repair", "apply_session_repair", "apply_mix_layout", "cleanup_apply",
         ],
         ToolID.logicMidi.rawValue: [
             "send_note", "send_chord", "send_cc", "send_program_change", "send_pitch_bend",
@@ -426,7 +428,7 @@ enum OperationRegistry {
         ToolID.logicTracks.rawValue: [
             "select", "create_audio", "create_instrument", "create_drummer",
             "create_external_midi", "delete", "duplicate", "rename", "mute", "solo", "arm",
-            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "set_automation", "set_instrument", "list_library",
+            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "set_automation", "set_instrument", "list_library",
             "scan_library", "resolve_path", "scan_plugin_presets",
         ],
     ]
@@ -942,6 +944,12 @@ enum OperationRegistry {
         (.projectPlanSessionRepair, "plan_session_repair", Mutability.readOnly, ConfirmationPolicy.none, VerificationPolicy.none, DeadlineClass.short, ["snapshot_id", "policy", "names", "plan_id", "digest", "on_ambiguity", "allow_create_aux", "allow_stack_membership_change", "allow_replace_send"]),
         (.projectApplySessionRepair, "apply_session_repair", Mutability.`mutating`, ConfirmationPolicy.l1,
             VerificationPolicy.readbackRequired, DeadlineClass.long, ["plan_id", "digest", "confirmed", "idempotency_key"]),
+        // Mix-prep: a whole mix layout from a JSON spec, as preflight -> execute -> status. Execute
+        // runs the verified track/mixer/plug-in operations step by step within a time budget and
+        // continues on a repeated call with the same key; the confirmation is the preflight's plan hash.
+        (.projectApplyMixLayout, "apply_mix_layout", Mutability.`mutating`, ConfirmationPolicy.l1,
+            VerificationPolicy.readbackRequired, DeadlineClass.long,
+            ["color_readback", "confirmed_plan_hash", "idempotency_key", "mode", "spec"]),
         (
             .projectCleanupApply,
             "cleanup_apply",
@@ -1034,6 +1042,9 @@ enum OperationRegistry {
         // Every region of one track, through View > Colors; no AX readback, an Undo-title witness.
         // Measured on Logic 12.4: the stack main track lands at the first member's position and
         // the members follow it; non-contiguous members are gathered (others move after it).
+        // Places one track directly after a track above it (temporary folder stack + Flatten Stack);
+        // State A is the whole rail read back in exactly the expected order.
+        (.tracksMoveTrack, "move_track", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.none, ["after", "name"]),
         (.tracksCreateStack, "create_stack", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.none, ["kind", "members", "name"]),
         // Remove Silence on every audio region of one track; State A when the track holds exactly
         // the number of regions the dialog previewed (measured on Logic 12.4).

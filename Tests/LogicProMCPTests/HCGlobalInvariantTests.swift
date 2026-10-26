@@ -109,6 +109,7 @@ struct HCGlobalInvariantTests {
             RouteCase(tool: "logic_tracks", command: "set_automation", params: ["index": .int(0), "mode": .string("read")], operation: "track.set_automation", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "set_instrument", params: ["index": .int(2), "path": .string("/Library/Application Support/Logic/Patches/Instrument/HC.patch"), "expected_name": .string("Bass")], operation: "track.set_instrument", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "strip_silence", params: ["index": .int(2), "expected_name": .string("Bass")], operation: "track.strip_silence", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_tracks", command: "move_track", params: ["name": .string("Bass"), "after": .string("Kick")], operation: "track.move_verified", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "create_stack", params: ["members": .array([.string("Kick"), .string("Bass")]), "kind": .string("summing")], operation: "track.create_stack_verified", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "set_region_color", params: ["index": .int(2), "color": .string("green"), "expected_name": .string("Bass")], operation: "track.set_region_color", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "set_color", params: ["index": .int(2), "color": .string("red"), "expected_name": .string("Bass")], operation: "track.set_color", destinations: [], invariant: .minimumV1),
@@ -363,6 +364,7 @@ struct HCGlobalInvariantTests {
             RouteCase(tool: "logic_project", command: "save_as", params: ["path": .string(fixtures.saveAsProjectPath), "confirmed": .bool(true)], operation: "project.save_as", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_project", command: "close", params: ["confirmed": .bool(true), "saving": .string("no")], operation: "project.close", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_project", command: "bounce", params: ["confirmed": .bool(true)], operation: "project.bounce", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_project", command: "apply_mix_layout", params: ["mode": .string("status"), "idempotency_key": .string("none")], operation: "project.apply_mix_layout", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_project", command: "cleanup_apply", params: ["step_id": .string("rename_duplicate_kick_0_1"), "confirmed": .bool(true), "names": .string("Kick L,Kick R")], operation: "project.cleanup_apply", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_project", command: "apply_session_repair", params: [:], operation: "project.apply_session_repair", destinations: [], invariant: .minimumV1),
 

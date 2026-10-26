@@ -220,15 +220,21 @@ enum TrackColorProjectFile {
         let bytes = [UInt8](data)
         guard bytes.count >= needle.count + 4 else { return .absent }
         var found: [Int] = []
+        // Measured on 12.4: an aux track (made from a Mixer strip) carries the same record with
+        // 0x00 where an audio track carries 0x80. Used only when no 0x80 record exists and exactly
+        // one 0x00 record does; anything else stays unread.
+        var auxFound: [Int] = []
         var index = 4
         while index + needle.count <= bytes.count {
             if bytes[index] == needle[0],
                Array(bytes[index..<(index + needle.count)]) == needle,
-               bytes[index - 4] == 0x80, bytes[index - 2] == 0, bytes[index - 1] == 0 {
-                found.append(Int(bytes[index - 3]))
+               bytes[index - 2] == 0, bytes[index - 1] == 0 {
+                if bytes[index - 4] == 0x80 { found.append(Int(bytes[index - 3])) }
+                if bytes[index - 4] == 0x00 { auxFound.append(Int(bytes[index - 3])) }
             }
             index += 1
         }
+        if found.isEmpty, auxFound.count == 1, auxFound[0] > 0 { found = auxFound }
         switch found.count {
         case 0: return .absent
         case 1: return .found(found[0])

@@ -83,9 +83,24 @@ enum TrackStackVerifier {
         case mismatch(String)
     }
 
+    /// The rail with the new stack collapsed: Logic 12.4 creates a folder stack closed, so its
+    /// members are not rows of the track list until it is opened (measured 2026-10-26).
+    static func expectedCollapsedAfter(before: [String], memberIndices: [Int]) -> [String?] {
+        let members = Set(memberIndices)
+        guard let first = memberIndices.min() else { return before }
+        var after: [String?] = []
+        for (index, name) in before.enumerated() {
+            if index == first { after.append(nil) }
+            if !members.contains(index) { after.append(name) }
+        }
+        return after
+    }
+
     static func verify(before: [String], memberIndices: [Int], after: [Row]) -> Verdict {
         if after.map(\.name) == before { return .unchanged }
-        let expected = expectedAfter(before: before, memberIndices: memberIndices)
+        let open = expectedAfter(before: before, memberIndices: memberIndices)
+        let collapsed = expectedCollapsedAfter(before: before, memberIndices: memberIndices)
+        let expected = after.count == collapsed.count && memberIndices.count > 1 ? collapsed : open
         guard after.count == expected.count else {
             return .mismatch("expected \(expected.count) tracks after, read \(after.count)")
         }
@@ -102,5 +117,35 @@ enum TrackStackVerifier {
             return .mismatch("row \(headerIndex) ('\(header.name)') does not read as a stack main track")
         }
         return .verified(headerIndex: headerIndex, headerName: header.name)
+    }
+}
+
+/// Pure core of `track.move_verified`: the rail after a track is moved to directly follow an
+/// anchor above it (stack + flatten, measured on Logic 12.4: everything else keeps its order).
+enum TrackMoveVerifier {
+    static func expectedAfter(before: [String], moving: Int, after anchor: Int) -> [String] {
+        guard before.indices.contains(moving), before.indices.contains(anchor), anchor < moving else { return before }
+        var rail = before
+        let track = rail.remove(at: moving)
+        rail.insert(track, at: anchor + 1)
+        return rail
+    }
+
+    /// The moves that turn `current` into `target` by placing each track after the previous one,
+    /// top to bottom. Nil when the first track of `target` is not already first: nothing can be
+    /// moved to the top this way. Both lists must hold the same names.
+    static func plan(current: [String], target: [String]) -> [(name: String, after: String)]? {
+        guard Set(current) == Set(target), current.count == target.count else { return nil }
+        guard let first = target.first else { return [] }
+        guard current.first == first else { return nil }
+        var rail = current
+        var moves: [(name: String, after: String)] = []
+        for position in 1..<target.count {
+            let name = target[position]
+            guard rail[position] != name, let from = rail.firstIndex(of: name) else { continue }
+            moves.append((name, target[position - 1]))
+            rail = expectedAfter(before: rail, moving: from, after: position - 1)
+        }
+        return moves
     }
 }

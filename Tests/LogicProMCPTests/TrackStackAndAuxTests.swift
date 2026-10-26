@@ -134,3 +134,31 @@ func stripSilenceRanges() {
         return
     }
 }
+
+// MARK: - move_track
+
+@Test("a move places the track directly after its anchor and keeps every other track in order")
+func moveTrackExpectedRail() {
+    let rail = ["Kick", "Snare", "HH", "Bass", "Vox Lead"]
+    #expect(TrackMoveVerifier.expectedAfter(before: rail, moving: 4, after: 1) == ["Kick", "Snare", "Vox Lead", "HH", "Bass"])
+    #expect(TrackMoveVerifier.expectedAfter(before: rail, moving: 1, after: 3) == rail)   // downward: not this way
+}
+
+@Test("a target order is planned as upward moves, and refused when the top track would change")
+func moveTrackPlan() throws {
+    let current = ["Kick", "Bass", "Snare", "Vox", "HH"]
+    let plan = try #require(TrackMoveVerifier.plan(current: current, target: ["Kick", "Snare", "HH", "Bass", "Vox"]))
+    #expect(plan.map(\.name) == ["Snare", "HH"])
+    #expect(plan.map(\.after) == ["Kick", "Snare"])
+    #expect(TrackMoveVerifier.plan(current: current, target: current)?.isEmpty == true)
+    #expect(TrackMoveVerifier.plan(current: current, target: ["Bass", "Kick", "Snare", "Vox", "HH"]) == nil)
+}
+
+@Test("a folder stack Logic creates collapsed verifies with its members hidden")
+func trackStackCollapsedFolder() {
+    let before = ["Kick", "Snare", "HH", "Vox Lead"]
+    let after: [TrackStackVerifier.Row] = [
+        .init(name: "Kick", isStackHeader: false), .init(name: "Sub 1", isStackHeader: true), .init(name: "HH", isStackHeader: false),
+    ]
+    #expect(TrackStackVerifier.verify(before: before, memberIndices: [1, 3], after: after) == .verified(headerIndex: 1, headerName: "Sub 1"))
+}

@@ -318,6 +318,16 @@ enum SemanticOracleTable {
             // dialog's preview; pending an oracle, not structural.
             "live State-A contract pending — State A is the track's audio-region count equal to the "
             + "Remove Silence preview; no oracle pinning that envelope has been written yet",
+        .projectApplyMixLayout:
+            // Mix-prep, post-closure. A composite of verified operations whose State A is every
+            // step's own State A; pending an oracle, not structural.
+            "live State-A contract pending — State A is every layout step answering State A in "
+            + "order; no oracle pinning the composite envelope has been written yet",
+        .tracksMoveTrack:
+            // Mix-prep, post-closure. State A is the whole track rail read back in the expected
+            // order; pending an oracle, not structural.
+            "live State-A contract pending — State A is the whole track rail read back with the "
+            + "track directly after its anchor; no oracle pinning that envelope has been written yet",
         .tracksCreateStack:
             // Mix-prep, post-closure. Its State A IS an independent readback (the whole track rail
             // read again, stack main track detected by its disclosure triangle), so like mixer.bank

@@ -400,6 +400,10 @@ extension OperationRegistry {
                 "kind": .enforced(.scalar, .string("summing"), allowed: TrackStackKind.allCases.map(\.rawValue)),
                 "name": .enforced(.string, .string("DRUMS")),
             ], required: [["members"]]),
+            "tracks.move_track": .init(params: [
+                "name": .enforced(.string, .string("Vox Lead")),
+                "after": .enforced(.string, .string("Snare")),
+            ], required: [["name"], ["after"]]),
             "tracks.strip_silence": .init(params: [
                 "index": index(), "track": index(), "target_ref": targetRef, "project_ref": projectRef,
                 "expected_name": expectedName,
@@ -559,6 +563,14 @@ extension OperationRegistry {
                                                   sample: Self.planSessionRepairSamples[$0])) }),
                 // A retained plan by id, or a retained inspection with a policy to plan from.
                 required: [["plan_id", "snapshot_id+policy"]]),
+            "project.apply_mix_layout": .init(params: [
+                "mode": .enforced(.scalar, .string("preflight"), allowed: ["preflight", "execute", "status"]),
+                "spec": .unconstrained("checked by the layout spec parser, which names the offending key",
+                                       sample: .object(["order": .array([.string("Kick"), .string("Snare")])])),
+                "confirmed_plan_hash": .enforced(.string, .string(String(repeating: "0", count: 64))),
+                "idempotency_key": .enforced(.string, .string("layout-1")),
+                "color_readback": .enforced(.scalar, .string("ax"), allowed: ["ax", "project_file"]),
+            ], required: []),
             "project.apply_session_repair": .init(params: [
                 "plan_id": .unconstrained("checked against the retained canonical plan", sample: .string("plan_unavailable")),
                 "digest": .unconstrained("checked against the exact retained digest", sample: .string(String(repeating: "0", count: 64))),

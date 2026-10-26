@@ -737,6 +737,7 @@ struct OperationRegistryTests {
         ("project.plan_session_repair", "plan_session_repair", .readOnly, .short, .none),
         ("project.apply_session_repair", "apply_session_repair", .mutating, .long, .readbackRequired),
         ("project.inspect_session", "inspect_session", .readOnly, .medium, .none),
+        ("project.apply_mix_layout", "apply_mix_layout", .mutating, .long, .readbackRequired),
         ("project.cleanup_apply", "cleanup_apply", .mutating, .medium, .readbackRequired),
     ]
 
@@ -749,6 +750,7 @@ struct OperationRegistryTests {
         ("logic_project", "launch", .l1),
         ("logic_project", "cleanup_apply", .l1),
         ("logic_project", "apply_session_repair", .l1),
+        ("logic_project", "apply_mix_layout", .l1),
         ("logic_project", "open", .l2),
         ("logic_project", "save_as", .l2),
         ("logic_project", "bounce", .l2),
@@ -812,7 +814,7 @@ struct OperationRegistryTests {
             .map(\.command))
         #expect(expected == Set([
             "new", "open", "save", "save_as", "close", "bounce", "launch", "quit",
-            "export_run", "export_resume", "cleanup_apply", "apply_session_repair",
+            "export_run", "export_resume", "cleanup_apply", "apply_session_repair", "apply_mix_layout",
         ]))
         #expect(OperationRegistry.mutatingCommands(tool: tool) == expected)
         for entry in Self.projectCommands {
@@ -825,7 +827,7 @@ struct OperationRegistryTests {
     func projectDeadlineParity() {
         #expect(Self.projectCommands.filter { $0.deadline == .short }.count == 7)
         #expect(Self.projectCommands.filter { $0.deadline == .medium }.count == 6)
-        #expect(Self.projectCommands.filter { $0.deadline == .long }.count == 6)
+        #expect(Self.projectCommands.filter { $0.deadline == .long }.count == 7)
 
         for entry in Self.projectCommands {
             #expect(OperationRegistry.deadlineSeconds(tool: "logic_project", command: entry.command)
@@ -1137,6 +1139,7 @@ struct OperationRegistryTests {
         ("tracks.set_region_color", "set_region_color", .mutating, .medium, .readbackRequired),
         ("tracks.create_stack", "create_stack", .mutating, .medium, .readbackRequired),
         ("tracks.strip_silence", "strip_silence", .mutating, .medium, .readbackRequired),
+        ("tracks.move_track", "move_track", .mutating, .medium, .readbackRequired),
         ("tracks.set_automation", "set_automation", .mutating, .short, .readbackRequired),
         ("tracks.set_instrument", "set_instrument", .mutating, .medium, .readbackRequired),
         ("tracks.list_library", "list_library", .readOnly, .long, .none),
@@ -1210,7 +1213,7 @@ struct OperationRegistryTests {
         #expect(expected == Set([
             "select", "create_audio", "create_instrument", "create_drummer", "create_external_midi",
             "delete", "duplicate", "rename", "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified",
-            "set_color", "set_region_color", "create_stack", "strip_silence", "set_automation", "set_instrument",
+            "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "set_automation", "set_instrument",
         ]))
         #expect(OperationRegistry.mutatingCommands(tool: tool) == expected)
         for command in ["list_library", "scan_library", "resolve_path", "scan_plugin_presets"] {
@@ -1225,7 +1228,7 @@ struct OperationRegistryTests {
     @Test("tracks deadlines preserve short medium long and read-only long tiers")
     func tracksDeadlineParity() {
         #expect(Self.trackCommands.filter { $0.deadline == .short }.count == 14)
-        #expect(Self.trackCommands.filter { $0.deadline == .medium }.map(\.command) == ["sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "set_instrument"])
+        #expect(Self.trackCommands.filter { $0.deadline == .medium }.map(\.command) == ["sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "set_instrument"])
         #expect(Set(Self.trackCommands.filter { $0.deadline == .long }.map(\.command)) == Set([
             "record_sequence", "list_library", "scan_library", "scan_plugin_presets",
         ]))

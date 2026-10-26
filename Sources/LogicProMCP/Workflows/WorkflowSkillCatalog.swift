@@ -513,7 +513,7 @@ enum WorkflowSkillCatalog {
         "logic_tracks": [
             "select", "create_audio", "create_instrument", "create_drummer",
             "create_external_midi", "delete", "duplicate", "rename",
-            "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence",
+            "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "move_track",
             "set_automation", "set_instrument",
             "resolve_path", "list_library", "scan_library", "scan_plugin_presets",
         ],
@@ -544,7 +544,7 @@ enum WorkflowSkillCatalog {
             "new", "open", "save", "save_as", "close", "bounce",
             "is_running", "get_regions",
             "export_plan", "export_run", "export_resume",
-            "audit", "cleanup_plan", "inspect_session", "plan_session_repair", "apply_session_repair", "cleanup_apply", "launch", "quit",
+            "audit", "cleanup_plan", "inspect_session", "plan_session_repair", "apply_session_repair", "apply_mix_layout", "cleanup_apply", "launch", "quit",
         ],
         "logic_system": [
             "health", "permissions", "refresh_cache", "export_support_bundle", "help",

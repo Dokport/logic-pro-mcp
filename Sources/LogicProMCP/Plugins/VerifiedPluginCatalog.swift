@@ -112,8 +112,19 @@ enum VerifiedPluginCatalog {
     static func canonicalPluginID(from alias: String) -> String? {
         let normalized = alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalized.isEmpty else { return nil }
-        return pluginAliases[normalized]
+        return pluginAliases[normalized] ?? catalogEffectAliases[normalized]
     }
+
+    /// Every stock audio effect in the catalog (utilities and meters included) also resolves by its own display name and id. Resolving
+    /// is not permission: insertion stays gated by `insertableAllowlist`.
+    private static let catalogEffectAliases: [String: String] = {
+        var table: [String: String] = [:]
+        for entry in StockPluginCatalog.productionSnapshot.entries where entry.type != .instrument && entry.type != .midiEffect {
+            table[entry.displayName.lowercased()] = entry.id
+            table[entry.id] = entry.id
+        }
+        return table
+    }()
 
     /// Resolve a caller-supplied parameter alias to the catalog parameter id for
     /// a (already-canonical) plugin id, or nil when the plugin declares no such
@@ -138,7 +149,123 @@ enum VerifiedPluginCatalog {
     /// as caller-input resolution so the two stay consistent.
     static func pluginID(forObservedName name: String) -> String? {
         canonicalPluginID(from: name)
+            ?? measuredSlotLabels[name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()]
     }
+
+    /// The names Logic 12.4 shows in an occupied insert slot where they differ from the plug-in's
+    /// display name (abbreviated, or cut at 10 characters). Measured 2026-10-26 by inserting every
+    /// stock effect on the test project and reading the slot back
+    /// (`research/plugin-census-12.4.jsonl`). A Logic update can change them; an unknown label
+    /// reads as no identity, so readback then fails closed.
+    static let measuredSlotLabels: [String: String] = [
+        "linear eq": "logic.stock.effect.linear_phase_eq",
+        "single eq": "logic.stock.effect.single_band_eq",
+        "cnsl eq": "logic.stock.effect.vintage_console_eq",
+        "graph eq": "logic.stock.effect.vintage_graphic_eq",
+        "tube eq": "logic.stock.effect.vintage_tube_eq",
+        "adlimit": "logic.stock.effect.adaptive_limiter",
+        "multipr": "logic.stock.effect.multipressor",
+        "qrs": "logic.stock.effect.quantec_room_simulator",
+        "space d": "logic.stock.effect.space_designer",
+        "delay d": "logic.stock.effect.delay_designer",
+        "smpledly": "logic.stock.effect.sample_delay",
+        "st-delay": "logic.stock.effect.stereo_delay",
+        "mcrphas": "logic.stock.effect.microphaser",
+        "moddel": "logic.stock.effect.modulation_delay",
+        "ringshift": "logic.stock.effect.ringshifter",
+        "rotor": "logic.stock.effect.rotor_cabinet",
+        "scanvib": "logic.stock.effect.scanner_vibrato",
+        "clipdist": "logic.stock.effect.clip_distortion",
+        "dist ii": "logic.stock.effect.distortion_ii",
+        "phasedist": "logic.stock.effect.phase_distortion",
+        "evoc fb": "logic.stock.effect.evoc_20_filterbank",
+        "specgate": "logic.stock.effect.spectral_gate",
+        "dirmix": "logic.stock.effect.direction_mixer",
+        "spread": "logic.stock.effect.stereo_spread",
+        "pitchcor": "logic.stock.effect.pitch_correction",
+        "pshft": "logic.stock.effect.pitch_shifter",
+        "vocaltrf": "logic.stock.effect.vocal_transformer",
+        "testosc": "logic.stock.effect.test_oscillator",
+        "correlatio": "logic.stock.effect.correlation_meter",
+        "level mtr": "logic.stock.effect.level_meter",
+        "loudness": "logic.stock.effect.loudness_meter",
+        "beat break": "logic.stock.effect.beat_breaker",
+        "amp": "logic.stock.effect.amp_designer",
+        "bass amp": "logic.stock.effect.bass_amp_designer",
+    ]
+
+    /// Stock effects whose insertion and slot readback were measured on Logic 12.4 (same census).
+    /// `Distortion` is not here: its name is also a category in the plug-in menu, and the exact
+    /// leaf was not found.
+    static let measuredInsertable: Set<String> = [
+        "logic.stock.effect.adaptive_limiter",
+        "logic.stock.effect.amp_designer",
+        "logic.stock.effect.autofilter",
+        "logic.stock.effect.bass_amp_designer",
+        "logic.stock.effect.beat_breaker",
+        "logic.stock.effect.bitcrusher",
+        "logic.stock.effect.channel_eq",
+        "logic.stock.effect.chorus",
+        "logic.stock.effect.chromaglow",
+        "logic.stock.effect.chromaverb",
+        "logic.stock.effect.clip_distortion",
+        "logic.stock.effect.compressor",
+        "logic.stock.effect.correlation_meter",
+        "logic.stock.effect.deesser_2",
+        "logic.stock.effect.delay_designer",
+        "logic.stock.effect.direction_mixer",
+        "logic.stock.effect.distortion_ii",
+        "logic.stock.effect.echo",
+        "logic.stock.effect.ensemble",
+        "logic.stock.effect.enveloper",
+        "logic.stock.effect.evoc_20_filterbank",
+        "logic.stock.effect.exciter",
+        "logic.stock.effect.expander",
+        "logic.stock.effect.flanger",
+        "logic.stock.effect.fuzz_wah",
+        "logic.stock.effect.gain",
+        "logic.stock.effect.io",
+        "logic.stock.effect.level_meter",
+        "logic.stock.effect.limiter",
+        "logic.stock.effect.linear_phase_eq",
+        "logic.stock.effect.loudness_meter",
+        "logic.stock.effect.match_eq",
+        "logic.stock.effect.microphaser",
+        "logic.stock.effect.modulation_delay",
+        "logic.stock.effect.multimeter",
+        "logic.stock.effect.multipressor",
+        "logic.stock.effect.noise_gate",
+        "logic.stock.effect.overdrive",
+        "logic.stock.effect.pedalboard",
+        "logic.stock.effect.phase_distortion",
+        "logic.stock.effect.phaser",
+        "logic.stock.effect.phat_fx",
+        "logic.stock.effect.pitch_correction",
+        "logic.stock.effect.pitch_shifter",
+        "logic.stock.effect.quantec_room_simulator",
+        "logic.stock.effect.remix_fx",
+        "logic.stock.effect.ringshifter",
+        "logic.stock.effect.rotor_cabinet",
+        "logic.stock.effect.sample_delay",
+        "logic.stock.effect.scanner_vibrato",
+        "logic.stock.effect.silververb",
+        "logic.stock.effect.single_band_eq",
+        "logic.stock.effect.space_designer",
+        "logic.stock.effect.spectral_gate",
+        "logic.stock.effect.spreader",
+        "logic.stock.effect.step_fx",
+        "logic.stock.effect.stereo_delay",
+        "logic.stock.effect.stereo_spread",
+        "logic.stock.effect.subbass",
+        "logic.stock.effect.tape_delay",
+        "logic.stock.effect.test_oscillator",
+        "logic.stock.effect.tremolo",
+        "logic.stock.effect.tuner",
+        "logic.stock.effect.vintage_console_eq",
+        "logic.stock.effect.vintage_graphic_eq",
+        "logic.stock.effect.vintage_tube_eq",
+        "logic.stock.effect.vocal_transformer",
+    ]
 
     /// Result of the R6 step-5 capability preflight.
     enum ParamCapability: Equatable {

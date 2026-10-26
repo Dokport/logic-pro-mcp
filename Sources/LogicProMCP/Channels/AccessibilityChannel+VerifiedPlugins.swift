@@ -5569,7 +5569,7 @@ extension AccessibilityChannel {
                     "operation": operation,
                     "target_identity": preResolutionIdentity,
                     "what_was_attempted": "resolve insertable plugin identity '\(pluginAlias)'",
-                    "what_was_observed": "not an insertable allowlisted stock plugin (Gain / Channel EQ / Compressor / ChromaVerb / Stereo Delay)",
+                    "what_was_observed": "not a stock effect whose insertion and slot readback were measured (VerifiedPluginCatalog.measuredInsertable)",
                     "safe_to_retry": false,
                     "write_attempted": false,
                 ]
@@ -5606,7 +5606,8 @@ extension AccessibilityChannel {
         if let refusal = pluginReferenceBindingGuard(
             params: params, target: target, operation: operation, identity: identity
         ) { return refusal }
-        guard let slots = AXLogicProElements.audioPluginInsertSlots(in: target.strip, runtime: runtime.ax) else {
+        // Append-aware: slot N after N occupied slots is the strip's append button (Logic 12.4).
+        guard let slots = AXLogicProElements.audioPluginInsertSlotsWithAppend(in: target.strip, runtime: runtime.ax) else {
             return refuseBeforeInsert("the strip's children did not read")
         }
         let built = pluginInventoryItems(for: slots)
@@ -6471,7 +6472,7 @@ extension AccessibilityChannel {
         onRefusal: ((String) -> Void)? = nil
     ) -> AXLogicProElements.PluginInsertSlot? {
         guard let target = boundPluginTrack(track: track, runtime: runtime, onRefusal: onRefusal) else { return nil }
-        guard let slots = AXLogicProElements.audioPluginInsertSlots(in: target.strip, runtime: runtime.ax) else {
+        guard let slots = AXLogicProElements.audioPluginInsertSlotsWithAppend(in: target.strip, runtime: runtime.ax) else {
             onRefusal?("slot_inventory_unavailable"); return nil
         }
         // #234 — a zero-slot result on this mid-flight re-resolution means the
@@ -7347,7 +7348,7 @@ extension AccessibilityChannel {
     // MARK: - Helpers
 
     /// Insertable stock plugins (R5/R7) — Noise Gate is identity-only, excluded.
-    static let insertableAllowlist: Set<String> = [
+    static let insertableAllowlist: Set<String> = Set<String>([
         "logic.stock.effect.gain",
         "logic.stock.effect.channel_eq",
         "logic.stock.effect.compressor",
@@ -7355,7 +7356,7 @@ extension AccessibilityChannel {
         // read back by the same inventory; their parameters stay outside the verified surface.
         "logic.stock.effect.chromaverb",
         "logic.stock.effect.stereo_delay",
-    ]
+    ]).union(VerifiedPluginCatalog.measuredInsertable)
 
     private static func invalidParamsStateC(_ operation: String, _ detail: String) -> String {
         HonestContract.encodeV2StateC(

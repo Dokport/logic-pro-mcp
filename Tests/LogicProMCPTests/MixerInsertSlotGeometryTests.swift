@@ -278,6 +278,32 @@ private func decode(_ message: String) -> [String: Any] {
     #expect(read.count == 3, "no insert 3 is made out of the append button")
 }
 
+@Test func theAppendButtonIsTheNextSlotOnlyForTheAppendAwareInsertPath() throws {
+    let b = FakeAXRuntimeBuilder()
+    let strip = MeasuredStrip(b)
+    let parent = b.element(899)
+    b.setChildren(parent, strip.axOrder)
+
+    let read = try #require(AXLogicProElements.audioPluginInsertSlotsWithAppend(in: parent, runtime: b.makeAXRuntime()))
+
+    #expect(read.count == 4)
+    #expect(read.prefix(3).allSatisfy { $0.occupied })
+    #expect(read[3].isEmpty && read[3].index == 3)
+    #expect(CFEqual(read[3].element, strip.appendButton))
+}
+
+@Test func anAppendButtonThatIsNotDirectlyBelowTheLowestInsertIsNotASlot() throws {
+    let b = FakeAXRuntimeBuilder()
+    var strip = MeasuredStrip(b)
+    strip.appendButton = button(b, 811, y: 760, height: 9, description: "Audio-Plug-in", help: audioEffectHelp)
+    let parent = b.element(899)
+    b.setChildren(parent, strip.axOrder)
+
+    let read = try #require(AXLogicProElements.audioPluginInsertSlotsWithAppend(in: parent, runtime: b.makeAXRuntime()))
+
+    #expect(read.count == 3)
+}
+
 // MARK: - What the rule cannot account for is unclassified
 
 @Test func anInstrumentSlotWithASeparatorAboveItLeavesTheStripUnclassified() {
@@ -441,7 +467,7 @@ func invalidMultiSlotGeometryIsNotAnAddressableOrder(_ caseName: String) {
     #expect(plugins.map { $0["insert"] as? Int } == [0, 1, 2])
     #expect(plugins.map { $0["name"] as? String } == ["Channel EQ", "Compressor", "ChromaVerb"])
     #expect(plugins.map { $0["plugin_id"] as? String }
-        == ["logic.stock.effect.channel_eq", "logic.stock.effect.compressor", nil])
+        == ["logic.stock.effect.channel_eq", "logic.stock.effect.compressor", "logic.stock.effect.chromaverb"])
     #expect(!plugins.contains { $0["read_status"] as? String == "empty" })
 }
 

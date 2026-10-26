@@ -576,11 +576,13 @@ func testInsertVerifiedRefusesUnreadChildrenAsUnread(mixerUnread: Bool, mixerByI
     #expect(!((obj["write_attempted"] as? Bool)!))
 }
 
-@Test func testInsertVerifiedNoiseGateNotInsertable() async {
-    // Noise Gate is identity-only, excluded from the insertable allowlist (R5).
+@Test func testInsertVerifiedUnmeasuredStockEffectNotInsertable() async {
+    // Mix-prep: every stock effect whose insertion and slot readback were measured on 12.4 is
+    // insertable (Noise Gate included). Distortion is a catalog identity that was not measured:
+    // its name is also a plug-in menu category.
     let b = FakeAXRuntimeBuilder()
     let runtime = makeMixerFixture(b) { b in [addEmptySlot(b, 970)] }
-    let obj = await runInsert(insertParams(plugin: "Noise Gate"), runtime: runtime)
+    let obj = await runInsert(insertParams(plugin: "Distortion"), runtime: runtime)
     #expect(obj["error"] as? String == "unknown_plugin_identity")
     #expect(!((obj["write_attempted"] as? Bool)!))
 }
