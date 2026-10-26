@@ -759,6 +759,34 @@
     "zh-TW": "derived"
    }
   },
+  "changeRegionColorUndoOperation": {
+   "canonical": "Change Region Color",
+   "variants": [
+    "리전 색상 변경",
+    "リージョンカラーを変更",
+    "Regionsfarbe ändern",
+    "cambio de color del pasaje",
+    "Modifier la couleur de la séquence",
+    "Modifica colore della regione",
+    "Alterar Cor da Região",
+    "更改片段颜色",
+    "更改區段顏色"
+   ],
+   "rationale": "Apple's undo-operation name for a region colour change, matched by containment inside the Edit menu's Undo title. Not yet observed on a running Logic; every string is the value of the row named below, copied by script, so nothing here is typed. Checked offline by Scripts/check-labelsets-are-derived.py.",
+   "match": "contains",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
+   }
+  },
   "changeTrackColorUndoOperation": {
    "canonical": "Change Track Color",
    "variants": [
@@ -773,7 +801,7 @@
     "更改音軌顏色"
    ],
    "rationale": "An en-US Logic 12.4 offered `Undo Change Track Color` after a palette swatch was clicked, and `Can’t Undo` after an AXPress that changed nothing (2026-10-26, research/FINDINGS.md). It witnesses that A track colour changed, never which track or which colour. Every other locale is the value of the row named below, copied by script. Checked offline by Scripts/check-labelsets-are-derived.py.",
-   "match": "exact",
+   "match": "contains",
    "coverage": {
     "en-US": "unmeasured",
     "ko-KR": "unmeasured",
@@ -8906,6 +8934,34 @@
     "pt-BR": "derived",
     "zh-CN": "derived",
     "zh-TW": "derived"
+   }
+  },
+  "viewColorsMenuItem": {
+   "canonical": "Colors",
+   "variants": [
+    "색상",
+    "カラー",
+    "Farben",
+    "Colores",
+    "Couleurs",
+    "Colori",
+    "Cores",
+    "颜色",
+    "顏色"
+   ],
+   "rationale": "View > Colors opens the colour palette for whatever has key focus; region colouring uses it with the arrangement focused. Read off an en-US Logic 12.4 menu bar on 2026-10-26 (research/ax/menubar-noproject.txt); every other locale is the value of the row named below, copied by script. Matched only under the View menu. Checked offline by Scripts/check-labelsets-are-derived.py.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
    }
   },
   "viewMenuBar": {

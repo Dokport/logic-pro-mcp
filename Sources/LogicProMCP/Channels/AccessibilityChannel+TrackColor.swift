@@ -25,6 +25,8 @@ extension AccessibilityChannel {
     enum TrackColorUndoWitness: String, Sendable {
         /// The Undo entry names a track colour change.
         case changeTrackColor = "change_track_color"
+        /// The Undo entry names a region colour change.
+        case changeRegionColor = "change_region_color"
         /// The Undo entry read and names something else (or nothing can be undone).
         case otherOperation = "other_operation"
         /// The Edit menu or its Undo entry did not read.
@@ -85,32 +87,70 @@ extension AccessibilityChannel {
                 hint: "Track \(index) did not read as the only selected track; no colour was changed.", extras: evidence)
         }
 
-        // 4. Open the palette through its own menu item.
+        // 4-6. Open the palette through its own menu item and click the swatch.
+        switch clickPaletteSwatch(
+            menuPath: AXLocalePolicy.assignTrackColorMenuPath,
+            menuName: "Assign Track Color…",
+            row: row, column: column, operation: "track.set_color",
+            evidence: &evidence, runtime: runtime
+        ) {
+        case .refused(let refusal):
+            return refusal
+        case .clicked:
+            break
+        }
+
+        // 7. Read the witness (the palette is already closed).
+        let witness = readTrackColorUndoWitness(runtime: runtime)
+        evidence["undo_witness"] = witness.witness.rawValue
+        evidence["undo_title"] = witness.title ?? NSNull()
+        evidence["readback"] = "unavailable_via_ax"
+        evidence["hint"] = "Track colour is not readable through Accessibility. Pass readback:\"project_file\" (saves the project) for a verified read."
+        return .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: evidence))
+    }
+
+    enum PaletteClick {
+        /// Nothing was clicked; the reply is the State C refusal to return.
+        case refused(ChannelResult)
+        /// One click was posted on the swatch and the palette was closed again (`palette_closed`
+        /// in the evidence says whether that worked).
+        case clicked
+    }
+
+    /// Opens the colour palette through `menuPath`, derives the swatch's click point from the
+    /// palette's own children, clicks it once with Logic frontmost, and closes the palette.
+    /// Every refusal happens before the click and carries `write_attempted: false`.
+    static func clickPaletteSwatch(
+        menuPath: AXLocalePolicy.MenuPath,
+        menuName: String,
+        row: Int,
+        column: Int,
+        operation: String,
+        evidence: inout [String: Any],
+        runtime: AXLogicProElements.Runtime
+    ) -> PaletteClick {
+        func refuse(_ error: HonestContract.FailureError, _ reason: String, _ hint: String) -> PaletteClick {
+            .refused(colorStateC(error, operation: operation, reason: reason, hint: hint, extras: evidence))
+        }
         let windowsBefore = trackColorWindows(runtime: runtime)
         if windowsBefore.contains(where: { trackColorSwatchPositions(in: $0, runtime: runtime) != nil }) {
-            return trackColorStateC(.unsupportedState, reason: "palette_already_open",
-                hint: "A colour palette is already open; close it and retry. Nothing was clicked.", extras: evidence)
+            return refuse(.unsupportedState, "palette_already_open",
+                "A colour palette is already open; close it and retry. Nothing was clicked.")
         }
         let item: AXUIElement
-        switch AXLogicProElements.menuItemRead(
-            labelPath: [AXLocalePolicy.assignTrackColorMenuPath.bar, AXLocalePolicy.assignTrackColorMenuPath.item],
-            runtime: runtime
-        ) {
+        switch AXLogicProElements.menuItemRead(labelPath: [menuPath.bar, menuPath.item], runtime: runtime) {
         case .found(let found):
             item = found
         case .absent:
-            return trackColorStateC(.elementNotFound, reason: "menu_item_absent",
-                hint: "Track > Assign Track Color… was not found in this Logic's menu bar.", extras: evidence)
+            return refuse(.elementNotFound, "menu_item_absent", "\(menuName) was not found in this Logic's menu bar.")
         case .unreadable(let stage, let status):
             evidence["read_failure_stage"] = stage
             evidence["read_failure_status"] = status
-            return trackColorStateC(.readbackUnavailable, reason: "menu_unreadable",
-                hint: "The Track menu could not be read; nothing was pressed.", extras: evidence)
+            return refuse(.readbackUnavailable, "menu_unreadable", "The menu holding \(menuName) could not be read; nothing was pressed.")
         }
         guard AXHelpers.performAction(item, kAXPressAction as String, runtime: runtime.ax)
             || trackColorPalette(runtime: runtime, excluding: windowsBefore) != nil else {
-            return trackColorStateC(.axWriteFailed, reason: "menu_press_failed",
-                hint: "Assign Track Color… did not open the palette.", extras: evidence)
+            return refuse(.axWriteFailed, "menu_press_failed", "\(menuName) did not open the palette.")
         }
         var palette: (window: AXUIElement, positions: [CGPoint])?
         for _ in 0..<trackColorPalettePolls {
@@ -121,56 +161,41 @@ extension AccessibilityChannel {
             usleep(trackColorPalettePollMicros)
         }
         guard let palette else {
-            return trackColorStateC(.windowOpenFailed, reason: "palette_not_observed",
-                hint: "The colour palette did not appear after Assign Track Color…; nothing was clicked.", extras: evidence)
+            return refuse(.windowOpenFailed, "palette_not_observed",
+                "The colour palette did not appear after \(menuName); nothing was clicked.")
         }
-
-        // 5. Where to click, from the palette's own children.
         let point: CGPoint
         switch TrackColorPaletteGeometry.clickPoint(row: row, column: column, childPositions: palette.positions) {
         case .point(let derived):
             point = derived
         case .layoutUnrecognized(let why):
-            let closed = closeTrackColorPalette(palette.window, runtime: runtime)
             evidence["palette_layout"] = why
-            evidence["palette_closed"] = closed
-            return trackColorStateC(.unsupportedState, reason: "palette_layout_unrecognized",
-                hint: "The colour palette's layout is not the one measured on Logic \(TrackColorPalette.measuredLogicVersion) (\(why)); nothing was clicked.",
-                extras: evidence)
+            evidence["palette_closed"] = closeTrackColorPalette(palette.window, runtime: runtime)
+            return refuse(.unsupportedState, "palette_layout_unrecognized",
+                "The colour palette's layout is not the one measured on Logic \(TrackColorPalette.measuredLogicVersion) (\(why)); nothing was clicked.")
         }
         if let frame = trackColorFrame(palette.window, runtime: runtime), !frame.contains(point) {
-            let closed = closeTrackColorPalette(palette.window, runtime: runtime)
-            evidence["palette_closed"] = closed
-            return trackColorStateC(.unsupportedState, reason: "click_point_outside_palette",
-                hint: "The derived swatch position lies outside the palette window; nothing was clicked.", extras: evidence)
+            evidence["palette_closed"] = closeTrackColorPalette(palette.window, runtime: runtime)
+            return refuse(.unsupportedState, "click_point_outside_palette",
+                "The derived swatch position lies outside the palette window; nothing was clicked.")
         }
-
-        // 6. Click. From here on the colour may have changed, so nothing below is State C.
         let refront = FrontmostGate.prepareObserved(
             observe: runtime.observeFrontmost,
             activate: { ProcessUtils.activateLogicPro() },
             sleepMicros: { usleep($0) }
         )
         guard refront.preparation.isReady else {
-            let closed = closeTrackColorPalette(palette.window, runtime: runtime)
-            evidence["palette_closed"] = closed
-            return trackColorStateC(.unsupportedState, reason: "logic_not_frontmost",
-                hint: "Logic Pro lost the front before the swatch click; nothing was clicked.", extras: evidence)
+            evidence["palette_closed"] = closeTrackColorPalette(palette.window, runtime: runtime)
+            return refuse(.unsupportedState, "logic_not_frontmost",
+                "Logic Pro lost the front before the swatch click; nothing was clicked.")
         }
-        let posted = AXMouseHelper.click(at: point)
+        // From here on the colour may have changed: nothing after this is a State C refusal.
+        evidence["click_posted"] = AXMouseHelper.click(at: point)
         evidence["write_attempted"] = true
-        evidence["click_posted"] = posted
         evidence["write_channel"] = "cgevent_click_on_ax_derived_swatch"
         usleep(trackColorSettleMicros)
-
-        // 7. Put the UI back, then read the witness.
         evidence["palette_closed"] = closeTrackColorPalette(palette.window, runtime: runtime)
-        let witness = readTrackColorUndoWitness(runtime: runtime)
-        evidence["undo_witness"] = witness.witness.rawValue
-        evidence["undo_title"] = witness.title ?? NSNull()
-        evidence["readback"] = "unavailable_via_ax"
-        evidence["hint"] = "Track colour is not readable through Accessibility. Pass readback:\"project_file\" (saves the project) for a verified read."
-        return .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: evidence))
+        return .clicked
     }
 
     static func trackColorDescription(_ swatch: TrackColorSwatch) -> [String: Any] {
@@ -183,8 +208,18 @@ extension AccessibilityChannel {
         hint: String,
         extras: [String: Any] = [:]
     ) -> ChannelResult {
+        colorStateC(error, operation: "track.set_color", reason: reason, hint: hint, extras: extras)
+    }
+
+    private static func colorStateC(
+        _ error: HonestContract.FailureError,
+        operation: String,
+        reason: String,
+        hint: String,
+        extras: [String: Any] = [:]
+    ) -> ChannelResult {
         var details = extras
-        details["operation"] = "track.set_color"
+        details["operation"] = operation
         details["reason"] = reason
         details["write_attempted"] = false
         return .error(HonestContract.encodeStateC(error: error, hint: hint, extras: details))
@@ -275,6 +310,119 @@ extension AccessibilityChannel {
         }
         let title: String? = AXHelpers.getAttribute(item, kAXTitleAttribute as String, runtime: runtime.ax)
         guard let title else { return (.unreadable, nil) }
-        return (AXLocalePolicy.changeTrackColorUndoOperation.containsAny(in: title) ? .changeTrackColor : .otherOperation, title)
+        if AXLocalePolicy.changeRegionColorUndoOperation.containsAny(in: title) { return (.changeRegionColor, title) }
+        if AXLocalePolicy.changeTrackColorUndoOperation.containsAny(in: title) { return (.changeTrackColor, title) }
+        return (.otherOperation, title)
+    }
+
+    // MARK: - region.set_color
+
+    /// `region.set_color`: select exactly the regions of one track, open View > Colors with the
+    /// arrangement area focused, click one swatch.
+    ///
+    /// The regions are selected through their own `AXSelected` after Edit > Deselect All, the same
+    /// write `region.select_last` measured, and the whole selected set must read back as exactly
+    /// those regions before anything is clicked. A region colour, like a track colour, has no AX
+    /// readback; the Undo title separates the two (`Change Region Color` vs `Change Track Color`),
+    /// so the witness also says which of the two the click changed.
+    static func defaultSetRegionColor(
+        params: [String: String],
+        runtime: AXLogicProElements.Runtime = .production
+    ) async -> ChannelResult {
+        func refuse(_ error: HonestContract.FailureError, _ reason: String, _ hint: String, _ extras: [String: Any]) -> ChannelResult {
+            colorStateC(error, operation: "region.set_color", reason: reason, hint: hint, extras: extras)
+        }
+        guard let indexRaw = params["index"], let index = Int(indexRaw), index >= 0 else {
+            return refuse(.invalidParams, "index_invalid", "region set_color requires the track 'index' (Int ≥ 0)", [:])
+        }
+        guard let row = params["row"].flatMap(Int.init), let column = params["column"].flatMap(Int.init),
+              let swatch = TrackColorPalette.swatch(row: row, column: column) else {
+            return refuse(.invalidParams, "swatch_invalid", "region set_color requires a palette row (1-4) and column (1-24)", [:])
+        }
+        var evidence: [String: Any] = [
+            "track": index,
+            "requested_color": trackColorDescription(swatch),
+            "palette_measured_on": "Logic Pro \(TrackColorPalette.measuredLogicVersion)",
+        ]
+        guard let header = AXLogicProElements.findTrackHeader(at: index, runtime: runtime) else {
+            return refuse(.elementNotFound, "track_not_found", "Track at index \(index) not found", evidence)
+        }
+        let liveName = AXValueExtractors.extractTrackState(from: header, index: index, runtime: runtime.ax).name
+        evidence["track_name"] = liveName
+        if let expected = params["expected_name"], !expected.utf8.elementsEqual(liveName.utf8) {
+            evidence["expected_name"] = expected
+            return refuse(.targetIdentityMismatch, "name_mismatch",
+                "Track \(index) is '\(liveName)', not '\(expected)'. Re-read logic://tracks.", evidence)
+        }
+        let front = FrontmostGate.prepareObserved(
+            observe: runtime.observeFrontmost,
+            activate: { ProcessUtils.activateLogicPro() },
+            sleepMicros: { usleep($0) }
+        )
+        evidence["frontmost_preparation"] = front.preparation.rawValue
+        guard front.preparation.isReady else {
+            return refuse(.unsupportedState, "logic_not_frontmost", "Logic Pro could not be brought to the front; nothing was clicked.", evidence)
+        }
+
+        // Which regions: every region the arrangement shows on this track, and none hidden.
+        guard case .success(let arrangement) = enumerateRegionItems(runtime: runtime) else {
+            return refuse(.readbackUnavailable, "regions_unreadable", "The arrangement's regions could not be read; nothing was selected.", evidence)
+        }
+        guard arrangement.regionItemsOutsideViewport == 0 else {
+            evidence["region_items_outside_viewport"] = arrangement.regionItemsOutsideViewport
+            return refuse(.unsupportedState, "regions_outside_viewport",
+                "Some regions lie outside the visible arrangement, so 'all regions of this track' cannot be established. Zoom to fit and retry; nothing was selected.",
+                evidence)
+        }
+        let targets = arrangement.regions.filter { $0.info.trackIndex == index }
+        evidence["region_count"] = targets.count
+        guard !targets.isEmpty else {
+            return refuse(.elementNotFound, "no_regions", "Track \(index) shows no regions; nothing to colour.", evidence)
+        }
+
+        // Exactly those regions selected, proven by reading the whole selected set back.
+        if let deselect = AXLogicProElements.menuItem(identifier: "deselectAll:", inMenuBar: AXLocalePolicy.editMenuBar, runtime: runtime) {
+            _ = AXHelpers.performAction(deselect, kAXPressAction as String, runtime: runtime.ax)
+        }
+        usleep(150_000)
+        guard let cleared = selectedRegionInfos(runtime: runtime), cleared.isEmpty else {
+            return refuse(.unsupportedState, "selection_not_cleared",
+                "Edit > Deselect All did not leave an empty, readable region selection; nothing was coloured.", evidence)
+        }
+        for target in targets {
+            _ = AXHelpers.setAttribute(target.item, kAXSelectedAttribute, kCFBooleanTrue, runtime: runtime.ax)
+        }
+        usleep(150_000)
+        func key(_ info: RegionInfo) -> String { "\(info.trackIndex)|\(info.startBar)|\(info.endBar)|\(info.name)" }
+        guard let selected = selectedRegionInfos(runtime: runtime),
+              selected.map(key).sorted() == targets.map({ key($0.info) }).sorted() else {
+            return refuse(.unsupportedState, "selection_not_exact",
+                "The region selection did not read back as exactly track \(index)'s regions; nothing was coloured.", evidence)
+        }
+
+        // The palette colours what has key focus: give it to the arrangement, at the first region.
+        _ = AXHelpers.setAttribute(targets[0].item, kAXFocusedAttribute, kCFBooleanTrue, runtime: runtime.ax)
+        switch clickPaletteSwatch(
+            menuPath: AXLocalePolicy.viewColorsMenuPath,
+            menuName: "View > Colors",
+            row: row, column: column, operation: "region.set_color",
+            evidence: &evidence, runtime: runtime
+        ) {
+        case .refused(let refusal):
+            return refusal
+        case .clicked:
+            break
+        }
+        let witness = readTrackColorUndoWitness(runtime: runtime)
+        evidence["undo_witness"] = witness.witness.rawValue
+        evidence["undo_title"] = witness.title ?? NSNull()
+        evidence["readback"] = "unavailable_via_ax"
+        if witness.witness == .changeTrackColor {
+            // The click landed on the track, not the regions. Said plainly, not hidden in a B.
+            evidence["hint"] = "The palette changed the TRACK colour instead of the regions' colour."
+            return .success(HonestContract.encodeStateB(reason: .readbackMismatch, extras: evidence))
+        }
+        evidence["hint"] = "Region colour is not readable through Accessibility; the Undo title names the change."
+        return .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: evidence))
     }
 }

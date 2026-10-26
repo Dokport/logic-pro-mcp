@@ -1,0 +1,47 @@
+#!/usr/bin/env -S python3 -I
+"""Relay an MCP client's stdio to the LogicProMCPHost socket. Holds no permissions of its own.
+
+Register it as the server command in a client instead of the LogicProMCP binary:
+
+    claude mcp add logic-pro -- /path/to/tools/mcp-socket-relay
+
+The host (Scripts/install-host.sh) holds Accessibility; this relay only moves bytes.
+"""
+import os
+import select
+import socket
+import sys
+
+DEFAULT_SOCKET = os.path.expanduser("~/Library/Application Support/LogicProMCP/mcp.sock")
+
+
+def main():
+    path = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("LOGIC_MCP_SOCKET", DEFAULT_SOCKET)
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        conn.connect(path)
+    except OSError as error:
+        sys.stderr.write(f"mcp-socket-relay: cannot reach the host at {path}: {error}. "
+                         "Is LogicProMCPHost installed and loaded (Scripts/install-host.sh)?\n")
+        return 1
+    stdin, stdout = sys.stdin.fileno(), sys.stdout.fileno()
+    sources = [stdin, conn]
+    while sources:
+        readable, _, _ = select.select(sources, [], [])
+        if stdin in readable:
+            data = os.read(stdin, 65536)
+            if data:
+                conn.sendall(data)
+            else:
+                conn.shutdown(socket.SHUT_WR)
+                sources.remove(stdin)
+        if conn in readable:
+            data = conn.recv(65536)
+            if not data:
+                return 0
+            os.write(stdout, data)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

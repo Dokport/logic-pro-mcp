@@ -7,6 +7,8 @@ let package = Package(
     products: [
         .executable(name: "LogicProMCP", targets: ["LogicProMCPCLI"]),
         .executable(name: "trusted-verifier", targets: ["TrustedVerifier"]),
+        // The launchd-started process that alone holds Accessibility (Scripts/install-host.sh).
+        .executable(name: "LogicProMCPHost", targets: ["LogicProMCPHost"]),
         .library(name: "LogicProMCPKit", targets: ["LogicProMCP"]),
     ],
     dependencies: [
@@ -62,6 +64,11 @@ let package = Package(
             name: "LogicProMCPCLI",
             dependencies: ["LogicProMCP"],
             path: "Sources/LogicProMCPCLI"
+        ),
+        .executableTarget(
+            name: "LogicProMCPHost",
+            path: "Sources/LogicProMCPHost",
+            linkerSettings: [.linkedFramework("ApplicationServices")]
         ),
         .executableTarget(
             name: "TrustedVerifier",

@@ -232,6 +232,7 @@ struct OperationCatalogTests {
         .tracksSetAutomation: ["mode"],
         .tracksSetInstrument: ["category", "path", "preset"],
         .tracksSetColor: ["color", "readback"],
+        .tracksSetRegionColor: ["color"],
         .tracksScanLibrary: ["mode"],
         .tracksResolvePath: ["path"],
         .tracksScanPluginPresets: ["submenuOpenDelayMs"],
@@ -299,7 +300,7 @@ struct OperationCatalogTests {
         case .tracksSetInstrument:
             params["path"] = .string("/tmp/selector-probe.patch")
             params[OperationRegistry.corroborationParam] = .string("Track \(value)")
-        case .tracksSetColor:
+        case .tracksSetColor, .tracksSetRegionColor:
             params["color"] = .string("red")
             params[OperationRegistry.corroborationParam] = .string("Track \(value)")
         default:

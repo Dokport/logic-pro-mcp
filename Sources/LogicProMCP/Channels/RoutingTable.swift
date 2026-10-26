@@ -95,6 +95,7 @@ extension ChannelRouter {
         "track.set_arm":              [.accessibility, .mcu, .cgEvent],
         "track.duplicate":            [.midiKeyCommands, .cgEvent],
         "track.set_color":            [.accessibility],
+        "region.set_color":           [.accessibility],
         "track.set_automation":       [.mcu],  // §4.3.1 new command
         "track.create_stack":         [.midiKeyCommands, .cgEvent],
         "track.set_instrument":       [.accessibility],  // Library panel via AX + CGEvent

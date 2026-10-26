@@ -386,6 +386,12 @@ extension OperationRegistry {
                                         sample: .string("red")),
                 "readback": .enforced(.scalar, .string("ax"), allowed: TrackDispatcher.colorReadbackModes),
             ], required: [indexGroup, ["color"], ["expected_name", "target_ref"]]),
+            "tracks.set_region_color": .init(params: [
+                "index": index(), "track": index(), "target_ref": targetRef, "project_ref": projectRef,
+                "expected_name": expectedName,
+                "color": .unconstrained("a name, a stored index 1-96 as a number or numeric string, or {row, column}; the dispatcher resolves the shape",
+                                        sample: .string("green")),
+            ], required: [indexGroup, ["color"], ["expected_name", "target_ref"]]),
             "tracks.sort_verified": .init(params: [
                 "criterion": .enforced(.scalar, .string("midi_channel"), allowed: TrackSortCriterion.allCases.map(\.rawValue)),
                 "expected_order": .enforced(.array, .array([.string("trk:1")])),

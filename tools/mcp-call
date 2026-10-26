@@ -9,6 +9,7 @@ One server process lives for the whole invocation, so references a call returns
   tools/mcp-call --read logic://tracks
   tools/mcp-call --script steps.jsonl      # one {"tool","command","params"}, {"read"} or {"sleep"} per line
   tools/mcp-call --repl                    # same lines from stdin
+  tools/mcp-call --socket logic_system health   # through the LogicProMCPHost socket (no client permissions)
 
 Each result is printed as one JSON line on stdout; server stderr goes to --log (default: discarded).
 """
@@ -20,16 +21,18 @@ import subprocess
 import sys
 import time
 
+RELAY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp-socket-relay")
+RELAY_DEFAULT_SOCKET = os.path.expanduser("~/Library/Application Support/LogicProMCP/mcp.sock")
 DEFAULT_BINARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".build", "release", "LogicProMCP")
 
 
 class Server:
-    def __init__(self, binary, log_path, timeout):
+    def __init__(self, command, log_path, timeout):
         self.timeout = timeout
         self.next_id = 1
         log = open(log_path, "ab") if log_path else subprocess.DEVNULL
         self.proc = subprocess.Popen(
-            [binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, bufsize=0
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, bufsize=0
         )
         self.buffer = b""
         self.request("initialize", {
@@ -127,11 +130,18 @@ def main():
     parser.add_argument("--script", help="JSONL file of steps")
     parser.add_argument("--repl", action="store_true", help="read JSONL steps from stdin")
     parser.add_argument("--binary", default=os.environ.get("LOGIC_MCP_BINARY", DEFAULT_BINARY))
+    parser.add_argument("--socket", action="store_true",
+                        help="talk to the LogicProMCPHost socket through tools/mcp-socket-relay instead of spawning --binary")
+    parser.add_argument("--socket-path", default=os.environ.get("LOGIC_MCP_SOCKET", RELAY_DEFAULT_SOCKET))
     parser.add_argument("--log", help="append server stderr to this file")
     parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
 
-    server = Server(args.binary, args.log, args.timeout)
+    if args.socket:
+        command = [sys.executable, "-I", RELAY, args.socket_path]
+    else:
+        command = [args.binary]
+    server = Server(command, args.log, args.timeout)
     try:
         if args.read:
             steps = [{"read": args.read}]

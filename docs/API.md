@@ -93,7 +93,7 @@ The field is present only on operations that are both target-bearing (`target` =
 | Tier | Meaning | Today |
 | --- | --- | --- |
 | `ref_required` | A bare index is refused; only `target_ref` binds. | **No operations.** Implemented and tested; the first promotion is a registry row flip and will appear as a catalog diff. |
-| `corroborated` | A bare index must be corroborated by `expected_name`. | `tracks.delete`, `tracks.duplicate`, `tracks.set_instrument`, `tracks.set_color`, `plugins.insert_verified` |
+| `corroborated` | A bare index must be corroborated by `expected_name`. | `tracks.delete`, `tracks.duplicate`, `tracks.set_instrument`, `tracks.set_color`, `tracks.set_region_color`, `plugins.insert_verified` |
 | `legacy_index_allowed` | The historical unguarded index path. | **Deprecated** — see below. |
 
 #### The corroboration contract
@@ -160,11 +160,13 @@ successful refresh clears the old key. Clients must accept historical payloads w
 
 Use explicit indices or names. Track mutation fails closed when the target cannot be identified or read back.
 
-Common commands: `select`, `create_audio`, `create_instrument`, `create_drummer`, `create_external_midi`, `delete`, `duplicate`, `rename`, `mute`, `solo`, `arm`, `arm_only`, `record_sequence`, `set_color`, `set_automation`, `set_instrument`, `list_library`, `scan_library`, `resolve_path`, `scan_plugin_presets`.
+Common commands: `select`, `create_audio`, `create_instrument`, `create_drummer`, `create_external_midi`, `delete`, `duplicate`, `rename`, `mute`, `solo`, `arm`, `arm_only`, `record_sequence`, `set_color`, `set_region_color`, `set_automation`, `set_instrument`, `list_library`, `scan_library`, `resolve_path`, `scan_plugin_presets`.
 
 `set_color` takes `{index, expected_name}` or `{target_ref}`, a `color` and an optional `readback` (`"ax"`, the default, or `"project_file"`). `color` is a name — `red`, `vermilion`, `orange`, `amber`, `yellow`, `chartreuse`, `lime`, `green`, `spring green`, `mint`, `teal`, `cyan`, `sky blue`, `azure`, `blue`, `indigo`, `violet`, `purple`, `plum`, `magenta`, `pink`, optionally prefixed by `medium`, `dark` or `darkest` — a stored palette index 1–96, or `{row: 1-4, column: 1-24}` (visible palette position, row 1 brightest). Every reply carries `requested_color` with its row, column, stored index and sRGB. It is `corroborated`: the palette colours whatever is selected and the previous colour cannot be read to undo a wrong-target write.
 
 Logic exposes no Accessibility colour write or read (measured on 12.4; see `research/FINDINGS.md`). The operation selects exactly the target track (refusing when the selection does not read as that track alone), opens Track ▸ Assign Track Color… by its localized menu item, finds the palette by structure (one window, one group of 97 position-only children), derives the swatch's click point from those children — refusing a layout that is not the measured 24 × 4 grid — and posts one native click while Logic is frontmost. It then closes the palette and reads the Edit menu's Undo title. With `readback: "ax"` the answer is State B `readback_unavailable` with `undo_witness` (`change_track_color`, `other_operation` or `unreadable`): the witness says that A track colour changed, not which. With `readback: "project_file"` the project is saved through `project.save` and the track record in `ProjectData` is read; State A requires the saved index to equal the requested one (`observed_stored_index`), a different index is State B `readback_mismatch`, and a save or record that does not read stays State B with `readback_detail`. Every refusal before the click is State C with `write_attempted: false`. Limits: the palette table and the `ProjectData` record layout are measured on Logic 12.4 only; the click needs Logic frontmost and PostEvent access; the record read requires the track name to be unique in the file.
+
+`set_region_color` takes the same binding and `color` as `set_color`, and colours every region of that track. It refuses when any region lies outside the visible arrangement (the dispatcher then routes `nav.zoom_to_fit` once and retries), clears the selection with Edit ▸ Deselect All, selects each of the track's regions through its `AXSelected`, and requires the whole selected set to read back as exactly those regions before anything is clicked. It then focuses the arrangement, opens View ▸ Colors and clicks the swatch as `set_color` does. There is no readback mode: the answer is State B with `region_count` and `undo_witness` — `change_region_color` when the Edit menu offers `Undo Change Region Color`; `change_track_color` means the palette coloured the track instead and is reported as `readback_mismatch`. Measured on Logic 12.4 through LogicProMCPHost: a track with 97 audio regions and two MIDI tracks with 1 and 2 regions.
 
 **`delete`, `duplicate`, and `set_instrument` no longer accept a bare index.** They are `corroborated` (see [Index binding](#index-binding)): pass `expected_name` (the track name you expect at that index) or `target_ref`. Without one, they fail closed with `index_binding_corroboration_required` and write nothing.
 
@@ -471,6 +473,15 @@ The CGEvent fallback sends nine operations as a letter key with no Command, Cont
 A few command tokens are recognised by the dispatchers but are deliberately **not part of the production MCP contract** (no deterministic / verified path exists yet). They are excluded from the workflow command census and return a single machine-classifiable State C shape — `error: "command_not_exposed"`, `not_exposed: true`, `supported: false`, plus the `operation` — so a complete-surface demo/test harness can classify them as *expected*, not a malfunction:
 
 - `logic_mixer.set_send`, `logic_mixer.set_output`, `logic_mixer.set_input`, `logic_mixer.toggle_eq`, `logic_mixer.reset_strip`, `logic_mixer.bypass_plugin`
+
+## Running without client-wide Accessibility (LogicProMCPHost)
+
+By default the server inherits Accessibility from whatever spawns it, so the client (Claude Code, a terminal) must hold the grant, and every program that client runs can then drive every app. `LogicProMCPHost` moves the grant to one small process:
+
+- `Scripts/install-host.sh --no-agent` builds `~/Applications/LogicProMCPHost.app` (host + server, signed with hardened runtime and only the Apple Events entitlement) and starts it once; without the flag it also installs a LaunchAgent so it starts at login.
+- The host listens on `~/Library/Application Support/LogicProMCP/mcp.sock` (mode 0600, peer uid checked) and runs the bundled server for one connection at a time, with a fixed minimal environment. It takes no option naming another program.
+- Clients register `tools/mcp-socket-relay` as the server command; the relay only moves bytes. `tools/mcp-call --socket` uses the same path.
+- Grant Accessibility (and the Automation prompts) to `LogicProMCPHost` only. With an ad-hoc signature every rebuild is a new identity: reset with `tccutil reset Accessibility com.logicpro.mcp.host` and grant again, or sign with `LOGIC_MCP_SIGN_IDENTITY` set to a local code-signing certificate.
 
 ## Error Format
 

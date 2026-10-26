@@ -212,3 +212,39 @@ func trackSetColorRefusesUnknownNames() async throws {
     #expect(text.contains("unknown_color_name"))
     #expect(text.contains("write_attempted"))
 }
+
+// MARK: - set_region_color
+
+@Test("set_region_color is corroborated and refuses a readback mode it cannot honour")
+func trackSetRegionColorRefusals() async throws {
+    #expect(OperationRegistry.spec(tool: "logic_tracks", command: "set_region_color")?.indexBinding == .corroborated)
+    let bare = await TrackDispatcher.handle(
+        command: "set_region_color",
+        params: ["index": .int(0), "color": .string("green")],
+        router: ChannelRouter(),
+        cache: StateCache()
+    )
+    #expect(bare.isError == true)
+    #expect(sharedToolText(bare).contains("index_binding_corroboration_required"))
+    let withReadback = await TrackDispatcher.handle(
+        command: "set_region_color",
+        params: ["index": .int(0), "expected_name": .string("Kick"), "color": .string("green"), "readback": .string("project_file")],
+        router: ChannelRouter(),
+        cache: StateCache()
+    )
+    #expect(withReadback.isError == true)
+    #expect(sharedToolText(withReadback).contains("readback_not_supported"))
+}
+
+@Test("the region channel refuses an unresolved swatch before touching AX")
+func regionSetColorRefusesUnresolvedSwatch() async {
+    let result = await AccessibilityChannel.defaultSetRegionColor(
+        params: ["index": "0", "row": "9", "column": "1"],
+        runtime: .init(logicProPID: { nil }, ax: .production)
+    )
+    #expect(!result.isSuccess)
+    let object = decodedJSONObject(result.message) ?? [:]
+    #expect(object["reason"] as? String == "swatch_invalid")
+    #expect(object["operation"] as? String == "region.set_color")
+    #expect(object["write_attempted"] as? Bool == false)
+}

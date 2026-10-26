@@ -850,6 +850,27 @@ enum AXLocalePolicy {
         item: assignTrackColorMenuItem
     )
 
+    static let viewColorsMenuItem = LabelSet(
+        canonical: "Colors",
+        variants: ["색상", "カラー", "Farben", "Colores", "Couleurs", "Colori", "Cores", "颜色", "顏色"],
+        rationale: "View > Colors opens the colour palette for whatever has key focus; region colouring uses it with the arrangement focused. Read off an en-US Logic 12.4 menu bar on 2026-10-26 (research/ax/menubar-noproject.txt); every other locale is the value of the row named below, copied by script. Matched only under the View menu. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Colors#value"
+    )
+
+    static let viewColorsMenuPath = MenuPath(
+        bar: viewMenuBar,
+        item: viewColorsMenuItem
+    )
+
+    /// The undo-operation NAME a region colour change leaves on top of the stack; distinguishes a
+    /// palette click that coloured regions from one that coloured the track.
+    static let changeRegionColorUndoOperation = LabelSet(
+        canonical: "Change Region Color",
+        variants: ["리전 색상 변경", "リージョンカラーを変更", "Regionsfarbe ändern", "cambio de color del pasaje", "Modifier la couleur de la séquence", "Modifica colore della regione", "Alterar Cor da Região", "更改片段颜色", "更改區段顏色"],
+        rationale: "Apple's undo-operation name for a region colour change, matched by containment inside the Edit menu's Undo title. Not yet observed on a running Logic; every string is the value of the row named below, copied by script, so nothing here is typed. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Change%20Region%20Color%23und#value"
+    )
+
     /// The undo-operation NAME a track colour change leaves on top of the stack. Matched by
     /// containment inside the Edit menu's Undo title, read through `editUndoMenuPath`.
     static let changeTrackColorUndoOperation = LabelSet(
@@ -3685,6 +3706,8 @@ enum AXLocalePolicy {
         sortTracksByMenuItem,
         assignTrackColorMenuItem,
         changeTrackColorUndoOperation,
+        viewColorsMenuItem,
+        changeRegionColorUndoOperation,
         sortTracksByMIDIChannelMenuItem,
         sortTracksByAudioChannelMenuItem,
         sortTracksByOutputChannelMenuItem,
