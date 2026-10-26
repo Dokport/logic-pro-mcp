@@ -515,6 +515,15 @@ struct MixerDispatcher: OperationTraceDispatching {
                 }
                 routedParams["expected_current"] = expected.token
             }
+            switch params["create_receiver"] {
+            case nil, .bool(false)?:
+                break
+            case .bool(true)?:
+                // Mix-prep: lets Logic create the aux an unused bus needs (legacy index path only).
+                routedParams["create_receiver"] = "true"
+            default:
+                return toolInvalidParamsResult("set_output_verified 'create_receiver' must be a boolean")
+            }
             routedParams["index"] = String(index)
             let outputAssociation: AccessibilityChannel.HeldSelectionAssociation.Pair?
             if let trackAssociation {

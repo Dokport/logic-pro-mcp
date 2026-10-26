@@ -224,6 +224,7 @@ extension OperationRegistry {
                 "index": index(), "track": index(), "target_ref": targetRef, "project_ref": projectRef,
                 "destination": .enforced(.object, .object(["kind": "bus", "number": .int(1)])),
                 "expected_current": .enforced(.object, .object(["kind": "bus", "number": .int(2)])),
+                "create_receiver": .enforced(.boolean, .bool(true)),
             ], required: [indexGroup, ["destination"]]),
             "mixer.get_output_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("mix_lpm_contract_291")), "project_ref": projectRef,

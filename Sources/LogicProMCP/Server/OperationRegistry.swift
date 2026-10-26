@@ -616,7 +616,7 @@ enum OperationRegistry {
             "set_output_verified",
             .none,
             .acceptsStableTarget,
-            ["destination", "expected_current", "index", "track"]
+            ["create_receiver", "destination", "expected_current", "index", "track"]
         ),
         (.mixerGetOutputVerified, "get_output_verified", .none, .acceptsStableTarget, []),
         (.mixerGetInputBusVerified, "get_input_bus_verified", .none, .acceptsStableTarget, []),

@@ -102,6 +102,10 @@ extension AccessibilityChannel {
             expected = parsed
         }
 
+        // Mix-prep: an explicit grant to let Logic create the aux an unused bus needs. Only on the
+        // legacy index path, whose readback is by ordinal and name; never for a held reference.
+        let createReceiver = params["create_receiver"] == "true" && physical == nil
+        var namesBefore: [String] = []
         var extras: [String: Any] = [
             "operation": operation,
             (physical == nil ? "track" : "mixer_strip_index"): index,
@@ -220,9 +224,13 @@ extension AccessibilityChannel {
         }
 
         if case .bus(let number) = destination {
-            switch busCheck(into: number, from: index, strips: strips, runtime: runtime.ax) {
+            switch busCheck(into: number, from: index, strips: strips, runtime: runtime.ax,
+                            allowCreatingReceiver: createReceiver) {
             case .receivers(let receivers):
                 extras["bus_receivers"] = receivers
+                // Read now: Logic replaces strip elements when an output changes, so names read
+                // from these elements after the press come back empty (measured 12.4).
+                if receivers.isEmpty { namesBefore = strips.map { AXHelpers.getDescription($0, runtime: runtime.ax) ?? "" } }
             case .refused(let error, let hint, let more):
                 return refusal(error, hint + "; nothing was pressed.", more)
             }
@@ -408,7 +416,8 @@ extension AccessibilityChannel {
                let currentSlot = AXLogicProElements.outputSlotButton(in: fresh.strips[index], runtime: runtime.ax),
                CFEqual(currentSlot, slotButton) {
                 if case .bus(let number) = destination {
-                    switch busCheck(into: number, from: index, strips: fresh.strips, runtime: runtime.ax) {
+                    switch busCheck(into: number, from: index, strips: fresh.strips, runtime: runtime.ax,
+                                    allowCreatingReceiver: createReceiver) {
                     case .receivers(let receivers): extras["bus_receivers_at_press"] = receivers
                     case .refused(let error, let hint, let more): refused = (error, hint, more)
                     }
@@ -479,6 +488,15 @@ extension AccessibilityChannel {
         var after: OutputAssignment?
         var countAfter: Int?
         var attemptedAssociation = false
+        // Creating the receiver: exactly one strip more is the expected after-state, and the new
+        // strip, located by a name census, may sit before the source and shift its ordinal.
+        let creating: Int? = {
+            guard createReceiver, case .bus(let number) = destination,
+                  (extras["bus_receivers"] as? [Int])?.isEmpty == true else { return nil }
+            return number
+        }()
+        var createdIndex: Int?
+        var lastNamesAfter: [String]?
         let deadline = Date().addingTimeInterval(Double(timing.readbackTimeoutMs) / 1000.0)
         repeat {
             let enumeration = (physical?.mixer ?? AXLogicProElements.getMixerArea(runtime: runtime))
@@ -486,7 +504,15 @@ extension AccessibilityChannel {
                 .flatMap { $0.unreadableChildren == 0 ? $0 : nil }
             countAfter = enumeration?.strips.count
             afterLabel = nil
-            if let enumeration, enumeration.strips.count == strips.count,
+            if creating != nil, let enumeration, enumeration.strips.count == strips.count + 1 {
+                let namesAfter = enumeration.strips.map { AXHelpers.getDescription($0, runtime: runtime.ax) ?? "" }
+                lastNamesAfter = namesAfter
+                if case .created(_, let position) = CreateAuxVerifier.verdict(before: namesBefore, after: namesAfter) {
+                    createdIndex = position
+                    let source = position <= index ? index + 1 : index
+                    afterLabel = AXLogicProElements.outputSlotDestination(in: enumeration.strips[source], runtime: runtime.ax)
+                }
+            } else if let enumeration, enumeration.strips.count == strips.count,
                physical == nil || physical?.currentIndex(runtime: runtime) == index {
                 if let physical {
                     if CFEqual(enumeration.strips[index], physical.strip) {
@@ -530,7 +556,30 @@ extension AccessibilityChannel {
         extras["changed"] = after.map { $0 != before } ?? NSNull()
         extras["strip_count_after"] = countAfter ?? NSNull()
 
-        if let countAfter, countAfter != strips.count {
+        if let number = creating {
+            // The created receiver is the operation's own effect, checked like the output itself.
+            guard let createdIndex, countAfter == strips.count + 1,
+                  let mixerNow = AXLogicProElements.getMixerArea(runtime: runtime),
+                  let created = AXLogicProElements.stripEnumeration(in: mixerNow, runtime: runtime.ax)?.strips,
+                  createdIndex < created.count else {
+                extras["hint"] = "The output was pressed to an unused bus; the expected single new receiver "
+                    + "strip did not read back. Re-read the Mixer before any dependent write."
+                extras["strip_count_before"] = strips.count
+                extras["strip_names_before"] = namesBefore
+                extras["strip_names_after"] = lastNamesAfter ?? NSNull()
+                return .success(HonestContract.encodeStateB(reason: .readbackUnavailable, extras: extras))
+            }
+            let receiverInput = AXLogicProElements.inputSlotReading(in: created[createdIndex], runtime: runtime.ax)
+            extras["created_receiver"] = [
+                "strip_index": createdIndex,
+                "name": AXHelpers.getDescription(created[createdIndex], runtime: runtime.ax) ?? NSNull(),
+                "input_bus": busNumber(feeding: receiverInput) ?? NSNull(),
+            ] as [String: Any]
+            guard busNumber(feeding: receiverInput) == number else {
+                extras["hint"] = "A new strip appeared, but it does not read Bus \(number) as its input."
+                return .success(HonestContract.encodeStateB(reason: .readbackMismatch, extras: extras))
+            }
+        } else if let countAfter, countAfter != strips.count {
             let sideEffect = countAfter > strips.count ? "strip_created" : "strip_removed"
             return refusal(.unexpectedSideEffect, "The output was pressed and the Mixer's strip count "
                 + "moved from \(strips.count) to \(countAfter), so strip \(index) may no longer be "
@@ -1287,7 +1336,8 @@ extension AccessibilityChannel {
         into number: Int,
         from index: Int,
         strips: [AXUIElement],
-        runtime: AXHelpers.Runtime
+        runtime: AXHelpers.Runtime,
+        allowCreatingReceiver: Bool = false
     ) -> BusCheck {
         var inputs: [Int: AXLogicProElements.InputSlotReading] = [:]
         for (ordinal, other) in strips.enumerated() where ordinal != index {
@@ -1315,6 +1365,12 @@ extension AccessibilityChannel {
         // never counted as "not a receiver" — the refusal stands either way.
         let ordinals = inputs.keys.sorted()
         let receivers = ordinals.filter { busNumber(feeding: inputs[$0]) == number }
+        // With the explicit grant, "no receiver" is the expected state -- but only when every
+        // other strip's input read: an unread input could be the receiver.
+        if receivers.isEmpty, allowCreatingReceiver,
+           !ordinals.contains(where: { inputs[$0] == .unreadable }) {
+            return .receivers([])
+        }
         guard !receivers.isEmpty else {
             return .refused(.busHasNoReceiver, "No other strip in the Mixer reads Bus \(number) as its "
                 + "input. Logic creates an aux when a strip is sent to an unused bus, and this "

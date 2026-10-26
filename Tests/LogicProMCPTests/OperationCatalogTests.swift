@@ -110,7 +110,7 @@ struct OperationCatalogTests {
         .transportSetCycleRange: ["end", "start"],
         .mixerSetVolume: ["value", "volume"],
         .mixerSetPan: ["pan", "value"],
-        .mixerSetOutputVerified: ["destination", "expected_current"],
+        .mixerSetOutputVerified: ["create_receiver", "destination", "expected_current"],
         .mixerSetInputBusVerified: ["destination", "expected_current", "replace_existing"],
         .mixerSetSendOutputVerified: ["ordinal", "destination", "expected_current", "replace_existing"],
         .mixerGetSendDestinationVerified: ["ordinal"],
