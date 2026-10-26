@@ -2,15 +2,30 @@
 import Foundation
 
 extension AccessibilityChannel {
-    /// These semantic editor values, not a raw-slider conversion or a universal
-    /// dB range, have been exercised on the occupied native Send editor.
+    /// A Send level as Logic's editor and display write it, normalized to 0.1 dB: `-∞`, or a
+    /// number from -144 to +6 dB written with `.` or `,` as decimal mark (the display follows the
+    /// system's number format; a Danish macOS draws `-95,0`) and `-` or `−` as minus.
+    ///
+    /// Upstream accepted only -95, -6 and -∞, the values it had exercised. Mix-prep measured -12
+    /// and -18 on Logic 12.4 through the same editor; the write still has to read back from the same
+    /// knob within 0.2 dB (`sendLevelsAgree`), so a value Logic moves further or refuses is State B.
     static func sendLevelToken(_ text: String) -> String? {
-        switch text {
-        case "-95", "-95.0": "-95"
-        case "-6", "-6.0": "-6"
-        case "-∞": "-∞"
-        default: nil
-        }
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed == "-∞" || trimmed == "−∞" { return "-∞" }
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".").replacingOccurrences(of: "−", with: "-")
+        guard let value = Double(normalized), value.isFinite, value >= -144, value <= 6 else { return nil }
+        let tenths = (value * 10).rounded() / 10
+        return tenths == tenths.rounded() ? String(Int(tenths)) : String(format: "%.1f", tenths)
+    }
+
+    /// Whether the knob's display after a write is the level that was written. Measured on Logic
+    /// 12.4: the knob is quantized, so a typed -18 reads back -18,1. Within 0.2 dB counts as the
+    /// written level; -∞ only matches -∞. The reply still carries the observed display.
+    static func sendLevelsAgree(_ display: String, _ desired: String) -> Bool {
+        guard let observed = sendLevelToken(display) else { return false }
+        if observed == "-∞" || desired == "-∞" { return observed == desired }
+        guard let a = Double(observed), let b = Double(desired) else { return false }
+        return abs(a - b) <= 0.2 + 1e-9
     }
 
     private static func sendLevelSlotsMatch(_ lhs: [SendSlotObservation], _ rhs: [SendSlotObservation],
@@ -270,7 +285,7 @@ extension AccessibilityChannel {
               before.checks == after.checks,
               sendLevelSlotsMatch(before.slots, after.slots, ordinal: ordinal, allowingLevelChange: true),
               let observed = after.slots.first(where: { $0.ordinal == ordinal }),
-              let afterDisplay = observed.levelDescription, sendLevelToken(afterDisplay) == desired,
+              let afterDisplay = observed.levelDescription, sendLevelsAgree(afterDisplay, desired),
               let afterRaw = observed.levelRaw, afterRaw.isFinite, numericRaw(knob) == afterRaw,
               custody(allowingLevelChange: true), ordinaryFocus(),
               AXLogicProElements.sendSlotObservations(in: before.physical.strip, runtime: runtime.ax) == after.slots,

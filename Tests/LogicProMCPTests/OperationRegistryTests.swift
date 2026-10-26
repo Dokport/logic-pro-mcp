@@ -31,6 +31,7 @@ struct OperationRegistryTests {
         (.mixerInsertPlugin, "insert_plugin"),
         (.mixerBank, "bank"),
         (.mixerCreateAux, "create_aux"),
+        (.mixerCreateSend, "create_send"),
         (.mixerSetOutputVerified, "set_output_verified"),
         (.mixerGetOutputVerified, "get_output_verified"),
         (.mixerGetInputBusVerified, "get_input_bus_verified"),

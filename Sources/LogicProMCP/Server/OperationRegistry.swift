@@ -19,6 +19,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case mixerInsertPlugin = "mixer.insert_plugin"
     case mixerBank = "mixer.bank"
     case mixerCreateAux = "mixer.create_aux"
+    case mixerCreateSend = "mixer.create_send"
     case mixerSetOutputVerified = "mixer.set_output_verified"
     case mixerGetOutputVerified = "mixer.get_output_verified"
     case mixerGetInputBusVerified = "mixer.get_input_bus_verified"
@@ -317,7 +318,7 @@ enum OperationRegistry {
         ],
         ToolID.logicMixer.rawValue: [
             "mixer.set_volume", "mixer.set_pan", "mixer.set_master_volume",
-            "mixer.set_plugin_param", "mixer.insert_plugin", "mixer.bank", "mixer.create_aux",
+            "mixer.set_plugin_param", "mixer.insert_plugin", "mixer.bank", "mixer.create_aux", "mixer.create_send",
             "mixer.set_output_verified", "mixer.get_output_verified", "mixer.get_input_bus_verified", "mixer.set_input_bus_verified", "mixer.get_send_destination_verified", "mixer.set_send_output_verified", "mixer.get_send_bypass_verified", "mixer.set_send_bypass_verified", "mixer.set_send_level_verified", "mixer.set_send_mode_verified",
         ],
         ToolID.logicNavigate.rawValue: [
@@ -381,7 +382,7 @@ enum OperationRegistry {
         ],
         ToolID.logicMixer.rawValue: [
             "set_volume", "set_pan", "set_master_volume", "set_plugin_param", "insert_plugin",
-            "bank", "create_aux", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified", "set_send_level_verified", "set_send_mode_verified",
+            "bank", "create_aux", "create_send", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified", "set_send_level_verified", "set_send_mode_verified",
         ],
         ToolID.logicNavigate.rawValue: [
             "goto_bar", "goto_marker", "create_marker", "delete_marker", "rename_marker",
@@ -606,6 +607,9 @@ enum OperationRegistry {
         // Mixer > Options > Create New Auxiliary Channel Strip, read back as exactly one new strip
         // in the Mixer's All view (measured on Logic 12.4). No target: it adds a strip.
         (.mixerCreateAux, "create_aux", .none, .none, []),
+        // One new send from a named strip to Bus N, optionally letting Logic create the receiving
+        // aux; read back from the strip's send census and the Mixer's strip census (Logic 12.4).
+        (.mixerCreateSend, "create_send", .none, .none, ["bus", "create_receiver", "strip"]),
         // #291 R2: one strip's output to one exact destination, read back from the same strip.
         // Target-bearing (`target_ref` from logic://tracks or logic://mixer, or `track`), and a
         // reversible write -- the reply carries the observed `before` -- so it joins the

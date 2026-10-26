@@ -7656,7 +7656,7 @@ struct Issue965HeldSelectionAssociationTests {
                 switch levelMode {
                 case "boolean_raw": b.setAttribute(knob, kAXValueAttribute as String, true)
                 case "wrong_expected": prepared["expected_current"] = .string("-95")
-                case "unsupported_level": prepared["level_db"] = .string("-12")
+                case "unsupported_level": prepared["level_db"] = .string("-200")
                 case "wrong_target": prepared["target_ref"] = .string(try #require(capture.issued?.byRow[0]).rawValue)
                 case "wrong_project": prepared["project_ref"] = .string("prj_foreign")
                 case "extra_param": prepared["value"] = .double(0.5)

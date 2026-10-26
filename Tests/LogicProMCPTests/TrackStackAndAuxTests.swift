@@ -78,3 +78,29 @@ func createAuxVerdicts() {
         return
     }
 }
+
+// MARK: - Send level tokens
+
+@Test("send levels normalize across decimal marks and minus signs, within -144...+6 dB")
+func sendLevelTokens() {
+    #expect(AccessibilityChannel.sendLevelToken("-95") == "-95")
+    #expect(AccessibilityChannel.sendLevelToken("-95.0") == "-95")
+    #expect(AccessibilityChannel.sendLevelToken("-95,0") == "-95")   // Danish number format, measured
+    #expect(AccessibilityChannel.sendLevelToken("−12") == "-12")
+    #expect(AccessibilityChannel.sendLevelToken("-18,5") == "-18.5")
+    #expect(AccessibilityChannel.sendLevelToken("-∞") == "-∞")
+    #expect(AccessibilityChannel.sendLevelToken("0") == "0")
+    #expect(AccessibilityChannel.sendLevelToken("+6") == "6")
+    #expect(AccessibilityChannel.sendLevelToken("-200") == nil)
+    #expect(AccessibilityChannel.sendLevelToken("7") == nil)
+    #expect(AccessibilityChannel.sendLevelToken("loud") == nil)
+}
+
+@Test("a written send level agrees with the knob's quantized display within 0.2 dB")
+func sendLevelsAgreeWithinQuantization() {
+    #expect(AccessibilityChannel.sendLevelsAgree("-18,1", "-18"))   // measured on Logic 12.4
+    #expect(AccessibilityChannel.sendLevelsAgree("-12,0", "-12"))
+    #expect(!AccessibilityChannel.sendLevelsAgree("-18,4", "-18"))
+    #expect(AccessibilityChannel.sendLevelsAgree("-∞", "-∞"))
+    #expect(!AccessibilityChannel.sendLevelsAgree("-95,0", "-∞"))
+}

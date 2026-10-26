@@ -387,6 +387,11 @@ extension OperationRegistry {
                                         sample: .string("red")),
                 "readback": .enforced(.scalar, .string("ax"), allowed: TrackDispatcher.colorReadbackModes),
             ], required: [indexGroup, ["color"], ["expected_name", "target_ref"]]),
+            "mixer.create_send": .init(params: [
+                "strip": .enforced(.string, .string("Vox Lead")),
+                "bus": .enforced(.integer, .int(6)),
+                "create_receiver": .enforced(.boolean, .bool(true)),
+            ], required: [["strip"], ["bus"]]),
             "tracks.create_stack": .init(params: [
                 "members": .enforced(.array, .array([.string("Kick"), .string("Snare")])),
                 "kind": .enforced(.scalar, .string("summing"), allowed: TrackStackKind.allCases.map(\.rawValue)),
