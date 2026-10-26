@@ -245,13 +245,11 @@ private func decodeJSON(_ s: String) -> [String: Any] {
     #expect(result.message.contains("Cannot find Mute button"))
 }
 
-// MARK: - T-4 (v3.1.2 P2-1): track.set_color — explicit State C `not_implemented`
+// MARK: - track.set_color: request shape is refused before any AX work
 
-@Test func testTrackSetColorReturnsNotImplemented() async {
-    // The set_color path short-circuits inside the AccessibilityChannel
-    // operation switch and never touches the AX tree, so the FakeAX
-    // builder can be empty. Only the trust + Logic-running gates need to
-    // pass for `execute(...)` to reach the switch statement.
+@Test func testTrackSetColorRefusesAnUnresolvedSwatchBeforeTouchingAX() async {
+    // The dispatcher resolves `color` to a palette row and column; a channel call without them
+    // is malformed and must answer State C before it reads a header or opens a menu.
     let builder = FakeAXRuntimeBuilder()
     let app = builder.element(900)
     let window = builder.element(901)
@@ -269,23 +267,12 @@ private func decodeJSON(_ s: String) -> [String: Any] {
         params: ["index": "2", "color": "12"]
     )
 
-    // Outer ChannelResult is .error (set_color uses .error for State C),
-    // and the embedded message must be a State C envelope with the
-    // canonical `not_implemented` error code + a hint.
     #expect(!result.isSuccess)
     let obj = decodeJSON(result.message)
     #expect(!((obj["success"] as? Bool)!))
-    #expect(obj["error"] as? String == "not_implemented")
-    let hint = obj["hint"] as? String ?? ""
-    #expect(hint.contains("Track color"), "expected hint to mention Track color, got: \(hint)")
-
-    // The router uses isTerminalStateC to suppress fallback when the
-    // primary channel reports an error no other channel can improve on.
-    // `not_implemented` is in `terminalErrorCodes`, so this must be true.
-    #expect(
-        HonestContract.isTerminalStateC(result.message),
-        "set_color State C must be classified as terminal so router skips fallback"
-    )
+    #expect(obj["error"] as? String == "invalid_params")
+    #expect(obj["reason"] as? String == "swatch_invalid")
+    #expect(obj["write_attempted"] as? Bool == false)
 }
 
 // MARK: - v3.1.3 backlog #3 — region.move_to_playhead / region.select_last

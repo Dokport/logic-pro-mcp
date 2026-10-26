@@ -1756,17 +1756,9 @@ actor AccessibilityChannel: Channel {
         case "track.sort_verified":
             return runtime.sortTracks(params)
         case "track.set_color":
-            // v3.1.2 P2-1 — explicit State C `not_implemented` so callers
-            // (and the router's terminal-error gate) can distinguish a
-            // structural "this surface does not exist" from a transient AX
-            // write failure. Logic Pro 12.0.1 does not expose track-color
-            // mutation through the Accessibility API — the color swatch in
-            // the inspector is a custom-drawn AppKit control with no AX
-            // children or settable attributes.
-            return .error(HonestContract.encodeStateC(
-                error: .notImplemented,
-                hint: "Track color is not exposed via AX in Logic Pro 12.0.1. Use Logic Pro UI directly."
-            ))
+            // Measured on Logic 12.4: the palette opens through its menu item, takes a native
+            // click on an AX-derived swatch, and offers no AX readback (see +TrackColor).
+            return await Self.defaultSetTrackColor(params: params, runtime: runtime.logicRuntime)
 
         // MARK: - Library (instrument patch) operations
         case "library.list":

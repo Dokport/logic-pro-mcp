@@ -48,7 +48,6 @@ struct MutationGateCompletenessTests {
     /// Error-only labels that exist as switch cases but return a "not exposed in
     /// the production MCP contract" State C — neither mutating nor a real query.
     private static let notExposedStubs: [String: Set<String>] = [
-        "logic_tracks": ["set_color"],
         "logic_mixer": ["set_send", "set_output", "set_input", "toggle_eq", "reset_strip", "bypass_plugin"],
     ]
 

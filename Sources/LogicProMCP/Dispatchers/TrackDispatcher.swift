@@ -8,7 +8,10 @@ struct TrackDispatcher: OperationTraceDispatching {
 
     // Keeps dispatcher cases auditable against the registry so fallback cannot bypass strict validation.
     static let handledCommands: Set<String> = OperationRegistry.commands(for: .logicTracks)
-    static let notExposedCommands: Set<String> = ["set_color"]
+    static let notExposedCommands: Set<String> = []
+    /// How `set_color` may prove the colour landed: `ax` (no colour readback exists; State B with
+    /// the Undo-title witness) or `project_file` (save, then read the track record; State A).
+    static let colorReadbackModes = ["ax", "project_file"]
     // The legacy direct alias stays explicit but is never exposed through MCP fallback.
     static let directOnlyCommands: Set<String> = ["library"]
 
@@ -16,7 +19,7 @@ struct TrackDispatcher: OperationTraceDispatching {
 
     static let tool = Tool(
         name: "logic_tracks",
-        description: "Track actions in Logic Pro. Commands: select, create_audio, create_instrument, create_drummer, create_external_midi, delete, duplicate, rename, mute, solo, arm, arm_only, record_sequence, sort_verified, set_automation, set_instrument, list_library, scan_library, resolve_path, scan_plugin_presets. Params: select -> { index: Int } or { name: String }; rename -> { name: String, index: Int (≥0) } or, by default (disable with LOGIC_MCP_ADR002_TARGET_REF=0), { name: String, target_ref: String, index?: Int }; when the kill-switch is set, supplying target_ref fails closed with target_ref_unavailable; omit it to use index; mute/solo/arm/arm_only/set_automation/set_instrument ALL require explicit { index: Int (≥0) }; mute/solo/arm -> also { enabled: Bool }; arm_only disarms all others + arms target, returns error on partial disarm failure; record_sequence -> { bar?: Int (default 1), notes: \"pitch,offsetMs,durMs[,vel[,ch]];...\" (BREAKING since v3.1.6: optional `ch` field is 1-based, range 1..16 — pre-v3.1.6 was 0-based; whole-parse-fail on any invalid segment; SMF end <= 3,600,000 ms), tempo?: Float } SMF-import path: generates a Standard MIDI File server-side, forces playhead to bar 1, imports via AX menu — byte-exact timing, creates a new track each call, then verifies the imported region by AX readback. Successful responses include `created_track`, `target_track_index`, `target_track_name`, `region_name`, `start_bar`, `end_bar`, `note_count`, and `verify_source`; structured error JSON distinguishes `import_failure`, `audibility_unverified`, `import_unverified`, `wrong_track_import`, `timing_mismatch`, and `unreadable_readback`. sort_verified -> { criterion: midi_channel|audio_channel|output_channel|instrument_name|track_name|used|creation_date, expected_order: [unique track_ref values from logic://tracks], confirmed: true }; the caller supplies the complete reference order implied by the requested criterion so the after-read can reject a wrong sort rather than treating any order change as success. A correctly already-sorted project remains State B because a no-op cannot prove the menu command ran. If Logic imports GM Device / External MIDI lanes, record_sequence fails closed instead of promoting region readback to audible success. v3.0.8 REMOVED the internal instrument auto-load: response always carries `\"instrument\":\"not-attempted\"`; callers that want a specific patch must follow up with explicit `set_instrument` on a Software Instrument track. The legacy `instrument_path` param is accepted for wire compat but ignored (surfaces as `\"ignored:<path>\"` in the response) — see CHANGELOG v3.0.8 for why the inline auto-load was unsafe (could load the wrong track's patch, corrupting a pre-existing track); create_* -> {}; delete/duplicate -> { index: Int, expected_name: String } (PRD-007 index binding: delete, duplicate and set_instrument are `corroborated` — a bare index is REFUSED with index_binding_corroboration_required; supply expected_name (the track name you expect at that index, corroborated against the live header and required to be unique) or a target_ref instead; expected_name + target_ref together is invalid_params; every binding failure is pre-write with write_attempted:false); set_automation -> { mode: read|write|touch|latch|trim } (independent readback required for State A); set_instrument -> { path: String, expected_name: String } or { category: String, preset: String, expected_name: String } — path mode preferred and only `resolve_path` results with kind=`leaf` and loadable=true are valid apply candidates; scan_library -> { mode?: \"ax\"|\"disk\"|\"both\" } (default disk — dedupes user and app-bundle Instrument `.patch` candidates with Panel-taxonomy remap; ax is the legacy live Library Panel scan; both returns diff summary); resolve_path -> { path: String } cache-backed read-only classifier returning kind/source/loadable; scan_plugin_presets -> { submenuOpenDelayMs?: Int }. ADR-002 (on by default; disable with LOGIC_MCP_ADR002_TARGET_REF=0): select, delete, duplicate, mute, solo, arm, arm_only, set_automation, and set_instrument ALSO accept a session-stable { target_ref: String } (a trk_… value from the logic://tracks resource) in place of the explicit index; when both target_ref and index are supplied they must agree or the op fails closed (stale_target_reference); when the kill-switch is set, any supplied target_ref fails closed with target_ref_unavailable; omit target_ref to use the explicit index path.",
+        description: "Track actions in Logic Pro. Commands: select, create_audio, create_instrument, create_drummer, create_external_midi, delete, duplicate, rename, mute, solo, arm, arm_only, record_sequence, sort_verified, set_color, set_automation, set_instrument, list_library, scan_library, resolve_path, scan_plugin_presets. Params: select -> { index: Int } or { name: String }; rename -> { name: String, index: Int (≥0) } or, by default (disable with LOGIC_MCP_ADR002_TARGET_REF=0), { name: String, target_ref: String, index?: Int }; when the kill-switch is set, supplying target_ref fails closed with target_ref_unavailable; omit it to use index; mute/solo/arm/arm_only/set_automation/set_instrument ALL require explicit { index: Int (≥0) }; mute/solo/arm -> also { enabled: Bool }; arm_only disarms all others + arms target, returns error on partial disarm failure; record_sequence -> { bar?: Int (default 1), notes: \"pitch,offsetMs,durMs[,vel[,ch]];...\" (BREAKING since v3.1.6: optional `ch` field is 1-based, range 1..16 — pre-v3.1.6 was 0-based; whole-parse-fail on any invalid segment; SMF end <= 3,600,000 ms), tempo?: Float } SMF-import path: generates a Standard MIDI File server-side, forces playhead to bar 1, imports via AX menu — byte-exact timing, creates a new track each call, then verifies the imported region by AX readback. Successful responses include `created_track`, `target_track_index`, `target_track_name`, `region_name`, `start_bar`, `end_bar`, `note_count`, and `verify_source`; structured error JSON distinguishes `import_failure`, `audibility_unverified`, `import_unverified`, `wrong_track_import`, `timing_mismatch`, and `unreadable_readback`. sort_verified -> { criterion: midi_channel|audio_channel|output_channel|instrument_name|track_name|used|creation_date, expected_order: [unique track_ref values from logic://tracks], confirmed: true }; the caller supplies the complete reference order implied by the requested criterion so the after-read can reject a wrong sort rather than treating any order change as success. A correctly already-sorted project remains State B because a no-op cannot prove the menu command ran. If Logic imports GM Device / External MIDI lanes, record_sequence fails closed instead of promoting region readback to audible success. v3.0.8 REMOVED the internal instrument auto-load: response always carries `\"instrument\":\"not-attempted\"`; callers that want a specific patch must follow up with explicit `set_instrument` on a Software Instrument track. The legacy `instrument_path` param is accepted for wire compat but ignored (surfaces as `\"ignored:<path>\"` in the response) — see CHANGELOG v3.0.8 for why the inline auto-load was unsafe (could load the wrong track's patch, corrupting a pre-existing track); create_* -> {}; delete/duplicate -> { index: Int, expected_name: String } (PRD-007 index binding: delete, duplicate and set_instrument are `corroborated` — a bare index is REFUSED with index_binding_corroboration_required; supply expected_name (the track name you expect at that index, corroborated against the live header and required to be unique) or a target_ref instead; expected_name + target_ref together is invalid_params; every binding failure is pre-write with write_attempted:false); set_automation -> { mode: read|write|touch|latch|trim } (independent readback required for State A); set_color -> { index: Int, expected_name: String (or target_ref), color: \"red\"|\"dark blue\"|… or stored index 1-96 or { row: 1-4, column: 1-24 }, readback?: \"ax\"|\"project_file\" } — clicks a palette swatch (Logic exposes no AX colour write or read); `ax` answers State B with an Undo-title witness, `project_file` saves the project and reads the track record for State A; set_instrument -> { path: String, expected_name: String } or { category: String, preset: String, expected_name: String } — path mode preferred and only `resolve_path` results with kind=`leaf` and loadable=true are valid apply candidates; scan_library -> { mode?: \"ax\"|\"disk\"|\"both\" } (default disk — dedupes user and app-bundle Instrument `.patch` candidates with Panel-taxonomy remap; ax is the legacy live Library Panel scan; both returns diff summary); resolve_path -> { path: String } cache-backed read-only classifier returning kind/source/loadable; scan_plugin_presets -> { submenuOpenDelayMs?: Int }. ADR-002 (on by default; disable with LOGIC_MCP_ADR002_TARGET_REF=0): select, delete, duplicate, mute, solo, arm, arm_only, set_automation, and set_instrument ALSO accept a session-stable { target_ref: String } (a trk_… value from the logic://tracks resource) in place of the explicit index; when both target_ref and index are supplied they must agree or the op fails closed (stale_target_reference); when the kill-switch is set, any supplied target_ref fails closed with target_ref_unavailable; omit target_ref to use the explicit index path.",
         inputSchema: commandParamsToolSchema(commandDescription: "Track command to execute")
     )
 
@@ -769,7 +772,104 @@ struct TrackDispatcher: OperationTraceDispatching {
             )
 
         case "set_color":
-            return notExposedCommandResult(operation: "track.set_color")
+            let index: Int
+            let resolvedReference: TargetReference?
+            let resolvedFingerprint: String?
+            switch await TargetRefResolver.resolveMutationIndex(
+                params,
+                targetRegistry: targetRegistry,
+                cache: cache,
+                operation: "track.set_color",
+                invalidIndexResult: toolInvalidParamsResult(
+                    "set_color requires explicit 'index' (Int ≥ 0)",
+                    extras: ["operation": "track.set_color"]
+                ),
+                liveTrackName: liveTrackName,
+                liveTrackNames: liveTrackNames
+            ) {
+            case .success(let resolved):
+                index = resolved.index
+                resolvedReference = resolved.reference
+                resolvedFingerprint = resolved.binding?.observedFingerprint
+            case .failure(let result):
+                return result
+            }
+            let swatch: TrackColorSwatch
+            switch trackColorResolution(params["color"]) {
+            case .resolved(let resolved)?:
+                swatch = resolved
+            case .unknownName(let name)?:
+                return toolInvalidParamsResult(
+                    "set_color does not know the colour '\(name)'. Use a name (\(TrackColorPalette.namedColumns.keys.sorted().joined(separator: ", ")), optionally prefixed by medium, dark or darkest), a stored index 1-96, or {row: 1-4, column: 1-24}.",
+                    extras: ["operation": "track.set_color", "reason": "unknown_color_name", "write_attempted": false]
+                )
+            case .outOfRange(let what)?:
+                return toolInvalidParamsResult(
+                    "set_color colour \(what) is outside the palette (rows 1-4, columns 1-24, stored index 1-96)",
+                    extras: ["operation": "track.set_color", "reason": "color_out_of_range", "write_attempted": false]
+                )
+            case nil:
+                return toolInvalidParamsResult(
+                    "set_color requires 'color': a name, a stored index 1-96, or {row, column}",
+                    extras: ["operation": "track.set_color", "reason": "color_missing", "write_attempted": false]
+                )
+            }
+            if let raw = params["readback"], raw.stringValue == nil {
+                return toolInvalidParamsResult(
+                    "set_color 'readback' must be a string: \(Self.colorReadbackModes.joined(separator: " or "))",
+                    extras: ["operation": "track.set_color", "reason": "readback_not_a_string", "write_attempted": false]
+                )
+            }
+            let readback = stringParam(params, "readback", default: "ax")
+            guard Self.colorReadbackModes.contains(readback) else {
+                return toolInvalidParamsResult(
+                    "set_color 'readback' must be one of: \(Self.colorReadbackModes.joined(separator: ", "))",
+                    extras: ["operation": "track.set_color", "reason": "unknown_readback", "write_attempted": false]
+                )
+            }
+            let traceID = await startTraceIfEnabled(command: command)
+            if dialogPresent() {
+                return await finalizeTrace(
+                    blockingLogicDialogResult(operation: "track.set_color"),
+                    traceID: traceID
+                )
+            }
+            // The palette colours whatever is selected and the old colour cannot be read back to
+            // undo a wrong-target write, so the index must be corroborated (PRD-007).
+            if let bindingFailure = IndexBindingGuard.evaluate(
+                policy: indexBindingPolicy(for: "set_color"),
+                operation: "track.set_color",
+                params: params,
+                index: index,
+                liveTrackNames: liveTrackNames
+            ) {
+                return await finalizeTrace(bindingFailure, traceID: traceID)
+            }
+            var routeParams: [String: String] = [
+                "index": String(index),
+                "row": String(swatch.row),
+                "column": String(swatch.column),
+            ]
+            if case .string(let expected)? = params["expected_name"] { routeParams["expected_name"] = expected }
+            let result = await withWriteBoundaryArmed(traceID) {
+                await router.route(operation: "track.set_color", params: routeParams)
+            }
+            var final = result
+            if readback == "project_file", channelResultIsUnverified(result) {
+                final = await TrackColorProjectReadback.verify(
+                    channelResult: result,
+                    expected: swatch,
+                    save: { await router.route(operation: "project.save") }
+                )
+            }
+            return await finalizeTrace(
+                TargetRefResolver.addEvidence(
+                    resolvedReference,
+                    fingerprint: resolvedFingerprint,
+                    to: toolTextResult(final)
+                ),
+                traceID: traceID
+            )
 
         case "sort_verified":
             guard let criterion = TrackSortCriterion(rawValue: stringParam(params, "criterion")) else {
@@ -1095,6 +1195,40 @@ struct TrackDispatcher: OperationTraceDispatching {
     /// is one registry edit and the census catches any drift.
     private static func indexBindingPolicy(for command: String) -> IndexBindingPolicy? {
         OperationRegistry.spec(tool: ToolID.logicTracks.rawValue, command: command)?.indexBinding
+    }
+
+    /// `set_color`'s `color`: a name (`"red"`, `"dark blue"`), a stored index 1-96 (as a number or
+    /// a numeric string), or `{row, column}`. nil when the parameter is missing or of no such shape.
+    static func trackColorResolution(_ value: Value?) -> TrackColorPalette.Resolution? {
+        switch value {
+        case .string(let raw)?:
+            if let stored = Int(raw.trimmingCharacters(in: .whitespaces)) {
+                return TrackColorPalette.resolve(storedIndex: stored)
+            }
+            return TrackColorPalette.resolve(name: raw)
+        case .int(let stored)?:
+            return TrackColorPalette.resolve(storedIndex: stored)
+        case .double(let stored)? where stored == stored.rounded():
+            return TrackColorPalette.resolve(storedIndex: Int(stored))
+        case .object(let object)?:
+            guard let row = object["row"].flatMap(trackColorInteger),
+                  let column = object["column"].flatMap(trackColorInteger),
+                  object.keys.allSatisfy({ $0 == "row" || $0 == "column" }) else {
+                return nil
+            }
+            return TrackColorPalette.resolve(row: row, column: column)
+        default:
+            return nil
+        }
+    }
+
+    private static func trackColorInteger(_ value: Value) -> Int? {
+        switch value {
+        case .int(let int): return int
+        case .double(let double) where double == double.rounded(): return Int(double)
+        case .string(let string): return Int(string)
+        default: return nil
+        }
     }
 
     private enum TrackSortExpectedTrackResolution {

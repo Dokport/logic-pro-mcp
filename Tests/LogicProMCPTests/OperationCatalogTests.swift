@@ -231,6 +231,7 @@ struct OperationCatalogTests {
         .tracksSortVerified: ["confirmed", "criterion", "expected_order"],
         .tracksSetAutomation: ["mode"],
         .tracksSetInstrument: ["category", "path", "preset"],
+        .tracksSetColor: ["color", "readback"],
         .tracksScanLibrary: ["mode"],
         .tracksResolvePath: ["path"],
         .tracksScanPluginPresets: ["submenuOpenDelayMs"],
@@ -297,6 +298,9 @@ struct OperationCatalogTests {
             params["mode"] = .string("read")
         case .tracksSetInstrument:
             params["path"] = .string("/tmp/selector-probe.patch")
+            params[OperationRegistry.corroborationParam] = .string("Track \(value)")
+        case .tracksSetColor:
+            params["color"] = .string("red")
             params[OperationRegistry.corroborationParam] = .string("Track \(value)")
         default:
             return nil

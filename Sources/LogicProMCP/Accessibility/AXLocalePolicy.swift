@@ -838,6 +838,27 @@ enum AXLocalePolicy {
         item: sortTracksByMenuItem
     )
 
+    static let assignTrackColorMenuItem = LabelSet(
+        canonical: "Assign Track Color…",
+        variants: ["트랙 색상 할당…", "トラックカラーを割り当て…", "Spurfarbe zuweisen …", "Asignar color de pista…", "Attribuer une couleur de piste…", "Assegna colore traccia…", "Atribuir Cor à Pista…", "分配轨道颜色…", "指定音軌顏色⋯"],
+        rationale: "Track > Assign Track Color… opens the track colour palette for the selected track. Read off an en-US Logic 12.4 menu bar on 2026-10-26 (research/ax/menubar-noproject.txt); every other locale is the value of the row named below, copied by script, so nothing here is typed. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Assign%20Track%20Color%E2%80%A6#value"
+    )
+
+    static let assignTrackColorMenuPath = MenuPath(
+        bar: trackMenuBar,
+        item: assignTrackColorMenuItem
+    )
+
+    /// The undo-operation NAME a track colour change leaves on top of the stack. Matched by
+    /// containment inside the Edit menu's Undo title, read through `editUndoMenuPath`.
+    static let changeTrackColorUndoOperation = LabelSet(
+        canonical: "Change Track Color",
+        variants: ["트랙 색상 변경", "トラックカラーを変更", "Spurfarbe ändern", "cambio de color de pista", "Changer la couleur de piste", "Modifica colore traccia", "Alterar Cor da Pista", "更改轨道颜色", "更改音軌顏色"],
+        rationale: "An en-US Logic 12.4 offered `Undo Change Track Color` after a palette swatch was clicked, and `Can’t Undo` after an AXPress that changed nothing (2026-10-26, research/FINDINGS.md). It witnesses that A track colour changed, never which track or which colour. Every other locale is the value of the row named below, copied by script. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Change%20Track%20Color%23und#value"
+    )
+
     /// Exact English Track > Sort Tracks by leaf titles from the 2026-09-05
     /// and 2026-09-12 en-US arrange-menu censuses, reconfirmed live 2026-10-09.
     /// In particular, these leaves use singular "Channel" and "Name", unlike
@@ -3662,6 +3683,8 @@ enum AXLocalePolicy {
         toggleHideViewMenuItem,
         trackHideControl,
         sortTracksByMenuItem,
+        assignTrackColorMenuItem,
+        changeTrackColorUndoOperation,
         sortTracksByMIDIChannelMenuItem,
         sortTracksByAudioChannelMenuItem,
         sortTracksByOutputChannelMenuItem,

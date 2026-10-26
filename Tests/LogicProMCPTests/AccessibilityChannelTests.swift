@@ -1044,9 +1044,6 @@ private func makeInstrumentCacheRoot(preset: String) -> LibraryRoot {
     let channel = AccessibilityChannel(runtime: makeAccessibilityRuntime())
 
     let expectations: [(String, String)] = [
-        // v3.1.2 P2-1: track.set_color now returns a State C envelope with
-        // `error:"not_implemented"` instead of a plain free-form string.
-        ("track.set_color", "\"error\":\"not_implemented\""),
         // #592: these six had accessibility arms that only ever refused, and their table rows are
         // gone with them. `mixer.set_send` and `automation.set_mode` are NOT in this list because
         // they are implemented elsewhere — MCU and the key-command channel — and their accessibility

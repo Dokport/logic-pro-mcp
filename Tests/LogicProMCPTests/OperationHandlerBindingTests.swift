@@ -103,7 +103,6 @@ struct OperationHandlerBindingTests {
         }
 
         let typedStubs = [
-            (ToolID.logicTracks.rawValue, "set_color"),
             (ToolID.logicMixer.rawValue, "set_send"),
             (ToolID.logicMixer.rawValue, "set_output"),
             (ToolID.logicMixer.rawValue, "set_input"),
@@ -120,7 +119,7 @@ struct OperationHandlerBindingTests {
             )
         }
 
-        #expect(TrackDispatcher.notExposedCommands == ["set_color"])
+        #expect(TrackDispatcher.notExposedCommands.isEmpty)
         #expect(MixerDispatcher.notExposedCommands == [
             "set_send", "set_output", "set_input", "toggle_eq", "reset_strip", "bypass_plugin",
         ])
@@ -240,7 +239,6 @@ struct OperationHandlerBindingTests {
         let server = LogicProServer()
         let handlers = await server.makeHandlers()
         let notExposedCases = [
-            (ToolID.logicTracks.rawValue, "set_color"),
             (ToolID.logicMixer.rawValue, "set_send"),
             (ToolID.logicMixer.rawValue, "set_output"),
             (ToolID.logicMixer.rawValue, "set_input"),

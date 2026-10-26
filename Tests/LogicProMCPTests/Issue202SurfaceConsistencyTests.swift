@@ -33,7 +33,6 @@ struct Issue202SurfaceConsistencyTests {
             ("mixer.toggle_eq", await mixer("toggle_eq")),
             ("mixer.reset_strip", await mixer("reset_strip")),
             ("mixer.bypass_plugin", await mixer("bypass_plugin")),
-            ("track.set_color", await track("set_color")),
         ]
         for (operation, result) in cases {
             #expect(result.isError!, "\(operation) must be a State C error")
