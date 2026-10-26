@@ -1232,7 +1232,7 @@ struct OperationRegistryTests {
         #expect(Self.trackCommands.filter { $0.deadline == .short }.count == 14)
         #expect(Self.trackCommands.filter { $0.deadline == .medium }.map(\.command) == ["sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "move_track", "color_regions_by_track", "set_instrument"])
         #expect(Set(Self.trackCommands.filter { $0.deadline == .long }.map(\.command)) == Set([
-            "record_sequence", "list_library", "scan_library", "scan_plugin_presets",
+            "record_sequence", "list_library", "scan_library", "scan_plugin_presets", "reorder_tracks",
         ]))
         #expect(Set(Self.trackCommands
             .filter { $0.mutability == .readOnly && $0.deadline == .long }
