@@ -92,11 +92,18 @@ De to Dry-spor har samme navn og blev derfor afvist af bindingen (`ambiguous_tar
 
 ## Tests
 
-- **Baseline (upstream HEAD, Logic lukket ved start, `--no-parallel`):**
-  - 6302 beståede.
-  - 13 fejl før mine ændringer: `RegionDragSpike*`, og Python-guard-tests, der kræver Python ≥ 3.10 og `yaml`.
-  - Kørslen crasher i `ResourceSchemaTests.swift:459`, fordi en test selv starter Logic. Tests efter det punkt kører ikke på denne maskine.
-- **Branch:** De målrettede suiter (290 tests: registry, kataloger, kontrakter, invarianter, dispatcher og de nye farvetests) er grønne. Hele suiten mangler at blive kørt igen.
+- **Baseline (upstream `a6e7ba1a`, Logic lukket ved start, `--no-parallel`):**
+  - 6302 beståede, 13 fejlede.
+  - Kørslen crashede i `ResourceSchemaTests.swift:459`, fordi en test selv startede Logic. Resten af suiten kørte ikke.
+- **Branch `b6641915` (samme betingelser):**
+  - Kørslen kom helt igennem: 7294 tests, 7273 beståede.
+  - Ingen fejl skyldes mix-prep-ændringerne. De resterende fejl:
+    - 9 × `RegionDragSpike*`: fejlede også i baseline og afhænger af miljøet.
+    - 7 "known issues" (`Issue1088*`, `DeadOptionalBoolComparison`): forventede og markeret af upstream.
+    - `StockPluginCatalog` factory-settings: Logic 12.4 har plug-in-mapper, som det 12.3-pinnede katalog ikke kender, fx "UltraPitch Shift (m)" og "Silk Vocal (m)".
+    - 2 CoreMIDI-smoke-tests: et CoreMIDI-endpoint på denne Mac kunne ikke læses (-50). Det er miljøafhængigt.
+  - Python-guard-tests, der kræver Python ≥ 3.10 og `yaml`, fejler også i baseline.
+- De målrettede suiter for mix-prep (545 tests) er grønne.
 
 ## Stop-betingelser ramt
 
