@@ -968,11 +968,16 @@ extension AccessibilityChannel {
             let headers: [AXUIElement]
             let document: String
             let frames: [CGRect]
-            let horizontal: HorizontalViewportPosition?
+            let horizontal: MixerViewportPosition?
+            let vertical: MixerViewportPosition?
 
             func hasSameViewportPosition(as other: Self) -> Bool {
-                guard frames == other.frames else { return false }
-                switch (horizontal, other.horizontal) {
+                frames == other.frames && Self.samePosition(horizontal, other.horizontal)
+                    && Self.samePosition(vertical, other.vertical)
+            }
+
+            static func samePosition(_ lhs: MixerViewportPosition?, _ rhs: MixerViewportPosition?) -> Bool {
+                switch (lhs, rhs) {
                 case (.none, .none): return true
                 case (.some(let lhs), .some(let rhs)):
                     return lhs.sameControlAndLayout(as: rhs) && lhs.value == rhs.value
@@ -981,7 +986,7 @@ extension AccessibilityChannel {
             }
         }
 
-        struct HorizontalViewportPosition: @unchecked Sendable {
+        struct MixerViewportPosition: @unchecked Sendable {
             let control: AXUIElement
             let owner: AXUIElement
             let value: Double
@@ -997,8 +1002,14 @@ extension AccessibilityChannel {
             }
         }
 
-        private func horizontalViewportPosition() -> HorizontalViewportPosition? {
-            guard let hitTest = logic.ax.elementAtPosition, permitsRead() else { return nil }
+        private func mixerViewportPosition(horizontal: Bool) -> MixerViewportPosition? {
+            // Only observedMixerViewportGeometry calls this non-Help sampler.
+            // Its complete ownership checks bracket both axis/value rereads and
+            // every strip frame as one decision; no observation survives a lost
+            // scope. Repeating that full census inside each axis exhausted the
+            // native acquisition deadline before the restored report could land.
+            guard !lost, (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
+                  let hitTest = logic.ax.elementAtPosition else { return nil }
             func frame(_ element: AXUIElement) -> CGRect? {
                 guard let point = AXHelpers.getPosition(element, runtime: logic.ax),
                       let size = AXHelpers.getSize(element, runtime: logic.ax),
@@ -1012,10 +1023,13 @@ extension AccessibilityChannel {
                   AXHelpers.getRole(owner, runtime: logic.ax) == kAXGroupRole as String,
                   let ownerFrame = frame(owner) else { return nil }
             let visible = windowFrame.intersection(mixerFrame)
-            guard !visible.isNull, visible.width > 0, visible.height > 17 else { return nil }
+            guard !visible.isNull, visible.width > (horizontal ? 0 : 17),
+                  visible.height > (horizontal ? 17 : 0) else { return nil }
             // This point discovers a native object; its coordinates grant no
             // action authority. Logic omits this bar from its owner's children.
-            let point = CGPoint(x: visible.midX, y: visible.maxY - 7)
+            let point = horizontal ? CGPoint(x: visible.midX, y: visible.maxY - 7)
+                : CGPoint(x: visible.maxX - 7, y: visible.midY)
+            let orientation = horizontal ? kAXHorizontalOrientationValue as String : kAXVerticalOrientationValue as String
             guard case .success(let hit?) = hitTest(app, point), let hitFrame = frame(hit), hitFrame.contains(point),
                   let hitWindow: AXUIElement = AXHelpers.getAttribute(hit, kAXWindowAttribute as String, runtime: logic.ax),
                   CFEqual(hitWindow, window) else { return nil }
@@ -1029,7 +1043,7 @@ extension AccessibilityChannel {
                 control = parent
             }
             guard AXHelpers.getRole(control, runtime: logic.ax) == kAXScrollBarRole as String,
-                  AXHelpers.getAttribute(control, kAXOrientationAttribute as String, runtime: logic.ax) as String? == kAXHorizontalOrientationValue as String,
+                  AXHelpers.getAttribute(control, kAXOrientationAttribute as String, runtime: logic.ax) as String? == orientation,
                   let parent: AXUIElement = AXHelpers.getAttribute(control, kAXParentAttribute as String, runtime: logic.ax),
                   CFEqual(parent, owner),
                   let controlWindow: AXUIElement = AXHelpers.getAttribute(control, kAXWindowAttribute as String, runtime: logic.ax),
@@ -1045,16 +1059,18 @@ extension AccessibilityChannel {
                   frame(window) == windowFrame, frame(mixer) == mixerFrame, frame(owner) == ownerFrame,
                   frame(control) == controlFrame,
                   AXHelpers.getRole(control, runtime: logic.ax) == kAXScrollBarRole as String,
-                  AXHelpers.getAttribute(control, kAXOrientationAttribute as String, runtime: logic.ax) as String? == kAXHorizontalOrientationValue as String,
+                  AXHelpers.getAttribute(control, kAXOrientationAttribute as String, runtime: logic.ax) as String? == orientation,
                   let decidingParent: AXUIElement = AXHelpers.getAttribute(control, kAXParentAttribute as String, runtime: logic.ax),
-                  CFEqual(decidingParent, owner), permitsRead() else { return nil }
+                  CFEqual(decidingParent, owner), !lost,
+                  (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return nil }
             return .init(control: control, owner: owner, value: value.doubleValue,
                 windowFrame: windowFrame, mixerFrame: mixerFrame, ownerFrame: ownerFrame, controlFrame: controlFrame)
         }
 
         func observedMixerViewportGeometry() -> MixerViewportGeometry? {
             guard permitsRead() else { return nil }
-            let horizontalBefore = horizontalViewportPosition()
+            let horizontalBefore = mixerViewportPosition(horizontal: true)
+            let verticalBefore = mixerViewportPosition(horizontal: false)
             var frames: [CGRect] = []
             for strip in strips {
                 guard (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil,
@@ -1064,16 +1080,13 @@ extension AccessibilityChannel {
                       size.width > 0, size.height > 0 else { return nil }
                 frames.append(CGRect(origin: point, size: size))
             }
-            let horizontalAfter = horizontalViewportPosition()
-            switch (horizontalBefore, horizontalAfter) {
-            case (.none, .none): break
-            case (.some(let before), .some(let after)):
-                guard before.sameControlAndLayout(as: after), before.value == after.value else { return nil }
-            default: return nil
-            }
+            let horizontalAfter = mixerViewportPosition(horizontal: true)
+            let verticalAfter = mixerViewportPosition(horizontal: false)
+            guard MixerViewportGeometry.samePosition(horizontalBefore, horizontalAfter),
+                  MixerViewportGeometry.samePosition(verticalBefore, verticalAfter) else { return nil }
             guard permitsRead() else { return nil }
             return .init(window: window, mixer: mixer, headers: headers, document: document,
-                frames: frames, horizontal: horizontalAfter)
+                frames: frames, horizontal: horizontalAfter, vertical: verticalAfter)
         }
 
         /// The installed Scroll To menu exposes existing physical rows without
@@ -1243,26 +1256,47 @@ extension AccessibilityChannel {
             }
             recoveryStage = "final_geometry_read"
             guard var final = observedMixerViewportGeometry() else { return false }
-            if let before = original.horizontal, let after = final.horizontal,
-               before.sameControlAndLayout(as: after), before.value != after.value,
-               let first = original.frames.first, let currentFirst = final.frames.first {
-                recoveryStage = "horizontal_viewport_inverse"
-                let delta = currentFirst.minX - first.minX
-                guard delta.isFinite, zip(original.frames, final.frames).allSatisfy({ a, b in
-                    a.size == b.size && a.minY == b.minY && b.minX - a.minX == delta
+            // Scroll To may also reset the omitted native vertical bar. Restore
+            // only sampled original controls; coordinates never drive an action.
+            // Restore Y first so an owned two-axis displacement can then restore X.
+            for horizontal in [false, true] {
+                let beforePosition = horizontal ? original.horizontal : original.vertical
+                let afterPosition = horizontal ? final.horizontal : final.vertical
+                guard let before = beforePosition, let after = afterPosition,
+                      before.value != after.value else { continue }
+                recoveryStage = horizontal ? "horizontal_viewport_inverse" : "vertical_viewport_inverse"
+                guard before.sameControlAndLayout(as: after),
+                      let first = original.frames.first, let currentFirst = final.frames.first else { return false }
+                let deltaX = currentFirst.minX - first.minX, deltaY = currentFirst.minY - first.minY
+                if !horizontal, deltaX != 0 {
+                    guard let originalHorizontal = original.horizontal, let currentHorizontal = final.horizontal,
+                          originalHorizontal.sameControlAndLayout(as: currentHorizontal),
+                          originalHorizontal.value != currentHorizontal.value else { return false }
+                }
+                guard deltaX.isFinite, deltaY.isFinite, (!horizontal || deltaY == 0),
+                      zip(original.frames, final.frames).allSatisfy({ a, b in
+                    a.size == b.size && b.minX - a.minX == deltaX && b.minY - a.minY == deltaY
                 }), await referenceIsCurrent(),
-                      let deciding = observedMixerViewportGeometry(), deciding.frames == final.frames,
-                      let current = deciding.horizontal, current.sameControlAndLayout(as: after), current.value == after.value,
+                      let deciding = observedMixerViewportGeometry(), deciding.hasSameViewportPosition(as: final),
                       childMenus(view)?.isEmpty == true, scopeHeld(),
                       !stop(),
                       (try? SessionPopulationObservation.requireOwnedAcquisition()) != nil else { return false }
-                effects.attempted.append("mixer_horizontal_viewport")
+                let effect = horizontal ? "mixer_horizontal_viewport" : "mixer_vertical_viewport"
+                effects.attempted.append(effect)
                 let accepted = AXHelpers.setAttribute(before.control, kAXValueAttribute as String,
                     NSNumber(value: before.value), runtime: logic.ax)
-                guard let restored = observedMixerViewportGeometry(), let position = restored.horizontal,
+                guard let restored = observedMixerViewportGeometry(),
+                      let position = horizontal ? restored.horizontal : restored.vertical,
                       accepted, position.sameControlAndLayout(as: before), position.value == before.value,
-                      restored.frames == original.frames, scopeHeld() else { return false }
-                effects.changed.append("mixer_horizontal_viewport")
+                      MixerViewportGeometry.samePosition(horizontal ? restored.vertical : restored.horizontal,
+                          horizontal ? final.vertical : final.horizontal),
+                      zip(zip(original.frames, final.frames), restored.frames).allSatisfy({ prior, current in
+                          let (baseline, previous) = prior
+                          return current.size == previous.size && (horizontal
+                              ? current.minX == baseline.minX && current.minY == previous.minY
+                              : current.minY == baseline.minY && current.minX == previous.minX)
+                      }), scopeHeld() else { return false }
+                effects.changed.append(effect)
                 final = restored
             }
             recoveryStage = "final_strip_frames"

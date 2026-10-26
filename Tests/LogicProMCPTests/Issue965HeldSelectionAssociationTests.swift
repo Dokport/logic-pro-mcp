@@ -1643,7 +1643,7 @@ struct Issue965HeldSelectionAssociationTests {
                     headers: profile == "foreign_geometry_headers" ? Array(sampledGeometry.headers.reversed()) : sampledGeometry.headers,
                     document: profile == "foreign_geometry_document" ? "file:///foreign.logicx" : sampledGeometry.document,
                     frames: profile == "foreign_geometry_count" ? Array(sampledGeometry.frames.dropLast()) : sampledGeometry.frames,
-                    horizontal: sampledGeometry.horizontal) : nil
+                    horizontal: sampledGeometry.horizontal, vertical: sampledGeometry.vertical) : nil
             b.setRole(replacement, kAXLayoutItemRole as String)
             b.setAttribute(replacement, kAXNumberOfCharactersAttribute as String, 0)
             b.setAttribute(replacement, kAXInsertionPointLineNumberAttribute as String, 0)
@@ -1735,8 +1735,9 @@ struct Issue965HeldSelectionAssociationTests {
             #expect(recovered)
             #expect(held.effects.restoration == "restored")
             #expect(Array(held.effects.changed.prefix(2)) == ["mixer_scroll_to_output", "mixer_scroll_to_audio"])
-            #expect(held.effects.changed.count == 2 || held.effects.changed == [
-                "mixer_scroll_to_output", "mixer_scroll_to_audio", "mixer_horizontal_viewport"])
+            #expect(held.effects.changed.dropFirst(2).allSatisfy({
+                ["mixer_horizontal_viewport", "mixer_vertical_viewport"].contains($0)
+            }))
             #expect(held.observedMixerViewportGeometry()?.frames == geometry.frames)
             #expect(held.permitsRead())
         }
@@ -1749,7 +1750,11 @@ struct Issue965HeldSelectionAssociationTests {
                       "native_hidden_horizontal", "native_hidden_horizontal_vertical", "native_hidden_horizontal_foreign",
                       "native_hidden_horizontal_boolean", "native_hidden_horizontal_ack_only", "native_hidden_horizontal_late_document",
                       "native_hidden_horizontal_late_reference_project", "native_hidden_horizontal_late_reference_control",
-                      "native_hidden_horizontal_late_reference_value"])
+                      "native_hidden_horizontal_late_reference_value",
+                      "native_hidden_vertical", "native_hidden_vertical_ack_only", "native_hidden_vertical_foreign",
+                      "native_hidden_vertical_boolean", "native_hidden_vertical_late_document",
+                      "native_hidden_vertical_late_reference_project", "native_hidden_vertical_late_reference_control",
+                      "native_hidden_vertical_late_reference_value"])
     func mixerScrollToRecoveryOwnsItsLastActionBoundary(_ fault: String) async throws {
         final class Probe: @unchecked Sendable {
             var viewParentReads = 0
@@ -1800,8 +1805,10 @@ struct Issue965HeldSelectionAssociationTests {
             f.builder.setChildren(toolbar, [view]); f.builder.setChildren(controls, [toolbar])
             f.builder.setChildren(f.window, f.builder.makeAXRuntime().children(f.window) + [controls, foreignControls])
             let nativeHorizontal = fault.hasPrefix("native_hidden_horizontal")
+            let nativeVertical = fault.hasPrefix("native_hidden_vertical")
+            let nativeViewport = nativeHorizontal || nativeVertical
             let horizontal = f.builder.element(1_975_510), thumb = f.builder.element(1_975_511)
-            if nativeHorizontal {
+            if nativeViewport {
                 let owner = f.builder.element(1_975_512)
                 f.builder.setRole(owner, kAXGroupRole as String)
                 f.builder.setFrame(f.window, x: 0, y: 30, width: 1000, height: 800)
@@ -1811,20 +1818,24 @@ struct Issue965HeldSelectionAssociationTests {
                 f.builder.setChildren(f.window, [f.rail, owner, f.builder.element(1_965_720)])
                 f.builder.setRole(horizontal, kAXScrollBarRole as String)
                 f.builder.setAttribute(horizontal, kAXOrientationAttribute as String,
-                    fault.hasSuffix("_vertical") ? kAXVerticalOrientationValue as String : kAXHorizontalOrientationValue as String)
+                    nativeVertical || fault.hasSuffix("_vertical")
+                        ? kAXVerticalOrientationValue as String : kAXHorizontalOrientationValue as String)
                 f.builder.setAttribute(horizontal, kAXWindowAttribute as String, f.window)
                 f.builder.setAttribute(horizontal, kAXParentAttribute as String, fault.hasSuffix("_foreign") ? foreignControls : owner)
                 f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0.25))
                 f.builder.setAttributeSettable(horizontal, kAXValueAttribute as String, true)
-                f.builder.setFrame(horizontal, x: 0, y: 813, width: 1000, height: 17)
+                f.builder.setFrame(horizontal, x: nativeVertical ? 983 : 0, y: nativeVertical ? 300 : 813,
+                    width: nativeVertical ? 17 : 1000, height: nativeVertical ? 530 : 17)
                 f.builder.setRole(thumb, kAXValueIndicatorRole as String)
                 f.builder.setAttribute(thumb, kAXWindowAttribute as String, f.window)
-                f.builder.setFrame(thumb, x: 75, y: 814, width: 700, height: 15)
+                f.builder.setFrame(thumb, x: nativeVertical ? 984 : 75, y: nativeVertical ? 350 : 814,
+                    width: nativeVertical ? 15 : 700, height: nativeVertical ? 400 : 15)
                 f.builder.setChildren(horizontal, [thumb]); f.builder.setChildren(thumb, [])
                 // Like the observed native bar, its owner omits it from AXChildren.
                 f.routingFocusHit = { _, _ in .success(thumb) }
                 for (index, strip) in f.strips.enumerated() {
-                    f.builder.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                    f.builder.setFrame(strip, x: CGFloat(index) * 100 - (nativeVertical ? 0 : 55),
+                        y: nativeVertical ? 337 : 350, width: 100, height: 300)
                 }
                 f.routingSetter = { element, attribute, value in
                     guard CFEqual(element, horizontal), attribute == kAXValueAttribute as String,
@@ -1835,9 +1846,11 @@ struct Issue965HeldSelectionAssociationTests {
                     }
                     if fault.hasSuffix("_ack_only") { return true }
                     f.builder.setAttribute(horizontal, attribute, number)
-                    f.builder.setFrame(thumb, x: 75, y: 814, width: 700, height: 15)
+                    f.builder.setFrame(thumb, x: nativeVertical ? 984 : 75, y: nativeVertical ? 350 : 814,
+                        width: nativeVertical ? 15 : 700, height: nativeVertical ? 400 : 15)
                     for (index, strip) in f.strips.enumerated() {
-                        f.builder.setFrame(strip, x: CGFloat(index) * 100 - 55, y: 350, width: 100, height: 300)
+                        f.builder.setFrame(strip, x: CGFloat(index) * 100 - (nativeVertical ? 0 : 55),
+                            y: nativeVertical ? 337 : 350, width: 100, height: 300)
                     }
                     return true
                 }
@@ -1850,7 +1863,7 @@ struct Issue965HeldSelectionAssociationTests {
                     logic: f.logic(), expectedProject: nil, requiresProjectReference: false))
                 let geometry = try #require(held.observedMixerViewportGeometry())
                 f.routingReadResult = { element, attribute in
-                    if nativeHorizontal, CFEqual(element, horizontal), attribute == kAXValueAttribute as String {
+                    if nativeViewport, CFEqual(element, horizontal), attribute == kAXValueAttribute as String {
                         if probe.leafPresses == 2, fault.hasSuffix("_late_document") {
                             f.builder.setAttribute(f.window, kAXDocumentAttribute as String, "file:///tmp/Foreign.logicx")
                             probe.injected = true
@@ -1914,9 +1927,10 @@ struct Issue965HeldSelectionAssociationTests {
                     if CFEqual(element, output) || CFEqual(element, audio), action == kAXPressAction as String {
                         probe.leafPresses += 1
                         if probe.firstLeafChildrenRead == nil { probe.firstLeafChildrenRead = probe.viewChildrenReads }
-                        if nativeHorizontal, CFEqual(element, audio) {
+                        if nativeViewport, CFEqual(element, audio) {
                             f.builder.setAttribute(horizontal, kAXValueAttribute as String, NSNumber(value: 0))
-                            f.builder.setFrame(thumb, x: 0, y: 814, width: 700, height: 15)
+                            f.builder.setFrame(thumb, x: nativeVertical ? 984 : 0, y: nativeVertical ? 300 : 814,
+                                width: nativeVertical ? 15 : 700, height: nativeVertical ? 400 : 15)
                             for (index, strip) in f.strips.enumerated() {
                                 f.builder.setFrame(strip, x: CGFloat(index) * 100, y: 350, width: 100, height: 300)
                             }
@@ -1951,14 +1965,14 @@ struct Issue965HeldSelectionAssociationTests {
                     #expect(!recovered)
                     #expect(probe.cancels == 1)
                     #expect(f.builder.makeAXRuntime().children(view).isEmpty)
-                } else if nativeHorizontal && fault != "native_hidden_horizontal" {
+                } else if nativeViewport && !["native_hidden_horizontal", "native_hidden_vertical"].contains(fault) {
                     #expect(!recovered)
                     #expect(probe.viewportWrites == (fault.hasSuffix("_ack_only") ? 1 : 0))
                     #expect(probe.foreignActions == 0)
                     if fault.hasSuffix("_late_document") || fault.contains("_late_reference_") { #expect(probe.injected) }
                 } else {
                     #expect(recovered)
-                    if nativeHorizontal {
+                    if nativeViewport {
                         #expect(probe.leafPresses == 2 && probe.viewportWrites == 1)
                         #expect((f.builder.attributeValue(horizontal, kAXValueAttribute as String) as? NSNumber)?.doubleValue == 0.25)
                         #expect(held.observedMixerViewportGeometry()?.frames == geometry.frames)
