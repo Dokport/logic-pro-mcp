@@ -108,6 +108,7 @@ struct HCGlobalInvariantTests {
             RouteCase(tool: "logic_tracks", command: "arm_only", params: ["index": .int(1)], operation: "track.arm_only", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "set_automation", params: ["index": .int(0), "mode": .string("read")], operation: "track.set_automation", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "set_instrument", params: ["index": .int(2), "path": .string("/Library/Application Support/Logic/Patches/Instrument/HC.patch"), "expected_name": .string("Bass")], operation: "track.set_instrument", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_tracks", command: "create_stack", params: ["members": .array([.string("Kick"), .string("Bass")]), "kind": .string("summing")], operation: "track.create_stack_verified", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "set_region_color", params: ["index": .int(2), "color": .string("green"), "expected_name": .string("Bass")], operation: "track.set_region_color", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "set_color", params: ["index": .int(2), "color": .string("red"), "expected_name": .string("Bass")], operation: "track.set_color", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_tracks", command: "sort_verified", params: ["criterion": .string("track_name"), "expected_order": .array([.string("trk_hc_bass"), .string("trk_hc_kick")]), "confirmed": .bool(true)], operation: "track.sort_verified", destinations: [], invariant: .minimumV1),
@@ -115,6 +116,7 @@ struct HCGlobalInvariantTests {
             RouteCase(tool: "logic_mixer", command: "set_volume", params: ["track": .int(0), "value": .double(0.5)], operation: "mixer.set_volume", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_pan", params: ["track": .int(0), "value": .double(0)], operation: "mixer.set_pan", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_master_volume", params: ["value": .double(0.5)], operation: "mixer.set_master_volume", destinations: [], invariant: .minimumV1),
+            RouteCase(tool: "logic_mixer", command: "create_aux", params: [:], operation: "mixer.create_aux", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "bank", params: ["direction": .string("right")], operation: "mixer.bank", destinations: [], invariant: .minimumV1),
             RouteCase(tool: "logic_mixer", command: "set_output_verified", params: ["track": .int(0), "destination": .object(["kind": .string("bus"), "number": .int(1)])], operation: "mixer.set_output_verified", destinations: [], invariant: .minimumV1),
             // execute supplies the actual issued physical reference so this

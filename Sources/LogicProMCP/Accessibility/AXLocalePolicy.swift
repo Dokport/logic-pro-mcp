@@ -850,6 +850,18 @@ enum AXLocalePolicy {
         item: assignTrackColorMenuItem
     )
 
+    static let createTrackStackMenuItem = LabelSet(
+        canonical: "Create Track Stack…",
+        variants: ["Track Stack 생성…", "Track Stackを作成…", "Spurstapel erzeugen …", "Crear Track Stack…", "Créer une Track Stack…", "Crea pila di tracce…", "Criar Track Stack…", "创建 Track Stack…", "製作音軌堆疊⋯"],
+        rationale: "Track > Create Track Stack… opens the stack-type sheet for the selected tracks. Read off an en-US Logic 12.4 menu bar on 2026-10-26 (research/ax/menubar-noproject.txt) and pressed live there; every other locale is the value of the row named below, copied by script. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Create%20Track%20Stack%E2%80%A6#value"
+    )
+
+    static let createTrackStackMenuPath = MenuPath(
+        bar: trackMenuBar,
+        item: createTrackStackMenuItem
+    )
+
     static let viewColorsMenuItem = LabelSet(
         canonical: "Colors",
         variants: ["색상", "カラー", "Farben", "Colores", "Couleurs", "Colori", "Cores", "颜色", "顏色"],
@@ -3708,6 +3720,7 @@ enum AXLocalePolicy {
         changeTrackColorUndoOperation,
         viewColorsMenuItem,
         changeRegionColorUndoOperation,
+        createTrackStackMenuItem,
         sortTracksByMIDIChannelMenuItem,
         sortTracksByAudioChannelMenuItem,
         sortTracksByOutputChannelMenuItem,

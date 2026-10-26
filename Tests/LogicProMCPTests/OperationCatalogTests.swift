@@ -120,6 +120,7 @@ struct OperationCatalogTests {
         .mixerSetSendModeVerified: ["ordinal", "mode", "expected_current"],
         .mixerSetMasterVolume: ["value", "volume"],
         .mixerBank: ["count", "direction"],
+        .mixerCreateAux: [],
         .mixerSetPluginParam: ["insert", "param", "value"],
         .mixerInsertPlugin: [
             // #871 `configuration` (and its alias) name the CHANNEL CONFIGURATION, used only when
@@ -233,6 +234,7 @@ struct OperationCatalogTests {
         .tracksSetInstrument: ["category", "path", "preset"],
         .tracksSetColor: ["color", "readback"],
         .tracksSetRegionColor: ["color"],
+        .tracksCreateStack: ["kind", "members", "name"],
         .tracksScanLibrary: ["mode"],
         .tracksResolvePath: ["path"],
         .tracksScanPluginPresets: ["submenuOpenDelayMs"],

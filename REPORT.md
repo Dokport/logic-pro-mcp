@@ -11,7 +11,9 @@ _Sidst opdateret: 2026-10-26_
 | `tracks.set_color` | Implementeret og live-testet. Projektfil-tilbagelæsning gav State A på testprojektet |
 | `tracks.set_region_color` | Implementeret og live-testet på brugerens session gennem LogicProMCPHost (State B med undo-vidne) |
 | LogicProMCPHost (rettigheder kun til én proces) | Implementeret og bevist: claude har ingen Accessibility, og serveren gennem hosten har |
-| `create_aux` / `create_summing_stack`, `set_output`, `set_send`, `move_track` | Ikke startet. Mekanismerne er målt i FINDINGS.md |
+| `tracks.create_stack` (summing/folder + navn) | Implementeret. State A 3 gange i træk fra ren kopi (DRUMS) med debug-serveren. Bekræftelse gennem hosten mangler |
+| `mixer.create_aux` | Implementeret. State A 3 gange i træk fra ren kopi med debug-serveren. Bekræftelse gennem hosten mangler |
+| `set_output`, `set_send`, `move_track` | Ikke startet. Mekanismerne er målt i FINDINGS.md |
 | `apply_mix_layout` | Ikke startet |
 | "3 gange i træk fra ren kopi" | Ikke kørt endnu |
 
@@ -36,7 +38,7 @@ Brugeren vil ikke give en bred Tilgængelighed-rettighed til Claude eller termin
   - Autostart ved login (LaunchAgent) blev afvist af sikkerhedsfilteret som persistens. Brugeren kan selv køre `Scripts/install-host.sh` uden flag.
   - Hosten er indtil videre startet med `open` (`--no-agent`).
 
-> **HUSK:** "claude" er slået fra under Tilgængelighed (2026-10-26). Lad den være slået fra. Fjern LogicProMCPHost, hvis projektet stoppes.
+> **HUSK:** Brugeren slår "claude" til under Tilgængelighed **kun mens der udvikles** (aftalt 2026-10-26), så agenten kan måle med `tools/ax-dump` i stedet for at gætte. Efter hver arbejdssession slås den fra igen. Det færdige produkt bruger kun LogicProMCPHost. Fjern LogicProMCPHost, hvis projektet stoppes.
 
 ## Miljø
 
@@ -73,9 +75,15 @@ De to Dry-spor har samme navn og blev derfor afvist af bindingen (`ambiguous_tar
 | Operation | Skrivning | Tilbagelæsning |
 |---|---|---|
 | `set_color` | AX-menupunkt + CGEvent-klik på et AX-afledt palettefelt | Undo-titel (B). ProjectData efter `project.save` (A) |
+| `create_stack` | AX-valg af første medlem + CGEvent ⌘-klik på AX-placerede navnefelter (verificeret som præcist sæt), AX-menupunkt og sheet | AX: hele sporlisten i den målte form (A). Navn via verificeret rename |
+| `create_aux` | AX: Mixerens Options-knap (2. af 3 over Mixeren) og menupunkt efter label | AX: komplet strip-census i All-visningen (A) |
 | `set_region_color` | AX: Deselect All + `AXSelected` pr. region (verificeret som præcist sæt), View ▸ Colors + CGEvent-klik | Undo-titel (B), der skelner region og spor |
 
 ## Skrøbeligt / kan gå i stykker ved Logic-opdateringer
+
+- **Hængende modifier-tast:** Efter et ⌘-klik behandlede Logic de næste almindelige klik som ⌘-klik, indtil et event uden flag nulstillede det. `AXMouseHelper.commandClick` afslutter derfor med et museflyt uden flag. Et stak-hoved valgt sammen med sine medlemmer bliver eneste valgte spor ved et almindeligt klik på navnefeltet.
+- `create_aux` vælger Options-knappen ud fra placering (2. af 3 knapper i rækken lige over Mixeren), fordi knappernes beskrivelser ikke har en entydig række i Logics strenge. Menupunktet matches stadig på sin label.
+- `track.create_stack` fandtes allerede i routingtabellen som en ubrugt tastekommando-rute, så den verificerede operation hedder `track.create_stack_verified`.
 
 - Palettens layout (24×4 + reset-knap), at øverste række har forkert AX-position, og placeringen af farvebyten i ProjectData er alle målt på 12.4 og udokumenterede.
 - CGEvent-klik kræver, at Logic er i front, og at paletten står på skærmen.

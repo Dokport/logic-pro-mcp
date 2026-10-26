@@ -30,6 +30,7 @@ struct OperationRegistryTests {
         (.mixerSetPluginParam, "set_plugin_param"),
         (.mixerInsertPlugin, "insert_plugin"),
         (.mixerBank, "bank"),
+        (.mixerCreateAux, "create_aux"),
         (.mixerSetOutputVerified, "set_output_verified"),
         (.mixerGetOutputVerified, "get_output_verified"),
         (.mixerGetInputBusVerified, "get_input_bus_verified"),
@@ -1132,6 +1133,7 @@ struct OperationRegistryTests {
         ("tracks.sort_verified", "sort_verified", .mutating, .medium, .readbackRequired),
         ("tracks.set_color", "set_color", .mutating, .medium, .readbackRequired),
         ("tracks.set_region_color", "set_region_color", .mutating, .medium, .readbackRequired),
+        ("tracks.create_stack", "create_stack", .mutating, .medium, .readbackRequired),
         ("tracks.set_automation", "set_automation", .mutating, .short, .readbackRequired),
         ("tracks.set_instrument", "set_instrument", .mutating, .medium, .readbackRequired),
         ("tracks.list_library", "list_library", .readOnly, .long, .none),
@@ -1205,7 +1207,7 @@ struct OperationRegistryTests {
         #expect(expected == Set([
             "select", "create_audio", "create_instrument", "create_drummer", "create_external_midi",
             "delete", "duplicate", "rename", "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified",
-            "set_color", "set_region_color", "set_automation", "set_instrument",
+            "set_color", "set_region_color", "create_stack", "set_automation", "set_instrument",
         ]))
         #expect(OperationRegistry.mutatingCommands(tool: tool) == expected)
         for command in ["list_library", "scan_library", "resolve_path", "scan_plugin_presets"] {
@@ -1220,7 +1222,7 @@ struct OperationRegistryTests {
     @Test("tracks deadlines preserve short medium long and read-only long tiers")
     func tracksDeadlineParity() {
         #expect(Self.trackCommands.filter { $0.deadline == .short }.count == 14)
-        #expect(Self.trackCommands.filter { $0.deadline == .medium }.map(\.command) == ["sort_verified", "set_color", "set_region_color", "set_instrument"])
+        #expect(Self.trackCommands.filter { $0.deadline == .medium }.map(\.command) == ["sort_verified", "set_color", "set_region_color", "create_stack", "set_instrument"])
         #expect(Set(Self.trackCommands.filter { $0.deadline == .long }.map(\.command)) == Set([
             "record_sequence", "list_library", "scan_library", "scan_plugin_presets",
         ]))

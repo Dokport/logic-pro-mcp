@@ -301,6 +301,28 @@ enum SemanticOracleTable {
     /// mutating spec, is DISJOINT from the covered set, and carries a reason —
     /// so the uncovered complement is never fully implicit.
     static let structurallyUnverifiedMutatingOperationIDs: [OperationID: String] = [
+        .tracksSetColor:
+            // Mix-prep, post-closure: NOT back-dated into a phase set. Logic exposes no colour to
+            // Accessibility (#448), so the default answer is State B with an Undo-title witness;
+            // State A exists only through readback:"project_file", which saves the project and
+            // reads the track record -- a readback of the FILE, not of a logic:// resource.
+            "no logic:// resource publishes a track colour; State A requires saving the project "
+            + "and reading the colour index from its track record (readback:\"project_file\")",
+        .tracksSetRegionColor:
+            // Mix-prep, post-closure. Region colour is not in the AX tree and its ProjectData
+            // record has not been measured, so the only evidence is the Undo title.
+            "no readback of a region colour exists; the operation's evidence is the Edit menu's "
+            + "Undo title naming a region colour change",
+        .tracksCreateStack:
+            // Mix-prep, post-closure. Its State A IS an independent readback (the whole track rail
+            // read again, stack main track detected by its disclosure triangle), so like mixer.bank
+            // this exclusion is pending an oracle, not structural.
+            "live State-A contract pending — State A is the whole track rail read back in the "
+            + "measured stack shape; no oracle pinning that envelope has been written yet",
+        .mixerCreateAux:
+            // Mix-prep, post-closure. State A is a fresh complete Mixer strip census; pending.
+            "live State-A contract pending — State A is a complete Mixer strip census gaining "
+            + "exactly one strip; no oracle pinning that envelope has been written yet",
         .systemSetupControlSurface:
             // Arrived on main after this inventory closed (#891). NOT back-dated into one of the
             // phase sets: those record what was pinned when, and putting a later operation into

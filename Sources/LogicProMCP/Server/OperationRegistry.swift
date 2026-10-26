@@ -18,6 +18,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case mixerSetPluginParam = "mixer.set_plugin_param"
     case mixerInsertPlugin = "mixer.insert_plugin"
     case mixerBank = "mixer.bank"
+    case mixerCreateAux = "mixer.create_aux"
     case mixerSetOutputVerified = "mixer.set_output_verified"
     case mixerGetOutputVerified = "mixer.get_output_verified"
     case mixerGetInputBusVerified = "mixer.get_input_bus_verified"
@@ -130,6 +131,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case tracksSortVerified = "tracks.sort_verified"
     case tracksSetColor = "tracks.set_color"
     case tracksSetRegionColor = "tracks.set_region_color"
+    case tracksCreateStack = "tracks.create_stack"
     case tracksSetAutomation = "tracks.set_automation"
     case tracksSetInstrument = "tracks.set_instrument"
     case tracksListLibrary = "tracks.list_library"
@@ -315,7 +317,7 @@ enum OperationRegistry {
         ],
         ToolID.logicMixer.rawValue: [
             "mixer.set_volume", "mixer.set_pan", "mixer.set_master_volume",
-            "mixer.set_plugin_param", "mixer.insert_plugin", "mixer.bank",
+            "mixer.set_plugin_param", "mixer.insert_plugin", "mixer.bank", "mixer.create_aux",
             "mixer.set_output_verified", "mixer.get_output_verified", "mixer.get_input_bus_verified", "mixer.set_input_bus_verified", "mixer.get_send_destination_verified", "mixer.set_send_output_verified", "mixer.get_send_bypass_verified", "mixer.set_send_bypass_verified", "mixer.set_send_level_verified", "mixer.set_send_mode_verified",
         ],
         ToolID.logicNavigate.rawValue: [
@@ -365,7 +367,7 @@ enum OperationRegistry {
             "tracks.select", "tracks.create_audio", "tracks.create_instrument",
             "tracks.create_drummer", "tracks.create_external_midi", "tracks.delete",
             "tracks.duplicate", "tracks.rename", "tracks.mute", "tracks.solo", "tracks.arm",
-            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.set_automation",
+            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.create_stack", "tracks.set_automation",
             "tracks.set_instrument", "tracks.list_library", "tracks.scan_library",
             "tracks.resolve_path", "tracks.scan_plugin_presets",
         ],
@@ -379,7 +381,7 @@ enum OperationRegistry {
         ],
         ToolID.logicMixer.rawValue: [
             "set_volume", "set_pan", "set_master_volume", "set_plugin_param", "insert_plugin",
-            "bank", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified", "set_send_level_verified", "set_send_mode_verified",
+            "bank", "create_aux", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified", "set_send_level_verified", "set_send_mode_verified",
         ],
         ToolID.logicNavigate.rawValue: [
             "goto_bar", "goto_marker", "create_marker", "delete_marker", "rename_marker",
@@ -421,7 +423,7 @@ enum OperationRegistry {
         ToolID.logicTracks.rawValue: [
             "select", "create_audio", "create_instrument", "create_drummer",
             "create_external_midi", "delete", "duplicate", "rename", "mute", "solo", "arm",
-            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "set_automation", "set_instrument", "list_library",
+            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "set_automation", "set_instrument", "list_library",
             "scan_library", "resolve_path", "scan_plugin_presets",
         ],
     ]
@@ -601,6 +603,9 @@ enum OperationRegistry {
         // #862: relative banking on the Mackie Control surface. `direction` and `count` only --
         // no track target, because the operation moves the eight-strip window, not a strip.
         (.mixerBank, "bank", .none, .none, ["count", "direction"]),
+        // Mixer > Options > Create New Auxiliary Channel Strip, read back as exactly one new strip
+        // in the Mixer's All view (measured on Logic 12.4). No target: it adds a strip.
+        (.mixerCreateAux, "create_aux", .none, .none, []),
         // #291 R2: one strip's output to one exact destination, read back from the same strip.
         // Target-bearing (`target_ref` from logic://tracks or logic://mixer, or `track`), and a
         // reversible write -- the reply carries the observed `before` -- so it joins the
@@ -1016,6 +1021,9 @@ enum OperationRegistry {
         // through readback:"project_file", which saves and reads the track record.
         (.tracksSetColor, "set_color", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["color", "index", "readback", "track"]),
         // Every region of one track, through View > Colors; no AX readback, an Undo-title witness.
+        // Measured on Logic 12.4: the stack main track lands at the first member's position and
+        // the members follow it; non-contiguous members are gathered (others move after it).
+        (.tracksCreateStack, "create_stack", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.none, ["kind", "members", "name"]),
         (.tracksSetRegionColor, "set_region_color", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["color", "index", "track"]),
         (.tracksSetAutomation, "set_automation", Mutability.`mutating`, DeadlineClass.short, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["index", "mode", "track"]),
         (.tracksSetInstrument, "set_instrument", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["category", "index", "path", "preset"]),

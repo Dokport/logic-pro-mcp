@@ -1611,6 +1611,34 @@
     "en-US": "title"
    }
   },
+  "createTrackStackMenuItem": {
+   "canonical": "Create Track Stack…",
+   "variants": [
+    "Track Stack 생성…",
+    "Track Stackを作成…",
+    "Spurstapel erzeugen …",
+    "Crear Track Stack…",
+    "Créer une Track Stack…",
+    "Crea pila di tracce…",
+    "Criar Track Stack…",
+    "创建 Track Stack…",
+    "製作音軌堆疊⋯"
+   ],
+   "rationale": "Track > Create Track Stack… opens the stack-type sheet for the selected tracks. Read off an en-US Logic 12.4 menu bar on 2026-10-26 (research/ax/menubar-noproject.txt) and pressed live there; every other locale is the value of the row named below, copied by script. Checked offline by Scripts/check-labelsets-are-derived.py.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
+   }
+  },
   "cycleRangeEnd": {
    "canonical": "End",
    "variants": [

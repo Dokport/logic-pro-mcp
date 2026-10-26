@@ -258,6 +258,36 @@ enum AXMouseHelper {
         return down && up
     }
 
+    /// Post one native left-click with Command held on the click itself. The flag rides on the
+    /// mouse events only; no modifier key is pressed, so there is no key state to leave stuck.
+    /// Used to add a track row to Logic's selection (measured on 12.4: ⌘-click on a row's name
+    /// field toggles that row in and out of the selection).
+    @discardableResult
+    static func commandClick(at point: CGPoint) -> Bool {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        guard let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                                 mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                               mouseCursorPosition: point, mouseButton: .left) else { return false }
+        for event in [down, up] {
+            event.flags = .maskCommand
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
+        }
+        down.post(tap: .cghidEventTap)
+        usleep(20_000)
+        up.post(tap: .cghidEventTap)
+        // Measured on Logic 12.4: without this, Logic kept treating the NEXT plain clicks as
+        // Command-clicks (a click meant to select one row deselected it instead). A move with no
+        // flags tells the window server the modifier is up again.
+        if let release = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                 mouseCursorPosition: point, mouseButton: .left) {
+            release.flags = []
+            usleep(20_000)
+            release.post(tap: .cghidEventTap)
+        }
+        return true
+    }
+
     /// Post a sequence of keystrokes representing the given string. Only
     /// ASCII digits, `.`, `-` and `Return` are supported — sufficient for
     /// tempo / locator numeric entry.

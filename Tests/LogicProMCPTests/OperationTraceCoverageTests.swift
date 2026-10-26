@@ -235,8 +235,8 @@ private let operationTraceCensusInternalWriteRoutes: Set<String> = [
     "mmc.play", "mmc.record_strobe", "mmc.stop",
     "nav.capture_markers", "nav.delete_marker", "nav.open_marker_list", "nav.rename_marker", "nav.zoom_to_fit",
     "plugin.insert", "plugin.insert_verified", "plugin.set_eq_band_verified", "plugin.set_param_verified",
-    "region.move_to_playhead",
-    "track.create_audio", "track.create_drummer", "track.create_external_midi", "track.create_instrument",
+    "region.move_to_playhead", "region.set_color",
+    "track.create_audio", "track.create_stack_verified", "track.set_color", "track.create_drummer", "track.create_external_midi", "track.create_instrument",
     "track.rename", "track.select", "track.set_arm", "track.set_automation", "track.set_instrument",
     "track.set_mute", "track.set_solo", "track.sort_verified",
     "transport.resume",
@@ -1128,6 +1128,14 @@ private func operationTraceCoverageParams(
         ]
     case .tracksRename:
         return ["index": .int(0), "name": .string("Trace Coverage")]
+    case .tracksSetColor, .tracksSetRegionColor:
+        return [
+            "index": .int(0),
+            OperationRegistry.corroborationParam: .string(operationTraceCoverageTrackName),
+            "color": .string("red"),
+        ]
+    case .tracksCreateStack:
+        return ["members": .array([.string(operationTraceCoverageTrackName)])]
     case .tracksSortVerified:
         return [
             "criterion": .string("track_name"),

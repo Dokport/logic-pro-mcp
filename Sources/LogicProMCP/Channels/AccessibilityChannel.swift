@@ -1759,6 +1759,11 @@ actor AccessibilityChannel: Channel {
             // Measured on Logic 12.4: the palette opens through its menu item, takes a native
             // click on an AX-derived swatch, and offers no AX readback (see +TrackColor).
             return await Self.defaultSetTrackColor(params: params, runtime: runtime.logicRuntime)
+        case "mixer.create_aux":
+            return await Self.defaultCreateAux(params: params, runtime: runtime.logicRuntime)
+        case "track.create_stack_verified":
+            // Exactly the named tracks selected, Create Track Stack…, the whole rail read back.
+            return await Self.defaultCreateTrackStack(params: params, runtime: runtime.logicRuntime)
         case "region.set_color":
             // Every region of one track, selected exactly, coloured through View > Colors.
             return await Self.defaultSetRegionColor(params: params, runtime: runtime.logicRuntime)

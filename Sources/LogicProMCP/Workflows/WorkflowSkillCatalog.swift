@@ -513,13 +513,13 @@ enum WorkflowSkillCatalog {
         "logic_tracks": [
             "select", "create_audio", "create_instrument", "create_drummer",
             "create_external_midi", "delete", "duplicate", "rename",
-            "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color",
+            "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack",
             "set_automation", "set_instrument",
             "resolve_path", "list_library", "scan_library", "scan_plugin_presets",
         ],
         "logic_mixer": [
             "set_volume", "set_pan", "set_master_volume",
-            "insert_plugin", "set_plugin_param", "bank", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified", "set_send_level_verified", "set_send_mode_verified",
+            "insert_plugin", "set_plugin_param", "bank", "create_aux", "set_output_verified", "get_output_verified", "get_input_bus_verified", "set_input_bus_verified", "get_send_destination_verified", "set_send_output_verified", "get_send_bypass_verified", "set_send_bypass_verified", "set_send_level_verified", "set_send_mode_verified",
         ],
         "logic_plugins": [
             "get_inventory", "get_param_verified", "get_channel_eq_state_verified", "plan_parameter_changes", "set_param_verified", "set_eq_band_verified", "insert_verified",

@@ -386,6 +386,11 @@ extension OperationRegistry {
                                         sample: .string("red")),
                 "readback": .enforced(.scalar, .string("ax"), allowed: TrackDispatcher.colorReadbackModes),
             ], required: [indexGroup, ["color"], ["expected_name", "target_ref"]]),
+            "tracks.create_stack": .init(params: [
+                "members": .enforced(.array, .array([.string("Kick"), .string("Snare")])),
+                "kind": .enforced(.scalar, .string("summing"), allowed: TrackStackKind.allCases.map(\.rawValue)),
+                "name": .enforced(.string, .string("DRUMS")),
+            ], required: [["members"]]),
             "tracks.set_region_color": .init(params: [
                 "index": index(), "track": index(), "target_ref": targetRef, "project_ref": projectRef,
                 "expected_name": expectedName,

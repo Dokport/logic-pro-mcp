@@ -61,6 +61,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | Command | Parameters | Required | Unknown parameters | Mutability | Confirmation | Target | Verification | Retry | Availability |
 |---|---|---|---|---|---|---|---|---|---|
 | `bank` | `count`: integer, `direction`: scalar (left, right) | `direction` | closed | mutating | none | none | readback_required | never_automatic | default_install |
+| `create_aux` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `get_input_bus_verified` | `project_ref`, `target_ref`: string | `target_ref` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `get_output_verified` | `project_ref`, `target_ref`: string | `target_ref` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `get_send_bypass_verified` | `ordinal`: integer, `project_ref`, `target_ref`: string | `target_ref`; `ordinal` | closed | read_only | none | accepts_stable_target | readback_required | never_automatic | default_install |
@@ -156,6 +157,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `create_drummer` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `create_external_midi` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `create_instrument` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
+| `create_stack` | `kind`: scalar (folder, summing), `members`: array, `name`: string | `members` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `delete` | `expected_name`, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `expected_name` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `duplicate` | `expected_name`, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `expected_name` or `target_ref` | closed | mutating | none | accepts_stable_target | none | never_automatic | default_install |
 | `list_library` | none | none | closed | read_only | none | none | none | never_automatic | default_install |
