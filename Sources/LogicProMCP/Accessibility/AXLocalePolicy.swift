@@ -874,6 +874,21 @@ enum AXLocalePolicy {
         item: flattenStackMenuItem
     )
 
+    static let colorRegionsByTrackColorMenuItem = LabelSet(
+        canonical: "Color Regions/Cells by Track Color",
+        variants: ["트랙 색상을 리전/셀에 적용", "トラックカラーに基づいてリージョン/セルに色を付ける", "Regionen/Zellen nach Spurfarbe färben", "Colorear pasajes/celdas por color de pista", "Colorier les régions/cellules selon la couleur de la piste", "Colora regioni/celle in base al colore della traccia", "Colorir Regiões/Células pela Cor da Pista", "按轨道颜色给片段/单元格着色", "依照音軌顏色著色區段/輸入格"],
+        rationale: "The Tracks area's Functions menu item that gives every selected region its track's colour. Read off an en-US Logic 12.4 Functions menu on 2026-10-26; every other locale is the value of the row named below in this installed Logic.framework. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Color%20Regions%2FCells%20by%20Track%20Color#value"
+    )
+
+    /// The undo-operation NAME Color Regions/Cells by Track Color leaves (`Undo Color Regions`, 12.4).
+    static let colorRegionsUndoOperation = LabelSet(
+        canonical: "Color Regions",
+        variants: ["리전에 색상 적용", "リージョンに色を付ける", "Regionen einfärben", "color de pasajes", "Colorier les régions", "Colora regioni", "Colorir Regiões", "颜色片段", "顏色區段"],
+        rationale: "An en-US Logic 12.4 offered `Undo Color Regions` right after Functions > Color Regions/Cells by Track Color on 2026-10-26. Matched by containment inside the Edit menu's Undo title, as a witness only. Every other locale is the value of the row named below, copied by script. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Color%20Regions%23und#value"
+    )
+
     static let removeSilenceMenuItem = LabelSet(
         canonical: "Remove Silence from Audio Region…",
         variants: ["오디오 리전에서 무음 구간 제거…", "オーディオリージョンから無音部分を削除…", "Stille von Audioregion entfernen …", "Eliminar silencio de pasaje de audio…", "Supprimer le silence de la région audio…", "Rimuovi silenzio dalla regione audio…", "Remover Silêncio da Região de Áudio…", "将无声片段从音频片段中移除…", "從音訊區段移除靜音⋯"],
@@ -3749,6 +3764,8 @@ enum AXLocalePolicy {
         changeRegionColorUndoOperation,
         createTrackStackMenuItem,
         flattenStackMenuItem,
+        colorRegionsByTrackColorMenuItem,
+        colorRegionsUndoOperation,
         removeSilenceMenuItem,
         stripSilenceUndoOperation,
         sortTracksByMIDIChannelMenuItem,

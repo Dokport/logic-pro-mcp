@@ -156,6 +156,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 |---|---|---|---|---|---|---|---|---|---|
 | `arm` | `enabled`: booleanLike, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `arm_only` | `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
+| `color_regions_by_track` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `create_audio` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `create_drummer` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `create_external_midi` | none | none | closed | mutating | none | none | readback_required | never_automatic | default_install |

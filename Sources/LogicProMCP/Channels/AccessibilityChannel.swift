@@ -1768,6 +1768,9 @@ actor AccessibilityChannel: Channel {
         case "track.create_stack_verified":
             // Exactly the named tracks selected, Create Track Stack…, the whole rail read back.
             return await Self.defaultCreateTrackStack(params: params, runtime: runtime.logicRuntime)
+        case "track.color_regions_by_track":
+            // Edit > Select All, then the Tracks area's Functions > Color Regions/Cells by Track Color.
+            return await Self.defaultColorRegionsByTrack(params: params, runtime: runtime.logicRuntime)
         case "track.move_verified":
             // A temporary folder stack of the anchor and the track, flattened again; rail read back.
             return await Self.defaultMoveTrack(params: params, runtime: runtime.logicRuntime)

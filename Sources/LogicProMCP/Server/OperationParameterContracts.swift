@@ -400,6 +400,7 @@ extension OperationRegistry {
                 "kind": .enforced(.scalar, .string("summing"), allowed: TrackStackKind.allCases.map(\.rawValue)),
                 "name": .enforced(.string, .string("DRUMS")),
             ], required: [["members"]]),
+            "tracks.color_regions_by_track": .init(params: [:], required: []),
             "tracks.move_track": .init(params: [
                 "name": .enforced(.string, .string("Vox Lead")),
                 "after": .enforced(.string, .string("Snare")),

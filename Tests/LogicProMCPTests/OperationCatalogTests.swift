@@ -239,6 +239,7 @@ struct OperationCatalogTests {
         .tracksSetRegionColor: ["color"],
         .tracksCreateStack: ["kind", "members", "name"],
         .tracksMoveTrack: ["after", "name"],
+        .tracksColorRegionsByTrack: [],
         .tracksStripSilence: ["min_silence_sec", "post_release_sec", "pre_attack_sec", "threshold_db"],
         .tracksScanLibrary: ["mode"],
         .tracksResolvePath: ["path"],

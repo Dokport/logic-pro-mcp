@@ -323,6 +323,11 @@ enum SemanticOracleTable {
             // step's own State A; pending an oracle, not structural.
             "live State-A contract pending — State A is every layout step answering State A in "
             + "order; no oracle pinning the composite envelope has been written yet",
+        .tracksColorRegionsByTrack:
+            // Mix-prep, post-closure. Region colours have no AX readback; State B with the Undo
+            // title naming a region colour change is the designed answer.
+            "live State-B contract pending — no AX region-colour readback; the Undo title naming "
+            + "a region colour change is the witness",
         .tracksMoveTrack:
             // Mix-prep, post-closure. State A is the whole track rail read back in the expected
             // order; pending an oracle, not structural.
