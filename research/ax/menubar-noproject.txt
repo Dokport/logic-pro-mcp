@@ -1,0 +1,653 @@
+AXMenuBar @0.0,0.0 1920.0x24.0 actions=AXCancel selected=0
+  AXMenuBarItem title="Apple" @10.0,0.0 34.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Om denne Mac" id="_aboutThisMacRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Oplysninger om system" id="_systemInformationRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Systemindstillinger…" id="_systemSettingsRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="App Store…, 8 opdateringer" id="_appStoreRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Seneste emner" id="_recentsRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Apps" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="App Store" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “App Store” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="ArtCraft Launcher" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “ArtCraft Launcher” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Brave Browser" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “Brave Browser” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Claude" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “Claude” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="EffectCraft" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “EffectCraft” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="FaceTime" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “FaceTime” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Logic Pro" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “Logic Pro” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="SolidCraft" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “SolidCraft” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Systemindstillinger" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “Systemindstillinger” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="TextEdit" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “TextEdit” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Dokumenter" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="179 Regnskab 2025-2026" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “179 Regnskab 2025-2026” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="179 Regnskab 2025-2026.pdf" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “179 Regnskab 2025-2026.pdf” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="B -krarokee" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “B -krarokee” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="body.stl" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “body.stl” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="ClaudeTestSession" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “ClaudeTestSession” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Demonized.logicx" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “Demonized.logicx” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="HA_SETUP.md" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “HA_SETUP.md” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="I will carry your light.logicx" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “I will carry your light.logicx” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="PointCloud1.mov" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “PointCloud1.mov” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Post Angst.logicx" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Vis “Post Angst.logicx” i Finder" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Servere" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="home" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Kattelemmen" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Lars Allan Lennart" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Macintosh HD" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Movie Library" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Music" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Music Production" id="_recentItemRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Ryd menu" id="_clearRecentItemsRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Afbryd…" id="_forceQuitPanelRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Afbryd Logic Pro" id="_forceQuitRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Vågeblus" id="_sleepRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Start igen…" id="_restartRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Start igen" id="_restartNowRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Luk ned…" id="_shutDownRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Luk ned" id="_shutDownNowRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Lås skærm" id="_lockScreenRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Log Lennart Wendt ud…" id="_logOutRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Log Lennart Wendt ud" id="_logOutNowRequested:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Logic Pro" @44.0,0.0 81.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="About Logic Pro" id="openAboutPanel:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Learn About Apple Creator Studio…" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Learn About Logic Remote…" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Settings" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="General…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Audio…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Recording…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="MIDI…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Score…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Movie…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Automation…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Control Surfaces…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="View…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="My Info…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Reset All Settings Except Key Command Assignments…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Plug-in Manager…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Chord Grid Library…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Control Surfaces" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Controller Assignments…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Setup…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Settings…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Rebuild Defaults" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Bypass All Control Surfaces" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Key Commands" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Sound Library…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Provide Logic Pro Feedback" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Services" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="No Services Apply" id="_noServicesApplyAction:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Services Settings…" id="_configureServicesMenu:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Hide Logic Pro" id="hide:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Hide Others" id="hideOtherApplications:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Show All" id="unhideAllApplications:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Quit Logic Pro" id="terminate:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="File" @125.0,0.0 42.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="New" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="New from Template…" id="newDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open…" id="openDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Recent" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="ClaudeTestSession" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="I will carry your light.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Post Angst.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="B -krarokee" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Demonized.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="My Tree.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="GhostEve.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="ASoulHasLeftMe_v2.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Reverberation 2.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="This year forfra til mix og trom klip til L.logicx" id="_openRecentDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Clear Menu" id="clearRecentDocuments:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Close" id="performClose:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Close Project" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Save" id="saveDocument:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Save As…" id="saveDocumentAs:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Save A Copy As…" id="saveDocumentTo:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Save as Template…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Revert to" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Saved\t\t26/10/2026, 08.26.18" id="revertDocumentToSaved:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  1\t26/10/2026, 08.24.11" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  2\t26/10/2026, 08.16.47" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  3\t26/10/2026, 08.11.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  4\t26/10/2026, 08.10.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  5\t26/10/2026, 08.10.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  6\t26/10/2026, 08.10.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  7\t26/10/2026, 08.10.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  8\t26/10/2026, 08.10.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup  9\t26/10/2026, 08.10.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Backup 10\t26/10/2026, 08.10.52" id="activateBackup:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Project Alternatives" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="New Alternative…" id="saveAsNewVariant:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Edit Alternatives…" id="editVariants:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Export Alternative as Project…" id="exportVariant:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="I will carry your light" id="switchToVariant:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Project Management" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Clean Up…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Consolidate…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Rename…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Show in Finder…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Project Settings" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="General…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Audio…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Recording…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Smart Tempo…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="MIDI…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Score…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Movie…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Synchronization…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Metronome…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Tuning…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Assets…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Import Project Settings…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Page Setup…" id="runPageLayout:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Print" id="print:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Movie" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Open Movie…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Remove Movie" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Show in Finder" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Move Movie Files out of Project…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Import Audio from Movie" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Export Audio to Movie…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Import" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Logic Projects…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Live Loops Grid…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Audio File…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="MIDI File…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="MusicXML…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Final Cut Pro XML…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="AAF…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Project from ADM BWF…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Other…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Export" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Region/Cell to Loop Library…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Regions as Audio Files…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Audio Files As…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Selection as Audio File…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Selection as MIDI File…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="1 Track as Audio File…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="All Tracks as Audio Files…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="All MIDI Tracks as MIDI File…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Project as AAF File…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Project to Final Cut Pro XML…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Project as Spatial Audio…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Score as MusicXML…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Bounce" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Regions in Place…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Track in Place…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="And Replace All Tracks…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Project or Section…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Share" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Song to Music…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Song to Voice Memos…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="AirDrop…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Mail…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Project to GarageBand for iOS…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Edit" @167.0,0.0 44.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Can’t Undo" id="undo:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Can’t Redo" id="redo:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Undo History…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Delete Undo History" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Cut" id="cut:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Copy" id="copy:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Paste" id="paste:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Delete" id="delete:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Select All" id="selectAll:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Track" @211.0,0.0 54.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="New Tracks…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="New Audio Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="New Software Instrument Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="New Session Player SI Track…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="New External MIDI Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Other" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="New Track With Duplicate Settings" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="New Track With Duplicate Settings and Content" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="New Track With Next Channel" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="New Track With Same Channel" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="New Track For Overlapped Regions" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="New Track For Selected Regions" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Rename Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Delete Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Delete Unused Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Create Track Stack…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Flatten Stack" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Convert Folder Stack to Summing Stack" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Global Tracks" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Global Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Configure Global Tracks…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Show Single Global Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Arrangement Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Arrangement Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Marker Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Marker Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Movie Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Movie Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Signature Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Signature Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Chord Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Chord Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Transposition Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Transposition Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Tempo Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Tempo Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Beat Mapping Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Beat Mapping Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Track Alternatives" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Master Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Replace or Double Drum Track…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Convert Regions to New Sampler Track…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Search and Select Track…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Hide/Show Selected Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Hide/Show Unselected Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Unhide All Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Toggle Hide View" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Sort Tracks by" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="MIDI Channel" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Audio Channel" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Output Channel" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Instrument Name" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Track Name" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Used, Unused" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Creation Date" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Assign Track Color…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Assign Track Icon…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Configure Track Header…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Navigate" @265.0,0.0 74.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Go To" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Position…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Left Locator" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Right Locator" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Selection Start" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Selection End" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Next Marker" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Previous Marker" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Marker Number…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Scroll to Selection" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Set Locators by Selection and Enable Cycle" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Set Rounded Locators by Selection and Enable Cycle" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Move Locators Forward by Cycle Length" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Move Locators Backwards by Cycle Length" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Create Marker" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Other" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Create Marker for Region/Marquee Selection" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Without Rounding" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Import Marker from Audio File" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Export Marker to Audio File" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Remove Marker from Audio File" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Movie Scene Cut Markers" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+            AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Remove Movie Scene Cut Markers" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+            AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Rename Marker" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Delete Marker at Playhead Position" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Marker List" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Marker Text" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Play Button Options" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Play from Marquee Selection" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Play from Cycle Start" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Play From Selected Region" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Play From Last Locate Position" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Stop Button Options" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Stop" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Stop and Go to Left Locator" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Stop and Go to Last Locate Position" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Jump between Marquee- and Project Start if stopped" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Jump between Cycle- and Project Start if stopped" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Jump between Selected Region- and Project Start if stopped" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Jump between Last Locate Position and Project Start if stopped" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Auto Set Locators" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="By Marquee Selection" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="By Region Selection" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="By Marker/Chord Selection" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="By Note Selection" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Enable Auto Set Locators" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Record" @339.0,0.0 63.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Count-in" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="None" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="1 Bar" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="2 Bars" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="3 Bars" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="4 Bars" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="5 Bars" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="6 Bars" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="1/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="2/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="3/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="4/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="5/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="6/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="7/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="8/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="9/4" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Metronome Settings…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Use Musical Grid" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Allow Quick Punch-In" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Auto Input Monitoring" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Low Latency Monitoring Mode" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Record Button Options" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Record" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Record / Record Toggle" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Record / Record Repeat" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Overlapping MIDI Recordings" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Cycle Off" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Take Folder" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Merge" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Overlap" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Overlap/Merge Selected Regions" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Track Alternative" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Cycle On" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Take Folder" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Merge" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Merge Current Recording Only" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Tracks and Mute" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Track Alternatives" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Replace" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Region Erase" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Region Punch" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Content Erase" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Content Punch" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Overlapping Audio Recordings" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Cycle Off" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Take Folder" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create New Track" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Track Alternative" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Cycle On" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Take Folder" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Tracks And Mute" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Track Alternatives" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Recording Settings…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Mix" @402.0,0.0 42.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Show Automation" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Create Track Automation" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Create 1 Automation Point at Region Borders" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create 2 Automation Points at Region Borders" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create 1 Automation Point each for Volume, Pan, Sends" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create 2 Automation Points each for Volume, Pan, Sends" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create 1 Automation Point for Visible Parameter" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create 2 Automation Points for Visible Parameter" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Create Volume Fade-Out on Main Output" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Convert Automation" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Convert Visible Track Automation to Region Automation" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Convert Visible Region Automation to Track Automation" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Convert All Track Automation to Region Automation" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Convert All Region Automation to Track Automation" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Delete Automation" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Delete Visible Automation on Selected Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Delete All Automation on Selected Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Delete Orphaned Automation on Selected Tracks" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Delete Redundant Automation Points" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Delete All Track Automation" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Move Track Automation with Regions" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Never" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Always" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Ask" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Enable Automation Quick Access" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Autoselect Automation Parameter in Read Mode" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Automation Settings…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Group Settings" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Groups Active" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Create Group" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="I/O Labels…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="I/O Assignments…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Pre-Fader Metering" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Search and Add Plug-in…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Mastering Assistant…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Dolby Atmos…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="View" @444.0,0.0 50.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Library" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Inspector" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Mixer" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Smart Controls" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Editor" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="List Editors" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Note Pads" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Loop Browser" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Browsers" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Control Bar" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Customize Control Bar and Display…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Toolbar" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Customize Toolbar…" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Movie Window" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Colors" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Enter Full Screen" id="toggleFullScreen:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Window" @494.0,0.0 69.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="Minimize" id="performMiniaturize:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Minimize All" id="miniaturizeAll:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Zoom" id="performZoom:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Zoom All" id="zoomAll:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Fill" id="_zoomFill:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Center" id="_zoomCenter:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Move & Resize" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Halves" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Left" id="_zoomLeft:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Right" id="_zoomRight:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Top" id="_zoomTop:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Bottom" id="_zoomBottom:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Quarters" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Top Left" id="_zoomTopLeft:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Top Right" id="_zoomTopRight:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Bottom Left" id="_zoomBottomLeft:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Bottom Right" id="_zoomBottomRight:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Arrange" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Left & Right" id="_zoomLeftAndRight:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Left & Quarters" id="_zoomLeftThreeUp:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Right & Left" id="_zoomRightAndLeft:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Right & Quarters" id="_zoomRightThreeUp:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Top & Bottom" id="_zoomTopAndBottom:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Top & Quarters" id="_zoomTopThreeUp:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Bottom & Top" id="_zoomBottomAndTop:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Bottom & Quarters" id="_zoomBottomThreeUp:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Quarters" id="_zoomQuarters:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Return to Previous Size" id="_zoomUntile:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Full Screen Tile" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Remove Window from Set" id="_removeWindowFromStageManagerSet:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Cycle Through Windows" id="_cycleWindows:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Bring All to Front" id="arrangeInFront:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Arrange in Front" id="alternateArrangeInFront:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Main Window" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Mixer" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Smart Controls" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Piano Roll" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Score Editor" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Step Sequencer" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Step Editor" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Audio Track Editor" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Audio File Editor" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Smart Tempo Editor" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Event List" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Signature List" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Project Audio" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open MIDI Transform" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Open Transport Float" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Event Float" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Region Inspector Float" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Keyboard" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Musical Typing" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Step Input Keyboard" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="All Plug-in Windows" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="1" @563.0,0.0 26.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem title="No Project open" id="localMenuItemAction:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+  AXMenuBarItem title="Help" @589.0,0.0 48.0x24.0 actions=AXCancel,AXPress,AXPick selected=0
+    AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+      AXMenuItem id="searchFieldAction:" @0.0,1080.0 0.0x0.0 selected=0
+        AXTextField/AXSearchField id="_SC_SEARCH_FIELD" @-1.0,1057.0 354.0x24.0 actions=AXShowMenu,AXConfirm
+        AXTable desc="search result" id="_SC_RESULTS_TABLE" @-1.0,1074.0 362.0x7.0
+          AXColumn id="Title" @0.0,1075.0 350.0x5.0 selected=0
+      AXMenuItem title="Quick Help" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Quick Help appears as" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+        AXMenu @0.0,1080.0 0.0x0.0 actions=AXCancel selected=0
+          AXMenuItem title="Inspector Pane" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Floating Window" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+          AXMenuItem title="Bubbles at Pointer Location" id="globalMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Logic Pro Help" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Logic Pro Instruments" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Logic Pro Effects" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Logic Pro Control Surfaces Support" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="What’s New in Logic Pro" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Release Notes" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Logic Pro Support" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Logic Pro on the Web" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Logic Pro Discussions" id="globalHelpMenuItemCall:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0
+      AXMenuItem title="Create Support Profile…" id="globalCreateSupportProfile:" @0.0,1080.0 0.0x0.0 actions=AXCancel,AXPress,AXPick selected=0

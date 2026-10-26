@@ -1,0 +1,153 @@
+#!/usr/bin/env -S python3 -I
+"""Talk JSON-RPC over stdio to a LogicProMCP server without registering it in a client.
+
+One server process lives for the whole invocation, so references a call returns
+(target_ref, project_ref, ...) stay valid for the calls after it.
+
+  tools/mcp-call logic_system health
+  tools/mcp-call logic_tracks rename '{"index":0,"name":"Kick"}'
+  tools/mcp-call --read logic://tracks
+  tools/mcp-call --script steps.jsonl      # one {"tool","command","params"}, {"read"} or {"sleep"} per line
+  tools/mcp-call --repl                    # same lines from stdin
+
+Each result is printed as one JSON line on stdout; server stderr goes to --log (default: discarded).
+"""
+import argparse
+import json
+import os
+import select
+import subprocess
+import sys
+import time
+
+DEFAULT_BINARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".build", "release", "LogicProMCP")
+
+
+class Server:
+    def __init__(self, binary, log_path, timeout):
+        self.timeout = timeout
+        self.next_id = 1
+        log = open(log_path, "ab") if log_path else subprocess.DEVNULL
+        self.proc = subprocess.Popen(
+            [binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, bufsize=0
+        )
+        self.buffer = b""
+        self.request("initialize", {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "mcp-call", "version": "1"},
+        })
+        self.notify("notifications/initialized")
+
+    def _write(self, msg):
+        self.proc.stdin.write((json.dumps(msg) + "\n").encode())
+        self.proc.stdin.flush()
+
+    def notify(self, method, params=None):
+        msg = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        self._write(msg)
+
+    def request(self, method, params):
+        req_id = self.next_id
+        self.next_id += 1
+        self._write({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
+        deadline = time.monotonic() + self.timeout
+        while True:
+            while b"\n" in self.buffer:
+                line, self.buffer = self.buffer.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                msg = json.loads(line)
+                if msg.get("id") == req_id:
+                    return msg
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"{method} timed out after {self.timeout}s")
+            ready, _, _ = select.select([self.proc.stdout], [], [], remaining)
+            if ready:
+                chunk = os.read(self.proc.stdout.fileno(), 65536)
+                if not chunk:
+                    raise RuntimeError("server closed stdout")
+                self.buffer += chunk
+
+    def call(self, tool, command, params):
+        msg = self.request("tools/call", {"name": tool, "arguments": {"command": command, "params": params or {}}})
+        return unwrap(msg)
+
+    def read(self, uri):
+        msg = self.request("resources/read", {"uri": uri})
+        if "error" in msg:
+            return {"rpc_error": msg["error"]}
+        contents = msg["result"].get("contents", [])
+        text = contents[0].get("text", "") if contents else ""
+        try:
+            return json.loads(text)
+        except ValueError:
+            return {"text": text}
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=5)
+        except Exception:
+            self.proc.kill()
+
+
+def unwrap(msg):
+    if "error" in msg:
+        return {"rpc_error": msg["error"]}
+    result = msg["result"]
+    if "structuredContent" in result:
+        return result["structuredContent"]
+    texts = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
+    text = "\n".join(texts)
+    try:
+        return json.loads(text)
+    except ValueError:
+        return {"text": text, "isError": result.get("isError", False)}
+
+
+def run_step(server, step):
+    if "sleep" in step:
+        time.sleep(float(step["sleep"]))
+        return {"slept": step["sleep"]}
+    if "read" in step:
+        return server.read(step["read"])
+    return server.call(step["tool"], step["command"], step.get("params"))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("tool", nargs="?")
+    parser.add_argument("command", nargs="?")
+    parser.add_argument("params", nargs="?", default="{}")
+    parser.add_argument("--read", help="read a resource URI instead of calling a tool")
+    parser.add_argument("--script", help="JSONL file of steps")
+    parser.add_argument("--repl", action="store_true", help="read JSONL steps from stdin")
+    parser.add_argument("--binary", default=os.environ.get("LOGIC_MCP_BINARY", DEFAULT_BINARY))
+    parser.add_argument("--log", help="append server stderr to this file")
+    parser.add_argument("--timeout", type=float, default=180.0)
+    args = parser.parse_args()
+
+    server = Server(args.binary, args.log, args.timeout)
+    try:
+        if args.read:
+            steps = [{"read": args.read}]
+        elif args.script or args.repl:
+            source = open(args.script) if args.script else sys.stdin
+            steps = (json.loads(line) for line in source if line.strip() and not line.startswith("#"))
+        elif args.tool and args.command:
+            steps = [{"tool": args.tool, "command": args.command, "params": json.loads(args.params)}]
+        else:
+            parser.error("give TOOL COMMAND [PARAMS], --read, --script or --repl")
+        for step in steps:
+            result = run_step(server, step)
+            print(json.dumps({"step": step, "result": result}, ensure_ascii=False), flush=True)
+    finally:
+        server.close()
+
+
+if __name__ == "__main__":
+    main()

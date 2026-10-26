@@ -1,0 +1,1339 @@
+            AXMenu
+              AXMenuItem title="Create New Auxiliary Channel Strip"
+              AXMenuItem title="Create New VCA for Selected Channel Strips"
+              AXMenuItem title="Create Tracks for Selected Channel Strips"
+              AXMenuItem title="Create Track Stack for Selected Channel Strips"
+              AXMenuItem title="Flatten Stack"
+              AXMenuItem title="Send All MIDI Mixer Data"
+              AXMenuItem
+              AXMenuItem title="Enable Groups"
+              AXMenuItem title="I/O Labels…"
+          AXMenuButton/AXSegment desc="View"
+          AXMenu
+            AXMenuItem title="Create New Auxiliary Channel Strip"
+            AXMenuItem title="Create New VCA for Selected Channel Strips"
+            AXMenuItem title="Create Tracks for Selected Channel Strips"
+            AXMenuItem title="Create Track Stack for Selected Channel Strips"
+            AXMenuItem title="Flatten Stack"
+            AXMenuItem title="Send All MIDI Mixer Data"
+            AXMenuItem
+            AXMenuItem title="Enable Groups"
+            AXMenuItem title="I/O Labels…"
+        AXStaticText value="Sends on Faders:"
+        AXCheckBox title="Sends on Faders:" value="0" help="Sends on Faders - On/Off. Swaps the Pan knob and Fader on channel strips so that they control the panning and volume of the chosen send. "
+        AXPopUpButton value="Off" help="Off, Sends on Faders pop-up menu. Assigns the Pan knob and Fader on channel strips to control the panning and volume of the chosen send. "
+        AXRadioGroup
+          AXRadioButton/AXSegment desc="Single" value="0" help="Show Signal Flow of Attentioned Track"
+          AXRadioButton/AXSegment desc="Tracks" value="1" help="Show all Channel Strips used by Tracks"
+          AXRadioButton/AXSegment desc="All" value="0" help="Show all Channel Strips"
+        AXGroup
+          AXCheckBox/AXSegment desc="Audio" value="1" help="Display Audio Channel Strips"
+          AXCheckBox/AXSegment desc="Inst" value="1" help="Display Inst Channel Strips"
+          AXCheckBox/AXSegment desc="Aux" value="1" help="Display Aux Channel Strips"
+          AXCheckBox/AXSegment desc="Bus" value="1" help="Display Bus Channel Strips"
+          AXCheckBox/AXSegment desc="Input" value="1" help="Display Input Channel Strips"
+          AXCheckBox/AXSegment desc="Output" value="1" help="Display Output Channel Strips"
+          AXCheckBox/AXSegment desc="Master/VCA" value="1" help="Display Master/VCA Channel Strips"
+          AXCheckBox/AXSegment desc="MIDI" value="1" help="Display MIDI Channel Strips"
+        AXRadioGroup
+          AXRadioButton/AXSegment desc="Narrow Channel Strips" value="1" help="Narrow Channel Strips"
+          AXRadioButton/AXSegment desc="Wide Channel Strips" value="0" help="Wide Channel Strips"
+      AXLayoutArea desc="Mixer"
+        AXLayoutItem desc="Kick"
+          AXTextField desc="name" value="Kick" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Snare"
+          AXTextField desc="name" value="Snare" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Sum 1"
+          AXTextField desc="name" value="Sum 1" help="Name field. Double-click to rename the channel strip. "
+          AXDisclosureTriangle desc="track stack" value="1" help="Track stack disclosure arrow. Show or hide subtracks. Make sure that View > Follow Track Stacks is chosen from the Mixer menu bar. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Bus 1" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+        AXLayoutItem desc="HH"
+          AXTextField desc="name" value="HH" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Bus 1" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="insert bar"plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXGroup desc="Channel EQ"
+            AXCheckBox desc="bypass" value="0"
+            AXButton desc="open"
+            AXButton desc="list"plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="on" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="OH R"
+          AXTextField desc="name" value="OH R" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Bus 1" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="OH L"
+          AXTextField desc="name" value="OH L" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Bass"
+          AXTextField desc="name" value="Bass" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Gtr L"
+          AXTextField desc="name" value="Gtr L" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Gtr R"
+          AXTextField desc="name" value="Gtr R" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Keys"
+          AXTextField desc="name" value="Keys" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Vox Lead"
+          AXTextField desc="name" value="Vox Lead" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Vox BV1"
+          AXTextField desc="name" value="Vox BV1" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Vox BV2"
+          AXTextField desc="name" value="Vox BV2" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="record" value="off" help="Record Enable button. Prepare the track for recording, or deactivate a record-ready track. The button changes to indicate whether the track is inactive, record enabled, or currently recording. "
+          AXButton/AXSwitch desc="monitoring" value="off" help="Input Monitoring button. Hear incoming signals on audio or software instrument tracks that aren’t record enabled. This is useful when setting levels or practicing parts before recording. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="Stereo Output" help="Output slot. Click and hold to choose the channel strip output destination—where the channel strip signal is sent. "
+          AXButton desc="send button" help="Send slot. Route the signal to an aux channel strip. Use sends to process or submix multiple track output signals. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Channel Mode button. Click to switch the channel strip input format between Mono and Stereo. Long-click, then choose Mono, Stereo, Left, Right, or Surround from the pop-up menu. "
+          AXButton desc="Input 3-4" help="Input slot. Choose the channel strip input source. This can be an input of your audio device (your microphone or instrument is connected to) or an internal bus (to receive a signal from another channel strip). "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+          AXSlider desc="input gain" value="0" help="Input Gain field and knob. Set the amount of input gain (in decibels). "
+        AXLayoutItem desc="Stereo Out"
+          AXTextField desc="name" value="Stereo Out" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="solo" value="off" help="Solo button. Isolate a channel strip’s signal so that it can be heard alone. Use on an aux or output channel strip to isolate that part of the mix. "
+          AXButton/AXSwitch desc="bounce" value="off" help="Bounce button. Render the signal of one or more output channel strips to an audio file, or to multiple audio files. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXButton title="peak level meter" desc="peak level meter" value="signal clipping off" help="Peak Level display. Shows the signal peak during playback. Values above 0 dB turn red to indicate signal clipping. Orange values above 0 dB do not clip due to internal floating point calculations. "
+          AXSlider desc="pan" value="0" help="Pan/Balance knob. Drag vertically to position the channel strip signal in the stereo field. "
+            AXStaticText desc="knob readout"
+          AXGroup desc="Read, automation enabled"
+            AXCheckBox desc="automation" value="1"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton desc="audio plug-in" help="Audio Effect slot. Insert an audio effect. Click an occupied slot to open the plug-in. Use effects to alter signals in real time. "plug-in menu with legacy plug-ins
+Target:0x0
+Selector:(null)
+          AXButton/AXSwitch desc="channel mode" value="Stereo" help="Output Channel Mode button. Switches a pair of linked outputs between one stereo channel strip and two mono channel strips. "
+          AXButton desc="mastering assistant" help="Mastering Assistant. Click to insert Mastering Assistant. "
+          AXButton desc="EQ" value="off" help="EQ display. Click to add a Channel EQ or open an inserted Channel or Linear Phase EQ. Shift-click to add a Linear Phase EQ. Use EQ to shape an audio signal by adjusting the levels of specific frequency ranges. "
+          AXButton/AXSwitch desc="gain reduction meter" value="off" help="Gain reduction meter. Shows the gain reduction of the first Compressor plug-in. If no Compressor is inserted, it shows the gain reduction of an inserted Limiter or Adaptive Limiter plug-in. "
+          AXButton desc="setting" help="Setting button. Load and save channel strip settings, which contain setup information for a channel strip, including plug-ins. "
+        AXLayoutItem desc="Master"
+          AXTextField desc="name" value="Master" help="Name field. Double-click to rename the channel strip. "
+          AXButton/AXSwitch desc="mute" value="off" help="Mute button. Silence a channel strip so it’s no longer audible. Use on an aux or output channel strip to silence that part of the mix, or on the master channel strip to mute the project. "
+          AXButton/AXSwitch desc="dim" value="off" help="Dim button. Set the volume according to the Dim value set in Audio General settings. Otherwise, the volume follows the master Volume fader. "
+          AXSlider desc="volume fader" value="173" help="Volume fader. Set a track’s playback volume. Use on an aux or output channel strip to adjust the volume of that part of the mix. You can leave the Volume fader of the master channel strip at 0 dB in most cases. "
+            AXValueIndicator desc="fader knob"
+          AXTextField title="volume fader level, 0,0 dB" desc="volume fader level" help="Volume display. Shows the position of the Volume fader referenced to the dB scale to the left of the Mixer. Positive values increase the signal level, negative values decrease it, and 0 dB leaves it unchanged. "
+          AXGroup desc="Read, automation disabled"
+            AXCheckBox desc="automation" value="0"
+            AXButton desc="list"
+          AXPopUpButton title="group" desc="group" help="Group slot. Add the channel strip to a group. You can also define which channel strip controls can be edited for the entire group at the same time. "
+      AXMenu
+        AXMenuItem title="Om denne Mac"
+        AXMenuItem title="Oplysninger om system"
+        AXMenuItem
+        AXMenuItem title="Systemindstillinger…"
+        AXMenuItem title="App Store…, 8 opdateringer"
+        AXMenuItem
+        AXMenuItem title="Seneste emner"
+          AXMenu
+            AXMenuItem title="Apps"
+            AXMenuItem title="App Store"
+            AXMenuItem title="Vis “App Store” i Finder"
+            AXMenuItem title="ArtCraft Launcher"
+            AXMenuItem title="Vis “ArtCraft Launcher” i Finder"
+            AXMenuItem title="Brave Browser"
+            AXMenuItem title="Vis “Brave Browser” i Finder"
+            AXMenuItem title="Claude"
+            AXMenuItem title="Vis “Claude” i Finder"
+            AXMenuItem title="EffectCraft"
+            AXMenuItem title="Vis “EffectCraft” i Finder"
+            AXMenuItem title="FaceTime"
+            AXMenuItem title="Vis “FaceTime” i Finder"
+            AXMenuItem title="Logic Pro"
+            AXMenuItem title="Vis “Logic Pro” i Finder"
+            AXMenuItem title="SolidCraft"
+            AXMenuItem title="Vis “SolidCraft” i Finder"
+            AXMenuItem title="Systemindstillinger"
+            AXMenuItem title="Vis “Systemindstillinger” i Finder"
+            AXMenuItem title="TextEdit"
+            AXMenuItem title="Vis “TextEdit” i Finder"
+            AXMenuItem
+            AXMenuItem title="Dokumenter"
+            AXMenuItem title="179 Regnskab 2025-2026"
+            AXMenuItem title="Vis “179 Regnskab 2025-2026” i Finder"
+            AXMenuItem title="B -krarokee"
+            AXMenuItem title="Vis “B -krarokee” i Finder"
+            AXMenuItem title="body.stl"
+            AXMenuItem title="Vis “body.stl” i Finder"
+            AXMenuItem title="ClaudeTestSession"
+            AXMenuItem title="Vis “ClaudeTestSession” i Finder"
+            AXMenuItem title="Demonized.logicx"
+            AXMenuItem title="Vis “Demonized.logicx” i Finder"
+            AXMenuItem title="HA_SETUP.md"
+            AXMenuItem title="Vis “HA_SETUP.md” i Finder"
+            AXMenuItem title="I will carry your light.logicx"
+            AXMenuItem title="Vis “I will carry your light.logicx” i Finder"
+            AXMenuItem title="MixPrepTest"
+            AXMenuItem title="Vis “MixPrepTest” i Finder"
+            AXMenuItem title="PointCloud1.mov"
+            AXMenuItem title="Vis “PointCloud1.mov” i Finder"
+            AXMenuItem title="Post Angst.logicx"
+            AXMenuItem title="Vis “Post Angst.logicx” i Finder"
+            AXMenuItem
+            AXMenuItem title="Servere"
+            AXMenuItem title="home"
+            AXMenuItem title="Kattelemmen"
+            AXMenuItem title="Lars Allan Lennart"
+            AXMenuItem title="Macintosh HD"
+            AXMenuItem title="Movie Library"
+            AXMenuItem title="Music"
+            AXMenuItem title="Music Production"
+            AXMenuItem
+            AXMenuItem title="Ryd menu"
+        AXMenuItem
+        AXMenuItem title="Afbryd…"
+        AXMenuItem title="Afbryd Logic Pro"
+        AXMenuItem
+        AXMenuItem title="Vågeblus"
+        AXMenuItem title="Start igen…"
+        AXMenuItem title="Start igen"
+        AXMenuItem title="Luk ned…"
+        AXMenuItem title="Luk ned"
+        AXMenuItem
+        AXMenuItem title="Lås skærm"
+        AXMenuItem title="Log Lennart Wendt ud…"
+        AXMenuItem title="Log Lennart Wendt ud"
+        AXMenuItem
+    AXMenuBarItem title="Logic Pro"
+      AXMenu
+        AXMenuItem title="About Logic Pro"
+        AXMenuItem title="Learn About Apple Creator Studio…"
+        AXMenuItem title="Learn About Logic Remote…"
+        AXMenuItem
+        AXMenuItem title="Settings"
+          AXMenu
+            AXMenuItem title="General…"
+            AXMenuItem title="Audio…"
+            AXMenuItem title="Recording…"
+            AXMenuItem title="MIDI…"
+            AXMenuItem title="Score…"
+            AXMenuItem title="Movie…"
+            AXMenuItem title="Automation…"
+            AXMenuItem title="Control Surfaces…"
+            AXMenuItem title="View…"
+            AXMenuItem title="My Info…"
+            AXMenuItem
+            AXMenuItem title="Reset All Settings Except Key Command Assignments…"
+            AXMenuItem
+            AXMenuItem title="Plug-in Manager…"
+            AXMenuItem title="Chord Grid Library…"
+        AXMenuItem title="Control Surfaces"
+          AXMenu
+            AXMenuItem title="Learn Assignment for “Create Track Stack…”"
+            AXMenuItem title="Controller Assignments…"
+            AXMenuItem
+            AXMenuItem title="Setup…"
+            AXMenuItem title="Settings…"
+            AXMenuItem
+            AXMenuItem title="Rebuild Defaults"
+            AXMenuItem title="Bypass All Control Surfaces"
+        AXMenuItem title="Key Commands"
+          AXMenu
+            AXMenuItem title="Presets"
+              AXMenu
+                AXMenuItem title="Simplified Chinese"
+                AXMenuItem title="Spanish"
+                AXMenuItem title="• Pro Tools"
+                AXMenuItem title="German"
+                AXMenuItem title="French"
+                AXMenuItem title="Japanese"
+                AXMenuItem title="U.S."
+                AXMenuItem title="Swedish"
+                AXMenuItem title="Italian"
+                AXMenuItem
+            AXMenuItem title="Edit Assignments…"
+        AXMenuItem
+        AXMenuItem title="Sound Library…"
+        AXMenuItem
+        AXMenuItem title="Provide Logic Pro Feedback"
+        AXMenuItem
+        AXMenuItem title="Services"
+          AXMenu
+            AXMenuItem title="No Services Apply"
+            AXMenuItem title="Services Settings…"
+        AXMenuItem
+        AXMenuItem title="Hide Logic Pro"
+        AXMenuItem title="Hide Others"
+        AXMenuItem title="Show All"
+        AXMenuItem
+        AXMenuItem title="Quit Logic Pro"
+    AXMenuBarItem title="File"
+      AXMenu
+        AXMenuItem title="New"
+        AXMenuItem title="New from Template…"
+        AXMenuItem title="Open…"
+        AXMenuItem title="Open Recent"
+          AXMenu
+            AXMenuItem title="MixPrepTest"
+            AXMenuItem title="ClaudeTestSession"
+            AXMenuItem title="I will carry your light.logicx"
+            AXMenuItem title="Post Angst.logicx"
+            AXMenuItem title="B -krarokee"
+            AXMenuItem title="Demonized.logicx"
+            AXMenuItem title="My Tree.logicx"
+            AXMenuItem title="GhostEve.logicx"
+            AXMenuItem title="ASoulHasLeftMe_v2.logicx"
+            AXMenuItem title="Reverberation 2.logicx"
+            AXMenuItem
+            AXMenuItem title="Clear Menu"
+        AXMenuItem
+        AXMenuItem title="Close"
+        AXMenuItem title="Close Project"
+        AXMenuItem title="Save"
+        AXMenuItem title="Save As…"
+        AXMenuItem title="Save A Copy As…"
+        AXMenuItem title="Save as Template…"
+        AXMenuItem title="Revert to"
+          AXMenu
+            AXMenuItem title="Saved\t\t26/10/2026, 10.11.44"
+        AXMenuItem
+        AXMenuItem title="Project Alternatives"
+          AXMenu
+            AXMenuItem title="New Alternative…"
+            AXMenuItem title="Edit Alternatives…"
+            AXMenuItem title="Export Alternative as Project…"
+            AXMenuItem
+            AXMenuItem title="MixPrepTest"
+        AXMenuItem title="Project Management"
+          AXMenu
+            AXMenuItem title="Clean Up…"
+            AXMenuItem title="Consolidate…"
+            AXMenuItem title="Rename…"
+            AXMenuItem title="Show in Finder…"
+        AXMenuItem title="Project Settings"
+          AXMenu
+            AXMenuItem title="General…"
+            AXMenuItem title="Audio…"
+            AXMenuItem title="Recording…"
+            AXMenuItem title="Smart Tempo…"
+            AXMenuItem title="MIDI…"
+            AXMenuItem title="Score…"
+            AXMenuItem title="Movie…"
+            AXMenuItem title="Synchronization…"
+            AXMenuItem title="Metronome…"
+            AXMenuItem title="Tuning…"
+            AXMenuItem title="Assets…"
+            AXMenuItem
+            AXMenuItem title="Import Project Settings…"
+        AXMenuItem
+        AXMenuItem title="Page Setup…"
+        AXMenuItem title="Print"
+        AXMenuItem
+        AXMenuItem title="Movie"
+          AXMenu
+            AXMenuItem
+            AXMenuItem title="Open Movie…"
+            AXMenuItem title="Remove Movie"
+            AXMenuItem
+            AXMenuItem title="Show in Finder"
+            AXMenuItem title="Move Movie Files out of Project…"
+            AXMenuItem
+            AXMenuItem title="Import Audio from Movie"
+            AXMenuItem title="Export Audio to Movie…"
+        AXMenuItem
+        AXMenuItem title="Import"
+          AXMenu
+            AXMenuItem title="Logic Projects…"
+            AXMenuItem title="Live Loops Grid…"
+            AXMenuItem title="Audio File…"
+            AXMenuItem title="MIDI File…"
+            AXMenuItem title="MusicXML…"
+            AXMenuItem
+            AXMenuItem title="Final Cut Pro XML…"
+            AXMenuItem title="AAF…"
+            AXMenuItem title="Create Project from ADM BWF…"
+            AXMenuItem title="Other…"
+        AXMenuItem title="Export"
+          AXMenu
+            AXMenuItem title="Region/Cell to Loop Library…"
+            AXMenuItem title="Regions as Audio Files…"
+            AXMenuItem title="Audio Files As…"
+            AXMenuItem
+            AXMenuItem title="Selection as Audio File…"
+            AXMenuItem title="Selection as MIDI File…"
+            AXMenuItem
+            AXMenuItem title="3 Tracks as Audio Files…"
+            AXMenuItem title="All Tracks as Audio Files…"
+            AXMenuItem title="All MIDI Tracks as MIDI File…"
+            AXMenuItem
+            AXMenuItem title="Project as AAF File…"
+            AXMenuItem title="Project to Final Cut Pro XML…"
+            AXMenuItem title="Project as Spatial Audio…"
+            AXMenuItem title="Score as MusicXML…"
+        AXMenuItem title="Bounce"
+          AXMenu
+            AXMenuItem title="Regions in Place…"
+            AXMenuItem title="Tracks in Place…"
+            AXMenuItem title="And Replace All Tracks…"
+            AXMenuItem
+            AXMenuItem title="Project or Section…"
+        AXMenuItem title="Share"
+          AXMenu
+            AXMenuItem title="Song to Music…"
+            AXMenuItem title="Song to Voice Memos…"
+            AXMenuItem
+            AXMenuItem title="AirDrop…"
+            AXMenuItem title="Mail…"
+            AXMenuItem
+            AXMenuItem title="Project to GarageBand for iOS…"
+    AXMenuBarItem title="Edit"
+      AXMenu
+        AXMenuItem title="Undo Create Track Stack"
+        AXMenuItem title="Can’t Redo"
+        AXMenuItem title="Undo History…"
+        AXMenuItem title="Delete Undo History"
+        AXMenuItem
+        AXMenuItem title="Cut"
+        AXMenuItem title="Copy"
+        AXMenuItem title="Paste"
+        AXMenuItem title="Paste Replace"
+        AXMenuItem title="Paste at Original Position"
+        AXMenuItem title="Delete"
+        AXMenuItem title="Delete and Move"
+        AXMenuItem title="Copy to Live Loops Scene"
+        AXMenuItem title="Select"
+          AXMenu
+            AXMenuItem title="All"
+            AXMenuItem title="All Following"
+            AXMenuItem title="All Following of Same Track"
+            AXMenuItem title="All Inside Locators"
+            AXMenuItem
+            AXMenuItem title="Muted Regions"
+            AXMenuItem title="Overlapped Regions"
+            AXMenuItem title="Same-Colored Regions"
+            AXMenuItem
+            AXMenuItem title="Empty Regions"
+            AXMenuItem title="SMPTE-Locked Regions"
+            AXMenuItem title="Similar Regions"
+            AXMenuItem title="Equal Regions"
+            AXMenuItem
+            AXMenuItem title="Next Region"
+            AXMenuItem title="Previous Region"
+            AXMenuItem
+            AXMenuItem title="Deselect All"
+            AXMenuItem title="Deselect Global Tracks"
+            AXMenuItem title="Deselect Outside Locators"
+            AXMenuItem title="Invert Selection"
+        AXMenuItem title="Select Tracks"
+          AXMenu
+            AXMenuItem title="All"
+            AXMenuItem title="Unused"
+            AXMenuItem title="Muted"
+            AXMenuItem title="Soloed"
+            AXMenuItem title="Frozen"
+            AXMenuItem title="Same-Colored"
+            AXMenuItem title="Instrument"
+            AXMenuItem title="MIDI"
+            AXMenuItem title="Audio"
+            AXMenuItem title="Aux"
+            AXMenuItem title="Sub/VCA"
+            AXMenuItem title="Summing Stack"
+            AXMenuItem title="Folder Stack"
+            AXMenuItem title="Folder"
+        AXMenuItem
+        AXMenuItem title="Show Flex Pitch/Time"
+        AXMenuItem
+        AXMenuItem title="Repeat"
+          AXMenu
+            AXMenuItem title="Once"
+            AXMenuItem title="Multiple…"
+        AXMenuItem title="Length"
+          AXMenu
+            AXMenuItem title="Double"
+            AXMenuItem title="Halve"
+            AXMenuItem title="Change…"
+        AXMenuItem title="Split"
+          AXMenu
+            AXMenuItem title="Regions at Playhead"
+            AXMenuItem title="Regions at Locators"
+        AXMenuItem title="Bounce or Join"
+          AXMenu
+            AXMenuItem title="Bounce Regions in Place…"
+            AXMenuItem title="Join"
+            AXMenuItem title="Join per Tracks"
+        AXMenuItem title="Move"
+          AXMenu
+            AXMenuItem title="To Playhead"
+            AXMenuItem title="To Recorded Position"
+            AXMenuItem title="To Beat"
+            AXMenuItem title="First Transient to Nearest Beat"
+            AXMenuItem title="To Focused Track"
+            AXMenuItem
+            AXMenuItem title="Shuffle Left"
+            AXMenuItem title="Shuffle Right"
+            AXMenuItem
+            AXMenuItem title="Nudge Left"
+            AXMenuItem title="Nudge Right"
+            AXMenuItem title="Slip Left"
+            AXMenuItem title="Slip Right"
+            AXMenuItem title="Rotate Left"
+            AXMenuItem title="Rotate Right"
+            AXMenuItem title="Set Nudge Value to"
+              AXMenu
+                AXMenuItem title="Bar"
+                AXMenuItem title="Beat"
+                AXMenuItem title="Division"
+                AXMenuItem title="10 Ticks"
+                AXMenuItem title="Tick"
+                AXMenuItem title="Step Input"
+                AXMenuItem
+                AXMenuItem title="1/1 Note"
+                AXMenuItem title="1/2 Note"
+                AXMenuItem title="1/4 Note"
+                AXMenuItem title="1/8 Note"
+                AXMenuItem title="1/16 Note"
+                AXMenuItem title="1/32 Note"
+                AXMenuItem title="1/64 Note"
+                AXMenuItem title="1/2 Triplet (1/3)"
+                AXMenuItem title="1/4 Triplet (1/6)"
+                AXMenuItem title="1/8 Triplet (1/12)"
+                AXMenuItem title="1/16 Triplet (1/24)"
+                AXMenuItem title="1/32 Triplet (1/48)"
+                AXMenuItem title="1/64 Triplet (1/96)"
+                AXMenuItem
+                AXMenuItem title="5 Frames"
+                AXMenuItem title="Frame"
+                AXMenuItem title="1/2 Frame"
+                AXMenuItem title="SMPTE Bit"
+                AXMenuItem
+                AXMenuItem title="10 ms"
+                AXMenuItem title="1 ms"
+                AXMenuItem title="Sample"
+        AXMenuItem title="Trim"
+          AXMenu
+            AXMenuItem title="Remove Overlaps"
+            AXMenuItem title="Fill within Locators"
+            AXMenuItem title="Crop Outside Locators"
+            AXMenuItem
+            AXMenuItem title="Region Start to Previous Region"
+            AXMenuItem title="Region Start to Previous Transient"
+            AXMenuItem title="Region Start to Next Transient"
+            AXMenuItem
+            AXMenuItem title="Region End to Next Region"
+            AXMenuItem title="Region End to Previous Transient"
+            AXMenuItem title="Region End to Next Transient"
+        AXMenuItem title="Convert"
+          AXMenu
+            AXMenuItem title="Loops to Regions"
+            AXMenuItem title="MIDI Loops to Aliases"
+            AXMenuItem title="Repetitions to Loops"
+            AXMenuItem
+            AXMenuItem title="To MIDI Region"
+            AXMenuItem title="To Session Player Region"
+            AXMenuItem title="Separate by Kit Piece"
+            AXMenuItem
+            AXMenuItem title="Audio Regions to New Regions"
+            AXMenuItem title="Audio Regions to New Audio Files"
+        AXMenuItem title="Time Stretch"
+          AXMenu
+            AXMenuItem title="Time Stretch Region Length to Locators"
+            AXMenuItem title="Time Stretch Region Length to Nearest Bar"
+            AXMenuItem title="Time Stretching Algorithm"
+              AXMenu
+                AXMenuItem title="Universal"
+                AXMenuItem title="Complex"
+                AXMenuItem title="Percussive"
+                AXMenuItem
+                AXMenuItem title="Legacy Algorithms"
+                  AXMenu
+                    AXMenuItem title="Version 5"
+                    AXMenuItem title="Any Material"
+                    AXMenuItem title="Monophonic"
+                    AXMenuItem title="Pads"
+                    AXMenuItem title="Rhythmic"
+                    AXMenuItem title="Beats Only"
+                AXMenuItem
+        AXMenuItem
+        AXMenuItem title="Copy MIDI Events…"
+        AXMenuItem title="Delete MIDI Events"
+          AXMenu
+            AXMenuItem title="Duplicates"
+            AXMenuItem title="Inside Locators"
+            AXMenuItem title="Outside Locators"
+            AXMenuItem title="Outside Region Boundaries"
+            AXMenuItem title="Unselected Within Selection"
+        AXMenuItem title="Separate MIDI Events"
+          AXMenu
+            AXMenuItem title="Separate by Note Pitch"
+            AXMenuItem title="Separate by MIDI Channel"
+            AXMenuItem title="Separate by Articulation"
+        AXMenuItem
+        AXMenuItem title="Cut/Insert Time"
+          AXMenu
+            AXMenuItem title="Cut Section Between Locators"
+            AXMenuItem title="Copy Section Between Locators"
+            AXMenuItem title="Insert Section at Playhead"
+            AXMenuItem title="Insert Silence at Locators"
+            AXMenuItem title="Repeat Section Between Locators"
+            AXMenuItem title="Copy Scene to Playhead"
+            AXMenuItem title="Insert Scene at Playhead"
+        AXMenuItem
+        AXMenuItem title="Tempo"
+          AXMenu
+            AXMenuItem title="Apply Region Tempo to Project Tempo…"
+            AXMenuItem title="Apply Project Tempo to Region and Downbeat"
+            AXMenuItem
+            AXMenuItem title="Write Project Tempo to Audio Files"
+            AXMenuItem title="Remove Tempo Information"
+            AXMenuItem
+            AXMenuItem title="Create Smart Tempo Multitrack Set"
+            AXMenuItem
+            AXMenuItem title="Adjust Tempo using Region Length and Locators"
+            AXMenuItem
+            AXMenuItem title="Show Beat Mapping Track"
+            AXMenuItem title="Show Tempo List"
+            AXMenuItem title="Tempo Operations…"
+            AXMenuItem title="Tempo Interpreter…"
+        AXMenuItem
+        AXMenuItem title="Open in External Sample Editor"
+        AXMenuItem title="Open Smart Tempo Editor"
+    AXMenuBarItem title="Track"
+      AXMenu
+        AXMenuItem title="New Tracks…"
+        AXMenuItem title="New Audio Track"
+        AXMenuItem title="New Software Instrument Track"
+        AXMenuItem title="New Session Player SI Track…"
+        AXMenuItem title="New External MIDI Track"
+        AXMenuItem title="Other"
+          AXMenu
+            AXMenuItem title="New Track With Duplicate Settings"
+            AXMenuItem title="New Track With Duplicate Settings and Content"
+            AXMenuItem title="New Track With Next Channel"
+            AXMenuItem title="New Track With Same Channel"
+            AXMenuItem
+            AXMenuItem title="New Track For Overlapped Regions"
+            AXMenuItem title="New Track For Selected Regions"
+        AXMenuItem title="Rename 3 Tracks"
+        AXMenuItem
+        AXMenuItem title="Delete 3 Tracks"
+        AXMenuItem title="Delete Unused Tracks"
+        AXMenuItem
+        AXMenuItem title="Create Track Stack…"
+        AXMenuItem title="Flatten Stack"
+        AXMenuItem title="Convert Folder Stack to Summing Stack"
+        AXMenuItem
+        AXMenuItem title="Global Tracks"
+          AXMenu
+            AXMenuItem title="Show Global Tracks"
+            AXMenuItem title="Configure Global Tracks…"
+            AXMenuItem title="Show Single Global Track"
+            AXMenuItem
+            AXMenuItem title="Show Arrangement Track"
+            AXMenuItem title="Show Marker Track"
+            AXMenuItem title="Show Movie Track"
+            AXMenuItem title="Show Signature Track"
+            AXMenuItem title="Show Chord Track"
+            AXMenuItem title="Show Tempo Track"
+            AXMenuItem title="Show Beat Mapping Track"
+        AXMenuItem title="Show Track Alternatives"
+        AXMenuItem title="Show Output Track"
+        AXMenuItem
+        AXMenuItem title="Replace or Double Drum Track…"
+        AXMenuItem title="Convert Regions to New Sampler Track…"
+        AXMenuItem
+        AXMenuItem title="Search and Select Track…"
+        AXMenuItem title="Hide Selected Tracks"
+        AXMenuItem title="Hide Unselected Tracks"
+        AXMenuItem title="Unhide All Tracks"
+        AXMenuItem title="Toggle Hide View"
+        AXMenuItem
+        AXMenuItem title="Sort Tracks by"
+          AXMenu
+            AXMenuItem title="MIDI Channel"
+            AXMenuItem title="Audio Channel"
+            AXMenuItem title="Output Channel"
+            AXMenuItem title="Instrument Name"
+            AXMenuItem title="Track Name"
+            AXMenuItem title="Used, Unused"
+            AXMenuItem title="Creation Date"
+        AXMenuItem title="Assign Track Color…"
+        AXMenuItem title="Assign Track Icon…"
+        AXMenuItem title="Configure Track Header…"
+    AXMenuBarItem title="Navigate"
+      AXMenu
+        AXMenuItem title="Go To"
+          AXMenu
+            AXMenuItem title="Position…"
+            AXMenuItem
+            AXMenuItem title="Left Locator"
+            AXMenuItem title="Right Locator"
+            AXMenuItem
+            AXMenuItem title="Selection Start"
+            AXMenuItem title="Selection End"
+            AXMenuItem
+            AXMenuItem title="Next Marker"
+            AXMenuItem title="Previous Marker"
+            AXMenuItem title="Marker Number…"
+        AXMenuItem
+        AXMenuItem title="Scroll to Selection"
+        AXMenuItem title="Set Locators by Selection and Enable Cycle"
+        AXMenuItem title="Set Rounded Locators by Selection and Enable Cycle"
+        AXMenuItem
+        AXMenuItem title="Move Locators Forward by Cycle Length"
+        AXMenuItem title="Move Locators Backwards by Cycle Length"
+        AXMenuItem
+        AXMenuItem title="Create Marker"
+        AXMenuItem title="Other"
+          AXMenu
+            AXMenuItem title="Create Marker for Region Selection"
+            AXMenuItem title="Create Without Rounding"
+            AXMenuItem
+            AXMenuItem title="Import Marker from Audio File"
+            AXMenuItem title="Export Marker to Audio File"
+            AXMenuItem title="Remove Marker from Audio File"
+            AXMenuItem
+            AXMenuItem title="Create Movie Scene Cut Markers"
+              AXMenu
+                AXMenuItem title="Auto Range"
+                AXMenuItem
+                AXMenuItem title="Marquee Selection"
+                AXMenuItem title="Cycle Area"
+                AXMenuItem title="Selected Regions"
+                AXMenuItem
+                AXMenuItem title="Entire Movie"
+            AXMenuItem title="Remove Movie Scene Cut Markers"
+              AXMenu
+                AXMenuItem title="Auto Range"
+                AXMenuItem
+                AXMenuItem title="Marquee Selection"
+                AXMenuItem title="Cycle Area"
+                AXMenuItem title="Selected Regions"
+                AXMenuItem
+                AXMenuItem title="All Scene Markers"
+        AXMenuItem title="Rename Marker"
+        AXMenuItem title="Delete Marker at Playhead Position"
+        AXMenuItem
+        AXMenuItem title="Open Marker List"
+        AXMenuItem title="Open Marker Text"
+        AXMenuItem
+        AXMenuItem title="Play Button Options"
+          AXMenu
+            AXMenuItem title="Play from Marquee Selection"
+            AXMenuItem title="Play from Cycle Start"
+            AXMenuItem title="Play From Selected Region"
+            AXMenuItem title="Play From Last Locate Position"
+        AXMenuItem title="Stop Button Options"
+          AXMenu
+            AXMenuItem title="Stop"
+            AXMenuItem title="Stop and Go to Left Locator"
+            AXMenuItem title="Stop and Go to Last Locate Position"
+            AXMenuItem
+            AXMenuItem title="Jump between Marquee- and Project Start if stopped"
+            AXMenuItem title="Jump between Cycle- and Project Start if stopped"
+            AXMenuItem title="Jump between Selected Region- and Project Start if stopped"
+            AXMenuItem title="Jump between Last Locate Position and Project Start if stopped"
+        AXMenuItem
+        AXMenuItem title="Auto Set Locators"
+          AXMenu
+            AXMenuItem title="By Marquee Selection"
+            AXMenuItem title="By Region Selection"
+            AXMenuItem title="By Marker/Chord Selection"
+            AXMenuItem title="By Note Selection"
+            AXMenuItem
+            AXMenuItem title="Enable Auto Set Locators"
+    AXMenuBarItem title="Record"
+      AXMenu
+        AXMenuItem title="Count-in"
+          AXMenu
+            AXMenuItem title="None"
+            AXMenuItem title="1 Bar"
+            AXMenuItem title="2 Bars"
+            AXMenuItem title="3 Bars"
+            AXMenuItem title="4 Bars"
+            AXMenuItem title="5 Bars"
+            AXMenuItem title="6 Bars"
+            AXMenuItem
+            AXMenuItem title="1/4"
+            AXMenuItem title="2/4"
+            AXMenuItem title="3/4"
+            AXMenuItem title="4/4"
+            AXMenuItem title="5/4"
+            AXMenuItem title="6/4"
+            AXMenuItem title="7/4"
+            AXMenuItem title="8/4"
+            AXMenuItem title="9/4"
+        AXMenuItem title="Metronome Settings…"
+        AXMenuItem
+        AXMenuItem title="Use Musical Grid"
+        AXMenuItem title="Allow Quick Punch-In"
+        AXMenuItem title="Auto Input Monitoring"
+        AXMenuItem title="Low Latency Monitoring Mode"
+        AXMenuItem
+        AXMenuItem title="Record Button Options"
+          AXMenu
+            AXMenuItem title="Record"
+            AXMenuItem title="Record / Record Toggle"
+            AXMenuItem title="Record / Record Repeat"
+        AXMenuItem title="Overlapping MIDI Recordings"
+          AXMenu
+            AXMenuItem title="Cycle Off"
+            AXMenuItem title="Create Take Folder"
+            AXMenuItem title="Merge"
+            AXMenuItem title="Overlap"
+            AXMenuItem title="Overlap/Merge Selected Regions"
+            AXMenuItem title="Create Track"
+            AXMenuItem title="Create Track Alternative"
+            AXMenuItem
+            AXMenuItem title="Cycle On"
+            AXMenuItem title="Create Take Folder"
+            AXMenuItem title="Merge"
+            AXMenuItem title="Merge Current Recording Only"
+            AXMenuItem title="Create Tracks"
+            AXMenuItem title="Create Tracks and Mute"
+            AXMenuItem title="Create Track Alternatives"
+            AXMenuItem
+            AXMenuItem title="Replace"
+            AXMenuItem title="Region Erase"
+            AXMenuItem title="Region Punch"
+            AXMenuItem title="Content Erase"
+            AXMenuItem title="Content Punch"
+        AXMenuItem title="Overlapping Audio Recordings"
+          AXMenu
+            AXMenuItem title="Cycle Off"
+            AXMenuItem title="Create Take Folder"
+            AXMenuItem title="Create New Track"
+            AXMenuItem title="Create Track Alternative"
+            AXMenuItem
+            AXMenuItem title="Cycle On"
+            AXMenuItem title="Create Take Folder"
+            AXMenuItem title="Create Tracks And Mute"
+            AXMenuItem title="Create Track Alternatives"
+        AXMenuItem title="Recording Settings…"
+    AXMenuBarItem title="Mix"
+      AXMenu
+        AXMenuItem title="Show Automation"
+        AXMenuItem title="Create Track Automation"
+          AXMenu
+            AXMenuItem title="Create 1 Automation Point at Region Borders"
+            AXMenuItem title="Create 2 Automation Points at Region Borders"
+            AXMenuItem
+            AXMenuItem title="Create 1 Automation Point each for Volume, Pan, Sends"
+            AXMenuItem title="Create 2 Automation Points each for Volume, Pan, Sends"
+            AXMenuItem title="Create 1 Automation Point for Visible Parameter"
+            AXMenuItem title="Create 2 Automation Points for Visible Parameter"
+            AXMenuItem
+            AXMenuItem title="Create Volume Fade-Out on Main Output"
+        AXMenuItem title="Convert Automation"
+          AXMenu
+            AXMenuItem title="Convert Visible Track Automation to Region Automation"
+            AXMenuItem title="Convert Visible Region Automation to Track Automation"
+            AXMenuItem
+            AXMenuItem title="Convert All Track Automation to Region Automation"
+            AXMenuItem title="Convert All Region Automation to Track Automation"
+        AXMenuItem title="Delete Automation"
+          AXMenu
+            AXMenuItem title="Delete Visible Automation on Selected Tracks"
+            AXMenuItem title="Delete All Automation on Selected Tracks"
+            AXMenuItem title="Delete Orphaned Automation on Selected Tracks"
+            AXMenuItem title="Delete Redundant Automation Points"
+            AXMenuItem title="Delete All Track Automation"
+        AXMenuItem
+        AXMenuItem title="Move Track Automation with Regions"
+          AXMenu
+            AXMenuItem title="Never"
+            AXMenuItem title="Always"
+            AXMenuItem title="Ask"
+        AXMenuItem title="Enable Automation Quick Access"
+        AXMenuItem title="Autoselect Automation Parameter in Read Mode"
+        AXMenuItem title="Automation Settings…"
+        AXMenuItem
+        AXMenuItem title="Group Settings"
+        AXMenuItem title="Groups Active"
+        AXMenuItem title="Create Group"
+        AXMenuItem title="I/O Labels…"
+        AXMenuItem title="I/O Assignments…"
+        AXMenuItem title="Pre-Fader Metering"
+        AXMenuItem
+        AXMenuItem title="Search and Add Plug-in…"
+        AXMenuItem title="Mastering Assistant…"
+        AXMenuItem
+        AXMenuItem title="Dolby Atmos…"
+        AXMenuItem
+    AXMenuBarItem title="View"
+      AXMenu
+        AXMenuItem title="Show Library"
+        AXMenuItem title="Hide Inspector"
+        AXMenuItem
+        AXMenuItem title="Hide Mixer"
+        AXMenuItem title="Show Smart Controls"
+        AXMenuItem title="Show Editor"
+        AXMenuItem
+        AXMenuItem title="Show List Editors"
+        AXMenuItem title="Show Note Pads"
+        AXMenuItem title="Show Loop Browser"
+        AXMenuItem title="Show Browsers"
+        AXMenuItem
+        AXMenuItem title="Hide Control Bar"
+        AXMenuItem title="Customize Control Bar and Display…"
+        AXMenuItem
+        AXMenuItem title="Show Toolbar"
+        AXMenuItem title="Customize Toolbar…"
+        AXMenuItem
+        AXMenuItem title="Show Movie Window"
+        AXMenuItem title="Show Colors"
+        AXMenuItem
+        AXMenuItem title="Enter Full Screen"
+    AXMenuBarItem title="Window"
+      AXMenu
+        AXMenuItem title="Minimize"
+        AXMenuItem title="Minimize All"
+        AXMenuItem title="Zoom"
+        AXMenuItem title="Zoom All"
+        AXMenuItem title="Fill"
+        AXMenuItem title="Center"
+        AXMenuItem
+        AXMenuItem title="Move & Resize"
+          AXMenu
+            AXMenuItem title="Halves"
+            AXMenuItem title="Left"
+            AXMenuItem title="Right"
+            AXMenuItem title="Top"
+            AXMenuItem title="Bottom"
+            AXMenuItem
+            AXMenuItem title="Quarters"
+            AXMenuItem title="Top Left"
+            AXMenuItem title="Top Right"
+            AXMenuItem title="Bottom Left"
+            AXMenuItem title="Bottom Right"
+            AXMenuItem
+            AXMenuItem title="Arrange"
+            AXMenuItem title="Left & Right"
+            AXMenuItem title="Left & Quarters"
+            AXMenuItem title="Right & Left"
+            AXMenuItem title="Right & Quarters"
+            AXMenuItem title="Top & Bottom"
+            AXMenuItem title="Top & Quarters"
+            AXMenuItem title="Bottom & Top"
+            AXMenuItem title="Bottom & Quarters"
+            AXMenuItem title="Quarters"
+            AXMenuItem
+            AXMenuItem title="Return to Previous Size"
+        AXMenuItem title="Full Screen Tile"
+          AXMenu
+            AXMenuItem title="Left of Screen"
+            AXMenuItem title="Right of Screen"
+        AXMenuItem
+        AXMenuItem title="Remove Window from Set"
+        AXMenuItem title="Cycle Through Windows"
+        AXMenuItem
+        AXMenuItem title="Bring All to Front"
+        AXMenuItem title="Arrange in Front"
+        AXMenuItem
+        AXMenuItem title="Open Main Window"
+        AXMenuItem title="Open Mixer"
+        AXMenuItem
+        AXMenuItem title="Open Smart Controls"
+        AXMenuItem title="Open Piano Roll"
+        AXMenuItem title="Open Score Editor"
+        AXMenuItem title="Open Step Sequencer"
+        AXMenuItem title="Open Step Editor"
+        AXMenuItem title="Open Audio Track Editor"
+        AXMenuItem title="Open Audio File Editor"
+        AXMenuItem title="Open Smart Tempo Editor"
+        AXMenuItem
+        AXMenuItem title="Open Event List"
+        AXMenuItem title="Open Signature List"
+        AXMenuItem title="Open Project Audio"
+        AXMenuItem
+        AXMenuItem title="Open MIDI Transform"
+        AXMenuItem
+        AXMenuItem title="Open Transport Float"
+        AXMenuItem title="Show Event Float"
+        AXMenuItem title="Show Region Inspector Float"
+        AXMenuItem
+        AXMenuItem title="Show Keyboard"
+        AXMenuItem title="Show Musical Typing"
+        AXMenuItem title="Show Step Input Keyboard"
+        AXMenuItem
+        AXMenuItem title="Hide All Plug-in Windows"
+        AXMenuItem
+        AXMenuItem title="MixPrepTest - Tracks"
+    AXMenuBarItem title="1"
+      AXMenu
+        AXMenuItem title="Screenset 1 (Tracks/Mixer)"
+        AXMenuItem
+        AXMenuItem title="Duplicate…"
+        AXMenuItem title="Rename…"
+        AXMenuItem
+        AXMenuItem title="Delete"
+        AXMenuItem
+        AXMenuItem title="Lock"
+        AXMenuItem title="Revert to Saved"
+    AXMenuBarItem title="Help"
+      AXMenu
+        AXMenuItem
+          AXTextField/AXSearchField @-1.0,1057.0 354.0x24.0
+          AXTable desc="search result" @-1.0,1074.0 362.0x7.0
+            AXColumn
+        AXMenuItem title="Quick Help"
+        AXMenuItem title="Quick Help appears as"
+          AXMenu
+            AXMenuItem title="Inspector Pane"
+            AXMenuItem title="Floating Window"
+            AXMenuItem title="Bubbles at Pointer Location"
+        AXMenuItem
+        AXMenuItem title="Logic Pro Help"
+        AXMenuItem title="Logic Pro Instruments"
+        AXMenuItem title="Logic Pro Effects"
+        AXMenuItem title="Logic Pro Control Surfaces Support"
+        AXMenuItem
+        AXMenuItem title="What’s New in Logic Pro"
+        AXMenuItem title="Release Notes"
+        AXMenuItem
+        AXMenuItem title="Logic Pro Support"
+        AXMenuItem title="Logic Pro on the Web"
+        AXMenuItem title="Logic Pro Discussions"
+        AXMenuItem title="Create Support Profile…"
