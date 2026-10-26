@@ -21,7 +21,7 @@ _Sidst opdateret: 2026-10-26_
 | `insert_verified` udvidet til alle målte stock-effekter | 67 af 68 stock-effekter indsat og læst tilbage på 12.4 (`research/plugin-census-12.4.jsonl`); 34 forkortede slot-navne kortlagt. Slot N > 0 via Logics append-knap |
 | `tracks.move_track` (stak + flatten) | Implementeret. State A 3 gange i træk fra ren kopi. Kun opad; øverste position kræver drag og er ikke lavet |
 | `project.apply_mix_layout` (preflight → execute → status) | Implementeret. CLAUDE.md-specen (54 trin) kørt 3 gange i træk fra ren kopi, se Live-kørsler |
-| "3 gange i træk fra ren kopi" | Ikke kørt endnu |
+| "3 gange i træk fra ren kopi" | Opfyldt med debug-serveren (claude med Accessibility) for alle operationer og `apply_mix_layout`. Bekræftelse gennem LogicProMCPHost mangler |
 
 ## Rettighedsmodel (ændret 2026-10-26 efter brugerens ønske)
 
@@ -75,6 +75,17 @@ Brugeren vil ikke give en bred Tilgængelighed-rettighed til Claude eller termin
 | 2 × "70 BPM So Rey Dry" | dark green | `Change Track Color` | 1 + 2 regions, `Change Region Color` |
 
 De to Dry-spor har samme navn og blev derfor afvist af bindingen (`ambiguous_target_name`). De blev midlertidigt omdøbt til `·A` og `·B`, farvet og omdøbt tilbage. Alle fire omdøbninger gav State A.
+
+### `apply_mix_layout` med CLAUDE.md-specen (2026-10-26)
+
+54 trin: 3 bus-grupper (DRUMS, MUSIC, VOX), 2 FX-returns (Plate med ChromaVerb, Delay med Stereo Delay), 5 sends med niveauer, 17 farver, `color_readback: project_file`. Hver kørsel fra en ren kopi, kaldt via `tools/mcp-call`-harnessen (preflight → execute → execute igen efter ca. 200 s → færdig).
+
+| Kørsel | Resultat |
+|---|---|
+| 4, 5, 6 (i træk, endelig kode) | State A, 54/54 trin. 4 trin bekræftet ved uafhængig `get_inventory` (plug-ins) og 17 farver ved én gemning + ProjectData |
+| 1–3 (før aux-farvelæsning) | 54/54 trin, State B: de 5 nye aux-spors farver kun med undo-vidne |
+
+Uafhængig kontrol efter kørslerne (`logic://mixer`): Kick…OH R → Bus 1 → DRUMS; Bass…Keys → Bus 2 → MUSIC; Vox-sporene → Bus 3 → VOX; sends Snare/Vox Lead/Vox BV1/Vox BV2 → Bus 4 (Plate) −12,1 dB og Vox Lead → Bus 5 (Delay) −18,1 dB. Gruppesporene ligger lige efter deres sidste medlem; Plate og Delay sidst.
 
 ## Hvilken kanal hver operation bruger
 
