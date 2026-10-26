@@ -40,11 +40,8 @@ Fund pr. operation står i [research/FINDINGS.md](research/FINDINGS.md).
 - Flytning via stack + flatten afhænger af, at Logic samler ikke-sammenhængende valg i sporrækkefølge.
 - Engelske menutitler er brugt i probes. Produktionskode skal bruge repoets locale-/labelset-infrastruktur.
 
-### Åbent spørgsmål til brugeren
-Farvenavne i specen ("red", "blue", "yellow", "purple") kan ikke oversættes til palettefelter uden at se paletten. Der er tre muligheder:
-1. Brugeren ser på paletten én gang og angiver felterne (fx række/kolonne).
-2. Midlertidig skærmoptagelse, så agenten kan kalibrere selv.
-3. Specen bruger paletteindeks (1-96) i stedet for navne.
+### Farvekalibrering
+Løst 2026-10-26 med to skærmbilleder fra brugeren. Tabellen ligger i `research/palette/palette-12.4.json`. Den skal laves igen, hvis en Logic-opdatering ændrer paletten.
 
 ### Stop-betingelser ramt indtil nu
 - 2026-10-26: Accessibility manglede for den responsible process. Brugeren har givet den (til `claude`/Claude Code), og den er løst.

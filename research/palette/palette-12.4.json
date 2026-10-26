@@ -1,0 +1,584 @@
+{
+ "logic_version": "12.4",
+ "source": "user screenshot of the Color window (sRGB-converted swatch centres), 2026-10-26",
+ "stored_index_formula": "row 1 -> 72+column, row 2 -> column, row 3 -> 24+column, row 4 -> 48+column",
+ "default_audio_track_index": 16,
+ "swatches": [
+  {
+   "row": 1,
+   "column": 1,
+   "stored_index": 73,
+   "rgb": "#CC4925"
+  },
+  {
+   "row": 1,
+   "column": 2,
+   "stored_index": 74,
+   "rgb": "#CC6529"
+  },
+  {
+   "row": 1,
+   "column": 3,
+   "stored_index": 75,
+   "rgb": "#CC842E"
+  },
+  {
+   "row": 1,
+   "column": 4,
+   "stored_index": 76,
+   "rgb": "#CCA937"
+  },
+  {
+   "row": 1,
+   "column": 5,
+   "stored_index": 77,
+   "rgb": "#CCCB41"
+  },
+  {
+   "row": 1,
+   "column": 6,
+   "stored_index": 78,
+   "rgb": "#AACA3F"
+  },
+  {
+   "row": 1,
+   "column": 7,
+   "stored_index": 79,
+   "rgb": "#86CA3E"
+  },
+  {
+   "row": 1,
+   "column": 8,
+   "stored_index": 80,
+   "rgb": "#63C93E"
+  },
+  {
+   "row": 1,
+   "column": 9,
+   "stored_index": 81,
+   "rgb": "#1FC94C"
+  },
+  {
+   "row": 1,
+   "column": 10,
+   "stored_index": 82,
+   "rgb": "#1FC96B"
+  },
+  {
+   "row": 1,
+   "column": 11,
+   "stored_index": 83,
+   "rgb": "#21C98B"
+  },
+  {
+   "row": 1,
+   "column": 12,
+   "stored_index": 84,
+   "rgb": "#23CAAC"
+  },
+  {
+   "row": 1,
+   "column": 13,
+   "stored_index": 85,
+   "rgb": "#27CBCC"
+  },
+  {
+   "row": 1,
+   "column": 14,
+   "stored_index": 86,
+   "rgb": "#25AACA"
+  },
+  {
+   "row": 1,
+   "column": 15,
+   "stored_index": 87,
+   "rgb": "#349DCF"
+  },
+  {
+   "row": 1,
+   "column": 16,
+   "stored_index": 88,
+   "rgb": "#428BD3"
+  },
+  {
+   "row": 1,
+   "column": 17,
+   "stored_index": 89,
+   "rgb": "#4A72D4"
+  },
+  {
+   "row": 1,
+   "column": 18,
+   "stored_index": 90,
+   "rgb": "#5153D6"
+  },
+  {
+   "row": 1,
+   "column": 19,
+   "stored_index": 91,
+   "rgb": "#6851D4"
+  },
+  {
+   "row": 1,
+   "column": 20,
+   "stored_index": 92,
+   "rgb": "#804BD2"
+  },
+  {
+   "row": 1,
+   "column": 21,
+   "stored_index": 93,
+   "rgb": "#9744CF"
+  },
+  {
+   "row": 1,
+   "column": 22,
+   "stored_index": 94,
+   "rgb": "#AB30C9"
+  },
+  {
+   "row": 1,
+   "column": 23,
+   "stored_index": 95,
+   "rgb": "#CD34C8"
+  },
+  {
+   "row": 1,
+   "column": 24,
+   "stored_index": 96,
+   "rgb": "#CC31A7"
+  },
+  {
+   "row": 2,
+   "column": 1,
+   "stored_index": 1,
+   "rgb": "#A84528"
+  },
+  {
+   "row": 2,
+   "column": 2,
+   "stored_index": 2,
+   "rgb": "#A85B2B"
+  },
+  {
+   "row": 2,
+   "column": 3,
+   "stored_index": 3,
+   "rgb": "#A8722F"
+  },
+  {
+   "row": 2,
+   "column": 4,
+   "stored_index": 4,
+   "rgb": "#A88E34"
+  },
+  {
+   "row": 2,
+   "column": 5,
+   "stored_index": 5,
+   "rgb": "#A8A73A"
+  },
+  {
+   "row": 2,
+   "column": 6,
+   "stored_index": 6,
+   "rgb": "#8EA639"
+  },
+  {
+   "row": 2,
+   "column": 7,
+   "stored_index": 7,
+   "rgb": "#74A638"
+  },
+  {
+   "row": 2,
+   "column": 8,
+   "stored_index": 8,
+   "rgb": "#59A638"
+  },
+  {
+   "row": 2,
+   "column": 9,
+   "stored_index": 9,
+   "rgb": "#24A545"
+  },
+  {
+   "row": 2,
+   "column": 10,
+   "stored_index": 10,
+   "rgb": "#24A65F"
+  },
+  {
+   "row": 2,
+   "column": 11,
+   "stored_index": 11,
+   "rgb": "#26A677"
+  },
+  {
+   "row": 2,
+   "column": 12,
+   "stored_index": 12,
+   "rgb": "#28A790"
+  },
+  {
+   "row": 2,
+   "column": 13,
+   "stored_index": 13,
+   "rgb": "#28A7A8"
+  },
+  {
+   "row": 2,
+   "column": 14,
+   "stored_index": 14,
+   "rgb": "#288EA7"
+  },
+  {
+   "row": 2,
+   "column": 15,
+   "stored_index": 15,
+   "rgb": "#3584A9"
+  },
+  {
+   "row": 2,
+   "column": 16,
+   "stored_index": 16,
+   "rgb": "#4177AE"
+  },
+  {
+   "row": 2,
+   "column": 17,
+   "stored_index": 17,
+   "rgb": "#4766AF"
+  },
+  {
+   "row": 2,
+   "column": 18,
+   "stored_index": 18,
+   "rgb": "#4D4EB1"
+  },
+  {
+   "row": 2,
+   "column": 19,
+   "stored_index": 19,
+   "rgb": "#5E4CAE"
+  },
+  {
+   "row": 2,
+   "column": 20,
+   "stored_index": 20,
+   "rgb": "#6F47AD"
+  },
+  {
+   "row": 2,
+   "column": 21,
+   "stored_index": 21,
+   "rgb": "#8242AD"
+  },
+  {
+   "row": 2,
+   "column": 22,
+   "stored_index": 22,
+   "rgb": "#8F30A5"
+  },
+  {
+   "row": 2,
+   "column": 23,
+   "stored_index": 23,
+   "rgb": "#A932A5"
+  },
+  {
+   "row": 2,
+   "column": 24,
+   "stored_index": 24,
+   "rgb": "#A9308C"
+  },
+  {
+   "row": 3,
+   "column": 1,
+   "stored_index": 25,
+   "rgb": "#843E28"
+  },
+  {
+   "row": 3,
+   "column": 2,
+   "stored_index": 26,
+   "rgb": "#844D2A"
+  },
+  {
+   "row": 3,
+   "column": 3,
+   "stored_index": 27,
+   "rgb": "#835E2C"
+  },
+  {
+   "row": 3,
+   "column": 4,
+   "stored_index": 28,
+   "rgb": "#84712F"
+  },
+  {
+   "row": 3,
+   "column": 5,
+   "stored_index": 29,
+   "rgb": "#838333"
+  },
+  {
+   "row": 3,
+   "column": 6,
+   "stored_index": 30,
+   "rgb": "#718233"
+  },
+  {
+   "row": 3,
+   "column": 7,
+   "stored_index": 31,
+   "rgb": "#5F8232"
+  },
+  {
+   "row": 3,
+   "column": 8,
+   "stored_index": 32,
+   "rgb": "#4B8232"
+  },
+  {
+   "row": 3,
+   "column": 9,
+   "stored_index": 33,
+   "rgb": "#26823D"
+  },
+  {
+   "row": 3,
+   "column": 10,
+   "stored_index": 34,
+   "rgb": "#268250"
+  },
+  {
+   "row": 3,
+   "column": 11,
+   "stored_index": 35,
+   "rgb": "#278361"
+  },
+  {
+   "row": 3,
+   "column": 12,
+   "stored_index": 36,
+   "rgb": "#288373"
+  },
+  {
+   "row": 3,
+   "column": 13,
+   "stored_index": 37,
+   "rgb": "#298384"
+  },
+  {
+   "row": 3,
+   "column": 14,
+   "stored_index": 38,
+   "rgb": "#287183"
+  },
+  {
+   "row": 3,
+   "column": 15,
+   "stored_index": 39,
+   "rgb": "#326B85"
+  },
+  {
+   "row": 3,
+   "column": 16,
+   "stored_index": 40,
+   "rgb": "#3B6187"
+  },
+  {
+   "row": 3,
+   "column": 17,
+   "stored_index": 41,
+   "rgb": "#3F5589"
+  },
+  {
+   "row": 3,
+   "column": 18,
+   "stored_index": 42,
+   "rgb": "#434489"
+  },
+  {
+   "row": 3,
+   "column": 19,
+   "stored_index": 43,
+   "rgb": "#504389"
+  },
+  {
+   "row": 3,
+   "column": 20,
+   "stored_index": 44,
+   "rgb": "#5C4087"
+  },
+  {
+   "row": 3,
+   "column": 21,
+   "stored_index": 45,
+   "rgb": "#6A3C87"
+  },
+  {
+   "row": 3,
+   "column": 22,
+   "stored_index": 46,
+   "rgb": "#722D82"
+  },
+  {
+   "row": 3,
+   "column": 23,
+   "stored_index": 47,
+   "rgb": "#842E82"
+  },
+  {
+   "row": 3,
+   "column": 24,
+   "stored_index": 48,
+   "rgb": "#842D70"
+  },
+  {
+   "row": 4,
+   "column": 1,
+   "stored_index": 49,
+   "rgb": "#5F3225"
+  },
+  {
+   "row": 4,
+   "column": 2,
+   "stored_index": 50,
+   "rgb": "#5F3B25"
+  },
+  {
+   "row": 4,
+   "column": 3,
+   "stored_index": 51,
+   "rgb": "#5E4626"
+  },
+  {
+   "row": 4,
+   "column": 4,
+   "stored_index": 52,
+   "rgb": "#5E5227"
+  },
+  {
+   "row": 4,
+   "column": 5,
+   "stored_index": 53,
+   "rgb": "#5E5E2A"
+  },
+  {
+   "row": 4,
+   "column": 6,
+   "stored_index": 54,
+   "rgb": "#535E29"
+  },
+  {
+   "row": 4,
+   "column": 7,
+   "stored_index": 55,
+   "rgb": "#475D29"
+  },
+  {
+   "row": 4,
+   "column": 8,
+   "stored_index": 56,
+   "rgb": "#3B5D29"
+  },
+  {
+   "row": 4,
+   "column": 9,
+   "stored_index": 57,
+   "rgb": "#235D31"
+  },
+  {
+   "row": 4,
+   "column": 10,
+   "stored_index": 58,
+   "rgb": "#235D3D"
+  },
+  {
+   "row": 4,
+   "column": 11,
+   "stored_index": 59,
+   "rgb": "#235E48"
+  },
+  {
+   "row": 4,
+   "column": 12,
+   "stored_index": 60,
+   "rgb": "#235E53"
+  },
+  {
+   "row": 4,
+   "column": 13,
+   "stored_index": 61,
+   "rgb": "#235E5E"
+  },
+  {
+   "row": 4,
+   "column": 14,
+   "stored_index": 62,
+   "rgb": "#24535E"
+  },
+  {
+   "row": 4,
+   "column": 15,
+   "stored_index": 63,
+   "rgb": "#2A4F60"
+  },
+  {
+   "row": 4,
+   "column": 16,
+   "stored_index": 64,
+   "rgb": "#314A62"
+  },
+  {
+   "row": 4,
+   "column": 17,
+   "stored_index": 65,
+   "rgb": "#334162"
+  },
+  {
+   "row": 4,
+   "column": 18,
+   "stored_index": 66,
+   "rgb": "#363661"
+  },
+  {
+   "row": 4,
+   "column": 19,
+   "stored_index": 67,
+   "rgb": "#3D3661"
+  },
+  {
+   "row": 4,
+   "column": 20,
+   "stored_index": 68,
+   "rgb": "#463461"
+  },
+  {
+   "row": 4,
+   "column": 21,
+   "stored_index": 69,
+   "rgb": "#4D305F"
+  },
+  {
+   "row": 4,
+   "column": 22,
+   "stored_index": 70,
+   "rgb": "#53275D"
+  },
+  {
+   "row": 4,
+   "column": 23,
+   "stored_index": 71,
+   "rgb": "#5F285D"
+  },
+  {
+   "row": 4,
+   "column": 24,
+   "stored_index": 72,
+   "rgb": "#5F2751"
+  }
+ ]
+}

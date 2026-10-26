@@ -23,7 +23,16 @@ Målt 2026-10-26 på Logic Pro 12.4 (en-US UI, macOS 15.6, én skærm 1920×1080
 - ProjectData efter gemning: i sporets record ligger en byte 5 bytes før det længde-præfiksede navn (`… 80 <farve> 00 00 <len u16 LE> <navn>`). Målt: felt 5 → 29, felt 80 → 8. Det passer med `farve = 1 + række·24 + kolonne` (række 0 = øverst, kolonne 0-baseret). Det kræver, at testprojektet gemmes, og afhænger af et udokumenteret binært format.
 - Undo-titlen: bekræfter, at en sporfarve ændredes, men ikke hvilken farve eller hvilket spor.
 
-**Åbent problem:** Felterne har ingen navne, og der er ingen skærmoptagelse, så navne som `"red"` og `"blue"` kan ikke oversættes til felter uden en visuel kalibrering (se stop-spørgsmål i REPORT.md).
+**Kalibrering (løst 2026-10-26):** Brugeren tog et skærmbillede af paletten ([palette/color-palette-12.4.png](palette/color-palette-12.4.png)). Midten af hvert felt er aflæst til sRGB i [palette/palette-12.4.json](palette/palette-12.4.json). Synlig række 1 er lysest og række 4 mørkest. Kolonnerne går rødt → orange → gult → grønt → cyan → blåt → lilla → magenta. Den gemte byte er målt ved klik og gemning, og en kontrol-markering bekræftede den visuelt:
+
+| Synlig række | Gemt byte | AX-børn | AX-position |
+|---|---|---|---|
+| 1 | 72 + kolonne | 49–72 | **forkert**: rapporteres 80 pt for lavt. Rigtig y = række 2's y − 20 |
+| 2 | kolonne (standard-audiospor = 16) | 73–96 | korrekt |
+| 3 | 24 + kolonne | 1–24 | korrekt |
+| 4 | 48 + kolonne | 25–48 | korrekt |
+
+Barn 0 er "reset"-knappen (pil) og satte byten til 1 i målingen. Den bør ikke bruges. Klikposition beregnes fra gitteret af de tre korrekt placerede rækker (24 kolonner, 28 pt mellem kolonner, 20 pt mellem rækker), ikke fra række 1's AX-position.
 
 **Mest robuste kanal:** AX-menupunkt for at åbne paletten → CGEvent-klik på AX-placeret felt → Undo-titel (svag) plus valgfri ProjectData-tilbagelæsning efter gemning (stærk). Uden ProjectData kan resultatet højst være `uncertain`.
 
