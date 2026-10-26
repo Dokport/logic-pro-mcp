@@ -862,6 +862,21 @@ enum AXLocalePolicy {
         item: createTrackStackMenuItem
     )
 
+    static let removeSilenceMenuItem = LabelSet(
+        canonical: "Remove Silence from Audio Region…",
+        variants: ["오디오 리전에서 무음 구간 제거…", "オーディオリージョンから無音部分を削除…", "Stille von Audioregion entfernen …", "Eliminar silencio de pasaje de audio…", "Supprimer le silence de la région audio…", "Rimuovi silenzio dalla regione audio…", "Remover Silêncio da Região de Áudio…", "将无声片段从音频片段中移除…", "從音訊區段移除靜音⋯"],
+        rationale: "The Tracks area's Functions menu item that opens the Remove Silence (strip silence) window for the selected audio regions. Read off an en-US Logic 12.4 Functions menu on 2026-10-26 and pressed live there; every other locale is the value of the row named below, copied by script. Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Remove%20Silence%20from%20Audio%20Region%E2%80%A6#value"
+    )
+
+    /// The undo-operation NAME a strip-silence leaves on top of the stack (`Undo Strip`, 12.4).
+    static let stripSilenceUndoOperation = LabelSet(
+        canonical: "Strip",
+        variants: ["스트립", "ストリップ", "división por silencio", "Découper", "Eliminar", "剥离", "直條"],
+        rationale: "An en-US Logic 12.4 offered `Undo Strip` right after Remove Silence was applied (2026-10-26). Matched by containment inside the Edit menu's Undo title, as a witness only. Every other locale is the value of the row named below, copied by script (de and it use `Strip` as well). Checked offline by Scripts/check-labelsets-are-derived.py.",
+        derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Strip%23und#value"
+    )
+
     static let viewColorsMenuItem = LabelSet(
         canonical: "Colors",
         variants: ["색상", "カラー", "Farben", "Colores", "Couleurs", "Colori", "Cores", "颜色", "顏色"],
@@ -3721,6 +3736,8 @@ enum AXLocalePolicy {
         viewColorsMenuItem,
         changeRegionColorUndoOperation,
         createTrackStackMenuItem,
+        removeSilenceMenuItem,
+        stripSilenceUndoOperation,
         sortTracksByMIDIChannelMenuItem,
         sortTracksByAudioChannelMenuItem,
         sortTracksByOutputChannelMenuItem,

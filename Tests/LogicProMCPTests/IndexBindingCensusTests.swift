@@ -35,6 +35,7 @@ struct IndexBindingCensusTests {
             .pluginsInsertVerified, // insert-class topology, trackIndex-keyed
             .tracksSetColor,        // the previous colour cannot be read to undo a wrong target
             .tracksSetRegionColor,  // likewise, for every region of the track
+            .tracksStripSilence,    // splits the wrong track's regions
         ]
         #expect(OperationRegistry.corroboratedOperationIDs == expectedSeedSet)
         #expect(Self.ids { $0.indexBinding == .corroborated } == expectedSeedSet)

@@ -236,6 +236,7 @@ struct OperationCatalogTests {
         .tracksSetColor: ["color", "readback"],
         .tracksSetRegionColor: ["color"],
         .tracksCreateStack: ["kind", "members", "name"],
+        .tracksStripSilence: ["min_silence_sec", "post_release_sec", "pre_attack_sec", "threshold_db"],
         .tracksScanLibrary: ["mode"],
         .tracksResolvePath: ["path"],
         .tracksScanPluginPresets: ["submenuOpenDelayMs"],
@@ -302,6 +303,8 @@ struct OperationCatalogTests {
             params["mode"] = .string("read")
         case .tracksSetInstrument:
             params["path"] = .string("/tmp/selector-probe.patch")
+            params[OperationRegistry.corroborationParam] = .string("Track \(value)")
+        case .tracksStripSilence:
             params[OperationRegistry.corroborationParam] = .string("Track \(value)")
         case .tracksSetColor, .tracksSetRegionColor:
             params["color"] = .string("red")

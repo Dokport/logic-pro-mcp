@@ -225,7 +225,7 @@ extension AccessibilityChannel {
         return .error(HonestContract.encodeStateC(error: error, hint: hint, extras: details))
     }
 
-    private static func trackColorWindows(runtime: AXLogicProElements.Runtime) -> [AXUIElement] {
+    static func trackColorWindows(runtime: AXLogicProElements.Runtime) -> [AXUIElement] {
         guard let app = AXLogicProElements.appRoot(runtime: runtime) else { return [] }
         return AXHelpers.getAttribute(app, kAXWindowsAttribute as String, runtime: runtime.ax) ?? []
     }
@@ -315,6 +315,56 @@ extension AccessibilityChannel {
         return (.otherOperation, title)
     }
 
+
+    enum TrackRegionSelection {
+        case selected([(item: AXUIElement, info: RegionInfo)])
+        case refused(HonestContract.FailureError, reason: String, hint: String, extras: [String: Any])
+    }
+
+    /// Edit > Deselect All, then `AXSelected` on every region the arrangement shows on track
+    /// `index` (optionally only those of `kind`), and the whole selected set read back as exactly
+    /// those regions. Regions outside the visible arrangement refuse: "all regions of this track"
+    /// could not be established. Shared by region colouring and strip silence.
+    static func selectOnlyTrackRegions(
+        _ index: Int,
+        kind: String? = nil,
+        runtime: AXLogicProElements.Runtime
+    ) -> TrackRegionSelection {
+        guard case .success(let arrangement) = enumerateRegionItems(runtime: runtime) else {
+            return .refused(.readbackUnavailable, reason: "regions_unreadable",
+                hint: "The arrangement's regions could not be read.", extras: [:])
+        }
+        guard arrangement.regionItemsOutsideViewport == 0 else {
+            return .refused(.unsupportedState, reason: "regions_outside_viewport",
+                hint: "Some regions lie outside the visible arrangement, so 'all regions of this track' cannot be established. Zoom to fit and retry.",
+                extras: ["region_items_outside_viewport": arrangement.regionItemsOutsideViewport])
+        }
+        let targets = arrangement.regions.filter { $0.info.trackIndex == index && (kind == nil || $0.info.kind == kind) }
+        guard !targets.isEmpty else {
+            return .refused(.elementNotFound, reason: "no_regions",
+                hint: "Track \(index) shows no\(kind.map { " \($0)" } ?? "") regions.", extras: [:])
+        }
+        if let deselect = AXLogicProElements.menuItem(identifier: "deselectAll:", inMenuBar: AXLocalePolicy.editMenuBar, runtime: runtime) {
+            _ = AXHelpers.performAction(deselect, kAXPressAction as String, runtime: runtime.ax)
+        }
+        usleep(150_000)
+        guard let cleared = selectedRegionInfos(runtime: runtime), cleared.isEmpty else {
+            return .refused(.unsupportedState, reason: "selection_not_cleared",
+                hint: "Edit > Deselect All did not leave an empty, readable region selection.", extras: [:])
+        }
+        for target in targets {
+            _ = AXHelpers.setAttribute(target.item, kAXSelectedAttribute, kCFBooleanTrue, runtime: runtime.ax)
+        }
+        usleep(150_000)
+        func key(_ info: RegionInfo) -> String { "\(info.trackIndex)|\(info.startBar)|\(info.endBar)|\(info.name)" }
+        guard let selected = selectedRegionInfos(runtime: runtime),
+              selected.map(key).sorted() == targets.map({ key($0.info) }).sorted() else {
+            return .refused(.unsupportedState, reason: "selection_not_exact",
+                hint: "The region selection did not read back as exactly track \(index)'s regions.", extras: [:])
+        }
+        return .selected(targets)
+    }
+
     // MARK: - region.set_color
 
     /// `region.set_color`: select exactly the regions of one track, open View > Colors with the
@@ -364,40 +414,14 @@ extension AccessibilityChannel {
             return refuse(.unsupportedState, "logic_not_frontmost", "Logic Pro could not be brought to the front; nothing was clicked.", evidence)
         }
 
-        // Which regions: every region the arrangement shows on this track, and none hidden.
-        guard case .success(let arrangement) = enumerateRegionItems(runtime: runtime) else {
-            return refuse(.readbackUnavailable, "regions_unreadable", "The arrangement's regions could not be read; nothing was selected.", evidence)
-        }
-        guard arrangement.regionItemsOutsideViewport == 0 else {
-            evidence["region_items_outside_viewport"] = arrangement.regionItemsOutsideViewport
-            return refuse(.unsupportedState, "regions_outside_viewport",
-                "Some regions lie outside the visible arrangement, so 'all regions of this track' cannot be established. Zoom to fit and retry; nothing was selected.",
-                evidence)
-        }
-        let targets = arrangement.regions.filter { $0.info.trackIndex == index }
-        evidence["region_count"] = targets.count
-        guard !targets.isEmpty else {
-            return refuse(.elementNotFound, "no_regions", "Track \(index) shows no regions; nothing to colour.", evidence)
-        }
-
-        // Exactly those regions selected, proven by reading the whole selected set back.
-        if let deselect = AXLogicProElements.menuItem(identifier: "deselectAll:", inMenuBar: AXLocalePolicy.editMenuBar, runtime: runtime) {
-            _ = AXHelpers.performAction(deselect, kAXPressAction as String, runtime: runtime.ax)
-        }
-        usleep(150_000)
-        guard let cleared = selectedRegionInfos(runtime: runtime), cleared.isEmpty else {
-            return refuse(.unsupportedState, "selection_not_cleared",
-                "Edit > Deselect All did not leave an empty, readable region selection; nothing was coloured.", evidence)
-        }
-        for target in targets {
-            _ = AXHelpers.setAttribute(target.item, kAXSelectedAttribute, kCFBooleanTrue, runtime: runtime.ax)
-        }
-        usleep(150_000)
-        func key(_ info: RegionInfo) -> String { "\(info.trackIndex)|\(info.startBar)|\(info.endBar)|\(info.name)" }
-        guard let selected = selectedRegionInfos(runtime: runtime),
-              selected.map(key).sorted() == targets.map({ key($0.info) }).sorted() else {
-            return refuse(.unsupportedState, "selection_not_exact",
-                "The region selection did not read back as exactly track \(index)'s regions; nothing was coloured.", evidence)
+        let targets: [(item: AXUIElement, info: RegionInfo)]
+        switch selectOnlyTrackRegions(index, runtime: runtime) {
+        case .selected(let selected):
+            targets = selected
+            evidence["region_count"] = selected.count
+        case .refused(let error, let reason, let hint, let more):
+            evidence.merge(more) { _, new in new }
+            return refuse(error, reason, hint + " Nothing was coloured.", evidence)
         }
 
         // The palette colours what has key focus: give it to the arrangement, at the first region.

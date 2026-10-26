@@ -1766,6 +1766,8 @@ actor AccessibilityChannel: Channel {
         case "track.create_stack_verified":
             // Exactly the named tracks selected, Create Track Stack…, the whole rail read back.
             return await Self.defaultCreateTrackStack(params: params, runtime: runtime.logicRuntime)
+        case "track.strip_silence":
+            return await Self.defaultStripSilence(params: params, runtime: runtime.logicRuntime)
         case "region.set_color":
             // Every region of one track, selected exactly, coloured through View > Colors.
             return await Self.defaultSetRegionColor(params: params, runtime: runtime.logicRuntime)

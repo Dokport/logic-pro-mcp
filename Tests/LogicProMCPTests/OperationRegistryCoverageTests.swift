@@ -92,6 +92,7 @@ struct OperationRegistryCoverageTests {
             .tracksSetInstrument,
             .tracksSetColor,
             .tracksSetRegionColor,
+            .tracksStripSilence,
             .midiExportTrackMIDI,
             .midiReadTrackNotes,
         ]

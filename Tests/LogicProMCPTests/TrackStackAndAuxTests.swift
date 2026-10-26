@@ -104,3 +104,33 @@ func sendLevelsAgreeWithinQuantization() {
     #expect(AccessibilityChannel.sendLevelsAgree("-∞", "-∞"))
     #expect(!AccessibilityChannel.sendLevelsAgree("-95,0", "-∞"))
 }
+
+// MARK: - strip_silence
+
+@Test("strip silence values are typed with the field's own decimal mark and precision")
+func stripSilenceTypedValues() {
+    #expect(StripSilenceSettings.typed(-28, field: .threshold, decimalMark: ",") == "-28")
+    #expect(StripSilenceSettings.typed(0.1, field: .minimumSilence, decimalMark: ",") == "0,1000")
+    #expect(StripSilenceSettings.typed(0.006, field: .preAttack, decimalMark: ".") == "0.0060")
+    #expect(StripSilenceSettings.decimalMark(of: "0,1000") == ",")
+    #expect(StripSilenceSettings.agrees("0,1000", 0.1, field: .minimumSilence))
+    #expect(StripSilenceSettings.agrees("-40", -40, field: .threshold))
+    #expect(!StripSilenceSettings.agrees("-38", -40, field: .threshold))   // measured: a stepped field drifted
+    #expect(StripSilenceSettings.previewCount("16 Regions") == 16)
+    #expect(StripSilenceSettings.previewCount("1 Region") == 1)
+    #expect(StripSilenceSettings.previewCount("dB") == nil)
+}
+
+@Test("strip silence settings outside the dialog's ranges are refused")
+func stripSilenceRanges() {
+    #expect(StripSilenceSettings.validated(threshold: -40, minimum: nil, preAttack: nil, postRelease: nil)
+        == .valid(StripSilenceSettings(thresholdDB: -40)))
+    guard case .outOfRange = StripSilenceSettings.validated(threshold: 3, minimum: nil, preAttack: nil, postRelease: nil) else {
+        Issue.record("a positive threshold must be refused")
+        return
+    }
+    guard case .outOfRange = StripSilenceSettings.validated(threshold: nil, minimum: -1, preAttack: nil, postRelease: nil) else {
+        Issue.record("a negative time must be refused")
+        return
+    }
+}

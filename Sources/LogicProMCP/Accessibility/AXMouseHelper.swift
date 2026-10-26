@@ -323,6 +323,11 @@ enum AXMouseHelper {
         postKey(0x24, runtime: runtime)   // kVK_Return = 0x24
     }
 
+    /// Post a Tab key tap: commits a numeric dialog field and moves to the next (Remove Silence).
+    static func pressTab(runtime: Runtime = .production) {
+        postKey(0x30, runtime: runtime)   // kVK_Tab = 0x30
+    }
+
     /// Post an Escape key tap (used to dismiss unwanted popups on error).
     static func pressEscape(runtime: Runtime = .production) {
         postKey(0x35, runtime: runtime)   // kVK_Escape = 0x35

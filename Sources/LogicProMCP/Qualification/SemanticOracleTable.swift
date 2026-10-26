@@ -313,6 +313,11 @@ enum SemanticOracleTable {
             // record has not been measured, so the only evidence is the Undo title.
             "no readback of a region colour exists; the operation's evidence is the Edit menu's "
             + "Undo title naming a region colour change",
+        .tracksStripSilence:
+            // Mix-prep, post-closure. State A is the arrangement's own region census matching the
+            // dialog's preview; pending an oracle, not structural.
+            "live State-A contract pending — State A is the track's audio-region count equal to the "
+            + "Remove Silence preview; no oracle pinning that envelope has been written yet",
         .tracksCreateStack:
             // Mix-prep, post-closure. Its State A IS an independent readback (the whole track rail
             // read again, stack main track detected by its disclosure triangle), so like mixer.bank

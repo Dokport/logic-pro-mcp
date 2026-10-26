@@ -397,6 +397,14 @@ extension OperationRegistry {
                 "kind": .enforced(.scalar, .string("summing"), allowed: TrackStackKind.allCases.map(\.rawValue)),
                 "name": .enforced(.string, .string("DRUMS")),
             ], required: [["members"]]),
+            "tracks.strip_silence": .init(params: [
+                "index": index(), "track": index(), "target_ref": targetRef, "project_ref": projectRef,
+                "expected_name": expectedName,
+                "threshold_db": .enforced(.number, .int(-28)),
+                "min_silence_sec": .enforced(.number, .double(0.1)),
+                "pre_attack_sec": .enforced(.number, .double(0.006)),
+                "post_release_sec": .enforced(.number, .int(0)),
+            ], required: [indexGroup, ["expected_name", "target_ref"]]),
             "tracks.set_region_color": .init(params: [
                 "index": index(), "track": index(), "target_ref": targetRef, "project_ref": projectRef,
                 "expected_name": expectedName,

@@ -16,6 +16,7 @@ _Sidst opdateret: 2026-10-26_
 | `set_output_verified` + `create_receiver` (output til ubrugt bus, Logic opretter aux) | Implementeret. State A 3 gange i træk fra ren kopi (debug-server). `set_output` forbliver "not exposed" efter upstreams beslutning (#291 R2) |
 | `mixer.create_send` (send til bus, evt. med oprettet FX-aux) | Implementeret. State A 3 gange i træk fra ren kopi (debug-server) |
 | `set_send_level_verified` med vilkårlige dB (−144…+6, komma eller punktum, 0,2 dB tolerance) | Udvidet. −12 og −18 dB gav State A 3 gange i træk. Kildesporet skal være valgt først |
+| `tracks.strip_silence` (Remove Silence på et spors lydregions) | Implementeret. State A 3 gange i træk fra ren kopi på to spor (1 region → 16) |
 | `move_track` | Ikke startet. Mekanismen (stak + flatten) er målt i FINDINGS.md |
 | `apply_mix_layout` | Ikke startet |
 | "3 gange i træk fra ren kopi" | Ikke kørt endnu |
@@ -85,6 +86,7 @@ De to Dry-spor har samme navn og blev derfor afvist af bindingen (`ambiguous_tar
 ## Skrøbeligt / kan gå i stykker ved Logic-opdateringer
 
 - **Send-niveau:** Knappens rå `AXValue` kan ikke bruges, fordi skrivninger hopper mellem −95, −97 og −∞. Niveauet skrives i Logics numeriske editor, som upstream gør. Knappen er kvantiseret (−18 bliver −18,1), og visningen følger systemets talformat (dansk: komma). Upstreams editor-greb kræver, at kildesporet er valgt, ellers flytter Logic fokus mellem Mixer- og inspektor-strip, og operationen afviser (`stale_snapshot`) uden at skrive.
+- **Strip silence:** Feltgruppernes segment-sliders kan ikke skrives pålideligt (ét trin flyttede −28 til −80). Felterne udfyldes derfor med dobbeltklik, Unicode-indtastning og Tab. Felterne bruger systemets decimaltegn, og på et dansk tastatur er US-minustasten "+". Testskabelonen `MixPrepTest_clean.logicx` har nu en genereret lydfil med anslag og stilhed (`~/dev/logic-test/media/hits-with-silence.wav`) på Kick, Snare og Vox Lead.
 - **Send-menuen:** En bus, der allerede fører til en aux, vises som `Bus 6 → Aux 1`.
 - **Poller'en:** En helt ny serverproces fyldte ikke Mixer-cachen (`logic://mixer`: `mixer_not_visible`), før den havde udført et UI-kald. Årsagen er ikke fundet. Inden for én session virker det.
 

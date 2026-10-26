@@ -513,7 +513,7 @@ enum WorkflowSkillCatalog {
         "logic_tracks": [
             "select", "create_audio", "create_instrument", "create_drummer",
             "create_external_midi", "delete", "duplicate", "rename",
-            "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack",
+            "mute", "solo", "arm", "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence",
             "set_automation", "set_instrument",
             "resolve_path", "list_library", "scan_library", "scan_plugin_presets",
         ],

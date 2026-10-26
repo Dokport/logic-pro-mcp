@@ -6429,6 +6429,34 @@
     "zh-TW": "derived"
    }
   },
+  "removeSilenceMenuItem": {
+   "canonical": "Remove Silence from Audio Region…",
+   "variants": [
+    "오디오 리전에서 무음 구간 제거…",
+    "オーディオリージョンから無音部分を削除…",
+    "Stille von Audioregion entfernen …",
+    "Eliminar silencio de pasaje de audio…",
+    "Supprimer le silence de la région audio…",
+    "Rimuovi silenzio dalla regione audio…",
+    "Remover Silêncio da Região de Áudio…",
+    "将无声片段从音频片段中移除…",
+    "從音訊區段移除靜音⋯"
+   ],
+   "rationale": "The Tracks area's Functions menu item that opens the Remove Silence (strip silence) window for the selected audio regions. Read off an en-US Logic 12.4 Functions menu on 2026-10-26 and pressed live there; every other locale is the value of the row named below, copied by script. Checked offline by Scripts/check-labelsets-are-derived.py.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
+   }
+  },
   "renameTrackMenuItem": {
    "canonical": "Rename Track",
    "variants": [
@@ -7614,6 +7642,32 @@
     "pt-BR": "derived",
     "zh-CN": "derived",
     "zh-TW": "derived"
+   }
+  },
+  "stripSilenceUndoOperation": {
+   "canonical": "Strip",
+   "variants": [
+    "스트립",
+    "ストリップ",
+    "división por silencio",
+    "Découper",
+    "Eliminar",
+    "剥离",
+    "直條"
+   ],
+   "rationale": "An en-US Logic 12.4 offered `Undo Strip` right after Remove Silence was applied (2026-10-26). Matched by containment inside the Edit menu's Undo title, as a witness only. Every other locale is the value of the row named below, copied by script (de and it use `Strip` as well). Checked offline by Scripts/check-labelsets-are-derived.py.",
+   "match": "contains",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "derived",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "derived",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
    }
   },
   "subdivisionSliderLabel": {

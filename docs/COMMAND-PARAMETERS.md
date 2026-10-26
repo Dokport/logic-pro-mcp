@@ -175,6 +175,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `set_region_color` | `color`, `expected_name`, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `color`; `expected_name` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `solo` | `enabled`: booleanLike, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `sort_verified` | `confirmed`, `criterion`: scalar (midi_channel, audio_channel, output_channel, instrument_name, track_name, used, creation_date), `expected_order`: array | `criterion`; `expected_order` | closed | mutating | l2 | none | readback_required | never_automatic | default_install |
+| `strip_silence` | `expected_name`, `index`: integer, `min_silence_sec`: number, `post_release_sec`: number, `pre_attack_sec`: number, `project_ref`, `target_ref`, `threshold_db`: number, `track`: integer | `index` or `track` or `target_ref`; `expected_name` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 
 ## `logic_transport`
 

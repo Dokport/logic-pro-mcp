@@ -133,6 +133,7 @@ enum OperationID: String, CaseIterable, Codable, Sendable, Hashable {
     case tracksSetColor = "tracks.set_color"
     case tracksSetRegionColor = "tracks.set_region_color"
     case tracksCreateStack = "tracks.create_stack"
+    case tracksStripSilence = "tracks.strip_silence"
     case tracksSetAutomation = "tracks.set_automation"
     case tracksSetInstrument = "tracks.set_instrument"
     case tracksListLibrary = "tracks.list_library"
@@ -368,7 +369,7 @@ enum OperationRegistry {
             "tracks.select", "tracks.create_audio", "tracks.create_instrument",
             "tracks.create_drummer", "tracks.create_external_midi", "tracks.delete",
             "tracks.duplicate", "tracks.rename", "tracks.mute", "tracks.solo", "tracks.arm",
-            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.create_stack", "tracks.set_automation",
+            "tracks.arm_only", "tracks.record_sequence", "tracks.sort_verified", "tracks.set_color", "tracks.set_region_color", "tracks.create_stack", "tracks.strip_silence", "tracks.set_automation",
             "tracks.set_instrument", "tracks.list_library", "tracks.scan_library",
             "tracks.resolve_path", "tracks.scan_plugin_presets",
         ],
@@ -424,7 +425,7 @@ enum OperationRegistry {
         ToolID.logicTracks.rawValue: [
             "select", "create_audio", "create_instrument", "create_drummer",
             "create_external_midi", "delete", "duplicate", "rename", "mute", "solo", "arm",
-            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "set_automation", "set_instrument", "list_library",
+            "arm_only", "record_sequence", "sort_verified", "set_color", "set_region_color", "create_stack", "strip_silence", "set_automation", "set_instrument", "list_library",
             "scan_library", "resolve_path", "scan_plugin_presets",
         ],
     ]
@@ -494,6 +495,8 @@ enum OperationRegistry {
         // The palette colours the selection and the previous colour is not readable, so a
         // wrong-target colour cannot be put back: irreversible in practice.
         .tracksSetColor, .tracksSetRegionColor,
+        // Splits every audio region of the track: a wrong target rewrites the wrong track's regions.
+        .tracksStripSilence,
     ]
 
     /// The bounded input writer has always required an exact physical Mixer
@@ -1028,6 +1031,9 @@ enum OperationRegistry {
         // Measured on Logic 12.4: the stack main track lands at the first member's position and
         // the members follow it; non-contiguous members are gathered (others move after it).
         (.tracksCreateStack, "create_stack", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.none, ["kind", "members", "name"]),
+        // Remove Silence on every audio region of one track; State A when the track holds exactly
+        // the number of regions the dialog previewed (measured on Logic 12.4).
+        (.tracksStripSilence, "strip_silence", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["index", "min_silence_sec", "post_release_sec", "pre_attack_sec", "threshold_db", "track"]),
         (.tracksSetRegionColor, "set_region_color", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["color", "index", "track"]),
         (.tracksSetAutomation, "set_automation", Mutability.`mutating`, DeadlineClass.short, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["index", "mode", "track"]),
         (.tracksSetInstrument, "set_instrument", Mutability.`mutating`, DeadlineClass.medium, VerificationPolicy.readbackRequired, TargetPolicy.acceptsStableTarget, ["category", "index", "path", "preset"]),
