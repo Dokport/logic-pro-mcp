@@ -167,6 +167,7 @@ Each command's accepted parameters and the registry's policy words for it. "Clos
 | `list_library` | none | none | closed | read_only | none | none | none | never_automatic | default_install |
 | `move_track` | `after`: string, `name`: string | `name`; `after` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `mute` | `enabled`: booleanLike, `index`: integer, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
+| `prepare_vocal` | `breath_color`: string, `confirmed_plan_hash`: string, `crossfade_ms`: number, `fade_in_ms`: number, `fade_out_ms`: number, `idempotency_key`: string, `min_silence`: number, `mode`: scalar (preflight, execute, status), `name`: string | `name` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `record_sequence` | `bar`: integer, `instrument`, `instrument_path`, `notes`: string, `tempo`: number | `notes` | closed | mutating | none | none | readback_required | never_automatic | default_install |
 | `rename` | `index`: integer, `name`: scalar, `project_ref`, `target_ref`, `track`: integer | `index` or `track` or `target_ref`; `name` | closed | mutating | none | accepts_stable_target | readback_required | never_automatic | default_install |
 | `reorder_tracks` | `order`: array | `order` | closed | mutating | none | none | readback_required | never_automatic | default_install |

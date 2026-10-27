@@ -1148,6 +1148,8 @@ private func operationTraceCoverageParams(
         ]
     case .tracksColorRegionsByTrack:
         return [:]
+    case .tracksPrepareVocal:
+        return ["mode": .string("status"), "idempotency_key": .string("none"), "name": .string("Voc")]
     case .tracksReorderTracks:
         return ["order": .array([.string(operationTraceCoverageTrackName)])]
     case .tracksMoveTrack:

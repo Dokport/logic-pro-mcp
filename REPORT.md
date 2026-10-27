@@ -21,6 +21,9 @@ _Sidst opdateret: 2026-10-26_
 | `insert_verified` udvidet til alle målte stock-effekter | 67 af 68 stock-effekter indsat og læst tilbage på 12.4 (`research/plugin-census-12.4.jsonl`); 34 forkortede slot-navne kortlagt. Slot N > 0 via Logics append-knap |
 | `tracks.move_track` (stak + flatten) | Implementeret. State A 3 gange i træk fra ren kopi. Kun opad; øverste position kræver drag og er ikke lavet |
 | `project.apply_mix_layout` (preflight → execute → status) | Implementeret. CLAUDE.md-specen (54 trin) kørt 3 gange i træk fra ren kopi, se Live-kørsler |
+| `tracks.color_regions_by_track` | Implementeret og brugt på brugerens session: alle regions får sporets farve (State B med undo-vidne) |
+| `tracks.reorder_tracks` (vilkårlig rækkefølge, stakke med) | Implementeret. State A på testprojektet og på brugerens session (header-drag, læst tilbage efter hvert træk) |
+| `tracks.prepare_vocal` (stilhed ud, åndedrag som farvede regions, crossfades) | Implementeret 2026-10-27. Fra ren kopi (`~/dev/logic-test/VocalPrepTest_clean.logicx`): leadvokal 45 → 55 regions og 22 åndedrag (3 gange i alt fra ren kopi), kor "2 voc" 5 → 18 / 6, kor "2 voc kvæd" 3 → 15 / 6; hver gang alle stykker og fades læst tilbage (State B: farver kun undo-vidne). Anden kørsel på resultatet planlægger ingen ændring |
 | "3 gange i træk fra ren kopi" | Opfyldt for `apply_mix_layout` gennem LogicProMCPHost med claude uden Accessibility (State A 3/3), og med debug-serveren for alle enkeltoperationer |
 
 ## Rettighedsmodel (ændret 2026-10-26 efter brugerens ønske)
@@ -114,6 +117,9 @@ Uafhængig kontrol efter kørslerne (`logic://mixer`): Kick…OH R → Bus 1 →
 | `insert_verified` (målte stock-effekter) | AX: slot-pop-up og AXPick på menublad (upstream); slot N > 0 via append-knappen | AX: inventory-diff; slot-navne via målt tabel. Ofte kun via uafhængig `get_inventory` (A) |
 | `move_track` | Midlertidig folder-stak via `create_stack` + AX-menupunkt Track ▸ Flatten Stack | AX: hele sporlisten i præcis forventet rækkefølge (A) |
 | `strip_silence` | AX-menu + dobbeltklik/Unicode-indtastning i dialogfelter | AX: antal lydregions = dialogens forhåndsvisning (A) |
+| `color_regions_by_track` | Edit ▸ Select All + Functions ▸ Color Regions/Cells by Track Color | Undo-titel (B) |
+| `reorder_tracks` | CGEvent-klik på stak-trekanter + CGEvent-drag af sporhoveder (koordinater fra AX) | AX: hele sporlisten efter hvert træk (A) |
+| `prepare_vocal` | Egen lydanalyse af filerne; AX-menuer (Trim, Split, Delete, Join, Go To Position), `AXSelected`, inspektørens fade-sliders (`AXValue`), palettefelt-klik; CGEvent-drag af første/sidste regions hjørne | AX: hver regions start/slut til tick mod planen, fades pr. region, antal lydfiler uændret efter Join (B pga. farver) |
 | `apply_mix_layout` | Alle ovenstående i rækkefølge | Hvert trins egen tilbagelæsning; uafhængig Mixer-/inventory-læsning hvor trinnets egen misser; farver via én projektgemning (A for de oprindelige spor) |
 
 ## Skrøbeligt / kan gå i stykker ved Logic-opdateringer
@@ -137,6 +143,13 @@ Uafhængig kontrol efter kørslerne (`logic://mixer`): Kick…OH R → Bus 1 →
 - CGEvent-klik kræver, at Logic er i front, og at paletten står på skærmen.
 - `set_region_color` kræver, at alle sporets regions er synlige, ellers zoomes der til "fit". Den virker kun på regions, Logic eksponerer i arrangementet.
 - **Labels:** Repoets oversættelseskorpus er låst til Logic 12.3. De fire nye LabelSets (`assignTrackColorMenuItem`, `changeTrackColorUndoOperation`, `viewColorsMenuItem`, `changeRegionColorUndoOperation`) peger på Logics korrekte rækker, men `check-labelsets-are-derived.py` og `check-canon-citations.py` melder dem som ikke-pinnede. Pinning kræver 12.3 eller en fuld migrering af korpusset til 12.4. Migreringen blev prøvet og gav følgefejl i andre guards (zh_TW-strenge og observationsloggen), så den blev rullet tilbage.
+
+- `prepare_vocal` læser hver regions placering i lydfilen fra `ProjectData` (UInt32 70 bytes før regionens navn, målt på 12.4). Formatet er udokumenteret; flytter det, afviser preflight (navnet findes ikke én gang). Lydfilen findes ud fra regionsnavnet (Logic tilføjer `.N` ved split); en omdøbt region uden matchende fil afvises.
+- `prepare_vocal` bruger engelske menutitler (Trim, Split, Bounce or Join, Go To ▸ Position…) og antager konstant tempo (fra transporten) og 4/4. Første regions start og sidste regions slut forlænges med et CGEvent-træk i hjørnet og kræver, at regionen er på skærmen.
+- Logics inspektør ændrer fades relativt, når flere regions er valgt; `prepare_vocal` sætter dem derfor én region ad gangen (langsomt: ~1 s pr. region).
+- Logic genvaliderer først et menupunkts `AXEnabled` (og om AXPress virker), når menuen åbnes: Navigate ▸ Go To ▸ Position… kan stå deaktiveret længe efter, den er blevet tilgængelig. `prepare_vocal` åbner topmenuen først i det tilfælde.
+- Et klik på et valgt spors navnefelt starter omdøbning, når navnet når ud til klikket ("2 voc kvæd"); `prepare_vocal` klikker i sporhovedets frie felt mellem fokusmarkøren og første knap.
+- Fuld testsuite 2026-10-27 (Logic lukket): 7317 tests, de samme ~10 timing-/ventetests fejler i begge kørsler (bl.a. "A matching send waits for observed asynchronous popup closure", `issue1174ShutdownWhileHealthAwaitsCannotExecuteMCU`); de består isoleret både med og uden ændringerne og ligger i kode, `prepare_vocal` ikke rører. Kørslen tog ~9 min mod ~30 min dagen før (anden belastning).
 
 ## Tests
 

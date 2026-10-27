@@ -410,7 +410,8 @@ enum OperationHandlerRegistry {
                     // track-header reader so the target_ref mutation boundary
                     // fails closed on an out-of-band reorder.
                     liveTrackName: { AXLogicProElements.trackName(at: $0) },
-                    liveTrackNames: dependencies.liveTrackNamesReader
+                    liveTrackNames: dependencies.liveTrackNamesReader,
+                    prepareVocal: { await VocalPrepSaga.handle(params: $0) }
                 )
             }
         }

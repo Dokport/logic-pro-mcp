@@ -240,6 +240,7 @@ struct OperationCatalogTests {
         .tracksCreateStack: ["kind", "members", "name"],
         .tracksMoveTrack: ["after", "name"],
         .tracksReorderTracks: ["order"],
+        .tracksPrepareVocal: ["breath_color", "confirmed_plan_hash", "crossfade_ms", "fade_in_ms", "fade_out_ms", "idempotency_key", "min_silence", "mode", "name"],
         .tracksColorRegionsByTrack: [],
         .tracksStripSilence: ["min_silence_sec", "post_release_sec", "pre_attack_sec", "threshold_db"],
         .tracksScanLibrary: ["mode"],

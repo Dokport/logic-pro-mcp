@@ -328,6 +328,11 @@ enum SemanticOracleTable {
             // title naming a region colour change is the designed answer.
             "live State-B contract pending — no AX region-colour readback; the Undo title naming "
             + "a region colour change is the witness",
+        .tracksPrepareVocal:
+            // Mix-prep, post-closure. Every cut, delete, join and fade is read back against the
+            // plan; region colours have no AX readback, so a complete run is State B by design.
+            "live State-B contract pending — cuts, deletes, joins and fades are read back against "
+            + "the plan; breath colours have only the Undo-title witness",
         .tracksReorderTracks:
             // Mix-prep, post-closure. State A is the whole track rail read back in the requested
             // order with each stack's own members; pending an oracle, not structural.

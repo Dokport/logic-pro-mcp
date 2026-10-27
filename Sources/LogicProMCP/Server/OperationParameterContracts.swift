@@ -400,6 +400,17 @@ extension OperationRegistry {
                 "kind": .enforced(.scalar, .string("summing"), allowed: TrackStackKind.allCases.map(\.rawValue)),
                 "name": .enforced(.string, .string("DRUMS")),
             ], required: [["members"]]),
+            "tracks.prepare_vocal": .init(params: [
+                "mode": .enforced(.scalar, .string("preflight"), allowed: ["preflight", "execute", "status"]),
+                "name": .enforced(.string, .string("Voc")),
+                "confirmed_plan_hash": .enforced(.string, .string(String(repeating: "0", count: 64))),
+                "idempotency_key": .enforced(.string, .string("vocal-1")),
+                "min_silence": .enforced(.number, .double(1.0)),
+                "crossfade_ms": .enforced(.number, .int(10)),
+                "fade_out_ms": .enforced(.number, .int(30)),
+                "fade_in_ms": .enforced(.number, .int(10)),
+                "breath_color": .enforced(.string, .string("cyan")),
+            ], required: [["name"]]),
             "tracks.reorder_tracks": .init(params: [
                 "order": .enforced(.array, .array([.string("Kick"), .string("Snare")])),
             ], required: [["order"]]),
